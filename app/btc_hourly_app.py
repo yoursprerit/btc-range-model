@@ -849,6 +849,89 @@ def compute_7d_close_cone_forecast(asof_date_iso):
     )
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_rolling_7d_series(end_date_iso, days_back=21):
+    """Generate rolling daily 7-day forward close predictions.
+
+    For each anchor day D from (end_date - days_back) to end_date,
+    compute the 7-day forward cone prediction and check whether the
+    target date (anchor + 7 calendar days) has a realized close.
+
+    Returns a DataFrame with columns:
+      anchor_date    – the anchor day (prediction anchored here)
+      target_date    – anchor + 7 calendar days (prediction target)
+      anchor_close   – realized BTC close at anchor date
+      pred_close     – predicted BTC close at target_date
+      lower / upper  – ±band_pct % bounds around pred_close
+      actual_close   – realized close at target_date (NaN = still future)
+      regime         – tercile index (0 = low vol, 1 = mid, 2 = high vol)
+      regime_label   – human-readable regime label
+    """
+    cone = _load_cone_7d()
+    if cone is None:
+        return pd.DataFrame()
+    daily = _fetch_daily_raw().copy()
+    if daily.empty:
+        return pd.DataFrame()
+
+    end      = pd.Timestamp(end_date_iso)
+    c        = daily["btc_close"]
+    h        = daily["btc_high"]
+    l_       = daily["btc_low"]
+    range_today = (h - l_) / c
+    range_ma30  = range_today.rolling(30).mean()
+    edges    = np.asarray(cone["regime_edges"], dtype=float)
+    band_pct = float(cone.get("band_pct", 0.097))
+
+    def _snap(d):
+        if d in c.index and pd.notna(c.loc[d]):
+            return d
+        prior = c.loc[c.index <= d]
+        return prior.index[-1] if not prior.empty else None
+
+    rows = []
+    for i in range(days_back, -1, -1):
+        anchor_raw = end - pd.Timedelta(days=i)
+        anchor = _snap(anchor_raw)
+        if anchor is None:
+            continue
+        if anchor not in range_ma30.index:
+            continue
+        rm30 = range_ma30.loc[anchor]
+        if not np.isfinite(rm30):
+            continue
+        a_close = float(c.loc[anchor])
+        regime  = int(np.searchsorted(edges, float(rm30), side="right"))
+        regime  = max(0, min(len(edges), regime))
+        regime_label = (["low vol", "mid vol", "high vol"][regime]
+                        if regime < 3 else f"r{regime}")
+        stats = cone["regime_stats"][regime]
+        med_logret = float(stats[0.50] if 0.50 in stats else stats["0.5"])
+        p_close = a_close * float(np.exp(med_logret))
+        lower   = p_close * (1 - band_pct)
+        upper   = p_close * (1 + band_pct)
+        target  = anchor + pd.Timedelta(days=7)
+        # Check if target date has a realized close
+        target_snapped = _snap(target)
+        actual_close = np.nan
+        if (target_snapped is not None
+                and target_snapped <= c.index[-1]
+                and pd.notna(c.loc[target_snapped])):
+            actual_close = float(c.loc[target_snapped])
+        rows.append(dict(
+            anchor_date  = anchor,
+            target_date  = target,
+            anchor_close = a_close,
+            pred_close   = p_close,
+            lower        = lower,
+            upper        = upper,
+            actual_close = actual_close,
+            regime       = regime,
+            regime_label = regime_label,
+        ))
+    return pd.DataFrame(rows)
+
+
 @st.cache_resource
 def _load_day_type():
     """Load the 3-class day-type GBM artefact (or None if missing)."""
@@ -1745,13 +1828,14 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         st.plotly_chart(fig2, use_container_width=True,
                         key=f"chart_daily_{'live' if is_live else 'hist'}")
 
-    # ─────────── 7-day close cone (regime-based) chart ────────────────────
-    # Past 7 weekly closes anchored at the daily-model target date, plus
-    # the +7d prediction and the fixed ±9.7 % band reported in
-    # notebooks/btc_7d_close_research.ipynb.
+    # ─────────── 7-day close cone — rolling daily predictions chart ──────────
+    # For each anchor day in the last 21 days the model predicts the close
+    # 7 days out. Realized actuals are overlaid once that date passes,
+    # coloured green (within ±9.7 % band) or red (outside).
+    # The headline KPI line below still uses compute_7d_close_cone_forecast
+    # for the current-anchor regime/return metadata.
     cone7 = compute_7d_close_cone_forecast(target_date.strftime("%Y-%m-%d"))
     if cone7 is not None:
-        hist = cone7["history"]
         ret_pct = (np.exp(cone7["regime_median_logret"]) - 1) * 100
         st.markdown(
             f"#### 📅 7-day close-price cone — regime: **{cone7['regime_label']}**  "
@@ -1763,195 +1847,250 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             f"band ±{cone7['band_pct']*100:.1f}%)</small>",
             unsafe_allow_html=True,
         )
-        hp = cone7.get("hist_preds", pd.DataFrame()).copy()
         band_pct = cone7["band_pct"]
-        # In historical replay, when the +7d target already has a realized
-        # close, treat it as the *last historical prediction* (with its
-        # actual on the realized line) rather than as a future-looking
-        # star. This keeps the chart strictly past-only in Historical
-        # Replay so every prediction has an actual to compare against.
-        in_hist_with_actual = (
-            (not is_live) and (cone7.get("actual_pred_close") is not None)
+        # ── Rolling daily 7-day predictions (replaces weekly-spaced chart) ──
+        # For each anchor day in the last 21 days, predict the close 7 days
+        # out and compare against the realized close once that date passes.
+        rolling7 = compute_rolling_7d_series(
+            target_date.strftime("%Y-%m-%d"), days_back=21
         )
-        if in_hist_with_actual:
-            hp = pd.concat([
-                hp,
-                pd.DataFrame([{
-                    "anchor_date":  cone7["asof_date"],
-                    "target_date":  cone7["pred_date"],
-                    "anchor_close": cone7["asof_close"],
-                    "pred_close":   cone7["pred_close"],
-                    "lower":        cone7["lower"],
-                    "upper":        cone7["upper"],
-                    "actual_close": cone7["actual_pred_close"],
-                    "regime":       cone7["regime"],
-                }]),
-            ], ignore_index=True)
-            hist = pd.concat([
-                hist,
-                pd.DataFrame({"close": [cone7["actual_pred_close"]]},
-                             index=pd.DatetimeIndex([cone7["actual_pred_date"]])),
-            ])
-        fig3 = go.Figure()
 
-        # Historical ±band — shaded fill across consecutive prediction targets.
-        if len(hp) >= 2:
+        if len(rolling7) > 0:
+            resolved = rolling7[rolling7["actual_close"].notna()].copy()
+            future   = rolling7[rolling7["actual_close"].isna()].copy()
+
+            fig3 = go.Figure()
+
+            # 1. ±band envelope fill across all target dates (background)
+            all_td = rolling7.sort_values("target_date")
             fig3.add_trace(go.Scatter(
-                x=list(hp["target_date"]), y=list(hp["upper"]),
-                mode="lines",
-                line=dict(color="rgba(37,99,235,0)"),
+                x=list(all_td["target_date"]), y=list(all_td["upper"]),
+                mode="lines", line=dict(color="rgba(37,99,235,0)"),
                 hoverinfo="skip", showlegend=False,
             ))
             fig3.add_trace(go.Scatter(
-                x=list(hp["target_date"]), y=list(hp["lower"]),
-                mode="lines",
+                x=list(all_td["target_date"]), y=list(all_td["lower"]),
+                mode="lines", fill="tonexty",
+                fillcolor="rgba(147,197,253,0.22)",
                 line=dict(color="rgba(37,99,235,0)"),
-                fill="tonexty", fillcolor="rgba(147,197,253,0.25)",
-                name=f"hist ±{band_pct*100:.1f}% band",
+                name=f"±{band_pct*100:.1f}% prediction band",
                 hoverinfo="skip",
             ))
-        # Historical prediction markers + per-point error bars (redundant with
-        # the fill but reads clearer for individual points)
-        if len(hp):
-            fig3.add_trace(go.Scatter(
-                x=list(hp["target_date"]), y=list(hp["pred_close"]),
-                mode="lines+markers", name="historical predictions",
-                line=dict(color="#2563eb", width=1.4, dash="dot"),
-                marker=dict(size=10, color="#2563eb", symbol="diamond",
-                            line=dict(color="white", width=1)),
-                error_y=dict(
-                    type="data",
-                    array=list(hp["upper"] - hp["pred_close"]),
-                    arrayminus=list(hp["pred_close"] - hp["lower"]),
-                    color="#93c5fd", thickness=1.2, width=4,
-                ),
-                hovertemplate=(
-                    "target %{x|%Y-%m-%d}<br>"
-                    "predicted $%{y:,.0f}<br>"
-                    f"band ±{band_pct*100:.1f}%"
-                    "<extra></extra>"
-                ),
-            ))
-        # Realized closes (actuals) at each historical target date
-        fig3.add_trace(go.Scatter(
-            x=list(hist.index), y=list(hist["close"]),
-            mode="lines+markers", name="realized close",
-            line=dict(color="#1f2937", width=2),
-            marker=dict(size=9, color="#1f2937"),
-            hovertemplate="actual %{x|%Y-%m-%d}<br>$%{y:,.0f}<extra></extra>",
-        ))
-        if is_live:
-            # Live mode: forward-looking +7d star (no actual exists yet).
-            fig3.add_trace(go.Scatter(
-                x=[hist.index[-1], cone7["pred_date"]],
-                y=[hist["close"].iloc[-1], cone7["pred_close"]],
-                mode="lines",
-                line=dict(color="#2563eb", width=2, dash="dot"),
-                hoverinfo="skip", showlegend=False,
-            ))
-            fig3.add_trace(go.Scatter(
-                x=[cone7["pred_date"]], y=[cone7["pred_close"]],
-                mode="markers+text", name="7-day forecast",
-                marker=dict(size=14, color="#2563eb", symbol="star",
-                            line=dict(color="white", width=1)),
-                text=[f"${cone7['pred_close']:,.0f}"],
-                textposition="top center",
-                error_y=dict(
-                    type="data",
-                    array=[cone7["upper"] - cone7["pred_close"]],
-                    arrayminus=[cone7["pred_close"] - cone7["lower"]],
-                    color="#60a5fa", thickness=2, width=6,
-                ),
-                hovertemplate=(
-                    "forecast %{x|%Y-%m-%d}<br>"
-                    f"median ${cone7['pred_close']:,.0f}<br>"
-                    f"band ±{band_pct*100:.1f}% "
-                    f"→ ${cone7['lower']:,.0f}…${cone7['upper']:,.0f}"
-                    "<extra></extra>"
-                ),
-            ))
-            fig3.add_shape(
-                type="rect",
-                x0=cone7["pred_date"] - pd.Timedelta(days=1),
-                x1=cone7["pred_date"] + pd.Timedelta(days=1),
-                y0=cone7["lower"], y1=cone7["upper"],
-                fillcolor="rgba(147,197,253,0.45)", line=dict(width=0),
-                layer="below",
+
+            # 2. Prediction line + diamond markers at RESOLVED target dates
+            if len(resolved) > 0:
+                fig3.add_trace(go.Scatter(
+                    x=list(resolved["target_date"]),
+                    y=list(resolved["pred_close"]),
+                    mode="lines+markers",
+                    name="7d prediction (resolved target)",
+                    line=dict(color="#2563eb", width=1.6, dash="dot"),
+                    marker=dict(size=9, color="#2563eb", symbol="diamond",
+                                line=dict(color="white", width=1)),
+                    customdata=list(
+                        resolved["anchor_date"].dt.strftime("%Y-%m-%d")
+                    ),
+                    hovertemplate=(
+                        "Target %{x|%Y-%m-%d} — anchored %{customdata}<br>"
+                        "Predicted $%{y:,.0f}"
+                        "<extra></extra>"
+                    ),
+                ))
+
+            # 3. Realized close LINE through resolved target dates (black)
+            if len(resolved) > 0:
+                fig3.add_trace(go.Scatter(
+                    x=list(resolved["target_date"]),
+                    y=list(resolved["actual_close"]),
+                    mode="lines",
+                    name="Realized close",
+                    line=dict(color="#1f2937", width=2.2),
+                    hovertemplate=(
+                        "Realized %{x|%Y-%m-%d}<br>$%{y:,.0f}<extra></extra>"
+                    ),
+                ))
+                # Accuracy markers: green circle = within band, red ✕ = outside
+                within_mask = (
+                    (resolved["actual_close"] >= resolved["lower"])
+                    & (resolved["actual_close"] <= resolved["upper"])
+                )
+                within_df  = resolved[within_mask]
+                outside_df = resolved[~within_mask]
+                if len(within_df) > 0:
+                    fig3.add_trace(go.Scatter(
+                        x=list(within_df["target_date"]),
+                        y=list(within_df["actual_close"]),
+                        mode="markers",
+                        name=f"Actual ✅ within ±{band_pct*100:.1f}% band",
+                        marker=dict(size=11, color="#16a34a", symbol="circle",
+                                    line=dict(color="white", width=1.5)),
+                        customdata=[
+                            f"{(r.actual_close - r.pred_close) / r.pred_close * 100:+.1f}%"
+                            for r in within_df.itertuples()
+                        ],
+                        hovertemplate=(
+                            "Actual %{x|%Y-%m-%d}<br>$%{y:,.0f}<br>"
+                            "Error vs prediction: %{customdata}<br>"
+                            "✅ Within band<extra></extra>"
+                        ),
+                    ))
+                if len(outside_df) > 0:
+                    fig3.add_trace(go.Scatter(
+                        x=list(outside_df["target_date"]),
+                        y=list(outside_df["actual_close"]),
+                        mode="markers",
+                        name=f"Actual ❌ outside ±{band_pct*100:.1f}% band",
+                        marker=dict(size=12, color="#dc2626", symbol="x-thin",
+                                    line=dict(color="#dc2626", width=3)),
+                        customdata=[
+                            f"{(r.actual_close - r.pred_close) / r.pred_close * 100:+.1f}%"
+                            for r in outside_df.itertuples()
+                        ],
+                        hovertemplate=(
+                            "Actual %{x|%Y-%m-%d}<br>$%{y:,.0f}<br>"
+                            "Error vs prediction: %{customdata}<br>"
+                            "❌ Outside band<extra></extra>"
+                        ),
+                    ))
+
+            # 4. FUTURE predictions (target_date > latest realized data)
+            if len(future) > 0:
+                # Dashed connector from last resolved pred → future preds
+                if len(resolved) > 0:
+                    bridge_x = (
+                        [resolved["target_date"].iloc[-1]]
+                        + list(future["target_date"])
+                    )
+                    bridge_y = (
+                        [resolved["pred_close"].iloc[-1]]
+                        + list(future["pred_close"])
+                    )
+                else:
+                    bridge_x = list(future["target_date"])
+                    bridge_y = list(future["pred_close"])
+                fig3.add_trace(go.Scatter(
+                    x=bridge_x, y=bridge_y,
+                    mode="lines",
+                    line=dict(color="#2563eb", width=1.6, dash="dot"),
+                    hoverinfo="skip", showlegend=False,
+                ))
+                # Near-term future points (all but the latest anchor)
+                if len(future) > 1:
+                    near = future.iloc[:-1]
+                    fig3.add_trace(go.Scatter(
+                        x=list(near["target_date"]),
+                        y=list(near["pred_close"]),
+                        mode="markers",
+                        name="Near-term forecasts",
+                        marker=dict(size=10, color="#93c5fd", symbol="star",
+                                    line=dict(color="#2563eb", width=1)),
+                        customdata=list(
+                            near["anchor_date"].dt.strftime("%Y-%m-%d")
+                        ),
+                        hovertemplate=(
+                            "Target %{x|%Y-%m-%d} — anchored %{customdata}<br>"
+                            "Predicted $%{y:,.0f}<extra></extra>"
+                        ),
+                    ))
+                # Latest anchor's prediction = the primary +7d star
+                cur = future.iloc[-1]
+                fig3.add_trace(go.Scatter(
+                    x=[cur["target_date"]], y=[cur["pred_close"]],
+                    mode="markers+text",
+                    name=(f"+7d forecast "
+                          f"(from {cur['anchor_date'].strftime('%Y-%m-%d')})"),
+                    marker=dict(size=15, color="#2563eb", symbol="star",
+                                line=dict(color="white", width=1.5)),
+                    text=[f"${cur['pred_close']:,.0f}"],
+                    textposition="top center",
+                    error_y=dict(
+                        type="data",
+                        array=[cur["upper"] - cur["pred_close"]],
+                        arrayminus=[cur["pred_close"] - cur["lower"]],
+                        color="#60a5fa", thickness=2.5, width=7,
+                    ),
+                    hovertemplate=(
+                        f"Target %{{x|%Y-%m-%d}}<br>"
+                        f"Anchored {cur['anchor_date'].strftime('%Y-%m-%d')}<br>"
+                        f"Predicted ${cur['pred_close']:,.0f}<br>"
+                        f"Band ${cur['lower']:,.0f} – ${cur['upper']:,.0f}"
+                        "<extra></extra>"
+                    ),
+                ))
+
+            # Accuracy summary (resolved predictions only)
+            accuracy_note = ""
+            if len(resolved) > 0:
+                mape = (
+                    (resolved["actual_close"] - resolved["pred_close"]).abs()
+                    / resolved["pred_close"] * 100
+                ).mean()
+                within_pct = (
+                    ((resolved["actual_close"] >= resolved["lower"])
+                     & (resolved["actual_close"] <= resolved["upper"]))
+                    .mean() * 100
+                )
+                accuracy_note = (
+                    f"  Rolling {len(resolved)} resolved predictions: "
+                    f"MAPE = {mape:.1f}%; "
+                    f"{within_pct:.0f}% within ±{band_pct*100:.1f}% band."
+                )
+
+            n_future   = len(future)
+            n_resolved = len(resolved)
+            title_detail = (
+                "Blue ◆ = predicted close anchored 7 days before each target "
+                "(rolling daily). "
+                "Black line = realized close at target dates. "
+                f"Green ● = actual within / Red ✕ = actual outside "
+                f"±{band_pct*100:.1f}% band. "
+                f"⭐ = {n_future} active forecast"
+                f"{'s' if n_future != 1 else ''} (target still in future)."
             )
-        elif in_hist_with_actual:
-            # Historical replay AND the last prediction has a realized
-            # actual: highlight that actual with a distinct X marker.
-            ap_close = cone7["actual_pred_close"]
-            ap_date  = cone7["actual_pred_date"]
-            ap_err   = (cone7["pred_close"] - ap_close) / ap_close * 100
-            ap_inside = (cone7["lower"] <= ap_close <= cone7["upper"])
-            fig3.add_trace(go.Scatter(
-                x=[ap_date], y=[ap_close],
-                mode="markers+text", name="actual at last prediction",
-                marker=dict(size=14, color="#dc2626", symbol="x-thin",
-                            line=dict(color="#dc2626", width=4)),
-                text=[f"${ap_close:,.0f}"],
-                textposition="bottom center",
-                hovertemplate=(
-                    "actual %{x|%Y-%m-%d}<br>"
-                    f"$%{{y:,.0f}}<br>"
-                    f"forecast error: {ap_err:+.2f}%<br>"
-                    f"{'inside' if ap_inside else 'outside'} "
-                    f"±{cone7['band_pct']*100:.1f}% band"
-                    "<extra></extra>"
+            fig3.update_layout(
+                height=430, template="plotly_white",
+                title=dict(
+                    text=(
+                        "<b>7-day close prediction — rolling daily anchors</b>"
+                        "<br><span style='font-size:12px;color:#555'>"
+                        + title_detail
+                        + (f"  {accuracy_note}" if accuracy_note else "")
+                        + "</span>"
+                    ),
+                    x=0.01, xanchor="left", y=0.97, yanchor="top",
                 ),
-            ))
-        # else: Historical replay where +7d is still unrealized — drop
-        # that point entirely (user requested past-only points).
-        fig3.update_layout(
-            height=380, template="plotly_white",
-            yaxis_title="BTC / USD",
-            xaxis_title="Date",
-            margin=dict(t=40, r=30, b=40, l=70),
-            legend=dict(orientation="h", x=0, xanchor="left", y=1.10,
-                        yanchor="bottom", bgcolor="rgba(255,255,255,0.95)",
-                        bordercolor="#ccc", borderwidth=1, font=dict(size=11)),
-        )
-        fig3.update_xaxes(tickformat="%d-%b")
-        st.plotly_chart(fig3, use_container_width=True,
-                        key=f"chart_7d_cone_{'live' if is_live else 'hist'}")
-        # Quick accuracy footnote on historical predictions
-        accuracy_note = ""
-        if len(hp):
-            err_pct = (hp["pred_close"] - hp["actual_close"]).abs() / hp["actual_close"] * 100
-            within_band = ((hp["actual_close"] >= hp["lower"])
-                           & (hp["actual_close"] <= hp["upper"])).mean() * 100
-            accuracy_note = (
-                f"  Historical (last {len(hp)} weekly targets): MAPE = "
-                f"{err_pct.mean():.2f} %; "
-                f"{within_band:.0f} % of actuals fell inside the ±{band_pct*100:.1f} % band."
+                yaxis_title="BTC / USD",
+                xaxis_title="Target date (close price predicted for this date, 7 days after anchor)",
+                margin=dict(t=115, r=30, b=50, l=70),
+                legend=dict(orientation="h", x=0, xanchor="left", y=1.08,
+                            yanchor="bottom", bgcolor="rgba(255,255,255,0.95)",
+                            bordercolor="#ccc", borderwidth=1, font=dict(size=11)),
             )
-        if is_live:
-            legend_blurb = (
-                "Diamonds = historical predictions made 7 days *before* each target; "
-                "black dots = realized weekly closes; "
-                "star = current +7-day forecast with band."
-            )
-        elif in_hist_with_actual:
-            legend_blurb = (
-                "Diamonds = historical predictions made 7 days *before* each target; "
-                "black dots = realized weekly closes; "
-                "red ✕ at the last point = realized close at the most recent "
-                "7-day target (Historical Replay shows past predictions only)."
+            fig3.update_xaxes(tickformat="%d-%b")
+            st.plotly_chart(fig3, use_container_width=True,
+                            key=f"chart_7d_rolling_{'live' if is_live else 'hist'}")
+            st.caption(
+                f"Rolling daily 7-day prediction chart: each anchor day generates "
+                f"a ±{band_pct*100:.1f}% cone forecast for the close 7 days later. "
+                "Blue diamonds = what was predicted; black line = what happened. "
+                "Green circles = actual fell inside the cone (hit); "
+                "red ✕ = actual outside (miss). "
+                "Stars = active forecasts whose target date hasn't arrived yet. "
+                + accuracy_note
+                + "  The fixed ±9.7% interval corresponds to ≈88% empirical "
+                "coverage on the held-out 8-month tail "
+                "(see `notebooks/btc_7d_close_research.ipynb`)."
             )
         else:
-            legend_blurb = (
-                "Diamonds = historical predictions made 7 days *before* each target; "
-                "black dots = realized weekly closes. "
-                "(Historical Replay shows only past predictions whose target "
-                f"date has a realized close — the +7-day target "
-                f"{cone7['pred_date'].strftime('%Y-%m-%d')} is still in the future.)"
+            # Fallback when rolling data is unavailable (insufficient history)
+            st.info(
+                "Rolling 7-day prediction series unavailable "
+                "(not enough historical data to compute regime features). "
+                f"Current +7d forecast: "
+                f"${cone7['pred_close']:,.0f} "
+                f"(regime: {cone7['regime_label']}, "
+                f"band ±{band_pct*100:.1f}%)."
             )
-        st.caption(
-            legend_blurb + " The fixed ±9.7 % interval corresponds to ≈ 88 % "
-            "empirical coverage on the held-out 8-month tail "
-            "(see `notebooks/btc_7d_close_research.ipynb`)." + accuracy_note
-        )
 
     # ─────────────────────── live look-back metrics ───────────────────────
     if lb_metrics:
