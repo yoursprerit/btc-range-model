@@ -911,13 +911,15 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
         lower   = p_close * (1 - band_pct)
         upper   = p_close * (1 + band_pct)
         target  = anchor + pd.Timedelta(days=7)
-        # Check if target date has a realized close
-        target_snapped = _snap(target)
+        # Only mark as realized if the target date itself is within
+        # available data. _snap() can silently return the most-recent
+        # past bar for any future date, so we must guard on `target`
+        # (not on the snapped result) to avoid showing future "actuals".
         actual_close = np.nan
-        if (target_snapped is not None
-                and target_snapped <= c.index[-1]
-                and pd.notna(c.loc[target_snapped])):
-            actual_close = float(c.loc[target_snapped])
+        if target <= c.index[-1]:
+            target_snapped = _snap(target)
+            if target_snapped is not None and pd.notna(c.loc[target_snapped]):
+                actual_close = float(c.loc[target_snapped])
         rows.append(dict(
             anchor_date  = anchor,
             target_date  = target,
