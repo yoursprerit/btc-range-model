@@ -165,9 +165,26 @@ def fetch_data():
             "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
     parts = {}
     for name, sym in SYMS.items():
-        parts[name] = _flat(yf.download(sym, period="2y", interval="60m",
-                                        progress=False, auto_adjust=False), name)
+        # yfinance caps 1-hour bars at 730 days; "2y" sits right at that edge
+        # and returns empty on Streamlit Cloud.  Try progressively shorter
+        # windows until we get data.
+        raw = pd.DataFrame()
+        for period in ("729d", "180d", "59d"):
+            try:
+                raw = yf.download(sym, period=period, interval="60m",
+                                  progress=False, auto_adjust=False)
+                if not raw.empty:
+                    break
+            except Exception:
+                continue
+        parts[name] = _flat(raw, name)
     btc = parts["btc"]
+    if btc.empty:
+        st.error(
+            "⚠️ Could not fetch live BTC/market data from Yahoo Finance. "
+            "Please click **Refresh now** in the sidebar to retry."
+        )
+        st.stop()
     grid = pd.date_range(btc.index.min().floor("h"), btc.index.max().floor("h"),
                          freq="h")
     df = pd.DataFrame(index=grid)
