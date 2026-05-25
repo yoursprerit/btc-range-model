@@ -103,6 +103,9 @@ TICKERS = {
 import yfinance as yf
 print("\n>>> Fetching auxiliary data from Yahoo Finance …")
 raw_yf = {}
+h_btc  = None   # BTC High  (for TI-D volume features)
+l_btc  = None   # BTC Low
+vol_btc = None  # BTC Volume
 for name, sym in TICKERS.items():
     try:
         d = yf.download(sym, start="2017-01-01", progress=False, auto_adjust=True)
@@ -110,6 +113,15 @@ for name, sym in TICKERS.items():
             print(f"  {name:6s} ({sym:15s}): EMPTY — skipped")
             continue
         raw_yf[name] = _clean_yf(d)
+        # For BTC, also extract High, Low, Volume for volume feature engineering
+        if name == "BTC":
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = [c[0] for c in d.columns]
+            d.index = pd.to_datetime(d.index).tz_localize(None).normalize()
+            d = d.sort_index()
+            h_btc   = d["High"]
+            l_btc   = d["Low"]
+            vol_btc = d["Volume"]
         s = raw_yf[name]
         print(f"  {name:6s} ({sym:15s}): {len(s)} bars  "
               f"{s.index.min().date()} → {s.index.max().date()}")
@@ -227,6 +239,43 @@ if "ETH" in raw_yf:
     feats["eth_btc_ratio"]       = np.log(eth_ / c)
     feats["eth_btc_ratio_chg_14"]= feats["eth_btc_ratio"].diff(14)
 
+# ── Group TI-D: Volume features (CMF, OBV, volume ratio) ─────────────────────
+# Research finding: TI-D reduces 14d MAPE by 0.52pp; CMF is the key feature.
+if vol_btc is not None and h_btc is not None and l_btc is not None:
+    h      = h_btc.reindex(c.index).ffill(limit=5)
+    l      = l_btc.reindex(c.index).ffill(limit=5)
+    volume = vol_btc.reindex(c.index).ffill(limit=5)
+
+    # a) CMF-20 (Chaikin Money Flow)
+    mfm   = ((c - l) - (h - c)) / (h - l + 1e-9)   # money flow multiplier
+    mfv   = mfm * volume
+    cmf20 = mfv.rolling(20).sum() / (volume.rolling(20).sum() + 1e-9)
+    feats["cmf_20"] = cmf20
+
+    # b) OBV vs 20d MA (normalised, stationary)
+    direction     = np.sign(c.diff()).fillna(0)
+    obv           = (direction * volume).cumsum()
+    obv_ma20      = obv.rolling(20).mean()
+    feats["obv_vs_ma20"] = obv / (obv_ma20.abs() + 1e-9) - 1
+
+    # c) Volume ratio features
+    vol_ma20 = volume.rolling(20).mean()
+    feats["vol_ratio_20"] = volume / (vol_ma20 + 1e-9) - 1
+    feats["vol_ratio_5"]  = volume / (volume.rolling(5).mean() + 1e-9) - 1
+
+    # d) Price-volume momentum
+    pv = ret_btc * volume   # use existing log-return series aligned to c
+    feats["pv_mom_5"]  = pv.rolling(5).sum()  / (volume.rolling(5).sum()  + 1e-9)
+    feats["pv_mom_20"] = pv.rolling(20).sum() / (volume.rolling(20).sum() + 1e-9)
+
+    # e) Volume trend
+    feats["vol_slope_20"] = np.log(vol_ma20 + 1e-9).diff(20)
+
+    print("  TI-D volume features engineered (CMF-20, OBV vs MA20, vol ratios, "
+          "PV-momentum, vol slope).")
+else:
+    print("  WARNING: BTC OHLCV not available — TI-D volume features skipped.")
+
 # ── Assemble feature matrix ────────────────────────────────────────────────────
 feats_df = pd.DataFrame(feats, index=c.index)
 feats_df["y_logret_14"] = np.log(c.shift(-HORIZON) / c)
@@ -244,7 +293,8 @@ feat_cols_all = [col for col in feats_df.columns if col != "y_logret_14"]
 feats_df[feat_cols_all] = feats_df[feat_cols_all].ffill(limit=5).bfill(limit=40)
 
 print(f"\n  Feature matrix: {feats_df.shape}  "
-      f"({feats_df.shape[1]-1} features + 1 target)")
+      f"({feats_df.shape[1]-1} features + 1 target)  "
+      f"(~106 features expected with TI-D volume group)")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. TRAIN / TEST SPLIT  (same convention as v1: last 8 months, 14-day embargo)
@@ -468,8 +518,19 @@ art = dict(
         test_n         = int(len(test)),
         embargo_days   = int(EMBARGO_DAYS),
         method_v2      = ("GBM point prediction (BTC + macro + yield spread + "
-                          "econ activity + energy + ETH/BTC ratio); "
+                          "econ activity + energy + ETH/BTC ratio + "
+                          "volume TI-D (CMF, OBV)); "
                           "regime-cone band on GBM residuals"),
+        feature_groups = {
+            "btc_own":        "momentum (ret 1–21d), volatility (7–30d), RSI-14, range_ma30",
+            "macro_baseline": "SPX, NDX, VIX, GOLD, DXY, ETH (ret+vol)",
+            "group_A_yield":  "TNX level+ret, IRX, 10Y−3M spread (level+chg+inversion)",
+            "group_C_econ":   "HG (Copper) ret+vol, Copper/Gold ratio, XLI, XLF",
+            "group_H_energy": "CL (crude), NG (nat gas), XLE ETF",
+            "eth_btc_ratio":  "ETH/BTC log-ratio and 14d change",
+            "group_TI-D_vol": ("CMF-20, OBV vs MA20, vol_ratio_20, vol_ratio_5, "
+                               "pv_mom_5, pv_mom_20, vol_slope_20"),
+        },
         method_v1      = "range_ma30 tercile regime cone; median 14d forward log-return",
         band_pct_v2    = float(band_pct),
         band_pct_v1    = float(band_v1),
