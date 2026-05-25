@@ -20,7 +20,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 from paths import (
-    HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, DAY_TYPE_MODEL,
+    HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, CONE_14D_MODEL, DAY_TYPE_MODEL,
     BINANCE_HOURLY_CSV,
     BOOKMARKS_FILE as _BOOKMARKS_PATH, RUNTIME_DIR,
 )
@@ -93,6 +93,13 @@ def _training_cutoffs():
             out["7-day cone"] = pd.Timestamp(meta.get("train_end")) if meta.get("train_end") else None
         except Exception:
             out["7-day cone"] = None
+    # 14-day cone
+    if os.path.exists(str(CONE_14D_MODEL)):
+        try:
+            meta = joblib.load(CONE_14D_MODEL).get("calibration_meta", {})
+            out["14-day cone"] = pd.Timestamp(meta.get("train_end")) if meta.get("train_end") else None
+        except Exception:
+            out["14-day cone"] = None
     # 3-class
     if os.path.exists(str(DAY_TYPE_MODEL)):
         try:
@@ -471,8 +478,14 @@ def _fetch_daily_raw():
     START = (btc_daily.index.min() - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
     END = (datetime.now(timezone.utc).date()
            + pd.Timedelta(days=1).to_pytimedelta()).strftime("%Y-%m-%d")
+    # Extended ticker list — covers both 7d and 14d GBM feature sets:
+    #   Base:    ETH, SPX, NDX, VIX, GOLD, DXY, TNX
+    #   +7d/14d: IRX (yield spread), HG (copper), XLI, XLF (econ activity),
+    #            CL, NG, XLE (energy)
     SYMS = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
-            "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
+            "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX",
+            "irx":"^IRX","hg":"HG=F","xli":"XLI","xlf":"XLF",
+            "cl":"CL=F","ng":"NG=F","xle":"XLE"}
     parts = []
     for name, sym in SYMS.items():
         d = yf.download(sym, start=START, end=END, progress=False,
@@ -754,6 +767,218 @@ def _load_cone_7d():
     return joblib.load(p)
 
 
+@st.cache_resource
+def _load_cone_14d():
+    """Load the 14-day close-price GBM+cone artefact (or None if absent)."""
+    p = str(CONE_14D_MODEL)
+    if not os.path.exists(p):
+        return None
+    return joblib.load(p)
+
+
+@st.cache_data(ttl=3600 * 6, show_spinner=False)
+def _build_cone_feature_matrix():
+    """Build the shared daily feature matrix for the 7-day and 14-day GBM cone models.
+
+    Mirrors the feature engineering in ``src/train_7d_close_cone.py`` and
+    ``src/train_14d_close_cone.py`` exactly, using daily data from
+    ``_fetch_daily_raw()`` (which now includes IRX, HG, XLI, XLF, CL, NG, XLE).
+
+    Returns a DataFrame indexed by the same daily dates as ``_fetch_daily_raw()``.
+    Rows with NaN are forward-filled (limit 5) to match training-time behaviour.
+    Result is cached for 6 h — same TTL as ``_fetch_daily_raw()``.
+    """
+    df = _fetch_daily_raw()
+    if df.empty:
+        return pd.DataFrame()
+
+    c   = df["btc_close"]
+    h   = df.get("btc_high",   pd.Series(c, name="btc_high"))
+    l_  = df.get("btc_low",    pd.Series(c, name="btc_low"))
+    vol = df.get("btc_volume", pd.Series(1e6, index=c.index, name="btc_volume"))
+
+    feats = {}
+
+    # ── BTC own ──────────────────────────────────────────────────────────────
+    ret = np.log(c).diff()
+    for k in [1, 3, 5, 7, 10, 14, 21]:
+        feats[f"btc_ret_{k}"] = ret.rolling(k).sum()
+    for k in [7, 14, 20, 30]:
+        feats[f"btc_vol_{k}"] = ret.rolling(k).std()
+    _delta = c.diff()
+    _gain  = _delta.clip(lower=0).rolling(14).mean()
+    _loss  = (-_delta.clip(upper=0)).rolling(14).mean()
+    feats["btc_rsi_14"] = 100 - 100 / (1 + _gain / _loss.replace(0, np.nan))
+    feats["range_ma30"] = ((h - l_) / c).rolling(30).mean()
+
+    # ── Macro helper ─────────────────────────────────────────────────────────
+    def _add_macro(src_col, prefix, lookbacks=(1, 5, 10, 14, 20)):
+        if src_col not in df.columns:
+            return
+        s = df[src_col]
+        r = np.log(s.clip(lower=1e-9)).diff()
+        for k in lookbacks:
+            feats[f"{prefix}_ret_{k}"] = r.rolling(k).sum()
+        feats[f"{prefix}_vol_20"] = r.rolling(20).std()
+
+    # Baseline macro (both models)
+    for _src, _pfx in [("spx_close","spx"),("ndx_close","ndx"),("vix_close","vix"),
+                       ("gold_close","gold"),("dxy_close","dxy"),("eth_close","eth")]:
+        _add_macro(_src, _pfx)
+
+    # TNX (10-year yield) — returns + vol
+    if "tnx_close" in df.columns:
+        _tnx  = df["tnx_close"]
+        _rtnx = np.log(_tnx.clip(lower=1e-9)).diff()
+        for k in [1, 5, 10, 14, 20]:
+            feats[f"tnx_ret_{k}"] = _rtnx.rolling(k).sum()
+        feats["tnx_vol_20"] = _rtnx.rolling(20).std()
+
+    # ── Yield curve spread (10Y − 3M) ────────────────────────────────────────
+    if "tnx_close" in df.columns and "irx_close" in df.columns:
+        _spread = df["tnx_close"] - df["irx_close"]
+        feats["spread_10y_3m"]        = _spread
+        feats["spread_10y_3m_chg_5"]  = _spread.diff(5)
+        feats["spread_10y_3m_chg_20"] = _spread.diff(20)
+        feats["curve_inverted"]       = (_spread < 0).astype(float)
+        feats["curve_inverted_20d"]   = feats["curve_inverted"].rolling(20).mean()
+
+    # ── Economic activity ─────────────────────────────────────────────────────
+    _add_macro("xli_close", "xli")
+    _add_macro("xlf_close", "xlf")
+
+    if "hg_close" in df.columns:
+        _hg   = df["hg_close"]
+        _rhg  = np.log(_hg.clip(lower=1e-9)).diff()
+        for k in [1, 5, 10, 14, 20]:
+            feats[f"hg_ret_{k}"] = _rhg.rolling(k).sum()
+        feats["hg_vol_20"] = _rhg.rolling(20).std()
+        if "gold_close" in df.columns:
+            _cg = np.log(_hg / df["gold_close"].clip(lower=1e-9))
+            feats["copper_gold_ratio"]    = _cg
+            feats["copper_gold_chg_14"]   = _cg.diff(14)
+            feats["copper_gold_chg_20"]   = _cg.diff(20)
+
+    # ── Energy ───────────────────────────────────────────────────────────────
+    _add_macro("cl_close",  "cl")
+    _add_macro("xle_close", "xle")
+
+    if "ng_close" in df.columns:
+        _ng  = df["ng_close"]
+        _rng = np.log(_ng.clip(lower=1e-9)).diff()
+        for k in [1, 5, 10, 14, 20]:
+            feats[f"ng_ret_{k}"] = _rng.rolling(k).sum()
+        feats["ng_vol_20"] = _rng.rolling(20).std()
+
+    # ── ETH/BTC ratio ─────────────────────────────────────────────────────────
+    if "eth_close" in df.columns:
+        feats["eth_btc_ratio"]        = np.log(df["eth_close"] / c.clip(lower=1e-9))
+        feats["eth_btc_ratio_chg_14"] = feats["eth_btc_ratio"].diff(14)
+
+    # ── TI-B Momentum (7d model: RSI, Stochastic, Williams-R, CCI, ROC) ──────
+    def _rsi(close, p):
+        _d  = close.diff()
+        _g  = _d.clip(lower=0).rolling(p).mean()
+        _lo = (-_d.clip(upper=0)).rolling(p).mean()
+        return 100 - 100 / (1 + _g / _lo.replace(0, np.nan))
+
+    feats["rsi_7"]  = _rsi(c, 7)
+    feats["rsi_21"] = _rsi(c, 21)
+    feats["rsi_30"] = _rsi(c, 30)
+
+    _lo14 = l_.rolling(14).min()
+    _hi14 = h.rolling(14).max()
+    _sk   = 100 * (c - _lo14) / (_hi14 - _lo14 + 1e-9)
+    _sd   = _sk.rolling(3).mean()
+    feats["stoch_k"]       = _sk
+    feats["stoch_d"]       = _sd
+    feats["stoch_kd_diff"] = _sk - _sd
+    feats["williams_r"]    = -100 * (_hi14 - c) / (_hi14 - _lo14 + 1e-9)
+
+    _tp       = (h + l_ + c) / 3
+    _sma_tp20 = _tp.rolling(20).mean()
+    _mad_tp20 = _tp.rolling(20).apply(
+        lambda x: np.mean(np.abs(x - x.mean())), raw=True
+    )
+    feats["cci_20"] = (_tp - _sma_tp20) / (0.015 * _mad_tp20 + 1e-9)
+    feats["roc_7"]  = c / c.shift(7)  - 1
+    feats["roc_14"] = c / c.shift(14) - 1
+
+    # ── TI-D Volume (14d model: CMF, OBV, vol ratios, PV momentum) ───────────
+    _mfm = ((c - l_) - (h - c)) / (h - l_ + 1e-9)
+    _mfv = _mfm * vol
+    feats["cmf_20"] = _mfv.rolling(20).sum() / (vol.rolling(20).sum() + 1e-9)
+
+    _direction       = np.sign(c.diff()).fillna(0)
+    _obv             = (_direction * vol).cumsum()
+    _obv_ma20        = _obv.rolling(20).mean()
+    feats["obv_vs_ma20"]  = _obv / (_obv_ma20.abs() + 1e-9) - 1
+    feats["vol_ratio_20"] = vol / (vol.rolling(20).mean() + 1e-9) - 1
+    feats["vol_ratio_5"]  = vol / (vol.rolling(5).mean()  + 1e-9) - 1
+
+    _pv = ret * vol
+    feats["pv_mom_5"]     = _pv.rolling(5).sum()  / (vol.rolling(5).sum()  + 1e-9)
+    feats["pv_mom_20"]    = _pv.rolling(20).sum() / (vol.rolling(20).sum() + 1e-9)
+    feats["vol_slope_20"] = np.log(vol.rolling(20).mean() + 1e-9).diff(20)
+
+    # ── OC-B Miner/flow (7d model: tx fees, miners rev, mempool, tx vol) ─────
+    _OC_MAP = {
+        "oc_transaction_fees_usd":            "oc_tx_fees_usd",
+        "oc_miners_revenue":                  "oc_miners_rev",
+        "oc_mempool_size":                    "oc_mempool_sz",
+        "oc_estimated_transaction_volume_usd":"oc_tx_vol_usd",
+    }
+    for _app_col, _feat_pfx in _OC_MAP.items():
+        if _app_col not in df.columns:
+            continue
+        _s  = df[_app_col].astype(float)
+        _ld = np.log(_s.clip(lower=1e-9)).diff()
+        feats[f"{_feat_pfx}_ret_7"]  = _ld.rolling(7).sum()
+        feats[f"{_feat_pfx}_ret_30"] = _ld.rolling(30).sum()
+        feats[f"{_feat_pfx}_vol_20"] = _ld.rolling(20).std()
+
+    if "oc_estimated_transaction_volume_usd" in df.columns:
+        _tv  = df["oc_estimated_transaction_volume_usd"].astype(float)
+        _nvt = np.log(c * 19_500_000 / _tv.clip(lower=1e-9))
+        feats["oc_nvt_proxy_chg_30"] = _nvt.diff(30)
+
+    if ("oc_miners_revenue" in df.columns and
+            "oc_transaction_fees_usd" in df.columns):
+        _mr = df["oc_miners_revenue"].astype(float)
+        _tf = df["oc_transaction_fees_usd"].astype(float)
+        _ms = np.log(_mr / _tf.clip(lower=1e-9))
+        feats["oc_miner_stress_chg_30"] = _ms.diff(30)
+
+    fdf = pd.DataFrame(feats, index=df.index)
+    return fdf.replace([np.inf, -np.inf], np.nan).ffill(limit=5)
+
+
+def _cone_predict_batch(art, feat_df, anchor_dates):
+    """Apply the cone artefact's GBM (if use_ml=True) to a batch of anchor dates.
+
+    Returns a dict {anchor_date: predicted_log_return}.  Falls back to
+    an empty dict when the model is unavailable or feature columns are missing,
+    allowing callers to use the regime-median fallback.
+    """
+    if not (art.get("use_ml") and art.get("ml_point_model") is not None):
+        return {}
+    feat_cols_model = art.get("ml_feature_cols", [])
+    if not feat_cols_model or feat_df.empty:
+        return {}
+    avail = [a for a in anchor_dates if a in feat_df.index]
+    if not avail:
+        return {}
+    try:
+        X = pd.DataFrame(0.0, index=avail, columns=feat_cols_model)
+        common = [c for c in feat_cols_model if c in feat_df.columns]
+        X[common] = feat_df.loc[avail, common].values
+        X = X.fillna(0)
+        preds = art["ml_point_model"].predict(X)
+        return dict(zip(avail, preds.tolist()))
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def compute_7d_close_cone_forecast(asof_date_iso):
     """Forecast BTC close 7 days after `asof_date_iso` using the regime cone.
@@ -804,11 +1029,17 @@ def compute_7d_close_cone_forecast(asof_date_iso):
     regime_label = ["low vol","mid vol","high vol"][regime] if regime < 3 else f"r{regime}"
 
     stats = cone["regime_stats"][regime]
-    # Median forward 7-day log-return for this regime
+    # Median forward 7-day log-return for this regime (cone fallback)
     med_logret = float(stats[0.50] if 0.50 in stats else stats["0.5"])
     asof_close = float(c.loc[asof_t])
-    pred_close = asof_close * float(np.exp(med_logret))
     band_pct = float(cone.get("band_pct", 0.097))
+    # GBM point prediction (v2 artefact) when available
+    gbm_preds = _cone_predict_batch(cone, _build_cone_feature_matrix(), [asof_t])
+    if asof_t in gbm_preds:
+        pred_logret = gbm_preds[asof_t]
+    else:
+        pred_logret = med_logret
+    pred_close = asof_close * float(np.exp(pred_logret))
     lower = pred_close * (1 - band_pct)
     upper = pred_close * (1 + band_pct)
     pred_date = asof_t + pd.Timedelta(days=7)
@@ -924,17 +1155,20 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
         prior = c.loc[c.index <= d]
         return prior.index[-1] if not prior.empty else None
 
-    rows = []
+    # Collect all valid anchor dates first so we can batch-predict with GBM
+    candidate_anchors = []
     for i in range(days_back, -1, -1):
-        anchor_raw = end - pd.Timedelta(days=i)
-        anchor = _snap(anchor_raw)
-        if anchor is None:
-            continue
-        if anchor not in range_ma30.index:
-            continue
+        a = _snap(end - pd.Timedelta(days=i))
+        if a is not None and a in range_ma30.index and np.isfinite(range_ma30.loc[a]):
+            candidate_anchors.append(a)
+
+    # Batch GBM predictions (empty dict → fall back to regime median per anchor)
+    gbm_preds_7d = _cone_predict_batch(cone, _build_cone_feature_matrix(),
+                                       candidate_anchors)
+
+    rows = []
+    for anchor in candidate_anchors:
         rm30 = range_ma30.loc[anchor]
-        if not np.isfinite(rm30):
-            continue
         a_close = float(c.loc[anchor])
         regime  = int(np.searchsorted(edges, float(rm30), side="right"))
         regime  = max(0, min(len(edges), regime))
@@ -942,7 +1176,8 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
                         if regime < 3 else f"r{regime}")
         stats = cone["regime_stats"][regime]
         med_logret = float(stats[0.50] if 0.50 in stats else stats["0.5"])
-        p_close = a_close * float(np.exp(med_logret))
+        pred_logret = gbm_preds_7d.get(anchor, med_logret)
+        p_close = a_close * float(np.exp(pred_logret))
         lower   = p_close * (1 - band_pct)
         upper   = p_close * (1 + band_pct)
         target  = anchor + pd.Timedelta(days=7)
@@ -967,6 +1202,230 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
             regime_label = regime_label,
         ))
     return pd.DataFrame(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 14-day close-price cone (GBM point prediction + empirical ±band)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_14d_close_cone_forecast(asof_date_iso):
+    """Forecast BTC close 14 days after ``asof_date_iso`` using the GBM+cone model.
+
+    Mirrors ``compute_7d_close_cone_forecast`` but with a 14-day horizon.
+    Uses the artefact's GBM (``ml_point_model``) when ``use_ml=True``, falling
+    back to the regime-median log-return when the model or features are absent.
+
+    Returns a dict with the same schema as the 7-day equivalent (horizon_days=14),
+    or ``None`` if the artefact or data is unavailable.
+    """
+    cone = _load_cone_14d()
+    if cone is None:
+        return None
+    daily = _fetch_daily_raw().copy()
+    if daily.empty:
+        return None
+
+    asof = pd.Timestamp(asof_date_iso)
+    bars_avail = daily.loc[daily.index <= asof]
+    if bars_avail.empty:
+        return None
+    asof_t = bars_avail.index[-1]
+
+    c = bars_avail["btc_close"]
+    h = bars_avail.get("btc_high",  c.copy())
+    l_= bars_avail.get("btc_low",   c.copy())
+    range_today = (h - l_) / c
+    range_ma30  = range_today.rolling(30).mean()
+    rm30 = range_ma30.loc[asof_t]
+    if not np.isfinite(rm30):
+        return None
+
+    edges = np.asarray(cone["regime_edges"], dtype=float)
+    regime = int(np.searchsorted(edges, float(rm30), side="right"))
+    regime = max(0, min(len(edges), regime))
+    regime_label = (["low vol", "mid vol", "high vol"][regime]
+                    if regime < 3 else f"r{regime}")
+
+    stats = cone["regime_stats"][regime]
+    med_logret = float(stats[0.50] if 0.50 in stats else stats["0.5"])
+    asof_close = float(c.loc[asof_t])
+    band_pct = float(cone.get("band_pct", 0.16))   # ≈±16 % for 14-day horizon
+
+    # GBM point prediction when available
+    gbm_preds = _cone_predict_batch(cone, _build_cone_feature_matrix(), [asof_t])
+    pred_logret = gbm_preds.get(asof_t, med_logret)
+    pred_close = asof_close * float(np.exp(pred_logret))
+    lower = pred_close * (1 - band_pct)
+    upper = pred_close * (1 + band_pct)
+    pred_date = asof_t + pd.Timedelta(days=14)
+
+    def _snap(d):
+        if d in c.index and pd.notna(c.loc[d]):
+            return d
+        prior = c.loc[c.index <= d]
+        return prior.index[-1] if not prior.empty else None
+
+    # Check if predicted target has already passed (historical replay)
+    actual_pred_close, actual_pred_date = None, None
+    last_avail = c.index[-1]
+    if pred_date <= last_avail:
+        snapped_pred = _snap(pred_date)
+        if snapped_pred is not None and pd.notna(c.loc[snapped_pred]):
+            actual_pred_close = float(c.loc[snapped_pred])
+            actual_pred_date  = snapped_pred
+
+    return dict(
+        pred_date        = pred_date,
+        pred_close       = pred_close,
+        lower            = lower,
+        upper            = upper,
+        regime           = regime,
+        regime_label     = regime_label,
+        band_pct         = band_pct,
+        asof_close       = asof_close,
+        asof_date        = asof_t,
+        regime_median_logret = med_logret,
+        use_ml           = bool(asof_t in gbm_preds),
+        actual_pred_close = actual_pred_close,
+        actual_pred_date  = actual_pred_date,
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_rolling_14d_series(end_date_iso, days_back=30):
+    """Generate rolling daily 14-day forward close predictions.
+
+    For each anchor day D from (end_date − days_back) to end_date, predicts
+    the close 14 calendar days forward.  With days_back=30 the resolved subset
+    covers ~16 observations and the future wing shows ~14 active forecasts.
+
+    Returns a DataFrame with columns identical to ``compute_rolling_7d_series``.
+    """
+    cone = _load_cone_14d()
+    if cone is None:
+        return pd.DataFrame()
+    daily = _fetch_daily_raw().copy()
+    if daily.empty:
+        return pd.DataFrame()
+
+    end = pd.Timestamp(end_date_iso)
+    c   = daily["btc_close"]
+    h   = daily.get("btc_high",  c.copy())
+    l_  = daily.get("btc_low",   c.copy())
+    range_today = (h - l_) / c
+    range_ma30  = range_today.rolling(30).mean()
+    edges    = np.asarray(cone["regime_edges"], dtype=float)
+    band_pct = float(cone.get("band_pct", 0.16))
+
+    def _snap(d):
+        if d in c.index and pd.notna(c.loc[d]):
+            return d
+        prior = c.loc[c.index <= d]
+        return prior.index[-1] if not prior.empty else None
+
+    # Collect valid anchors for batch GBM prediction
+    candidate_anchors = []
+    for i in range(days_back, -1, -1):
+        a = _snap(end - pd.Timedelta(days=i))
+        if a is not None and a in range_ma30.index and np.isfinite(range_ma30.loc[a]):
+            candidate_anchors.append(a)
+
+    gbm_preds_14d = _cone_predict_batch(cone, _build_cone_feature_matrix(),
+                                        candidate_anchors)
+
+    rows = []
+    for anchor in candidate_anchors:
+        rm30 = range_ma30.loc[anchor]
+        a_close = float(c.loc[anchor])
+        regime  = int(np.searchsorted(edges, float(rm30), side="right"))
+        regime  = max(0, min(len(edges), regime))
+        regime_label = (["low vol", "mid vol", "high vol"][regime]
+                        if regime < 3 else f"r{regime}")
+        stats = cone["regime_stats"][regime]
+        med_logret  = float(stats[0.50] if 0.50 in stats else stats["0.5"])
+        pred_logret = gbm_preds_14d.get(anchor, med_logret)
+        p_close = a_close * float(np.exp(pred_logret))
+        lower   = p_close * (1 - band_pct)
+        upper   = p_close * (1 + band_pct)
+        target  = anchor + pd.Timedelta(days=14)
+        actual_close = np.nan
+        if target <= c.index[-1]:
+            ts = _snap(target)
+            if ts is not None and pd.notna(c.loc[ts]):
+                actual_close = float(c.loc[ts])
+        rows.append(dict(
+            anchor_date  = anchor,
+            target_date  = target,
+            anchor_close = a_close,
+            pred_close   = p_close,
+            lower        = lower,
+            upper        = upper,
+            actual_close = actual_close,
+            regime       = regime,
+            regime_label = regime_label,
+        ))
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_30d_cone_14d_metrics(end_date_iso):
+    """30-day look-back metrics for the 14-day close-cone model.
+
+    Requests 44 days of rolling anchors so the resolved subset
+    (target_date already in the past) covers roughly 30 observations.
+    Returns None if fewer than 5 resolved predictions are available.
+    """
+    rolling = compute_rolling_14d_series(end_date_iso, days_back=44)
+    if rolling is None or rolling.empty:
+        return None
+    resolved = rolling[rolling["actual_close"].notna()].copy()
+    if len(resolved) < 5:
+        return None
+    mape = ((resolved["actual_close"] - resolved["pred_close"]).abs()
+            / resolved["pred_close"]).mean() * 100
+    band_pct = float(resolved.iloc[0]["upper"] / resolved.iloc[0]["pred_close"] - 1)
+    within = (((resolved["actual_close"] >= resolved["lower"])
+               & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    return dict(n=len(resolved), mape=float(mape),
+                within_pct=float(within), band_pct=band_pct)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_alltime_cone_14d_metrics(end_date_iso):
+    """MAPE + band coverage over the full held-out test period for the 14-day cone.
+
+    Anchors ``compute_rolling_14d_series`` at ``test_start`` so only genuinely
+    out-of-sample predictions are included.  Returns None when fewer than 5
+    resolved predictions are available.
+    """
+    cone = _load_cone_14d()
+    if cone is None:
+        return None
+    meta = cone.get("calibration_meta", {})
+    test_start_str = meta.get("test_start", "2025-09-25")
+    test_start_ts  = pd.Timestamp(test_start_str)
+    end_ts = pd.Timestamp(end_date_iso)
+    days_back = int((end_ts - test_start_ts).days) + 28  # +14d lag + buffer
+    rolling = compute_rolling_14d_series(end_date_iso, days_back=days_back)
+    if rolling is None or rolling.empty:
+        return None
+    rolling  = rolling[rolling["anchor_date"] >= test_start_ts].copy()
+    resolved = rolling[rolling["actual_close"].notna()]
+    if len(resolved) < 5:
+        return None
+    mape = ((resolved["actual_close"] - resolved["pred_close"]).abs()
+            / resolved["pred_close"]).mean() * 100
+    band_pct = float(cone.get("band_pct", 0.16))
+    within = (((resolved["actual_close"] >= resolved["lower"])
+               & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    regime_pct = resolved["regime"].value_counts(normalize=True).mul(100).to_dict()
+    return dict(
+        n=len(resolved), mape=float(mape), within_pct=float(within),
+        band_pct=band_pct, test_start=test_start_str,
+        regime_pct={int(k): float(v) for k, v in regime_pct.items()},
+        stored_coverage=float(meta.get("held_out_band_coverage_pct", 0)),
+    )
 
 
 @st.cache_resource
@@ -2417,6 +2876,260 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 f"band ±{band_pct*100:.1f}%)."
             )
 
+    # ─────────── 14-day close cone — rolling daily predictions chart ─────────
+    cone14 = compute_14d_close_cone_forecast(target_date.strftime("%Y-%m-%d"))
+    if cone14 is not None:
+        ret_pct_14 = (np.exp(cone14["regime_median_logret"]) - 1) * 100
+        ml_tag = " · GBM" if cone14.get("use_ml") else " · regime median"
+        st.markdown(
+            f"#### 📆 14-day close-price cone — regime: **{cone14['regime_label']}**  "
+            f"<small>(as-of {pd.Timestamp(cone14['asof_date']).strftime('%Y-%m-%d')} "
+            f"close ${cone14['asof_close']:,.0f} → "
+            f"forecast {cone14['pred_date'].strftime('%Y-%m-%d')} "
+            f"${cone14['pred_close']:,.0f} "
+            f"(regime median {ret_pct_14:+.2f}%), "
+            f"band ±{cone14['band_pct']*100:.1f}%{ml_tag})</small>",
+            unsafe_allow_html=True,
+        )
+        band_pct_14 = cone14["band_pct"]
+        rolling14 = compute_rolling_14d_series(
+            target_date.strftime("%Y-%m-%d"), days_back=30
+        )
+
+        if len(rolling14) > 0:
+            resolved14 = rolling14[rolling14["actual_close"].notna()].copy()
+            future14   = rolling14[rolling14["actual_close"].isna()].copy()
+
+            fig14 = go.Figure()
+
+            # 1. ±band envelope fill across all target dates
+            all_td14 = rolling14.sort_values("target_date")
+            fig14.add_trace(go.Scatter(
+                x=list(all_td14["target_date"]), y=list(all_td14["upper"]),
+                mode="lines", line=dict(color="rgba(124,58,237,0)"),
+                hoverinfo="skip", showlegend=False,
+            ))
+            fig14.add_trace(go.Scatter(
+                x=list(all_td14["target_date"]), y=list(all_td14["lower"]),
+                mode="lines", fill="tonexty",
+                fillcolor="rgba(196,181,253,0.22)",
+                line=dict(color="rgba(124,58,237,0)"),
+                name=f"±{band_pct_14*100:.1f}% prediction band",
+                hoverinfo="skip",
+            ))
+
+            # 2. Prediction line at RESOLVED target dates (purple)
+            if len(resolved14) > 0:
+                fig14.add_trace(go.Scatter(
+                    x=list(resolved14["target_date"]),
+                    y=list(resolved14["pred_close"]),
+                    mode="lines+markers",
+                    name="14d prediction (resolved target)",
+                    line=dict(color="#7c3aed", width=1.6, dash="dot"),
+                    marker=dict(size=9, color="#7c3aed", symbol="diamond",
+                                line=dict(color="white", width=1)),
+                    customdata=list(
+                        resolved14["anchor_date"].dt.strftime("%Y-%m-%d")
+                    ),
+                    hovertemplate=(
+                        "Target %{x|%Y-%m-%d} — anchored %{customdata}<br>"
+                        "Predicted $%{y:,.0f}"
+                        "<extra></extra>"
+                    ),
+                ))
+
+            # 3. Realized close line through resolved dates (black)
+            if len(resolved14) > 0:
+                fig14.add_trace(go.Scatter(
+                    x=list(resolved14["target_date"]),
+                    y=list(resolved14["actual_close"]),
+                    mode="lines",
+                    name="Realized close",
+                    line=dict(color="#1f2937", width=2.2),
+                    hovertemplate=(
+                        "Realized %{x|%Y-%m-%d}<br>$%{y:,.0f}<extra></extra>"
+                    ),
+                ))
+                within_mask14 = (
+                    (resolved14["actual_close"] >= resolved14["lower"])
+                    & (resolved14["actual_close"] <= resolved14["upper"])
+                )
+                within14_df  = resolved14[within_mask14]
+                outside14_df = resolved14[~within_mask14]
+                if len(within14_df) > 0:
+                    fig14.add_trace(go.Scatter(
+                        x=list(within14_df["target_date"]),
+                        y=list(within14_df["actual_close"]),
+                        mode="markers",
+                        name=f"Actual ✅ within ±{band_pct_14*100:.1f}% band",
+                        marker=dict(size=11, color="#16a34a", symbol="circle",
+                                    line=dict(color="white", width=1.5)),
+                        customdata=[
+                            f"{(r.actual_close - r.pred_close) / r.pred_close * 100:+.1f}%"
+                            for r in within14_df.itertuples()
+                        ],
+                        hovertemplate=(
+                            "Actual %{x|%Y-%m-%d}<br>$%{y:,.0f}<br>"
+                            "Error vs prediction: %{customdata}<br>"
+                            "✅ Within band<extra></extra>"
+                        ),
+                    ))
+                if len(outside14_df) > 0:
+                    fig14.add_trace(go.Scatter(
+                        x=list(outside14_df["target_date"]),
+                        y=list(outside14_df["actual_close"]),
+                        mode="markers",
+                        name=f"Actual ❌ outside ±{band_pct_14*100:.1f}% band",
+                        marker=dict(size=12, color="#dc2626", symbol="x-thin",
+                                    line=dict(color="#dc2626", width=3)),
+                        customdata=[
+                            f"{(r.actual_close - r.pred_close) / r.pred_close * 100:+.1f}%"
+                            for r in outside14_df.itertuples()
+                        ],
+                        hovertemplate=(
+                            "Actual %{x|%Y-%m-%d}<br>$%{y:,.0f}<br>"
+                            "Error vs prediction: %{customdata}<br>"
+                            "❌ Outside band<extra></extra>"
+                        ),
+                    ))
+
+            # 4. Future predictions (target > latest data)
+            if len(future14) > 0:
+                if len(resolved14) > 0:
+                    bridge_x = (
+                        [resolved14["target_date"].iloc[-1]]
+                        + list(future14["target_date"])
+                    )
+                    bridge_y = (
+                        [resolved14["pred_close"].iloc[-1]]
+                        + list(future14["pred_close"])
+                    )
+                else:
+                    bridge_x = list(future14["target_date"])
+                    bridge_y = list(future14["pred_close"])
+                fig14.add_trace(go.Scatter(
+                    x=bridge_x, y=bridge_y,
+                    mode="lines",
+                    line=dict(color="#7c3aed", width=1.6, dash="dot"),
+                    hoverinfo="skip", showlegend=False,
+                ))
+                if len(future14) > 1:
+                    near14 = future14.iloc[:-1]
+                    fig14.add_trace(go.Scatter(
+                        x=list(near14["target_date"]),
+                        y=list(near14["pred_close"]),
+                        mode="markers",
+                        name="Near-term forecasts",
+                        marker=dict(size=10, color="#c4b5fd", symbol="star",
+                                    line=dict(color="#7c3aed", width=1)),
+                        customdata=list(
+                            near14["anchor_date"].dt.strftime("%Y-%m-%d")
+                        ),
+                        hovertemplate=(
+                            "Target %{x|%Y-%m-%d} — anchored %{customdata}<br>"
+                            "Predicted $%{y:,.0f}<extra></extra>"
+                        ),
+                    ))
+                # Latest anchor = primary +14d star
+                cur14 = future14.iloc[-1]
+                fig14.add_trace(go.Scatter(
+                    x=[cur14["target_date"]], y=[cur14["pred_close"]],
+                    mode="markers+text",
+                    name=(f"+14d forecast "
+                          f"(from {cur14['anchor_date'].strftime('%Y-%m-%d')})"),
+                    marker=dict(size=15, color="#7c3aed", symbol="star",
+                                line=dict(color="white", width=1.5)),
+                    text=[f"${cur14['pred_close']:,.0f}"],
+                    textposition="top center",
+                    error_y=dict(
+                        type="data",
+                        array=[cur14["upper"] - cur14["pred_close"]],
+                        arrayminus=[cur14["pred_close"] - cur14["lower"]],
+                        color="#a78bfa", thickness=2.5, width=7,
+                    ),
+                    hovertemplate=(
+                        f"Target %{{x|%Y-%m-%d}}<br>"
+                        f"Anchored {cur14['anchor_date'].strftime('%Y-%m-%d')}<br>"
+                        f"Predicted ${cur14['pred_close']:,.0f}<br>"
+                        f"Band ${cur14['lower']:,.0f} – ${cur14['upper']:,.0f}"
+                        "<extra></extra>"
+                    ),
+                ))
+
+            # Accuracy summary
+            accuracy_note_14 = ""
+            if len(resolved14) > 0:
+                mape14 = (
+                    (resolved14["actual_close"] - resolved14["pred_close"]).abs()
+                    / resolved14["pred_close"] * 100
+                ).mean()
+                within_pct14 = (
+                    ((resolved14["actual_close"] >= resolved14["lower"])
+                     & (resolved14["actual_close"] <= resolved14["upper"]))
+                    .mean() * 100
+                )
+                accuracy_note_14 = (
+                    f"  Rolling {len(resolved14)} resolved predictions: "
+                    f"MAPE = {mape14:.1f}%; "
+                    f"{within_pct14:.0f}% within ±{band_pct_14*100:.1f}% band."
+                )
+
+            n_future14   = len(future14)
+            title14_detail = (
+                "Purple ◆ = predicted close anchored 14 days before each target "
+                "(rolling daily). "
+                "Black line = realized close at target dates. "
+                f"Green ● = actual within / Red ✕ = actual outside "
+                f"±{band_pct_14*100:.1f}% band. "
+                f"⭐ = {n_future14} active forecast"
+                f"{'s' if n_future14 != 1 else ''} (target still in future)."
+            )
+            fig14.update_layout(
+                height=430, template="plotly_white",
+                title=dict(
+                    text=(
+                        "<b>14-day close prediction — rolling daily anchors</b>"
+                        "<br><span style='font-size:12px;color:#555'>"
+                        + title14_detail
+                        + (f"  {accuracy_note_14}" if accuracy_note_14 else "")
+                        + "</span>"
+                    ),
+                    x=0.01, xanchor="left", y=0.97, yanchor="top",
+                ),
+                yaxis_title="BTC / USD",
+                xaxis_title="Target date (close price predicted for this date, 14 days after anchor)",
+                margin=dict(t=115, r=30, b=50, l=70),
+                legend=dict(orientation="h", x=0, xanchor="left", y=1.08,
+                            yanchor="bottom", bgcolor="rgba(255,255,255,0.95)",
+                            bordercolor="#ccc", borderwidth=1, font=dict(size=11)),
+            )
+            fig14.update_xaxes(tickformat="%d-%b")
+            st.plotly_chart(fig14, use_container_width=True,
+                            key=f"chart_14d_rolling_{'live' if is_live else 'hist'}")
+            st.caption(
+                f"Rolling daily 14-day prediction chart: each anchor day generates "
+                f"a ±{band_pct_14*100:.1f}% cone forecast for the close 14 days later. "
+                "Purple diamonds = what was predicted; black line = what happened. "
+                "Green circles = actual fell inside the cone (hit); "
+                "red ✕ = actual outside (miss). "
+                "Stars = active forecasts whose target date hasn't arrived yet. "
+                + accuracy_note_14
+                + "  Model: GBM point prediction (106 features: BTC momentum, "
+                "macro, yield spread, econ activity, energy, ETH/BTC ratio, "
+                "Chaikin Money Flow) + empirical ±band from return distribution. "
+                "Trained on data through Sep 2025; OOS baseline: "
+                "MAPE ≈8.7%, direction accuracy ≈58.5%, coverage ≈89%."
+            )
+        else:
+            st.info(
+                "Rolling 14-day prediction series unavailable "
+                "(not enough historical data to compute regime features). "
+                f"Current +14d forecast: "
+                f"${cone14['pred_close']:,.0f} "
+                f"(regime: {cone14['regime_label']}, "
+                f"band ±{band_pct_14*100:.1f}%)."
+            )
+
     # ══════════════════════════════════════════════════════════════════════
     # Accuracy panel — 30-day rolling  vs  full held-out test set
     # ══════════════════════════════════════════════════════════════════════
@@ -2477,19 +3190,23 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             )
 
     # Pre-fetch other model results (cached, so instant on subsequent renders)
-    _end_iso  = target_date.strftime("%Y-%m-%d")
-    hl30      = compute_30d_daily_hl_metrics(_end_iso)
-    cone30    = compute_30d_cone_metrics(_end_iso)
-    dt30      = compute_30d_daytype_metrics(_end_iso)
-    cone_at   = compute_alltime_cone_metrics(_end_iso)
-    dt_at     = compute_alltime_daytype_metrics(_end_iso)
-    _hl_art   = _load_daily_hl()
-    _hl_meta  = _hl_art.get("calibration_meta", {})
-    _hl_mtest = _hl_meta.get("metrics", {})
-    _dt_art   = _load_day_type()
-    _dt_meta  = (_dt_art.get("calibration_meta", {}) if _dt_art else {})
-    _cone_art = _load_cone_7d()
+    _end_iso   = target_date.strftime("%Y-%m-%d")
+    hl30       = compute_30d_daily_hl_metrics(_end_iso)
+    cone30     = compute_30d_cone_metrics(_end_iso)
+    cone14_30  = compute_30d_cone_14d_metrics(_end_iso)
+    dt30       = compute_30d_daytype_metrics(_end_iso)
+    cone_at    = compute_alltime_cone_metrics(_end_iso)
+    cone14_at  = compute_alltime_cone_14d_metrics(_end_iso)
+    dt_at      = compute_alltime_daytype_metrics(_end_iso)
+    _hl_art    = _load_daily_hl()
+    _hl_meta   = _hl_art.get("calibration_meta", {})
+    _hl_mtest  = _hl_meta.get("metrics", {})
+    _dt_art    = _load_day_type()
+    _dt_meta   = (_dt_art.get("calibration_meta", {}) if _dt_art else {})
+    _cone_art  = _load_cone_7d()
     _cone_meta = (_cone_art.get("calibration_meta", {}) if _cone_art else {})
+    _cone14_art  = _load_cone_14d()
+    _cone14_meta = (_cone14_art.get("calibration_meta", {}) if _cone14_art else {})
     _mt_h     = A.get("metrics_test", {})
 
     # ── 1. Hourly close model ────────────────────────────────────────────
@@ -2610,7 +3327,47 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     else:
         st.info("Insufficient data for 30-day cone metrics.")
 
-    # ── 4. 3-class day-type model ────────────────────────────────────────
+    # ── 4. 14-day close cone ─────────────────────────────────────────────
+    st.markdown("#### 📆 14-day close cone (GBM + empirical band)")
+    if _cone14_meta:
+        st.caption(
+            f"Test period: **{_cone14_meta.get('test_start','?')} → "
+            f"{_cone14_meta.get('test_end','?')}** · "
+            f"stored coverage: "
+            f"{_cone14_meta.get('held_out_band_coverage_pct', 0):.1f} %"
+            + (f"  ·  computed MAPE: {cone14_at['mape']:.2f} %  (n={cone14_at['n']})"
+               if cone14_at else "")
+        )
+    if cone14_30:
+        _vtest_cov14  = cone14_at["within_pct"] if cone14_at else _cone14_meta.get("held_out_band_coverage_pct", 0)
+        _vtest_mape14 = cone14_at["mape"]        if cone14_at else None
+        _cc14 = st.columns(3)
+        _em_cov14 = _badge(cone14_30["within_pct"], _vtest_cov14, lo_better=False)
+        _cc14[0].metric(
+            f"{_em_cov14} Within ±{cone14_30['band_pct']*100:.1f} % band",
+            f"{cone14_30['within_pct']:.1f} %",
+            delta=(f"{cone14_30['within_pct'] - _vtest_cov14:+.1f} pp  "
+                   f"(test: {_vtest_cov14:.1f} %)"),
+            delta_color="normal",
+            help=f"30-day n = {cone14_30['n']} · test coverage {_vtest_cov14:.1f} %",
+        )
+        if _vtest_mape14:
+            _em_mape14 = _badge(cone14_30["mape"], _vtest_mape14, lo_better=True)
+            _cc14[1].metric(
+                f"{_em_mape14} MAPE",
+                f"{cone14_30['mape']:.2f} %",
+                delta=(f"{cone14_30['mape'] - _vtest_mape14:+.2f} pp  "
+                       f"(test: {_vtest_mape14:.2f} %)"),
+                delta_color="inverse",
+            )
+        else:
+            _cc14[1].metric("MAPE", f"{cone14_30['mape']:.2f} %")
+        _cc14[2].metric("Resolved (30 d)", str(cone14_30["n"]),
+                        help="Number of 14-day forecasts whose target date has passed")
+    else:
+        st.info("Insufficient data for 30-day 14d cone metrics.")
+
+    # ── 5. 3-class day-type model ────────────────────────────────────────
     DT_ICON = {"BigUpper": "🟢", "BigLower": "🔴", "Quiet": "⚪"}
     st.markdown("#### 🏷️ 3-class day-type model (GBM: BigUpper / BigLower / Quiet)")
     if _dt_meta:
@@ -2712,6 +3469,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                                 f"vs {_vt_cov2:.1f}%"),
             "Direction drift": "—",
             "Overall":         _pm_c,
+        })
+    if cone14_30:
+        _vt_cov14_2 = cone14_at["within_pct"] if cone14_at else _cone14_meta.get("held_out_band_coverage_pct", 89)
+        _pm_c14     = _badge(cone14_30["within_pct"], _vt_cov14_2, False)
+        _drift_rows.append({
+            "Model":           "📆 14-day cone",
+            "Perf drift":      (f"{_pm_c14}  coverage {cone14_30['within_pct']:.1f}% "
+                                f"vs {_vt_cov14_2:.1f}%"),
+            "Direction drift": "—",
+            "Overall":         _pm_c14,
         })
     if dt30:
         _vt_acc2 = dt_at["accuracy"] if dt_at else _dt_meta.get("test_accuracy_pct", 52.8)
