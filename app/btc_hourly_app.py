@@ -1481,18 +1481,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                        "Actual close: $%{customdata[1]:,.0f}<extra></extra>"),
     ))
 
-    # Coloured markers on the 1m line at each hourly prediction target time.
-    # Reuse the same green / red / grey palette as the prediction dots so
-    # the realized price at that hour is instantly comparable to the forecast.
-    if is_live and len(_1m_x) > 0:
-        _1m_ser = pd.Series(_1m_y, index=_1m_x)
+    # Coloured hourly close markers on the 1m line.
+    # Use actual_lb directly (the same Yahoo hourly closes used to evaluate
+    # prediction correctness) — no need to search the 1m data.
+    # Only plot where a realized close exists (actual_lb is not NaN).
+    if len(_1m_x) > 0 or not is_live:
         _hm_x, _hm_y, _hm_col = [], [], []
-        for _j, _xt_ts in enumerate(xt_ct):
-            _delta = abs(_1m_ser.index - _xt_ts)
-            _ni    = int(_delta.argmin())
-            if _delta[_ni] <= pd.Timedelta(minutes=2):
-                _hm_x.append(_1m_ser.index[_ni])
-                _hm_y.append(float(_1m_ser.iloc[_ni]))
+        for _j, (_xt_ts, _act) in enumerate(zip(xt_ct, actual_lb)):
+            if not np.isnan(_act):
+                _hm_x.append(_xt_ts)
+                _hm_y.append(float(_act))
                 _hm_col.append(
                     str(marker_colors[_j]) if _j < len(marker_colors)
                     else "lightgrey"
