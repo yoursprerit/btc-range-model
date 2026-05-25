@@ -230,6 +230,41 @@ def fetch_live_spot():
     except Exception:
         return None, None
 
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_btc_1m():
+    """Fetch the last ~25 hours of 1-minute BTC/USDT klines from Binance.
+
+    Makes two paginated requests (1 000 bars each) to cover 25 hours
+    (1 500 minutes).  Returns a DataFrame with a UTC tz-naive
+    DatetimeIndex and a single 'close' column.  Returns an empty
+    DataFrame on any network or parsing error.
+    """
+    try:
+        url = "https://api.binance.com/api/v3/klines"
+        # First call: most recent 1 000 bars
+        r1 = requests.get(url, params={"symbol": "BTCUSDT",
+                                        "interval": "1m", "limit": 1000},
+                          timeout=8)
+        r1.raise_for_status()
+        data = r1.json()
+        if not data:
+            return pd.DataFrame()
+        # Second call: 500 bars ending just before the first batch
+        earliest_ms = data[0][0]
+        r2 = requests.get(url, params={"symbol": "BTCUSDT",
+                                        "interval": "1m", "limit": 500,
+                                        "endTime": earliest_ms - 1},
+                          timeout=8)
+        r2.raise_for_status()
+        data = r2.json() + data          # oldest first
+        idx = pd.to_datetime([row[0] for row in data],
+                             unit="ms", utc=True).tz_localize(None)
+        closes = [float(row[4]) for row in data]
+        return pd.DataFrame({"close": closes}, index=idx)
+    except Exception:
+        return pd.DataFrame()
+
 # ─────────────────────── Date bookmarks ────────────────────────────────
 RUNTIME_DIR.mkdir(exist_ok=True)
 BOOKMARKS_FILE = str(_BOOKMARKS_PATH)
@@ -1379,25 +1414,47 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         hoverinfo="skip",
     ))
 
-    # --- Past actuals (prominent, solid black) ---
-    # Always extend to the "Now" vline so the black line reaches the
-    # current-minute marker.  Use the live Binance spot when available;
-    # fall back to the last known hourly close (flat step) so there is
-    # never a gap between the end of the line and the Now marker.
-    _x_actual = list(look_idx_ct)
-    _y_actual = list(close_lb)
-    if is_live and _y_actual:
-        # Extend to the Now vline using the last completed hourly close
-        # (flat step). The live Binance spot is a separate marker and
-        # must not be mixed into the hourly-close series.
-        _x_actual = _x_actual + [now_ct]
-        _y_actual = _y_actual + [_y_actual[-1]]
-    fig.add_trace(go.Scatter(
-        x=_x_actual, y=_y_actual, mode="lines",
-        line=dict(color="black", width=2),
-        name="Actual close",
-        hovertemplate="%{x|%Y-%m-%d %H:%M} CT<br>$%{y:,.0f}<extra></extra>",
-    ))
+    # --- Past actuals — 1-minute rolling price (live) / hourly (historical) ---
+    # In live mode fetch Binance 1m klines so the black line updates every
+    # minute and shows intraday detail.  Fall back to hourly bars in
+    # historical replay or when the 1m fetch fails.
+    # _1m_x / _1m_y are kept as shared variables so the coloured hourly
+    # markers (added after marker_colors is computed below) can reuse them.
+    _btc_1m = fetch_btc_1m() if is_live else pd.DataFrame()
+    _1m_x = pd.DatetimeIndex([])
+    _1m_y = np.array([], dtype=float)
+
+    if is_live and not _btc_1m.empty:
+        _1m_idx_ct = _ct(_btc_1m.index)          # UTC tz-naive → CT tz-naive
+        _1m_cls    = _btc_1m["close"].values
+        _win_start = (look_idx_ct[0] if len(look_idx_ct)
+                      else now_ct - pd.Timedelta(hours=LOOKBACK_HOURS))
+        _mask_1m   = (_1m_idx_ct >= _win_start) & (_1m_idx_ct <= now_ct)
+        _1m_x = _1m_idx_ct[_mask_1m]
+        _1m_y = _1m_cls[_mask_1m]
+
+    if is_live and len(_1m_x) > 0:
+        fig.add_trace(go.Scatter(
+            x=list(_1m_x), y=list(_1m_y),
+            mode="lines",
+            line=dict(color="black", width=1.5),
+            name="Actual price (1m, updates every min)",
+            hovertemplate="%{x|%Y-%m-%d %H:%M} CT<br>$%{y:,.0f}<extra></extra>",
+        ))
+    else:
+        # Historical mode or 1m fetch unavailable — hourly bars with flat
+        # extension to the Now vline so there is no gap before the marker.
+        _x_actual = list(look_idx_ct)
+        _y_actual = list(close_lb)
+        if is_live and _y_actual:
+            _x_actual = _x_actual + [now_ct]
+            _y_actual = _y_actual + [_y_actual[-1]]
+        fig.add_trace(go.Scatter(
+            x=_x_actual, y=_y_actual, mode="lines",
+            line=dict(color="black", width=2),
+            name="Actual close",
+            hovertemplate="%{x|%Y-%m-%d %H:%M} CT<br>$%{y:,.0f}<extra></extra>",
+        ))
 
     # --- Past predictions as discrete markers (no lagging line) ---
     # Coloured by directional correctness: green = predicted direction matched
@@ -1423,6 +1480,34 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                        "Pred return: %{customdata[0]:+.3f}%<br>"
                        "Actual close: $%{customdata[1]:,.0f}<extra></extra>"),
     ))
+
+    # Coloured markers on the 1m line at each hourly prediction target time.
+    # Reuse the same green / red / grey palette as the prediction dots so
+    # the realized price at that hour is instantly comparable to the forecast.
+    if is_live and len(_1m_x) > 0:
+        _1m_ser = pd.Series(_1m_y, index=_1m_x)
+        _hm_x, _hm_y, _hm_col = [], [], []
+        for _j, _xt_ts in enumerate(xt_ct):
+            _delta = abs(_1m_ser.index - _xt_ts)
+            _ni    = int(_delta.argmin())
+            if _delta[_ni] <= pd.Timedelta(minutes=2):
+                _hm_x.append(_1m_ser.index[_ni])
+                _hm_y.append(float(_1m_ser.iloc[_ni]))
+                _hm_col.append(
+                    str(marker_colors[_j]) if _j < len(marker_colors)
+                    else "lightgrey"
+                )
+        if _hm_x:
+            fig.add_trace(go.Scatter(
+                x=_hm_x, y=_hm_y, mode="markers",
+                marker=dict(color=_hm_col, size=9, symbol="circle",
+                            line=dict(color="white", width=1.5)),
+                name="Hourly realized close (green=correct dir.)",
+                hovertemplate=(
+                    "Realized %{x|%Y-%m-%d %H:%M} CT<br>"
+                    "$%{y:,.0f}<extra></extra>"
+                ),
+            ))
 
     # --- LIVE FORECAST: prominent zone (rolling 1h-from-now) ---
     fig.add_vrect(
@@ -1603,6 +1688,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # Bound y-axis tightly to actual data + key reference levels.
     # The daily 95 % CI hrects span ~5-10 % which would otherwise distort the plot.
     y_pts = list(close_lb)
+    if len(_1m_y) > 0:
+        y_pts.extend(_1m_y.tolist())
     y_pts.extend([pred_close, pred_close_up, pred_close_dn])
     if live_spot is not None: y_pts.append(live_spot)
     if daily is not None:
