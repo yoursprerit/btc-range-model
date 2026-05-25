@@ -970,6 +970,15 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
 
 
 @st.cache_resource
+def _load_daily_hl():
+    """Load and cache the daily H/L ensemble artefact (or {} if absent)."""
+    p = str(DAILY_MODEL_CT)
+    if not os.path.exists(p):
+        return {}
+    return joblib.load(p)
+
+
+@st.cache_resource
 def _load_day_type():
     """Load the 3-class day-type GBM artefact (or None if missing)."""
     p = str(DAY_TYPE_MODEL)
@@ -1239,6 +1248,101 @@ def compute_30d_daytype_metrics(end_date_iso):
             correct_n= correct_n,
         )
     return dict(n=len(df_r), accuracy=acc, by_class=by_class)
+
+
+@st.cache_data(ttl=3600 * 4, show_spinner=False)
+def compute_alltime_cone_metrics(end_date_iso):
+    """MAPE + band coverage over the full held-out test period for the 7-day cone.
+
+    Anchors ``compute_rolling_7d_series`` at ``test_start`` so only
+    genuinely out-of-sample predictions are included.  Returns None when
+    fewer than 5 resolved predictions are available.
+    """
+    cone = _load_cone_7d()
+    if cone is None:
+        return None
+    meta = cone.get("calibration_meta", {})
+    test_start_str = meta.get("test_start", "2025-09-21")
+    test_start_ts  = pd.Timestamp(test_start_str)
+    end_ts = pd.Timestamp(end_date_iso)
+    days_back = int((end_ts - test_start_ts).days) + 14  # +7d lag + buffer
+    rolling = compute_rolling_7d_series(end_date_iso, days_back=days_back)
+    if rolling is None or rolling.empty:
+        return None
+    rolling = rolling[rolling["anchor_date"] >= test_start_ts].copy()
+    resolved = rolling[rolling["actual_close"].notna()]
+    if len(resolved) < 5:
+        return None
+    mape = ((resolved["actual_close"] - resolved["pred_close"]).abs()
+            / resolved["pred_close"]).mean() * 100
+    band_pct = float(cone.get("band_pct", 0.097))
+    within = (((resolved["actual_close"] >= resolved["lower"])
+               & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    regime_pct = resolved["regime"].value_counts(normalize=True).mul(100).to_dict()
+    return dict(
+        n=len(resolved), mape=float(mape), within_pct=float(within),
+        band_pct=band_pct, test_start=test_start_str,
+        regime_pct={int(k): float(v) for k, v in regime_pct.items()},
+        stored_coverage=float(meta.get("held_out_band_coverage_pct", 0)),
+    )
+
+
+@st.cache_data(ttl=3600 * 12, show_spinner=False)
+def compute_alltime_daytype_metrics(end_date_iso):
+    """Per-class precision / recall over the full test period for the day-type model.
+
+    Iterates every calendar day from ``test_start`` to ``end_date_iso``,
+    fetches the cached forecast, and derives the actual label from the
+    artefact's ``quiet_threshold`` — the same logic as training.
+    Returns None when fewer than 5 labelled days exist.
+    """
+    art = _load_day_type()
+    if art is None:
+        return None
+    meta = art.get("calibration_meta", {})
+    test_start_str = meta.get("test_start")
+    if not test_start_str:
+        return None
+    test_start_ts = pd.Timestamp(test_start_str)
+    end_ts = pd.Timestamp(end_date_iso)
+    qthr  = float(art.get("quiet_threshold", 0.03))
+    daily = _fetch_daily_raw().copy()
+    rows  = []
+    cur   = test_start_ts
+    while cur <= end_ts:
+        if cur in daily.index:
+            asof_bars = daily.loc[daily.index < cur]
+            if not asof_bars.empty:
+                asof_t     = asof_bars.index[-1]
+                close_asof = float(daily.loc[asof_t, "btc_close"])
+                ah = daily.loc[cur, "btc_high"]
+                al = daily.loc[cur, "btc_low"]
+                if pd.notna(ah) and pd.notna(al):
+                    y_hi = (float(ah) - close_asof) / close_asof
+                    y_lo = (close_asof - float(al))  / close_asof
+                    actual = ("Quiet" if (y_hi + y_lo) < qthr
+                              else ("BigUpper" if y_hi > y_lo else "BigLower"))
+                    pred_r = compute_day_type_forecast(cur.strftime("%Y-%m-%d"))
+                    if pred_r is not None:
+                        rows.append(dict(
+                            predicted=pred_r["predicted_class"],
+                            actual=actual,
+                            probability=float(pred_r["probability"]),
+                            correct=(pred_r["predicted_class"] == actual),
+                        ))
+        cur += pd.Timedelta(days=1)
+    if not rows:
+        return None
+    df_r = pd.DataFrame(rows)
+    acc  = float(df_r["correct"].mean() * 100)
+    by_class = {}
+    for cls in ["BigUpper", "BigLower", "Quiet"]:
+        pm = df_r["predicted"] == cls
+        am = df_r["actual"]    == cls
+        cn = int((pm & am).sum())
+        by_class[cls] = dict(pred_n=int(pm.sum()), actual_n=int(am.sum()), correct_n=cn)
+    return dict(n=len(df_r), accuracy=acc, by_class=by_class,
+                test_start=test_start_str)
 
 
 # ─────────────────────────── fetch + predict ──────────────────────────
@@ -2313,118 +2417,509 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 f"band ±{band_pct*100:.1f}%)."
             )
 
-    # ═══════════════════ 30-day look-back accuracy — all models ═════════════
+    # ══════════════════════════════════════════════════════════════════════
+    # Accuracy panel — 30-day rolling  vs  full held-out test set
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _badge(v30, vtest, lo_better=True, tol=0.20):
+        """Drift badge: 🟢 ≤tol · 🟡 tol–2×tol · 🔴 >2×tol relative degradation.
+
+        ``lo_better=True``  → a *rise* in the metric is bad (MAPE, MAE).
+        ``lo_better=False`` → a *fall*  in the metric is bad (accuracy, hit-rate).
+        Returns ⚪ when the test baseline is zero or None.
+        """
+        if vtest is None or vtest == 0:
+            return "⚪"
+        rel = (v30 - vtest) / abs(vtest)
+        bad = rel if lo_better else -rel   # positive value = worse
+        if bad <= tol:       return "🟢"
+        if bad <= tol * 2.0: return "🟡"
+        return "🔴"
+
     st.markdown("---")
-    st.subheader("📊 30-day look-back accuracy — all models")
+    st.subheader("📊 Model accuracy — 30-day rolling vs full test set")
     st.caption(
-        "Out-of-sample metrics computed over the last 30 calendar days ending "
-        "at the current as-of date.  "
-        "Only bars with realized actuals are included in each average."
+        "Each metric shows the **30-day rolling value** with Δ vs the **full "
+        "held-out test-set baseline** stored at training time.  "
+        "Drift badge: 🟢 ≤ 20 % degradation · 🟡 20–40 % · 🔴 > 40 %."
     )
 
-    # ── 1. Hourly close model (ridge regression) ─────────────────────────
-    st.markdown("#### ⏱️ Hourly close model (ridge regression)")
+    # ── Compute 30-day hourly metrics (used across both accuracy & drift) ─
     lb30_start = latest_t - pd.Timedelta(days=30)
     lb30_idx   = F_filled.index[
-        (F_filled.index > lb30_start) &
-        (F_filled.index <= latest_t) &
-        valid_mask
+        (F_filled.index > lb30_start) & (F_filled.index <= latest_t) & valid_mask
     ]
+    hourly_30d = None   # dict with 30d metrics + y_mean/y_std for drift
+    _y30_preds = None   # raw predictions array (kept for drift section)
     if len(lb30_idx) > 0:
-        y_30d      = model.predict(F_filled.loc[lb30_idx])
-        close_30d  = df.loc[lb30_idx, "btc_close"].values
-        pred_c_30d = close_30d * np.exp(y_30d)
-        tgt_30d    = [d + pd.Timedelta(hours=1) for d in lb30_idx]
-        act_30d    = np.array([
+        _y30_preds = model.predict(F_filled.loc[lb30_idx])
+        _c30       = df.loc[lb30_idx, "btc_close"].values
+        _pc30      = _c30 * np.exp(_y30_preds)
+        _tgt30     = [d + pd.Timedelta(hours=1) for d in lb30_idx]
+        _act30     = np.array([
             float(df.loc[d, "btc_close"]) if d in df.index else np.nan
-            for d in tgt_30d
+            for d in _tgt30
         ])
-        m30 = ~np.isnan(act_30d)
-        if m30.sum() > 5:
-            rel30 = np.abs(pred_c_30d[m30] - act_30d[m30]) / act_30d[m30]
-            pr30  = y_30d[m30]
-            ar30  = np.log(act_30d[m30] / close_30d[m30])
-            h_cols = st.columns(5)
-            h_cols[0].metric("MAPE",
-                             f"{rel30.mean() * 100:.2f} %",
-                             help=f"Mean absolute % error — n = {int(m30.sum())} realized hours")
-            h_cols[1].metric("Hit ±3 %",   f"{(rel30 <= 0.03).mean() * 100:.1f} %",
-                             help="Fraction of hours where |pred − actual| / actual ≤ 3 %")
-            h_cols[2].metric("Hit ±1 %",   f"{(rel30 <= 0.01).mean() * 100:.1f} %")
-            h_cols[3].metric("Hit ±0.5 %", f"{(rel30 <= 0.005).mean() * 100:.1f} %")
-            h_cols[4].metric("Direction acc.",
-                             f"{np.mean(np.sign(pr30) == np.sign(ar30)) * 100:.1f} %",
-                             help="% of hours where predicted direction (up/down) matched realized")
-        else:
-            st.info("Insufficient realized data for 30-day hourly metrics.")
-    else:
-        st.info("No hourly data available in the last 30 days.")
+        _m30 = ~np.isnan(_act30)
+        if _m30.sum() > 5:
+            _rel30 = np.abs(_pc30[_m30] - _act30[_m30]) / _act30[_m30]
+            _pr30  = _y30_preds[_m30]
+            _ar30  = np.log(_act30[_m30] / _c30[_m30])
+            hourly_30d = dict(
+                n       = int(_m30.sum()),
+                mape    = float(_rel30.mean() * 100),
+                hit3    = float((_rel30 <= 0.03).mean()  * 100),
+                hit1    = float((_rel30 <= 0.01).mean()  * 100),
+                hit05   = float((_rel30 <= 0.005).mean() * 100),
+                dir_acc = float(np.mean(np.sign(_pr30) == np.sign(_ar30)) * 100),
+                y_mean  = float(_pr30.mean() * 100),   # pct log-return
+                y_std   = float(_pr30.std()  * 100),
+            )
 
-    # ── 2. Daily H/L model (ensemble) ───────────────────────────────────
+    # Pre-fetch other model results (cached, so instant on subsequent renders)
+    _end_iso  = target_date.strftime("%Y-%m-%d")
+    hl30      = compute_30d_daily_hl_metrics(_end_iso)
+    cone30    = compute_30d_cone_metrics(_end_iso)
+    dt30      = compute_30d_daytype_metrics(_end_iso)
+    cone_at   = compute_alltime_cone_metrics(_end_iso)
+    dt_at     = compute_alltime_daytype_metrics(_end_iso)
+    _hl_art   = _load_daily_hl()
+    _hl_meta  = _hl_art.get("calibration_meta", {})
+    _hl_mtest = _hl_meta.get("metrics", {})
+    _dt_art   = _load_day_type()
+    _dt_meta  = (_dt_art.get("calibration_meta", {}) if _dt_art else {})
+    _cone_art = _load_cone_7d()
+    _cone_meta = (_cone_art.get("calibration_meta", {}) if _cone_art else {})
+    _mt_h     = A.get("metrics_test", {})
+
+    # ── 1. Hourly close model ────────────────────────────────────────────
+    st.markdown("#### ⏱️ Hourly close model (GBM)")
+    _ts_h = A.get("test_start"); _te_h = A.get("test_end")
+    if _ts_h and _te_h:
+        st.caption(
+            f"Test period: **{pd.Timestamp(_ts_h).date()} → "
+            f"{pd.Timestamp(_te_h).date()}** — metrics frozen from training run."
+        )
+    if hourly_30d and _mt_h:
+        _defs_h = [
+            ("MAPE",       "mape",    "MAPE_pct",    True,  "%.2f %%"),
+            ("Hit ±1 %",   "hit1",    "hit1_pct",    False, "%.1f %%"),
+            ("Hit ±0.5 %", "hit05",   "hit05_pct",   False, "%.1f %%"),
+            ("Dir acc",    "dir_acc", "dir_acc_pct", False, "%.1f %%"),
+        ]
+        _hc = st.columns(len(_defs_h))
+        for _ci, (_lbl, _k30, _ktest, _lo, _fmt) in enumerate(_defs_h):
+            _v30   = hourly_30d[_k30]
+            _vtest = _mt_h.get(_ktest, 0)
+            _em    = _badge(_v30, _vtest, _lo)
+            _hc[_ci].metric(
+                f"{_em} {_lbl}",
+                _fmt % _v30,
+                delta=f"{_v30 - _vtest:+.2f} pp  (test: {_fmt % _vtest})",
+                delta_color="inverse" if _lo else "normal",
+                help=(f"30-day n = {hourly_30d['n']} · "
+                      f"test baseline {_fmt % _vtest}  "
+                      f"({pd.Timestamp(_ts_h).date() if _ts_h else '?'} → "
+                      f"{pd.Timestamp(_te_h).date() if _te_h else '?'})"),
+            )
+    elif hourly_30d:
+        _hc2 = st.columns(4)
+        _hc2[0].metric("MAPE",       f"{hourly_30d['mape']:.2f} %")
+        _hc2[1].metric("Hit ±1 %",   f"{hourly_30d['hit1']:.1f} %")
+        _hc2[2].metric("Hit ±0.5 %", f"{hourly_30d['hit05']:.1f} %")
+        _hc2[3].metric("Dir acc",    f"{hourly_30d['dir_acc']:.1f} %")
+    else:
+        st.info("Insufficient data for 30-day hourly metrics.")
+
+    # ── 2. Daily H/L model ───────────────────────────────────────────────
     st.markdown("#### 📅 Daily H/L model (ensemble — Huber + Bayes + GBM-MAE)")
-    hl30 = compute_30d_daily_hl_metrics(target_date.strftime("%Y-%m-%d"))
-    if hl30:
-        hl_cols = st.columns(6)
-        hl_cols[0].metric("MAPE HIGH",
-                          f"{hl30['mape_h']:.2f} %",
-                          help=f"Mean |pred_high − actual_high| / actual_high — n = {hl30['n']} bars")
-        hl_cols[1].metric("MAPE LOW",       f"{hl30['mape_l']:.2f} %",
-                          help="Mean |pred_low − actual_low| / actual_low")
-        hl_cols[2].metric("Hit ±1.5 % HIGH", f"{hl30['hit_h']:.1f} %",
-                          help="% of days where pred_high is within 1.5 % of actual_high")
-        hl_cols[3].metric("Hit ±1.5 % LOW",  f"{hl30['hit_l']:.1f} %")
-        hl_cols[4].metric("Dir acc HIGH",   f"{hl30['dir_h']:.1f} %",
-                          help="Did the predicted HIGH line trend the same way as the actual HIGH day-over-day?")
-        hl_cols[5].metric("Dir acc LOW",    f"{hl30['dir_l']:.1f} %",
-                          help="Did the predicted LOW line trend the same way as the actual LOW day-over-day?")
+    if _hl_meta:
+        st.caption(
+            f"Test period: **{_hl_meta.get('test_start','?')} → "
+            f"{_hl_meta.get('test_end','?')}** · n = {_hl_meta.get('test_n','?')} bars"
+        )
+    if hl30 and _hl_mtest:
+        _defs_hl = [
+            ("MAPE HIGH",        "mape_h", "MAPE_H",             True,  "%.2f %%"),
+            ("MAPE LOW",         "mape_l", "MAPE_L",             True,  "%.2f %%"),
+            ("Hit ±1.5 % HIGH",  "hit_h",  "hit2_H",             False, "%.1f %%"),
+            ("Hit ±1.5 % LOW",   "hit_l",  "hit2_L",             False, "%.1f %%"),
+            ("Dir acc HIGH",     "dir_h",  "direction_hit_rate",  False, "%.1f %%"),
+            ("Dir acc LOW",      "dir_l",  "direction_hit_rate",  False, "%.1f %%"),
+        ]
+        _hlc = st.columns(len(_defs_hl))
+        for _ci, (_lbl, _k30, _ktest, _lo, _fmt) in enumerate(_defs_hl):
+            _v30   = hl30[_k30]
+            _vtest = _hl_mtest.get(_ktest, 0)
+            _em    = _badge(_v30, _vtest, _lo)
+            _hlc[_ci].metric(
+                f"{_em} {_lbl}",
+                _fmt % _v30,
+                delta=f"{_v30 - _vtest:+.2f} pp  (test: {_fmt % _vtest})",
+                delta_color="inverse" if _lo else "normal",
+                help=f"30-day n = {hl30['n']} · test baseline {_fmt % _vtest}",
+            )
+    elif hl30:
+        _hlc2 = st.columns(6)
+        _hlc2[0].metric("MAPE HIGH",       f"{hl30['mape_h']:.2f} %")
+        _hlc2[1].metric("MAPE LOW",        f"{hl30['mape_l']:.2f} %")
+        _hlc2[2].metric("Hit ±1.5% HIGH",  f"{hl30['hit_h']:.1f} %")
+        _hlc2[3].metric("Hit ±1.5% LOW",   f"{hl30['hit_l']:.1f} %")
+        _hlc2[4].metric("Dir acc HIGH",    f"{hl30['dir_h']:.1f} %")
+        _hlc2[5].metric("Dir acc LOW",     f"{hl30['dir_l']:.1f} %")
     else:
         st.info("Insufficient data for 30-day daily H/L metrics.")
 
-    # ── 3. 7-day close cone model ────────────────────────────────────────
+    # ── 3. 7-day close cone ──────────────────────────────────────────────
     st.markdown("#### 📐 7-day close cone (rolling daily anchors)")
-    cone30 = compute_30d_cone_metrics(target_date.strftime("%Y-%m-%d"))
+    if _cone_meta:
+        st.caption(
+            f"Test period: **{_cone_meta.get('test_start','?')} → "
+            f"{_cone_meta.get('test_end','?')}** · "
+            f"stored coverage: "
+            f"{_cone_meta.get('held_out_band_coverage_pct', 0):.1f} %"
+            + (f"  ·  computed MAPE: {cone_at['mape']:.2f} %  (n={cone_at['n']})"
+               if cone_at else "")
+        )
     if cone30:
-        c_cols = st.columns(3)
-        c_cols[0].metric("MAPE",
-                         f"{cone30['mape']:.2f} %",
-                         help=(f"Mean |pred_close − actual_close| / pred_close"
-                               f" — n = {cone30['n']} resolved 7-day forecasts"))
-        c_cols[1].metric(f"Within ±{cone30['band_pct'] * 100:.1f} % band",
-                         f"{cone30['within_pct']:.1f} %",
-                         help="% of resolved predictions where the actual close fell inside the cone")
-        c_cols[2].metric("Resolved forecasts (30 d)",
-                         str(cone30["n"]),
-                         help="Number of 7-day forecasts whose target date has passed")
+        _vtest_cov  = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 0)
+        _vtest_mape = cone_at["mape"]        if cone_at else None
+        _cc = st.columns(3)
+        _em_cov = _badge(cone30["within_pct"], _vtest_cov, lo_better=False)
+        _cc[0].metric(
+            f"{_em_cov} Within ±{cone30['band_pct']*100:.1f} % band",
+            f"{cone30['within_pct']:.1f} %",
+            delta=(f"{cone30['within_pct'] - _vtest_cov:+.1f} pp  "
+                   f"(test: {_vtest_cov:.1f} %)"),
+            delta_color="normal",
+            help=f"30-day n = {cone30['n']} · test coverage {_vtest_cov:.1f} %",
+        )
+        if _vtest_mape:
+            _em_mape = _badge(cone30["mape"], _vtest_mape, lo_better=True)
+            _cc[1].metric(
+                f"{_em_mape} MAPE",
+                f"{cone30['mape']:.2f} %",
+                delta=(f"{cone30['mape'] - _vtest_mape:+.2f} pp  "
+                       f"(test: {_vtest_mape:.2f} %)"),
+                delta_color="inverse",
+            )
+        else:
+            _cc[1].metric("MAPE", f"{cone30['mape']:.2f} %")
+        _cc[2].metric("Resolved (30 d)", str(cone30["n"]),
+                      help="Number of 7-day forecasts whose target date has passed")
     else:
         st.info("Insufficient data for 30-day cone metrics.")
 
-    # ── 4. 3-class day-type model (GBM) ─────────────────────────────────
+    # ── 4. 3-class day-type model ────────────────────────────────────────
+    DT_ICON = {"BigUpper": "🟢", "BigLower": "🔴", "Quiet": "⚪"}
     st.markdown("#### 🏷️ 3-class day-type model (GBM: BigUpper / BigLower / Quiet)")
-    dt30 = compute_30d_daytype_metrics(target_date.strftime("%Y-%m-%d"))
-    if dt30:
-        DT_ICON = {"BigUpper": "🟢", "BigLower": "🔴", "Quiet": "⚪"}
-        dt_cols = st.columns(4)
-        dt_cols[0].metric(
-            "Overall accuracy",
-            f"{dt30['accuracy']:.1f} %",
-            help=f"n = {dt30['n']} classified days (random-baseline ≈ 33 %)",
+    if _dt_meta:
+        _stored_acc = _dt_meta.get("test_accuracy_pct", 0)
+        st.caption(
+            f"Test period: **{_dt_meta.get('test_start','?')} → "
+            f"{_dt_meta.get('test_end','?')}** · "
+            f"n = {_dt_meta.get('test_n','?')} days · "
+            f"stored accuracy: {_stored_acc:.1f} %"
+            + (f"  ·  computed accuracy: {dt_at['accuracy']:.1f} %  (n={dt_at['n']})"
+               if dt_at else "")
         )
-        for ci, cls in enumerate(["BigUpper", "BigLower", "Quiet"]):
-            bc       = dt30["by_class"][cls]
-            n_pred   = bc["pred_n"]
-            n_actual = bc["actual_n"]
-            prec     = bc["correct_n"] / n_pred * 100 if n_pred > 0 else 0.0
-            recall   = (bc["correct_n"] / n_actual * 100) if n_actual else 0.0
-            dt_cols[ci + 1].metric(
-                f"{DT_ICON[cls]} {cls}",
-                f"{prec:.0f} % precision",
-                delta=f"pred {n_pred}× · actual {n_actual}×",
-                help=(f"Precision = {bc['correct_n']}/{n_pred} correct among predicted {cls}.  "
-                      f"Recall = {bc['correct_n']}/{n_actual} = {recall:.0f}%"
-                      if n_actual else "No actual days of this type in the window."),
-            )
+    if dt30:
+        _vtest_acc = dt_at["accuracy"] if dt_at else _dt_meta.get("test_accuracy_pct", 50.0)
+        _em_acc = _badge(dt30["accuracy"], _vtest_acc, lo_better=False)
+        _dtc = st.columns(4)
+        _dtc[0].metric(
+            f"{_em_acc} Overall accuracy",
+            f"{dt30['accuracy']:.1f} %",
+            delta=(f"{dt30['accuracy'] - _vtest_acc:+.1f} pp  "
+                   f"(test: {_vtest_acc:.1f} %)"),
+            delta_color="normal",
+            help=f"n = {dt30['n']} · test baseline {_vtest_acc:.1f} %",
+        )
+        for _ci, _cls in enumerate(["BigUpper", "BigLower", "Quiet"]):
+            _bc     = dt30["by_class"][_cls]
+            _prec30 = _bc["correct_n"] / _bc["pred_n"] * 100 if _bc["pred_n"] else 0.0
+            if dt_at:
+                _rbc     = dt_at["by_class"][_cls]
+                _prec_at = _rbc["correct_n"] / _rbc["pred_n"] * 100 if _rbc["pred_n"] else 0.0
+                _em_p    = _badge(_prec30, _prec_at, lo_better=False)
+                _dtc[_ci + 1].metric(
+                    f"{_em_p} {DT_ICON[_cls]} {_cls}",
+                    f"{_prec30:.0f} % prec",
+                    delta=(f"{_prec30 - _prec_at:+.0f} pp  "
+                           f"(test: {_prec_at:.0f} %)"),
+                    delta_color="normal",
+                    help=(f"30d: pred {_bc['pred_n']}× actual {_bc['actual_n']}×  "
+                          f"correct {_bc['correct_n']}.  "
+                          f"Test baseline precision {_prec_at:.0f} % "
+                          f"(pred {_rbc['pred_n']}× actual {_rbc['actual_n']}×)."),
+                )
+            else:
+                _recall30 = _bc["correct_n"] / _bc["actual_n"] * 100 if _bc["actual_n"] else 0.0
+                _dtc[_ci + 1].metric(
+                    f"{DT_ICON[_cls]} {_cls}",
+                    f"{_prec30:.0f} % prec",
+                    delta=f"pred {_bc['pred_n']}× · actual {_bc['actual_n']}×",
+                    help=(f"Precision {_prec30:.0f} %  Recall {_recall30:.0f} %  "
+                          f"(n = {_bc['pred_n']} predicted as {_cls})"),
+                )
     else:
         st.info("Insufficient data for 30-day day-type metrics.")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Drift monitoring
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("🔍 Drift monitoring")
+    st.caption(
+        "**Performance drift** = 30-day metric vs test-set baseline (above).  "
+        "**Prediction shift** = mean of recent predictions vs reference period.  "
+        "**Input drift** = z-score of recent feature means vs test-period reference (hourly).  "
+        "**Regime drift** = volatility regime distribution (7-day cone)."
+    )
+
+    # ── Status summary ────────────────────────────────────────────────────
+    _drift_rows = []
+    if hourly_30d and _mt_h:
+        _pm_h  = _badge(hourly_30d["mape"],    _mt_h.get("MAPE_pct",    0), True)
+        _da_h  = _badge(hourly_30d["dir_acc"], _mt_h.get("dir_acc_pct", 0), False)
+        _ov_h  = "🔴" if "🔴" in (_pm_h, _da_h) else ("🟡" if "🟡" in (_pm_h, _da_h) else "🟢")
+        _drift_rows.append({
+            "Model":           "⏱️ Hourly close",
+            "Perf drift":      (f"{_pm_h}  MAPE {hourly_30d['mape']:.2f}% "
+                                f"vs {_mt_h.get('MAPE_pct',0):.2f}%"),
+            "Direction drift": (f"{_da_h}  {hourly_30d['dir_acc']:.1f}% "
+                                f"vs {_mt_h.get('dir_acc_pct',0):.1f}%"),
+            "Overall":         _ov_h,
+        })
+    if hl30 and _hl_mtest:
+        _pm_hl  = _badge(hl30["mape_h"], _hl_mtest.get("MAPE_H", 0), True)
+        _da_hl  = _badge(hl30["dir_h"],  _hl_mtest.get("direction_hit_rate", 50), False)
+        _ov_hl  = "🔴" if "🔴" in (_pm_hl, _da_hl) else ("🟡" if "🟡" in (_pm_hl, _da_hl) else "🟢")
+        _drift_rows.append({
+            "Model":           "📅 Daily H/L",
+            "Perf drift":      (f"{_pm_hl}  MAPE-H {hl30['mape_h']:.2f}% "
+                                f"vs {_hl_mtest.get('MAPE_H',0):.2f}%"),
+            "Direction drift": (f"{_da_hl}  dir-H {hl30['dir_h']:.1f}% "
+                                f"vs {_hl_mtest.get('direction_hit_rate',50):.1f}%"),
+            "Overall":         _ov_hl,
+        })
+    if cone30:
+        _vt_cov2 = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 88)
+        _pm_c   = _badge(cone30["within_pct"], _vt_cov2, False)
+        _drift_rows.append({
+            "Model":           "📐 7-day cone",
+            "Perf drift":      (f"{_pm_c}  coverage {cone30['within_pct']:.1f}% "
+                                f"vs {_vt_cov2:.1f}%"),
+            "Direction drift": "—",
+            "Overall":         _pm_c,
+        })
+    if dt30:
+        _vt_acc2 = dt_at["accuracy"] if dt_at else _dt_meta.get("test_accuracy_pct", 52.8)
+        _pm_dt  = _badge(dt30["accuracy"], _vt_acc2, False)
+        _drift_rows.append({
+            "Model":           "🏷️ Day-type",
+            "Perf drift":      (f"{_pm_dt}  accuracy {dt30['accuracy']:.1f}% "
+                                f"vs {_vt_acc2:.1f}%"),
+            "Direction drift": "—",
+            "Overall":         _pm_dt,
+        })
+    if _drift_rows:
+        st.dataframe(
+            pd.DataFrame(_drift_rows),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    # ── Hourly: feature input drift ──────────────────────────────────────
+    with st.expander("🌊 Input feature drift — hourly model (top-15 by importance)", expanded=False):
+        _imp = A.get("importance")
+        if _imp is not None and _ts_h:
+            _ts_h_ts = pd.Timestamp(_ts_h)
+            _ref_idx = F_filled.index[
+                (F_filled.index >= _ts_h_ts) &
+                (F_filled.index <  lb30_start) &
+                valid_mask
+            ]
+            _rec_idx = F_filled.index[
+                (F_filled.index >= lb30_start) &
+                (F_filled.index <= latest_t) &
+                valid_mask
+            ]
+            if len(_ref_idx) > 100 and len(_rec_idx) > 24:
+                _top_f     = _imp.sort_values(ascending=False).head(15).index.tolist()
+                _ref_means = F_filled.loc[_ref_idx, _top_f].mean()
+                _ref_stds  = F_filled.loc[_ref_idx, _top_f].std()
+                _rec_means = F_filled.loc[_rec_idx, _top_f].mean()
+                _z_feats   = (_rec_means - _ref_means) / (_ref_stds + 1e-10)
+                _z_sorted  = _z_feats.sort_values()
+                _colors_f  = [
+                    "#dc2626" if abs(z) > 2.0 else
+                    "#f59e0b" if abs(z) > 1.0 else
+                    "#16a34a"
+                    for z in _z_sorted.values
+                ]
+                _fig_fd = go.Figure(go.Bar(
+                    y=list(_z_sorted.index), x=list(_z_sorted.values),
+                    orientation="h",
+                    marker_color=_colors_f,
+                    text=[f"{z:+.2f}" for z in _z_sorted.values],
+                    textposition="outside",
+                ))
+                _fig_fd.add_vline(x= 0, line=dict(color="#111", width=1))
+                _fig_fd.add_vline(x= 2, line=dict(color="#dc2626", width=1.2, dash="dash"))
+                _fig_fd.add_vline(x=-2, line=dict(color="#dc2626", width=1.2, dash="dash"))
+                _fig_fd.add_vline(x= 1, line=dict(color="#f59e0b", width=1,   dash="dot"))
+                _fig_fd.add_vline(x=-1, line=dict(color="#f59e0b", width=1,   dash="dot"))
+                _fig_fd.update_layout(
+                    height=430, template="plotly_white",
+                    title=dict(
+                        text=("<b>Feature z-scores: last 30 days vs test-period reference</b>"
+                              "<br><span style='font-size:11px;color:#555'>"
+                              "z = (recent mean − ref mean) / ref std.  "
+                              "🔴 |z|>2 = significant drift · 🟡 |z|>1 = mild · 🟢 stable."
+                              "</span>"),
+                        x=0.0, xanchor="left",
+                    ),
+                    xaxis_title="z-score (std deviations)",
+                    yaxis_title=None,
+                    margin=dict(t=80, r=90, b=40, l=170),
+                )
+                st.plotly_chart(_fig_fd, use_container_width=True,
+                                key=f"drift_feat_{'live' if is_live else 'hist'}")
+                _n_red = int((abs(_z_feats) > 2).sum())
+                _n_yel = int(((abs(_z_feats) > 1) & (abs(_z_feats) <= 2)).sum())
+                _n_grn = int((abs(_z_feats) <= 1).sum())
+                st.caption(
+                    f"Reference: {len(_ref_idx):,} hours from "
+                    f"{_ts_h_ts.date()} to {lb30_start.date()}.  "
+                    f"🔴 {_n_red} features significantly drifted (|z|>2) · "
+                    f"🟡 {_n_yel} mildly drifted (1<|z|≤2) · "
+                    f"🟢 {_n_grn} stable (|z|≤1)."
+                )
+            else:
+                st.info("Insufficient reference-period data for feature drift analysis "
+                        "(need test_start + at least 100 ref hours and 24 recent hours).")
+        else:
+            st.info("Feature importance not available in this artefact version.")
+
+    # ── Hourly: prediction distribution shift ────────────────────────────
+    with st.expander("📈 Prediction distribution shift — hourly model", expanded=False):
+        if _y30_preds is not None and _ts_h:
+            _ts_h_ts2 = pd.Timestamp(_ts_h)
+            _ref_idx2 = F_filled.index[
+                (F_filled.index >= _ts_h_ts2) &
+                (F_filled.index <  lb30_start) &
+                valid_mask
+            ]
+            if len(_ref_idx2) > 50:
+                _y_ref2 = model.predict(F_filled.loc[_ref_idx2])
+                _pc1, _pc2, _pc3 = st.columns(3)
+                _mean_diff  = hourly_30d["y_mean"] - float(_y_ref2.mean() * 100)
+                _std_diff   = hourly_30d["y_std"]  - float(_y_ref2.std()  * 100)
+                _z_mean_ps  = float(
+                    (_y30_preds.mean() - _y_ref2.mean())
+                    / (_y_ref2.std() / np.sqrt(len(_y30_preds)) + 1e-12)
+                )
+                _z_em_ps = "🟢" if abs(_z_mean_ps) < 1.5 else ("🟡" if abs(_z_mean_ps) < 2.5 else "🔴")
+                _pc1.metric(
+                    "Pred mean log-ret (30d)",
+                    f"{hourly_30d['y_mean']:+.4f} %",
+                    delta=f"ref: {_y_ref2.mean()*100:+.4f} %  (Δ {_mean_diff:+.4f} pp)",
+                    delta_color="off",
+                    help="Systematic upward/downward bias in recent predictions vs test-period reference",
+                )
+                _pc2.metric(
+                    "Pred std (30d)",
+                    f"{hourly_30d['y_std']:.4f} %",
+                    delta=f"ref: {_y_ref2.std()*100:.4f} %  (Δ {_std_diff:+.4f} pp)",
+                    delta_color="off",
+                    help="Spread of predicted log-returns — higher = model sees more uncertainty",
+                )
+                _pc3.metric(
+                    f"{_z_em_ps} Mean-shift z-score",
+                    f"{_z_mean_ps:.2f}",
+                    help=(f"z = (recent mean − ref mean) / (ref std / √n).  "
+                          f"|z| < 1.5 🟢 · 1.5–2.5 🟡 · >2.5 🔴.  "
+                          f"Reference: {len(_ref_idx2):,} bars from "
+                          f"{_ts_h_ts2.date()} → {lb30_start.date()}."),
+                )
+            else:
+                st.info("Insufficient reference-period data for prediction shift analysis.")
+        else:
+            st.info("Prediction shift unavailable (no test_start in artefact).")
+
+    # ── Daily H/L: prediction mean-offset shift ───────────────────────────
+    with st.expander("📅 Daily H/L prediction shift", expanded=False):
+        _mu_hi_ref = float(_hl_art.get("mu_hi", 0))
+        _mu_lo_ref = float(_hl_art.get("mu_lo", 0))
+        if hl30 and _mu_hi_ref and _mu_lo_ref:
+            _ds30 = compute_daily_series(_end_iso, days_back=30)
+            if not _ds30.empty and "close_asof" in _ds30.columns:
+                _have_ds = _ds30["actual_high"].notna()
+                _s30_hl  = _ds30[_have_ds]
+                if not _s30_hl.empty:
+                    _mu_hi_30 = ((_s30_hl["pred_high"] - _s30_hl["close_asof"])
+                                 / _s30_hl["close_asof"]).mean()
+                    _mu_lo_30 = ((_s30_hl["close_asof"] - _s30_hl["pred_low"])
+                                 / _s30_hl["close_asof"]).mean()
+                    _hps1, _hps2 = st.columns(2)
+                    _hps1.metric(
+                        "Mean pred upside offset (30d)",
+                        f"{_mu_hi_30 * 100:+.2f} %",
+                        delta=(f"vs training μ_hi {_mu_hi_ref * 100:+.2f} %  "
+                               f"(Δ {(_mu_hi_30 - _mu_hi_ref)*100:+.2f} pp)"),
+                        delta_color="off",
+                        help=(f"Mean of (pred_high − close_asof) / close_asof over last 30 days "
+                              f"vs climatological mean stored at training time."),
+                    )
+                    _hps2.metric(
+                        "Mean pred downside offset (30d)",
+                        f"{_mu_lo_30 * 100:+.2f} %",
+                        delta=(f"vs training μ_lo {_mu_lo_ref * 100:+.2f} %  "
+                               f"(Δ {(_mu_lo_30 - _mu_lo_ref)*100:+.2f} pp)"),
+                        delta_color="off",
+                    )
+                else:
+                    st.info("No completed daily bars in the last 30 days.")
+            else:
+                st.info("Daily series unavailable for prediction shift analysis.")
+        else:
+            st.info("Daily H/L prediction shift unavailable (mu_hi/mu_lo not in artefact).")
+
+    # ── 7-day cone: regime distribution drift ────────────────────────────
+    with st.expander("📐 7-day cone regime distribution drift", expanded=False):
+        if cone_at and cone30:
+            _rolling30_r = compute_rolling_7d_series(_end_iso, days_back=30)
+            if _rolling30_r is not None and not _rolling30_r.empty:
+                _rl = {0: "low vol", 1: "mid vol", 2: "high vol"}
+                _reg30_pct = _rolling30_r["regime"].value_counts(normalize=True).mul(100)
+                _reg_at_pct = cone_at["regime_pct"]
+                _rfig = go.Figure()
+                for _r, _rlbl in _rl.items():
+                    _rfig.add_trace(go.Bar(
+                        name=_rlbl,
+                        x=["Last 30 days", "Full test period"],
+                        y=[float(_reg30_pct.get(_r, 0)),
+                           float(_reg_at_pct.get(_r, 0))],
+                    ))
+                _rfig.update_layout(
+                    height=290, template="plotly_white", barmode="stack",
+                    title="Regime distribution: last 30 days vs full test period",
+                    yaxis_title="% of anchor days", yaxis_range=[0, 100],
+                    margin=dict(t=50, r=30, b=40, l=50),
+                    legend=dict(orientation="h", x=0, y=1.15),
+                )
+                st.plotly_chart(_rfig, use_container_width=True,
+                                key=f"drift_regime_{'live' if is_live else 'hist'}")
+                st.caption(
+                    "Regime = range_ma30 tercile (low/mid/high volatility).  "
+                    "A shift toward high-vol anchors means the model's median "
+                    "return estimate will be less reliable (higher-variance regime)."
+                )
+            else:
+                st.info("Insufficient data for regime drift analysis.")
+        else:
+            st.info("Regime drift requires full-test cone metrics (insufficient historical data).")
 
     # ─────────────────────── extra context: features now ──────────────────
     with st.expander("🔍 Latest feature snapshot (top contributors)"):
