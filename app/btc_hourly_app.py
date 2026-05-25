@@ -1380,8 +1380,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     ))
 
     # --- Past actuals (prominent, solid black) ---
+    # In live mode, append the Binance spot as the current-minute endpoint
+    # so the line rolls forward every minute instead of stopping at the
+    # last completed hourly bar (which can be up to 59 min stale).
+    _x_actual = list(look_idx_ct)
+    _y_actual = list(close_lb)
+    if is_live and live_spot is not None:
+        _x_actual = _x_actual + [now_ct]
+        _y_actual = _y_actual + [live_spot]
     fig.add_trace(go.Scatter(
-        x=look_idx_ct, y=close_lb, mode="lines",
+        x=_x_actual, y=_y_actual, mode="lines",
         line=dict(color="black", width=2),
         name="Actual close",
         hovertemplate="%{x|%Y-%m-%d %H:%M} CT<br>$%{y:,.0f}<extra></extra>",
