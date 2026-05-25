@@ -1119,6 +1119,128 @@ def build_features(df):
     f["us_open"]=((hr>=13)&(hr<=20)&(dow<5)).astype(int)
     return f
 
+# ═══════════════════ 30-day look-back metric helpers ════════════════════
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_30d_daily_hl_metrics(end_date_iso):
+    """30-day look-back MAPE, hit-rate and direction accuracy for the daily H/L model.
+
+    Uses ``compute_daily_series`` (already cached) to pull the last 30 target
+    bars with realised actuals, then computes per-level metrics.
+    Returns None if fewer than 5 bars are available.
+    """
+    series = compute_daily_series(end_date_iso, days_back=30)
+    if series is None or series.empty:
+        return None
+    have = series["actual_high"].notna() & series["actual_low"].notna()
+    s = series[have].copy()
+    if len(s) < 5:
+        return None
+    mape_h = ((s["actual_high"] - s["pred_high"]).abs() / s["actual_high"]).mean() * 100
+    mape_l = ((s["actual_low"]  - s["pred_low"] ).abs() / s["actual_low"] ).mean() * 100
+    hit_h  = ((s["actual_high"] - s["pred_high"]).abs() / s["actual_high"] <= 0.015).mean() * 100
+    hit_l  = ((s["actual_low"]  - s["pred_low"] ).abs() / s["actual_low"]  <= 0.015).mean() * 100
+    # Day-to-day direction accuracy (did pred line trend the same way as actuals?)
+    d_ah = s["actual_high"].diff(); d_ph = s["pred_high"].diff()
+    d_al = s["actual_low" ].diff(); d_pl = s["pred_low" ].diff()
+    valid = s.index[1:]
+    dir_h = ((np.sign(d_ah[valid]) == np.sign(d_ph[valid])) & (d_ah[valid] != 0)).mean() * 100
+    dir_l = ((np.sign(d_al[valid]) == np.sign(d_pl[valid])) & (d_al[valid] != 0)).mean() * 100
+    return dict(n=len(s), mape_h=float(mape_h), mape_l=float(mape_l),
+                hit_h=float(hit_h), hit_l=float(hit_l),
+                dir_h=float(dir_h), dir_l=float(dir_l))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_30d_cone_metrics(end_date_iso):
+    """30-day look-back metrics for the 7-day close-cone model.
+
+    Requests 37 days of rolling anchors so that the resolved subset
+    (target_date already in the past) covers roughly 30 observations.
+    Returns None if fewer than 5 resolved predictions are available.
+    """
+    rolling = compute_rolling_7d_series(end_date_iso, days_back=37)
+    if rolling is None or rolling.empty:
+        return None
+    resolved = rolling[rolling["actual_close"].notna()].copy()
+    if len(resolved) < 5:
+        return None
+    mape   = ((resolved["actual_close"] - resolved["pred_close"]).abs()
+              / resolved["pred_close"]).mean() * 100
+    # Recover band_pct from the first row (upper/pred_close - 1)
+    band_pct = float(resolved.iloc[0]["upper"] / resolved.iloc[0]["pred_close"] - 1)
+    within = (((resolved["actual_close"] >= resolved["lower"])
+               & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    return dict(n=len(resolved), mape=float(mape),
+                within_pct=float(within), band_pct=band_pct)
+
+
+@st.cache_data(ttl=3600 * 6, show_spinner="Computing 30-day day-type metrics …")
+def compute_30d_daytype_metrics(end_date_iso):
+    """30-day accuracy for the 3-class day-type (BigUpper / BigLower / Quiet) model.
+
+    For each of the 30 completed target-days ending at ``end_date_iso``:
+      1. Retrieve the model's predicted class via ``compute_day_type_forecast``
+         (already cached, so only recomputed once per day).
+      2. Derive the *actual* label from the realised H/L and the artefact's
+         stored ``quiet_threshold`` — matching the training label function
+         exactly.  Requires the target bar and the preceding close.
+    Returns None if fewer than 5 days have both a prediction and an actual.
+    """
+    art = _load_day_type()
+    if art is None:
+        return None
+    qthr  = float(art.get("quiet_threshold", 0.03))
+    end   = pd.Timestamp(end_date_iso)
+    daily = _fetch_daily_raw().copy()
+    rows  = []
+    for i in range(30, 0, -1):
+        target     = end - pd.Timedelta(days=i)
+        target_iso = target.strftime("%Y-%m-%d")
+        if target not in daily.index:
+            continue
+        # As-of close: the latest daily bar that closed BEFORE the target bar
+        asof_bars = daily.loc[daily.index < target]
+        if asof_bars.empty:
+            continue
+        asof_t      = asof_bars.index[-1]
+        close_asof  = float(daily.loc[asof_t, "btc_close"])
+        ah          = daily.loc[target, "btc_high"]
+        al          = daily.loc[target, "btc_low"]
+        if not (pd.notna(ah) and pd.notna(al)):
+            continue
+        y_hi = (float(ah) - close_asof) / close_asof
+        y_lo = (close_asof - float(al))  / close_asof
+        rng  = y_hi + y_lo
+        actual = ("Quiet" if rng < qthr
+                  else ("BigUpper" if y_hi > y_lo else "BigLower"))
+        pred_r = compute_day_type_forecast(target_iso)
+        if pred_r is None:
+            continue
+        rows.append(dict(
+            target_date    = target,
+            predicted      = pred_r["predicted_class"],
+            actual         = actual,
+            probability    = float(pred_r["probability"]),
+            correct        = (pred_r["predicted_class"] == actual),
+        ))
+    if not rows:
+        return None
+    df_r = pd.DataFrame(rows)
+    acc  = float(df_r["correct"].mean() * 100)
+    by_class = {}
+    for cls in ["BigUpper", "BigLower", "Quiet"]:
+        pred_mask   = df_r["predicted"] == cls
+        actual_mask = df_r["actual"]    == cls
+        correct_n   = int((pred_mask & actual_mask).sum())
+        by_class[cls] = dict(
+            pred_n   = int(pred_mask.sum()),
+            actual_n = int(actual_mask.sum()),
+            correct_n= correct_n,
+        )
+    return dict(n=len(df_r), accuracy=acc, by_class=by_class)
+
+
 # ─────────────────────────── fetch + predict ──────────────────────────
 with st.spinner("Fetching live market data ..."):
     df = fetch_data()
@@ -2191,15 +2313,118 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 f"band ±{band_pct*100:.1f}%)."
             )
 
-    # ─────────────────────── live look-back metrics ───────────────────────
-    if lb_metrics:
-        st.subheader(f"Live look-back accuracy (last {mask.sum()} realised hours)")
-        cols = st.columns(5)
-        cols[0].metric("MAPE", f"{lb_metrics['MAPE']:.2f} %")
-        cols[1].metric("Hit ±3 %", f"{lb_metrics['hit3']:.1f} %")
-        cols[2].metric("Hit ±1 %", f"{lb_metrics['hit1']:.1f} %")
-        cols[3].metric("Hit ±0.5 %", f"{lb_metrics['hit0.5']:.1f} %")
-        cols[4].metric("Direction acc.", f"{lb_metrics['dir_acc']:.1f} %")
+    # ═══════════════════ 30-day look-back accuracy — all models ═════════════
+    st.markdown("---")
+    st.subheader("📊 30-day look-back accuracy — all models")
+    st.caption(
+        "Out-of-sample metrics computed over the last 30 calendar days ending "
+        "at the current as-of date.  "
+        "Only bars with realized actuals are included in each average."
+    )
+
+    # ── 1. Hourly close model (ridge regression) ─────────────────────────
+    st.markdown("#### ⏱️ Hourly close model (ridge regression)")
+    lb30_start = latest_t - pd.Timedelta(days=30)
+    lb30_idx   = F_filled.index[
+        (F_filled.index > lb30_start) &
+        (F_filled.index <= latest_t) &
+        valid_mask
+    ]
+    if len(lb30_idx) > 0:
+        y_30d      = model.predict(F_filled.loc[lb30_idx])
+        close_30d  = df.loc[lb30_idx, "btc_close"].values
+        pred_c_30d = close_30d * np.exp(y_30d)
+        tgt_30d    = [d + pd.Timedelta(hours=1) for d in lb30_idx]
+        act_30d    = np.array([
+            float(df.loc[d, "btc_close"]) if d in df.index else np.nan
+            for d in tgt_30d
+        ])
+        m30 = ~np.isnan(act_30d)
+        if m30.sum() > 5:
+            rel30 = np.abs(pred_c_30d[m30] - act_30d[m30]) / act_30d[m30]
+            pr30  = y_30d[m30]
+            ar30  = np.log(act_30d[m30] / close_30d[m30])
+            h_cols = st.columns(5)
+            h_cols[0].metric("MAPE",
+                             f"{rel30.mean() * 100:.2f} %",
+                             help=f"Mean absolute % error — n = {int(m30.sum())} realized hours")
+            h_cols[1].metric("Hit ±3 %",   f"{(rel30 <= 0.03).mean() * 100:.1f} %",
+                             help="Fraction of hours where |pred − actual| / actual ≤ 3 %")
+            h_cols[2].metric("Hit ±1 %",   f"{(rel30 <= 0.01).mean() * 100:.1f} %")
+            h_cols[3].metric("Hit ±0.5 %", f"{(rel30 <= 0.005).mean() * 100:.1f} %")
+            h_cols[4].metric("Direction acc.",
+                             f"{np.mean(np.sign(pr30) == np.sign(ar30)) * 100:.1f} %",
+                             help="% of hours where predicted direction (up/down) matched realized")
+        else:
+            st.info("Insufficient realized data for 30-day hourly metrics.")
+    else:
+        st.info("No hourly data available in the last 30 days.")
+
+    # ── 2. Daily H/L model (ensemble) ───────────────────────────────────
+    st.markdown("#### 📅 Daily H/L model (ensemble — Huber + Bayes + GBM-MAE)")
+    hl30 = compute_30d_daily_hl_metrics(target_date.strftime("%Y-%m-%d"))
+    if hl30:
+        hl_cols = st.columns(6)
+        hl_cols[0].metric("MAPE HIGH",
+                          f"{hl30['mape_h']:.2f} %",
+                          help=f"Mean |pred_high − actual_high| / actual_high — n = {hl30['n']} bars")
+        hl_cols[1].metric("MAPE LOW",       f"{hl30['mape_l']:.2f} %",
+                          help="Mean |pred_low − actual_low| / actual_low")
+        hl_cols[2].metric("Hit ±1.5 % HIGH", f"{hl30['hit_h']:.1f} %",
+                          help="% of days where pred_high is within 1.5 % of actual_high")
+        hl_cols[3].metric("Hit ±1.5 % LOW",  f"{hl30['hit_l']:.1f} %")
+        hl_cols[4].metric("Dir acc HIGH",   f"{hl30['dir_h']:.1f} %",
+                          help="Did the predicted HIGH line trend the same way as the actual HIGH day-over-day?")
+        hl_cols[5].metric("Dir acc LOW",    f"{hl30['dir_l']:.1f} %",
+                          help="Did the predicted LOW line trend the same way as the actual LOW day-over-day?")
+    else:
+        st.info("Insufficient data for 30-day daily H/L metrics.")
+
+    # ── 3. 7-day close cone model ────────────────────────────────────────
+    st.markdown("#### 📐 7-day close cone (rolling daily anchors)")
+    cone30 = compute_30d_cone_metrics(target_date.strftime("%Y-%m-%d"))
+    if cone30:
+        c_cols = st.columns(3)
+        c_cols[0].metric("MAPE",
+                         f"{cone30['mape']:.2f} %",
+                         help=(f"Mean |pred_close − actual_close| / pred_close"
+                               f" — n = {cone30['n']} resolved 7-day forecasts"))
+        c_cols[1].metric(f"Within ±{cone30['band_pct'] * 100:.1f} % band",
+                         f"{cone30['within_pct']:.1f} %",
+                         help="% of resolved predictions where the actual close fell inside the cone")
+        c_cols[2].metric("Resolved forecasts (30 d)",
+                         str(cone30["n"]),
+                         help="Number of 7-day forecasts whose target date has passed")
+    else:
+        st.info("Insufficient data for 30-day cone metrics.")
+
+    # ── 4. 3-class day-type model (GBM) ─────────────────────────────────
+    st.markdown("#### 🏷️ 3-class day-type model (GBM: BigUpper / BigLower / Quiet)")
+    dt30 = compute_30d_daytype_metrics(target_date.strftime("%Y-%m-%d"))
+    if dt30:
+        DT_ICON = {"BigUpper": "🟢", "BigLower": "🔴", "Quiet": "⚪"}
+        dt_cols = st.columns(4)
+        dt_cols[0].metric(
+            "Overall accuracy",
+            f"{dt30['accuracy']:.1f} %",
+            help=f"n = {dt30['n']} classified days (random-baseline ≈ 33 %)",
+        )
+        for ci, cls in enumerate(["BigUpper", "BigLower", "Quiet"]):
+            bc       = dt30["by_class"][cls]
+            n_pred   = bc["pred_n"]
+            n_actual = bc["actual_n"]
+            prec     = bc["correct_n"] / n_pred * 100 if n_pred > 0 else 0.0
+            recall   = (bc["correct_n"] / n_actual * 100) if n_actual else 0.0
+            dt_cols[ci + 1].metric(
+                f"{DT_ICON[cls]} {cls}",
+                f"{prec:.0f} % precision",
+                delta=f"pred {n_pred}× · actual {n_actual}×",
+                help=(f"Precision = {bc['correct_n']}/{n_pred} correct among predicted {cls}.  "
+                      f"Recall = {bc['correct_n']}/{n_actual} = {recall:.0f}%"
+                      if n_actual else "No actual days of this type in the window."),
+            )
+    else:
+        st.info("Insufficient data for 30-day day-type metrics.")
 
     # ─────────────────────── extra context: features now ──────────────────
     with st.expander("🔍 Latest feature snapshot (top contributors)"):
