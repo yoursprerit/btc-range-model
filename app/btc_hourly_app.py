@@ -1396,8 +1396,12 @@ def compute_30d_cone_14d_metrics(end_date_iso):
     band_pct = float(resolved.iloc[0]["upper"] / resolved.iloc[0]["pred_close"] - 1)
     within = (((resolved["actual_close"] >= resolved["lower"])
                & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    dir_acc = float(np.mean(
+        np.sign(resolved["pred_close"] - resolved["anchor_close"])
+        == np.sign(resolved["actual_close"] - resolved["anchor_close"])
+    ) * 100)
     return dict(n=len(resolved), mape=float(mape),
-                within_pct=float(within), band_pct=band_pct)
+                within_pct=float(within), band_pct=band_pct, dir_acc=dir_acc)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1428,10 +1432,14 @@ def compute_alltime_cone_14d_metrics(end_date_iso):
     band_pct = float(cone.get("band_pct", 0.16))
     within = (((resolved["actual_close"] >= resolved["lower"])
                & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    dir_acc = float(np.mean(
+        np.sign(resolved["pred_close"] - resolved["anchor_close"])
+        == np.sign(resolved["actual_close"] - resolved["anchor_close"])
+    ) * 100)
     regime_pct = resolved["regime"].value_counts(normalize=True).mul(100).to_dict()
     return dict(
         n=len(resolved), mape=float(mape), within_pct=float(within),
-        band_pct=band_pct, test_start=test_start_str,
+        dir_acc=dir_acc, band_pct=band_pct, test_start=test_start_str,
         regime_pct={int(k): float(v) for k, v in regime_pct.items()},
         stored_coverage=float(meta.get("held_out_band_coverage_pct", 0)),
     )
@@ -1648,8 +1656,12 @@ def compute_30d_cone_metrics(end_date_iso):
     band_pct = float(resolved.iloc[0]["upper"] / resolved.iloc[0]["pred_close"] - 1)
     within = (((resolved["actual_close"] >= resolved["lower"])
                & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    dir_acc = float(np.mean(
+        np.sign(resolved["pred_close"] - resolved["anchor_close"])
+        == np.sign(resolved["actual_close"] - resolved["anchor_close"])
+    ) * 100)
     return dict(n=len(resolved), mape=float(mape),
-                within_pct=float(within), band_pct=band_pct)
+                within_pct=float(within), band_pct=band_pct, dir_acc=dir_acc)
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Computing 30-day day-type metrics …")
@@ -1746,10 +1758,14 @@ def compute_alltime_cone_metrics(end_date_iso):
     band_pct = float(cone.get("band_pct", 0.097))
     within = (((resolved["actual_close"] >= resolved["lower"])
                & (resolved["actual_close"] <= resolved["upper"])).mean() * 100)
+    dir_acc = float(np.mean(
+        np.sign(resolved["pred_close"] - resolved["anchor_close"])
+        == np.sign(resolved["actual_close"] - resolved["anchor_close"])
+    ) * 100)
     regime_pct = resolved["regime"].value_counts(normalize=True).mul(100).to_dict()
     return dict(
         n=len(resolved), mape=float(mape), within_pct=float(within),
-        band_pct=band_pct, test_start=test_start_str,
+        dir_acc=dir_acc, band_pct=band_pct, test_start=test_start_str,
         regime_pct={int(k): float(v) for k, v in regime_pct.items()},
         stored_coverage=float(meta.get("held_out_band_coverage_pct", 0)),
     )
@@ -3308,9 +3324,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                if cone_at else "")
         )
     if cone30:
-        _vtest_cov  = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 0)
-        _vtest_mape = cone_at["mape"]        if cone_at else None
-        _cc = st.columns(3)
+        _vtest_cov   = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 0)
+        _vtest_mape  = cone_at["mape"]        if cone_at else None
+        _vtest_dacc  = cone_at["dir_acc"]     if cone_at else None
+        _cc = st.columns(4)
         _em_cov = _badge(cone30["within_pct"], _vtest_cov, lo_better=False)
         _cc[0].metric(
             f"{_em_cov} Within ±{cone30['band_pct']*100:.1f} % band",
@@ -3331,7 +3348,20 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             )
         else:
             _cc[1].metric("MAPE", f"{cone30['mape']:.2f} %")
-        _cc[2].metric("Resolved (30 d)", str(cone30["n"]),
+        if _vtest_dacc:
+            _em_dacc = _badge(cone30["dir_acc"], _vtest_dacc, lo_better=False)
+            _cc[2].metric(
+                f"{_em_dacc} Dir accuracy",
+                f"{cone30['dir_acc']:.1f} %",
+                delta=(f"{cone30['dir_acc'] - _vtest_dacc:+.1f} pp  "
+                       f"(test: {_vtest_dacc:.1f} %)"),
+                delta_color="normal",
+                help="% of forecasts where predicted direction (up/down vs anchor) matched actual",
+            )
+        else:
+            _cc[2].metric("Dir accuracy", f"{cone30['dir_acc']:.1f} %",
+                          help="% of forecasts where predicted direction (up/down vs anchor) matched actual")
+        _cc[3].metric("Resolved (30 d)", str(cone30["n"]),
                       help="Number of 7-day forecasts whose target date has passed")
     else:
         st.info("Insufficient data for 30-day cone metrics.")
@@ -3350,7 +3380,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     if cone14_30:
         _vtest_cov14  = cone14_at["within_pct"] if cone14_at else _cone14_meta.get("held_out_band_coverage_pct", 0)
         _vtest_mape14 = cone14_at["mape"]        if cone14_at else None
-        _cc14 = st.columns(3)
+        _vtest_dacc14 = cone14_at["dir_acc"]     if cone14_at else None
+        _cc14 = st.columns(4)
         _em_cov14 = _badge(cone14_30["within_pct"], _vtest_cov14, lo_better=False)
         _cc14[0].metric(
             f"{_em_cov14} Within ±{cone14_30['band_pct']*100:.1f} % band",
@@ -3371,7 +3402,20 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             )
         else:
             _cc14[1].metric("MAPE", f"{cone14_30['mape']:.2f} %")
-        _cc14[2].metric("Resolved (30 d)", str(cone14_30["n"]),
+        if _vtest_dacc14:
+            _em_dacc14 = _badge(cone14_30["dir_acc"], _vtest_dacc14, lo_better=False)
+            _cc14[2].metric(
+                f"{_em_dacc14} Dir accuracy",
+                f"{cone14_30['dir_acc']:.1f} %",
+                delta=(f"{cone14_30['dir_acc'] - _vtest_dacc14:+.1f} pp  "
+                       f"(test: {_vtest_dacc14:.1f} %)"),
+                delta_color="normal",
+                help="% of forecasts where predicted direction (up/down vs anchor) matched actual",
+            )
+        else:
+            _cc14[2].metric("Dir accuracy", f"{cone14_30['dir_acc']:.1f} %",
+                            help="% of forecasts where predicted direction (up/down vs anchor) matched actual")
+        _cc14[3].metric("Resolved (30 d)", str(cone14_30["n"]),
                         help="Number of 14-day forecasts whose target date has passed")
     else:
         st.info("Insufficient data for 30-day 14d cone metrics.")
@@ -3470,24 +3514,32 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             "Overall":         _ov_hl,
         })
     if cone30:
-        _vt_cov2 = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 88)
-        _pm_c   = _badge(cone30["within_pct"], _vt_cov2, False)
+        _vt_cov2  = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 88)
+        _vt_da7   = cone_at["dir_acc"]    if cone_at else None
+        _pm_c     = _badge(cone30["within_pct"], _vt_cov2, False)
+        _da_c     = _badge(cone30["dir_acc"], _vt_da7, False) if _vt_da7 else "—"
+        _ov_c7    = "🔴" if "🔴" in (_pm_c, _da_c) else ("🟡" if "🟡" in (_pm_c, _da_c) else "🟢")
         _drift_rows.append({
             "Model":           "📐 7-day cone",
             "Perf drift":      (f"{_pm_c}  coverage {cone30['within_pct']:.1f}% "
                                 f"vs {_vt_cov2:.1f}%"),
-            "Direction drift": "—",
-            "Overall":         _pm_c,
+            "Direction drift": (f"{_da_c}  dir {cone30['dir_acc']:.1f}% "
+                                f"vs {_vt_da7:.1f}%") if _vt_da7 else "—",
+            "Overall":         _ov_c7,
         })
     if cone14_30:
         _vt_cov14_2 = cone14_at["within_pct"] if cone14_at else _cone14_meta.get("held_out_band_coverage_pct", 89)
+        _vt_da14    = cone14_at["dir_acc"]     if cone14_at else None
         _pm_c14     = _badge(cone14_30["within_pct"], _vt_cov14_2, False)
+        _da_c14     = _badge(cone14_30["dir_acc"], _vt_da14, False) if _vt_da14 else "—"
+        _ov_c14     = "🔴" if "🔴" in (_pm_c14, _da_c14) else ("🟡" if "🟡" in (_pm_c14, _da_c14) else "🟢")
         _drift_rows.append({
             "Model":           "📆 14-day cone",
             "Perf drift":      (f"{_pm_c14}  coverage {cone14_30['within_pct']:.1f}% "
                                 f"vs {_vt_cov14_2:.1f}%"),
-            "Direction drift": "—",
-            "Overall":         _pm_c14,
+            "Direction drift": (f"{_da_c14}  dir {cone14_30['dir_acc']:.1f}% "
+                                f"vs {_vt_da14:.1f}%") if _vt_da14 else "—",
+            "Overall":         _ov_c14,
         })
     if dt30:
         _vt_acc2 = dt_at["accuracy"] if dt_at else _dt_meta.get("test_accuracy_pct", 52.8)
