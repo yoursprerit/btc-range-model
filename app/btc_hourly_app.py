@@ -1805,23 +1805,75 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             borderwidth=1, font=dict(color="goldenrod", size=10),
         )
 
+        # ── Hourly BTC close price overlay (updates every minute) ──────────
+        # Window: from the first bar's 12:00 UTC open through to now (live)
+        # or as_of_t (historical). The continuous price line weaves between
+        # the predicted H/L thresholds so the intraday move is immediately
+        # visible relative to the model's range forecast.
+        hourly_win_start = (
+            series["target_date"].iloc[0] + pd.Timedelta(hours=ANCHOR_HOUR_UTC)
+        )
+        if is_live:
+            _now_naive = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+            hourly_win_end = _now_naive
+        else:
+            hourly_win_end = as_of_t
+
+        hourly_mask = (
+            (df.index >= hourly_win_start) & (df.index <= hourly_win_end)
+        )
+        hourly_slice = df.loc[hourly_mask, "btc_close"].dropna()
+
+        if len(hourly_slice) > 0:
+            fig2.add_trace(go.Scatter(
+                x=hourly_slice.index, y=hourly_slice.values,
+                mode="lines",
+                name="Hourly BTC close",
+                line=dict(color="#374151", width=1.5),
+                hovertemplate=(
+                    "%{x|%Y-%m-%d %H:%M} UTC<br>"
+                    "Close $%{y:,.0f}<extra></extra>"
+                ),
+            ))
+
+        # Live Binance spot — pinned as the current-minute price marker
+        if is_live and live_spot is not None and live_spot_ts is not None:
+            _spot_ts = (
+                live_spot_ts.tz_localize(None)
+                if live_spot_ts.tzinfo is not None
+                else live_spot_ts
+            )
+            fig2.add_trace(go.Scatter(
+                x=[_spot_ts], y=[live_spot],
+                mode="markers",
+                name="Live spot (Binance)",
+                marker=dict(size=11, color="crimson", symbol="circle",
+                            line=dict(color="white", width=1.5)),
+                hovertemplate=(
+                    "Live spot %{x|%H:%M:%S} UTC<br>"
+                    "$%{y:,.0f}<extra></extra>"
+                ),
+            ))
+
         fig2.update_layout(
-            template="plotly_white", height=500, hovermode="x unified",
+            template="plotly_white", height=520, hovermode="x unified",
             title=dict(
-                text=("<b>Daily H/L — predictions (dotted) vs actuals (X markers)</b>"
+                text=("<b>Daily H/L — predictions (dotted) vs actuals (X markers) "
+                      "+ rolling hourly price (solid)</b>"
                       "<br><span style='font-size:12px;color:#555'>"
                       "8 target days: last 7 with realised values + target forecast highlighted. "
+                      "Grey solid line = hourly BTC close (updates each minute). "
                       "Top rows: <b style='color:#1a7f37'>green</b> = HIGH line "
-                      "day-over-day direction (pred-trend vs actual-trend), "
-                      "<b style='color:#b91c1c'>red</b> = LOW line "
-                      "day-over-day direction. ✓ both lines moved the same way / ✗ opposed."
+                      "day-over-day direction, "
+                      "<b style='color:#b91c1c'>red</b> = LOW line direction. "
+                      "✓ both lines moved the same way / ✗ opposed."
                       f"{dir_hit_str}"
                       "</span>"),
                 x=0.01, xanchor="left", y=0.97, yanchor="top",
             ),
             yaxis_title="BTC / USD",
-            xaxis_title="Target bar start date (US Central, bar opens 7am CT)",
-            margin=dict(t=140, r=200, b=60, l=70),
+            xaxis_title="Date / Time (UTC) — daily bar opens 12:00 UTC = 7am CT",
+            margin=dict(t=145, r=200, b=60, l=70),
             legend=dict(orientation="v", x=1.02, xanchor="left", y=1.0,
                         yanchor="top", bgcolor="rgba(255,255,255,0.95)",
                         bordercolor="#ccc", borderwidth=1, font=dict(size=11)),
