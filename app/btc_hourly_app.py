@@ -19,11 +19,20 @@ from pathlib import Path
 # of the cwd from which Streamlit is launched.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
-from paths import (
-    HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, CONE_14D_MODEL, DAY_TYPE_MODEL,
-    BINANCE_HOURLY_CSV,
-    BOOKMARKS_FILE as _BOOKMARKS_PATH, RUNTIME_DIR,
-)
+try:
+    from paths import (
+        HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, CONE_14D_MODEL, DAY_TYPE_MODEL,
+        BINANCE_HOURLY_CSV,
+        BOOKMARKS_FILE as _BOOKMARKS_PATH, RUNTIME_DIR,
+    )
+except ImportError:
+    # Fallback for deployments where paths.py predates CONE_14D_MODEL
+    from paths import (
+        HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, DAY_TYPE_MODEL,
+        BINANCE_HOURLY_CSV,
+        BOOKMARKS_FILE as _BOOKMARKS_PATH, RUNTIME_DIR,
+    )
+    CONE_14D_MODEL = Path(str(CONE_7D_MODEL)).parent / "inference_assets_14d_cone.joblib"
 
 import numpy as np
 import pandas as pd
