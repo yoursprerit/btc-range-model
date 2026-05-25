@@ -1387,9 +1387,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _x_actual = list(look_idx_ct)
     _y_actual = list(close_lb)
     if is_live and _y_actual:
-        _end_price = live_spot if live_spot is not None else _y_actual[-1]
+        # Extend to the Now vline using the last completed hourly close
+        # (flat step). The live Binance spot is a separate marker and
+        # must not be mixed into the hourly-close series.
         _x_actual = _x_actual + [now_ct]
-        _y_actual = _y_actual + [_end_price]
+        _y_actual = _y_actual + [_y_actual[-1]]
     fig.add_trace(go.Scatter(
         x=_x_actual, y=_y_actual, mode="lines",
         line=dict(color="black", width=2),
