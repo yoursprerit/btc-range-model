@@ -1380,14 +1380,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     ))
 
     # --- Past actuals (prominent, solid black) ---
-    # In live mode, append the Binance spot as the current-minute endpoint
-    # so the line rolls forward every minute instead of stopping at the
-    # last completed hourly bar (which can be up to 59 min stale).
+    # Always extend to the "Now" vline so the black line reaches the
+    # current-minute marker.  Use the live Binance spot when available;
+    # fall back to the last known hourly close (flat step) so there is
+    # never a gap between the end of the line and the Now marker.
     _x_actual = list(look_idx_ct)
     _y_actual = list(close_lb)
-    if is_live and live_spot is not None:
+    if is_live and _y_actual:
+        _end_price = live_spot if live_spot is not None else _y_actual[-1]
         _x_actual = _x_actual + [now_ct]
-        _y_actual = _y_actual + [live_spot]
+        _y_actual = _y_actual + [_end_price]
     fig.add_trace(go.Scatter(
         x=_x_actual, y=_y_actual, mode="lines",
         line=dict(color="black", width=2),
