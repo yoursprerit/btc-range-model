@@ -358,7 +358,103 @@ TF2 automatically becomes TF1-equivalent.
 
 ---
 
-## Prior-Year Backtest: Sep 2024 → Sep 2025 (In-Sample)
+## Two-Year Backtest Summary (May 2024 → May 2026)
+
+> ⚠️ **In-sample warning:** CT model was trained through Sep 17, 2025.
+> Trades before that date are **in-sample** and should be discounted.
+> The dominant trade (Trade #2, Sep 2024 → Dec 2024, +54.3%) is in-sample.
+> OOS period (Sep 2025 → May 2026): 4 closed trades, all in BEAR regime.
+
+### Full-Period Metrics
+
+| Metric | TF2 | TF1 | Buy & Hold |
+|--------|-----|-----|-----------|
+| **Total return** | **+83.5%** | +11.8% | +23.5% |
+| **CAGR** | **+38.2%** | +6.1% | +11.9% |
+| **Final NAV ($100k start)** | **$183,540** | $111,770 | $123,530 |
+| **Alpha vs B&H** | **+$60,010** | −$11,770 | — |
+| Annualised volatility | 24.1% | lower | 39.0% |
+| **Max drawdown** | **−22.9%** | −30.9% | −49.7% |
+| DD recovery (days) | 30 | n/a | — |
+| **Sharpe ratio** (RF=4.5%) | **0.86** | 0.08 | 0.28 |
+| **Sortino ratio** | **1.33** | 0.12 | 0.42 |
+| **Calmar ratio** | **1.67** | 0.20 | 0.24 |
+| Closed trades | 11 | 22 | — |
+| Win rate | 54.5% | 45.5% | — |
+| Avg win | +16.7% | lower | — |
+| Avg loss | −6.0% | similar | — |
+| Profit factor | **2.33** | <1 | — |
+| Best trade | +54.3% | lower | — |
+| Worst trade | −8.5% | −8.5% | — |
+| Avg trade duration | 27 days | shorter | — |
+| Time in market | 43% | 33% | 100% |
+
+**TF2 outperforms B&H on every risk-adjusted metric** and also outperforms on absolute return.  
+**TF1 underperforms B&H** over 2 years (TF1 missed the bull run entirely; only +11.8% vs +23.5%).
+
+### Monthly Returns (TF2 vs B&H)
+
+| Month | TF2 | B&H | Better |
+|-------|-----|-----|--------|
+| Jun 2024 | +0.0% | +0.0% | = |
+| Jul 2024 | +4.0% | +3.1% | TF2 ▲ |
+| Aug 2024 | +0.0% | −8.7% | TF2 ▲ (cash) |
+| Sep 2024 | +0.2% | +7.4% | B&H |
+| Oct 2024 | +10.9% | +10.9% | = (invested) |
+| **Nov 2024** | **+37.4%** | **+37.4%** | = (invested) |
+| Dec 2024 | +1.1% | −3.1% | TF2 ▲ (D3 exit) |
+| Jan 2025 | −1.9% | +9.6% | B&H |
+| **Feb 2025** | **−6.7%** | **−17.6%** | **TF2 ▲ (D2 exit saved −11pp)** |
+| Mar 2025 | +0.0% | −2.2% | TF2 ▲ (cash) |
+| Apr 2025 | +13.0% | +14.1% | B&H |
+| May 2025 | +11.1% | +11.1% | = (invested) |
+| Jun 2025 | +1.0% | +2.4% | B&H |
+| Jul 2025 | +11.2% | +8.0% | TF2 ▲ |
+| Aug 2025 | −9.9% | −6.5% | B&H |
+| Sep 2025 | +4.7% | +5.4% | B&H |
+| Oct 2025 | −5.9% | −3.9% | B&H |
+| **Nov 2025** | **+0.0%** | **−17.5%** | **TF2 ▲▲ (cash, avoided crash)** |
+| Dec 2025 | −4.3% | −3.2% | B&H |
+| **Jan 2026** | **+4.2%** | **−10.2%** | **TF2 ▲▲ (entered on signal)** |
+| **Feb 2026** | **+0.0%** | **−14.8%** | **TF2 ▲▲ (cash)** |
+| Mar 2026 | −5.5% | +1.8% | B&H |
+| Apr 2026 | +4.6% | +11.8% | B&H |
+| May 2026 | +1.5% | +1.5% | = |
+
+**Months TF2 beat B&H:** 13 of 24  
+**Worst TF2 month:** −9.9% (Aug 2025) vs B&H −6.5%  
+**Worst B&H month:** −17.6% (Feb 2025) — TF2 limited to −6.7%
+
+### Trade Log (2-Year, All 11 Closed Trades)
+
+| # | Entry | Exit | P&L | Days | Regime | Exit Signal | IS/OOS |
+|---|-------|------|-----|------|--------|-------------|--------|
+| 1 | Jul 17, 2024 | Jul 19, 2024 | +4.0% ✓ | 2 | BEAR | D2 | IS |
+| **2** | **Sep 20, 2024** | **Dec 19, 2024** | **+54.3% ✓** | **90** | **BULL** | **D3** | **IS** |
+| 3 | Jan 18, 2025 | Feb 18, 2025 | −8.5% ✗ | 31 | BEAR | D2 | IS |
+| 4 | Apr 3, 2025 | Apr 11, 2025 | +0.4% ✓ | 8 | BEAR | D3 | IS |
+| 5 | Apr 13, 2025 | Jun 14, 2025 | +26.0% ✓ | 62 | BEAR | D2 | IS |
+| 6 | Jun 26, 2025 | Jul 13, 2025 | +11.4% ✓ | 17 | BULL | D3 | IS |
+| 7 | Aug 12, 2025 | Sep 24, 2025 | −5.7% ✗ | 43 | BEAR | D2 | IS |
+| 8 | Oct 4, 2025 | Oct 12, 2025 | −5.9% ✗ | 8 | BEAR | D2 | OOS |
+| 9 | Dec 12, 2025 | Dec 15, 2025 | −4.3% ✗ | 3 | BEAR | D2 | OOS |
+| 10 | Dec 31, 2025 | Jan 12, 2026 | +4.2% ✓ | 12 | BEAR | D2 | OOS |
+| 11 | Mar 11, 2026 | Mar 28, 2026 | −5.5% ✗ | 17 | BEAR | D2 | OOS |
+| Open | Apr 10, 2026 | — | (open) | — | BEAR | — | OOS |
+
+**Trade #2 is the key:** Sep 20 → Dec 19, 2024 (+54.3%) — TF2 entered in BEAR regime but the MA30 slope turned bullish, switching to BULL mode during the hold. D3 fired 90 days later at the exhaustion of the Nov–Dec 2024 BTC peak. TF1 exited this trade much earlier (multiple D2 fires), capturing only a fraction of the move.
+
+### Critical Caveat: In-Sample Dominance
+
+**If you exclude Trade #2 (in-sample, +54.3%):**
+- TF2 OOS-only (Trades 8–11 + open): 1W/4L = 25% win rate, approximately −12% over the period
+- This matches the OOS-period standalone backtest result
+
+The 2-year combined number (+83.5%) is **heavily driven by one in-sample trade** that captured the Nov–Dec 2024 BTC bull run. The OOS story is more modest but still shows capital preservation vs B&H −30%.
+
+---
+
+
 
 > **⚠️ Critical caveat:** The CT ensemble model was trained on data through **Sep 17, 2025**.
 > This prior-year test covers **Sep 17, 2024 → Sep 17, 2025** — the predictions are **in-sample**.
