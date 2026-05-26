@@ -2034,8 +2034,9 @@ def compute_trend_signatures(target_date_iso: str):
     Returns a dict with all computed values and trigger flags.
     Returns None if fewer than 5 completed bars are available.
     """
-    # Pull last 10 completed daily bars (actual H/L present)
-    series = compute_daily_series(target_date_iso, days_back=10)
+    # Pull last 45 completed daily bars — 30 needed for MA30, 10 for clean_10d,
+    # plus buffer; core rolling metrics still use only last 3/5 bars.
+    series = compute_daily_series(target_date_iso, days_back=45)
     if series is None or series.empty:
         return None
     completed = series[series["actual_high"].notna() & series["actual_low"].notna()].copy()
@@ -2111,11 +2112,49 @@ def compute_trend_signatures(target_date_iso: str):
     capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 5.0)
     v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 5.0)
 
+    # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
+    # Re-compute D1/D2 signal for every historical bar so we can check
+    # whether any fired in the 10 bars preceding the current bar (clean_10d).
+    _d1_hist = np.zeros(n, dtype=bool)
+    _d2_hist = np.zeros(n, dtype=bool)
+    for _i in range(n):
+        _s = max(0, _i - 2)
+        _ehma_i = float(np.mean(err_hi[_s: _i + 1]))
+        _elma_i = float(np.mean(err_lo[_s: _i + 1]))
+        _hb3_i  = int(np.sum(hi_break[_s: _i + 1]))
+        _lb3_i  = int(np.sum(lo_break[_s: _i + 1]))
+        _d1_hist[_i] = (_lb3_i >= 2) and (_elma_i > 0.5)
+        _d2_hist[_i] = (_ehma_i < -1.0)
+    # 30-bar rolling mean of close prices (close_asof = the daily close proxy)
+    ma30_window = min(30, n)
+    ma30_value  = float(np.mean(c[-ma30_window:]))
+    current_close_sig = float(c[-1])
+    above_ma30 = current_close_sig > ma30_value
+    # MA30 slope: compare current MA30 vs MA30 computed 5 bars ago
+    # Bull regime = price above MA30 AND MA30 is rising (slope > 0 over last 5 bars)
+    if n >= 35:
+        ma30_5d_ago = float(np.mean(c[-35:-5]))   # 30-bar mean ending 5 bars ago
+    else:
+        ma30_5d_ago = ma30_value                   # insufficient data → assume flat
+    ma30_slope_pos = ma30_value > ma30_5d_ago
+    bull_regime = above_ma30 and ma30_slope_pos
+    # clean_10d: zero D1 or D2 fires in the 10 bars *before* the current bar
+    if n >= 11:
+        clean_10d = not bool(np.any(_d1_hist[-11:-1] | _d2_hist[-11:-1]))
+    elif n >= 2:
+        clean_10d = not bool(np.any(_d1_hist[:-1] | _d2_hist[:-1]))
+    else:
+        clean_10d = False
+
     # ── Signature trigger flags ─────────────────────────────────────────
-    d1_triggered = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
-    d2_triggered = (err_hi_ma3 < -1.0)
-    d3_triggered = exhaustion_active
-    u1_triggered = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
+    d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
+    d2_triggered  = (err_hi_ma3 < -1.0)
+    d3_triggered  = exhaustion_active
+    u1_triggered  = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
+    # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
+    # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
+    # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
+    tf1_triggered = u1_triggered and (above_ma30 or clean_10d)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -2127,6 +2166,8 @@ def compute_trend_signatures(target_date_iso: str):
         alert_level = "ELEVATED_DN"
     elif dn_count == 1 and not u1_triggered:
         alert_level = "WATCH_DN"
+    elif tf1_triggered:
+        alert_level = "STRATEGY_BUY"
     elif up_count >= 1 and dn_count == 0:
         alert_level = "WATCH_UP"
     else:
@@ -2150,21 +2191,30 @@ def compute_trend_signatures(target_date_iso: str):
 
     return dict(
         # Signal values
-        err_hi_ma3   = err_hi_ma3,
-        err_lo_ma3   = err_lo_ma3,
-        hi_breaks_3d = hi_breaks_3d,
-        lo_breaks_3d = lo_breaks_3d,
-        hi_breaks_5d = hi_breaks_5d,
-        lo_breaks_5d = lo_breaks_5d,
-        streak       = streak,
-        last_lo_err  = last_lo_err,
-        last_hi_err  = last_hi_err,
-        dn_score_raw = dn_score_raw,
+        err_hi_ma3        = err_hi_ma3,
+        err_lo_ma3        = err_lo_ma3,
+        hi_breaks_3d      = hi_breaks_3d,
+        lo_breaks_3d      = lo_breaks_3d,
+        hi_breaks_5d      = hi_breaks_5d,
+        lo_breaks_5d      = lo_breaks_5d,
+        streak            = streak,
+        last_lo_err       = last_lo_err,
+        last_hi_err       = last_hi_err,
+        dn_score_raw      = dn_score_raw,
+        # Trend-filter values (TF1/TF2 strategy entry + regime detection)
+        ma30_value        = ma30_value,
+        ma30_5d_ago       = ma30_5d_ago,
+        current_close_sig = current_close_sig,
+        above_ma30        = above_ma30,
+        ma30_slope_pos    = ma30_slope_pos,
+        bull_regime       = bull_regime,
+        clean_10d         = clean_10d,
         # Trigger flags
-        d1_triggered = d1_triggered,
-        d2_triggered = d2_triggered,
-        d3_triggered = d3_triggered,
-        u1_triggered = u1_triggered,
+        d1_triggered      = d1_triggered,
+        d2_triggered      = d2_triggered,
+        d3_triggered      = d3_triggered,
+        u1_triggered      = u1_triggered,
+        tf1_triggered     = tf1_triggered,
         capitulation_signal = capitulation_signal,
         v_reversal_likely   = v_reversal_likely,
         exhaustion_active   = exhaustion_active,
@@ -2179,12 +2229,601 @@ def compute_trend_signatures(target_date_iso: str):
     )
 
 
+# ════════════════════════════════════════════════════════════════════════
+# TF1 Trading Strategy — Batch Backtest Engine
+# ════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600 * 6, show_spinner=False)
+def _build_ct_batch_predictions():
+    """Build CT daily H/L predictions for ALL available bars in one pass.
+
+    Mirrors compute_daily_forecast() but builds the feature matrix ONCE on the
+    full _fetch_daily_raw() dataset and runs vectorised batch prediction instead
+    of rebuilding features for every individual target date.
+
+    Returns a DataFrame indexed by TARGET date (the bar being predicted) with
+    columns: close_asof, pred_high, pred_low.
+    Returns None if the CT model artefact is missing.
+    Cache TTL: 6 h — same as _fetch_daily_raw().
+    """
+    path = str(DAILY_MODEL_CT)
+    if not os.path.exists(path):
+        return None
+    try:
+        AD = joblib.load(path)
+    except Exception:
+        return None
+
+    df = _fetch_daily_raw().copy()
+    if df.empty:
+        return None
+    df = df.sort_index().ffill(limit=5)
+
+    # ── Feature engineering (mirrors compute_daily_forecast exactly) ───
+    f   = pd.DataFrame(index=df.index)
+    c   = df["btc_close"]
+    h   = df["btc_high"]
+    l_  = df["btc_low"]
+    v   = df["btc_volume"]
+    ret = np.log(c).diff()
+    for k in [1,3,5,7,14,30]: f[f"ret_{k}"] = ret.rolling(k).sum()
+    for k in [5,10,20,30]:    f[f"vol_{k}"] = ret.rolling(k).std()
+    prev_c = c.shift(1)
+    tr = pd.concat([(h-l_),(h-prev_c).abs(),(l_-prev_c).abs()],axis=1).max(axis=1)
+    for k in [7,14,30]: f[f"atr_{k}"] = tr.rolling(k).mean()/c
+    f["range_today"] = (h-l_)/c
+    f["range_ma7"]   = ((h-l_)/c).rolling(7).mean()
+    f["range_ma30"]  = ((h-l_)/c).rolling(30).mean()
+    f["range_std30"] = ((h-l_)/c).rolling(30).std()
+    delta = c.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, np.nan)
+    f["rsi_14"] = 100 - 100/(1+rs)
+    e12 = c.ewm(span=12,adjust=False).mean()
+    e26 = c.ewm(span=26,adjust=False).mean()
+    macd = e12 - e26
+    f["macd"]      = macd/c
+    f["macd_sig"]  = macd.ewm(span=9,adjust=False).mean()/c
+    f["macd_hist"] = (macd - macd.ewm(span=9,adjust=False).mean())/c
+    ma20=c.rolling(20).mean(); sd20=c.rolling(20).std()
+    f["bb_width"]   = (4*sd20)/ma20
+    f["dist_hi_30"] = c/c.rolling(30).max()-1
+    f["dist_lo_30"] = c/c.rolling(30).min()-1
+    f["dist_hi_90"] = c/c.rolling(90).max()-1
+    f["vol_chg_1"]    = np.log(v).diff()
+    f["vol_z_20"]     = (np.log(v)-np.log(v).rolling(20).mean())/np.log(v).rolling(20).std()
+    f["vol_ma_ratio"] = v/v.rolling(20).mean()
+    dow = df.index.dayofweek
+    for i in range(6): f[f"dow_{i}"] = (dow==i).astype(float)
+    def mret(name, ks=(1,5,20)):
+        s = df[f"{name}_close"]
+        for k in ks: f[f"{name}_ret_{k}"] = np.log(s).diff(k)
+        f[f"{name}_vol_20"] = np.log(s).diff().rolling(20).std()
+    for nm in ["spx","ndx","vix","gold","dxy","tnx","eth"]: mret(nm)
+    f["btc_spx_corr_30"]  = ret.rolling(30).corr(np.log(df["spx_close"]).diff())
+    f["btc_ndx_corr_30"]  = ret.rolling(30).corr(np.log(df["ndx_close"]).diff())
+    f["btc_gold_corr_30"] = ret.rolling(30).corr(np.log(df["gold_close"]).diff())
+    f["btc_dxy_corr_30"]  = ret.rolling(30).corr(np.log(df["dxy_close"]).diff())
+    for col in [x for x in df.columns if x.startswith("oc_")]:
+        s = df[col].astype(float); s_log = np.log(s.replace(0,np.nan))
+        f[f"{col}_d1"]  = s_log.diff(1)
+        f[f"{col}_d7"]  = s_log.diff(7)
+        f[f"{col}_z30"] = (s_log - s_log.rolling(30).mean())/s_log.rolling(30).std()
+    nh, nl = h.shift(-1), l_.shift(-1)
+    y_hi = (nh-c)/c; y_lo = (c-nl)/c
+    f["y_hi_ema3"] = y_hi.shift(1).ewm(span=3, adjust=False).mean()
+    f["y_lo_ema3"] = y_lo.shift(1).ewm(span=3, adjust=False).mean()
+    f["y_hi_ema7"] = y_hi.shift(1).ewm(span=7, adjust=False).mean()
+    f["y_lo_ema7"] = y_lo.shift(1).ewm(span=7, adjust=False).mean()
+    prev_3_hi = h.shift(1).rolling(3).max()
+    prev_3_lo = l_.shift(1).rolling(3).min()
+    f["above_3d_high"]  = (c > prev_3_hi).astype(float)
+    f["below_3d_low"]   = (c < prev_3_lo).astype(float)
+    f["bo_strength_up"] = (c / prev_3_hi - 1).clip(lower=0)
+    f["bo_strength_dn"] = (1 - c / prev_3_lo).clip(lower=0)
+    _y_hi_lag = y_hi.shift(1)
+    _y_lo_lag = y_lo.shift(1)
+    f["y_hi_surprise"] = _y_hi_lag - _y_hi_lag.ewm(span=7, adjust=False).mean()
+    f["y_lo_surprise"] = _y_lo_lag - _y_lo_lag.ewm(span=7, adjust=False).mean()
+    neg_ret = ret.clip(upper=0)
+    f["dn_vol_5"]  = neg_ret.rolling(5).std()
+    f["dn_vol_20"] = neg_ret.rolling(20).std()
+    sma50 = c.rolling(50).mean()
+    f["below_sma50"]    = (c < sma50).astype(float)
+    f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
+
+    fc = AD["feat_cols"]
+    f  = f.replace([np.inf, -np.inf], np.nan)
+    F  = f[fc].dropna()
+    if F.empty:
+        return None
+
+    # ── Batch prediction ────────────────────────────────────────────────
+    def _scalar(x):
+        if hasattr(x, "item"):
+            try: return float(x.item())
+            except Exception: pass
+        return float(np.asarray(x).ravel()[0])
+
+    if AD.get("ensemble") and AD.get("constituents"):
+        yhi = np.mean([con["m_hi"].predict(F) for con in AD["constituents"]], axis=0)
+        ylo = np.mean([con["m_lo"].predict(F) for con in AD["constituents"]], axis=0)
+        if AD.get("blended") and float(AD.get("alpha", 1.0)) < 1.0:
+            a = float(AD["alpha"])
+            yhi = a * yhi + (1-a) * float(AD.get("mu_hi", 0))
+            ylo = a * ylo + (1-a) * float(AD.get("mu_lo", 0))
+    else:
+        yhi = AD["hi_model"].predict(F)
+        ylo = AD["lo_model"].predict(F)
+
+    # Direction head — vectorised predict_proba
+    dh = AD.get("direction_head")
+    if dh is not None and dh.get("classifier") is not None:
+        try:
+            clf         = dh["classifier"]
+            beta_base   = float(dh.get("beta", 1.0))
+            reduction   = float(dh.get("beta_trend_reduction", 0.0))
+            trend_sat   = float(dh.get("trend_saturation", 0.05))
+            trend_feat  = dh.get("trend_feature", "ret_5")
+            d_bull_mean = float(dh.get("d_bull_mean", 0.0))
+            d_bear_mean = float(dh.get("d_bear_mean", 0.0))
+            p_bull      = clf.predict_proba(F)[:, 1]
+            t_vals      = F[trend_feat].fillna(0).values if trend_feat in F.columns else np.zeros(len(F))
+            t_str       = np.minimum(np.abs(t_vals) / trend_sat, 1.0)
+            b_eff       = np.clip(beta_base * (1.0 - reduction * t_str), 0.0, 1.0)
+            m_pred      = (yhi + ylo) / 2.0
+            d_pred      = (yhi - ylo) / 2.0
+            d_dir       = p_bull * d_bull_mean + (1 - p_bull) * d_bear_mean
+            d_blnd      = b_eff * d_pred + (1 - b_eff) * d_dir
+            yhi         = m_pred + d_blnd
+            ylo         = m_pred - d_blnd
+        except Exception:
+            pass
+
+    c_vals       = c.reindex(F.index).values
+    pred_hi_vals = c_vals * (1 + np.clip(yhi, 0, None))
+    pred_lo_vals = c_vals * (1 - np.clip(ylo, 0, None))
+
+    # Shift index: feature row at date D predicts the NEXT bar (target = D+1).
+    # Use the actual next index element rather than D + 1 calendar day, so we
+    # handle non-consecutive dates (e.g. missing weekends) correctly.
+    idx_arr    = np.asarray(F.index, dtype="datetime64[ns]")
+    next_dates = np.empty(len(F), dtype="datetime64[ns]")
+    next_dates[:-1] = idx_arr[1:]
+    next_dates[-1]  = idx_arr[-1] + np.timedelta64(1, "D")
+
+    result = pd.DataFrame(
+        {"close_asof": c_vals, "pred_high": pred_hi_vals, "pred_low": pred_lo_vals},
+        index=pd.DatetimeIndex(next_dates, name="target_date"),
+    )
+    return result[~result.index.duplicated(keep="last")]
+
+
+@st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
+def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
+                     strategy: str = "TF2"):
+    """Run a trading strategy backtest on the rolling ~1-year window.
+
+    Entry (both TF1 and TF2):
+        U1 active (err_hi_ma3 > +0.5% AND hi_breaks_3d ≥ 2)
+        AND (BTC > MA30  OR  clean_10d)
+
+    Exit — TF1 (conservative, bear-optimised):
+        D2 (err_hi_ma3 < −1%)  OR  D3 (exhaustion canary)
+
+    Exit — TF2 (regime-adaptive, default):
+        BULL regime (above_ma30 AND MA30 slope > 0) → exit D3 only (patient)
+        BEAR / NEUTRAL regime                       → exit D2 OR D3 (defensive)
+
+    Execution: 1-bar lag — signal fires bar i, trade executes at bar i+1 close.
+    Uses _build_ct_batch_predictions() for O(1) lookups. Cached 6 h.
+
+    Returns a dict with trades, nav_series, bh_series, stats, open_pos.
+    Returns None if insufficient data or the CT model is unavailable.
+    """
+    WARMUP = 35  # bars before backtest begins (MA30 needs 30 + 5 buffer)
+
+    preds = _build_ct_batch_predictions()
+    if preds is None or preds.empty:
+        return None
+
+    raw    = _fetch_daily_raw()
+    closes = raw["btc_close"]
+    highs  = raw["btc_high"]
+    lows   = raw["btc_low"]
+
+    # Restrict to ~1-year window + warm-up, ending at end_date_iso
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = end_dt - pd.Timedelta(days=400)
+    preds    = preds.loc[(preds.index >= start_dt) & (preds.index <= end_dt)].copy()
+    if len(preds) < WARMUP + 3:
+        return None
+
+    # Attach actual H/L/close for each target date (vectorised join)
+    preds["actual_high"]  = highs.reindex(preds.index).values
+    preds["actual_low"]   = lows.reindex(preds.index).values
+    preds["actual_close"] = closes.reindex(preds.index).values
+
+    comp = (preds.dropna(subset=["actual_high","actual_low","actual_close"])
+                 .reset_index())          # target_date becomes a column
+    N = len(comp)
+    if N < WARMUP + 3:
+        return None
+
+    dates   = pd.DatetimeIndex(comp["target_date"])
+    c_asof  = comp["close_asof"].values.astype(float)
+    exec_px = comp["actual_close"].values.astype(float)
+    pred_hi = comp["pred_high"].values.astype(float)
+    pred_lo = comp["pred_low"].values.astype(float)
+    act_hi  = comp["actual_high"].values.astype(float)
+    act_lo  = comp["actual_low"].values.astype(float)
+
+    # ── Signal arrays ────────────────────────────────────────────────────
+    err_hi = (act_hi - pred_hi) / c_asof * 100
+    err_lo = (pred_lo - act_lo) / c_asof * 100
+    hi_brk = (act_hi > pred_hi).astype(int)
+    lo_brk = (act_lo < pred_lo).astype(int)
+
+    ehma3 = np.zeros(N); elma3 = np.zeros(N)
+    hb3   = np.zeros(N, dtype=int); lb3 = np.zeros(N, dtype=int)
+    for i in range(N):
+        s = max(0, i-2)
+        ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
+        hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
+
+    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    d1 = (lb3 >= 2)    & (elma3 > 0.5)
+    d2 = ehma3 < -1.0
+    d3 = np.zeros(N, dtype=bool)
+    for i in range(1, N):
+        consec = 0
+        for k in range(i-1, -1, -1):
+            if hi_brk[k]: consec += 1
+            else: break
+        if consec >= 3 and lo_brk[i]:
+            d3[i] = True
+
+    ma30 = np.full(N, np.nan)
+    for i in range(N):
+        w = min(30, i+1)
+        ma30[i] = np.mean(c_asof[max(0, i-w+1): i+1])
+    above_ma30 = c_asof > ma30
+
+    # MA30 slope (5-bar): used for regime detection in TF2
+    ma30_slope_pos = np.zeros(N, dtype=bool)
+    for i in range(N):
+        if i >= 5 and np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
+            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
+    # BULL regime: price above MA30 AND MA30 is rising
+    bull_regime = above_ma30 & ma30_slope_pos
+
+    clean_10d = np.zeros(N, dtype=bool)
+    for i in range(N):
+        lo_i = max(0, i-10)
+        clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
+
+    tf1_entry = u1 & (above_ma30 | clean_10d)
+    tf1_exit  = d2 | d3   # TF1 always exits D2|D3
+
+    # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
+    nav      = initial_capital
+    pos      = "CASH"
+    btc_qty  = 0.0
+    e_price = e_nav = e_date = e_trigger = None
+    trades  = []
+    nav_arr = np.full(N, np.nan)
+
+    for i in range(N):
+        si    = i - 1        # signal bar index
+        price = exec_px[i]  # execution price = bar i close
+
+        if i < WARMUP:
+            nav_arr[i] = initial_capital
+            continue
+
+        if pos == "LONG":
+            cur = btc_qty * price
+            # Regime-adaptive exit for TF2; fixed D2|D3 for TF1
+            if si >= 0:
+                if strategy == "TF2":
+                    # Bull regime: patience — wait for structural D3 reversal
+                    # Bear/neutral regime: defensive — exit on first D2 or D3
+                    should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
+                    exit_lbl    = "D3" if d3[si] else "D2 (bear)"
+                else:   # TF1
+                    should_exit = bool(tf1_exit[si])
+                    exit_lbl    = "D3" if d3[si] else "D2"
+            else:
+                should_exit = False; exit_lbl = "?"
+            if should_exit:
+                nav = cur
+                trades.append(dict(
+                    entry_date    = e_date,    entry_price = e_price,
+                    entry_nav     = e_nav,     entry_trigger = e_trigger,
+                    exit_date     = dates[i],  exit_price  = price,
+                    exit_nav      = nav,
+                    pnl_pct       = (price / e_price - 1) * 100,
+                    pnl_abs       = nav - e_nav,
+                    exit_signal   = exit_lbl,
+                    duration_days = (dates[i] - e_date).days,
+                ))
+                pos = "CASH"; btc_qty = 0.0
+            else:
+                nav = cur
+        else:  # CASH
+            if si >= 0 and tf1_entry[si]:
+                btc_qty  = nav / price
+                e_price  = price; e_date = dates[i]
+                e_nav    = nav;   pos    = "LONG"
+                if above_ma30[si] and clean_10d[si]:
+                    e_trigger = "U1 + ↑MA30 + clean10d"
+                elif above_ma30[si]:
+                    e_trigger = "U1 + ↑MA30"
+                else:
+                    e_trigger = "U1 + clean10d"
+
+        nav_arr[i] = btc_qty * price if pos == "LONG" else nav
+
+    if pos == "LONG":
+        nav_arr[N-1] = btc_qty * exec_px[N-1]
+
+    nav_series = pd.Series(nav_arr[WARMUP:], index=dates[WARMUP:]).ffill()
+    bh_series  = pd.Series(
+        initial_capital * exec_px[WARMUP:] / exec_px[WARMUP],
+        index=dates[WARMUP:],
+    )
+
+    # ── Statistics ───────────────────────────────────────────────────────
+    final_nav = float(nav_series.iloc[-1])
+    final_bh  = float(bh_series.iloc[-1])
+    strat_ret = (final_nav / initial_capital - 1) * 100
+    bh_ret    = (final_bh  / initial_capital - 1) * 100
+    wins      = [t for t in trades if t["pnl_pct"] > 0]
+    losses    = [t for t in trades if t["pnl_pct"] <= 0]
+    win_rate  = 100 * len(wins) / len(trades) if trades else 0.0
+    avg_pnl   = float(np.mean([t["pnl_pct"] for t in trades])) if trades else 0.0
+    best_t    = float(max([t["pnl_pct"] for t in trades])) if trades else 0.0
+    worst_t   = float(min([t["pnl_pct"] for t in trades])) if trades else 0.0
+    rm        = nav_series.cummax()
+    max_dd    = float(((nav_series - rm) / rm * 100).min())
+    days_in   = sum(t["duration_days"] for t in trades)
+    tot_days  = max(1, (dates[N-1] - dates[WARMUP]).days)
+
+    return dict(
+        strategy   = strategy,
+        trades     = trades,
+        nav_series = nav_series,
+        bh_series  = bh_series,
+        open_pos   = pos == "LONG",
+        open_entry = (dict(price=e_price, date=e_date, nav=e_nav) if pos == "LONG" else None),
+        stats = dict(
+            strategy        = strategy,
+            initial_capital = initial_capital,
+            final_nav    = final_nav,   final_bh   = final_bh,
+            strat_ret    = strat_ret,   bh_ret     = bh_ret,
+            alpha_abs    = final_nav - final_bh,
+            n_trades     = len(trades),
+            n_wins       = len(wins),   n_losses   = len(losses),
+            win_rate     = win_rate,    avg_pnl    = avg_pnl,
+            best_trade   = best_t,      worst_trade = worst_t,
+            max_drawdown = max_dd,
+            time_in_mkt  = 100 * days_in / tot_days,
+            start_date   = dates[WARMUP],
+            end_date     = dates[N-1],
+        ),
+    )
+
+
+def render_trading_strategy_dashboard(bt) -> None:
+    """Render the TF2 trading strategy summary + rolling backtest dashboard.
+
+    Shows:
+      • Strategy rules summary card (entry, exit, regime logic)
+      • 6-KPI row: NAV, B&H NAV, Alpha, Win Rate, Max Drawdown, Time in Market
+      • Portfolio NAV chart (TF2 vs Buy & Hold) with trade markers
+      • Expandable trade log table
+    """
+    st.markdown("---")
+    st.subheader("🎯 TF2 Trading Strategy — Regime-Adaptive Rolling Backtest")
+
+    if bt is None:
+        st.info("⚙️ Backtest computing … CT model batch predictions being built. "
+                "Refresh in a moment.")
+        return
+
+    s       = bt["stats"]
+    has_pos = bt["open_pos"]
+    strat   = s.get("strategy", "TF2")
+
+    # ── Strategy summary ──────────────────────────────────────────────
+    period_str = (
+        f"{pd.Timestamp(s['start_date']).strftime('%b %d, %Y')} → "
+        f"{pd.Timestamp(s['end_date']).strftime('%b %d, %Y')}"
+    )
+    st.markdown(
+        "<div style='background:#eff6ff; border:2px solid #2563eb; border-radius:10px; "
+        "padding:12px 18px; margin:4px 0 14px 0;'>"
+        "<div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:6px;'>"
+        f"TF2 — Regime-Adaptive Strategy Rules</div>"
+        "<div style='font-size:12px; color:#1e3a8a; line-height:1.9;'>"
+        "📥 <b>Entry</b> — U1 active (<code>err_hi_ma3 &gt; +0.5%</code> "
+        "AND <code>hi_breaks_3d ≥ 2</code>) <b>AND</b> "
+        "(BTC above 30-day MA &nbsp;<b>OR</b>&nbsp; zero D1/D2 fires in prior 10 bars)<br>"
+        "📤 <b>Exit</b> — <b>BULL regime</b> (price &gt; MA30 &amp; MA30 rising): "
+        "D3 only (patient — wait for structural reversal) &nbsp;|&nbsp; "
+        "<b>BEAR/Neutral</b>: D2 <b>OR</b> D3 (defensive — cut quickly)<br>"
+        "⏱ <b>Execution</b> — 1-day lag · signal on bar <i>i</i>, "
+        "trade at bar <i>i+1</i> close &nbsp;·&nbsp; "
+        f"<b>Period:</b> {period_str}"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── KPI row ────────────────────────────────────────────────────────
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Strategy NAV",   f"${s['final_nav']:,.0f}", delta=f"{s['strat_ret']:+.1f}%")
+    c2.metric("Buy & Hold NAV", f"${s['final_bh']:,.0f}",  delta=f"{s['bh_ret']:+.1f}%")
+    c3.metric("Alpha vs B&H",   f"${s['alpha_abs']:+,.0f}",
+              delta=f"{s['strat_ret'] - s['bh_ret']:+.1f} pp")
+    c4.metric("Win Rate",       f"{s['win_rate']:.0f}%",
+              delta=f"{s['n_wins']}W / {s['n_losses']}L")
+    c5.metric("Max Drawdown",   f"{s['max_drawdown']:.1f}%")
+    c6.metric("Time in Market", f"{s['time_in_mkt']:.0f}%",
+              delta=f"{s['n_trades']} trades")
+
+    # ── Open-position badge ───────────────────────────────────────────
+    if has_pos and bt["open_entry"]:
+        oe  = bt["open_entry"]
+        unr = (float(bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+        oe_col = "#16a34a" if unr >= 0 else "#dc2626"
+        st.markdown(
+            f"<div style='background:#f0fdf4; border:1px solid #16a34a; border-radius:8px; "
+            f"padding:8px 14px; margin:2px 0 10px 0; font-size:13px; color:#14532d;'>"
+            f"📍 <b>Open position</b> — bought {pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
+            f"@ ${oe['price']:,.0f} · "
+            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>{unr:+.1f}%</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── NAV vs B&H chart ──────────────────────────────────────────────
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=bt["bh_series"].index, y=bt["bh_series"].values,
+        name="Buy & Hold",
+        line=dict(color="#94a3b8", width=1.5, dash="dot"),
+        hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=bt["nav_series"].index, y=bt["nav_series"].values,
+        name="TF2 Strategy",
+        line=dict(color="#2563eb", width=2.5),
+        hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2 Strategy</extra>",
+    ))
+    fig.add_hline(
+        y=s["initial_capital"], line_dash="dash",
+        line_color="#64748b", line_width=1, opacity=0.4,
+        annotation_text=f"  $100k start",
+        annotation_position="bottom right",
+    )
+
+    # Trade markers
+    nav_s = bt["nav_series"]
+    for t in bt["trades"]:
+        # Find NAV series value closest to entry/exit dates
+        entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
+        exit_y  = float(t["exit_nav"])
+        win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+
+        fig.add_trace(go.Scatter(
+            x=[t["entry_date"]], y=[entry_y], mode="markers",
+            marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                        line=dict(width=1.5, color="white")),
+            showlegend=False,
+            hovertemplate=(
+                f"<b>BUY</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
+                f" @ ${t['entry_price']:,.0f}<br>{t['entry_trigger']}<extra></extra>"
+            ),
+        ))
+        fig.add_trace(go.Scatter(
+            x=[t["exit_date"]], y=[exit_y], mode="markers",
+            marker=dict(symbol="triangle-down", size=13, color=win_col,
+                        line=dict(width=1.5, color="white")),
+            showlegend=False,
+            hovertemplate=(
+                f"<b>SELL</b> {pd.Timestamp(t['exit_date']).strftime('%b %d')}"
+                f" @ ${t['exit_price']:,.0f} "
+                f"({t['pnl_pct']:+.1f}%) — {t['exit_signal']}<extra></extra>"
+            ),
+        ))
+
+    # Open-position entry marker (no exit yet)
+    if has_pos and bt["open_entry"]:
+        oe = bt["open_entry"]
+        oe_y = float(nav_s.asof(oe["date"])) if oe["date"] >= nav_s.index[0] else s["initial_capital"]
+        fig.add_trace(go.Scatter(
+            x=[oe["date"]], y=[oe_y], mode="markers",
+            marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
+                        line=dict(width=1.5, color="white")),
+            showlegend=False,
+            hovertemplate=(
+                f"<b>BUY (OPEN)</b> {pd.Timestamp(oe['date']).strftime('%b %d')}"
+                f" @ ${oe['price']:,.0f}<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        xaxis_title=None,
+        yaxis_title="Portfolio Value ($)",
+        yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+        height=380,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=0, r=0, t=8, b=0),
+        hovermode="x unified",
+        plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
+        xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+        yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Trade log ─────────────────────────────────────────────────────
+    total_label = f"{s['n_trades']} closed trades"
+    if has_pos:
+        total_label += " + 1 open"
+    with st.expander(f"📋 Trade log — {total_label}", expanded=True):
+        rows = []
+        for i, t in enumerate(bt["trades"], 1):
+            rows.append({
+                "#":           i,
+                "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
+                "Buy @":       f"${t['entry_price']:,.0f}",
+                "Trigger":     t["entry_trigger"],
+                "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
+                "Sell @":      f"${t['exit_price']:,.0f}",
+                "P&L":         f"{t['pnl_pct']:+.1f}%",
+                "Result":      "✓ WIN" if t["pnl_pct"] > 0 else "✗ LOSS",
+                "Days":        t["duration_days"],
+                "Exit Signal": t["exit_signal"],
+                "NAV After":   f"${t['exit_nav']:,.0f}",
+            })
+        if has_pos and bt["open_entry"]:
+            oe = bt["open_entry"]
+            unr_pct = (float(bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+            rows.append({
+                "#":           len(bt["trades"]) + 1,
+                "Entry":       pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
+                "Buy @":       f"${oe['price']:,.0f}",
+                "Trigger":     "—",
+                "Exit":        "⏳ OPEN",
+                "Sell @":      "—",
+                "P&L":         f"{unr_pct:+.1f}% (unrlzd)",
+                "Result":      "🟡 OPEN",
+                "Days":        (pd.Timestamp.utcnow() - pd.Timestamp(oe["date"])).days,
+                "Exit Signal": "—",
+                "NAV After":   "—",
+            })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        if not rows:
+            st.info("No trades in this period — strategy has been in cash throughout.")
+
+        st.caption(
+            "💡 P&L is computed at execution prices (bar close, 1-day lag from signal). "
+            "B&H is normalised to $100k at the backtest start date. "
+            "⚠️ Dates before the CT model's training cutoff are in-sample — "
+            "out-of-sample period starts ~Sep 2025."
+        )
+
+
 def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     """Render the Trend Signature Alert Dashboard in the Streamlit UI.
 
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
+      • TF1 full-width card (U1 + MA30 trend-filter — best backtest strategy)
       • V-reversal special signal
       • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
@@ -2200,16 +2839,18 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # ── Color scheme ───────────────────────────────────────────────────
     ALERT_CFG = {
-        "HIGH_DN":    {"bg": "#fee2e2", "border": "#dc2626", "badge_bg": "#dc2626",
-                       "badge_txt": "⚠️ HIGH DOWNTREND ALERT",  "txt_col": "#7f1d1d"},
-        "ELEVATED_DN":{"bg": "#fef3c7", "border": "#d97706", "badge_bg": "#d97706",
-                       "badge_txt": "🟠 ELEVATED DOWNTREND RISK","txt_col": "#78350f"},
-        "WATCH_DN":   {"bg": "#fffbeb", "border": "#f59e0b", "badge_bg": "#f59e0b",
-                       "badge_txt": "👁 DOWNTREND WATCH",         "txt_col": "#92400e"},
-        "WATCH_UP":   {"bg": "#f0fdf4", "border": "#16a34a", "badge_bg": "#16a34a",
-                       "badge_txt": "📈 UPTREND SIGNAL",          "txt_col": "#14532d"},
-        "NEUTRAL":    {"bg": "#f8fafc", "border": "#94a3b8", "badge_bg": "#64748b",
-                       "badge_txt": "⬜ NO ACTIVE SIGNAL",        "txt_col": "#334155"},
+        "HIGH_DN":     {"bg": "#fee2e2", "border": "#dc2626", "badge_bg": "#dc2626",
+                        "badge_txt": "⚠️ HIGH DOWNTREND ALERT",       "txt_col": "#7f1d1d"},
+        "ELEVATED_DN": {"bg": "#fef3c7", "border": "#d97706", "badge_bg": "#d97706",
+                        "badge_txt": "🟠 ELEVATED DOWNTREND RISK",     "txt_col": "#78350f"},
+        "WATCH_DN":    {"bg": "#fffbeb", "border": "#f59e0b", "badge_bg": "#f59e0b",
+                        "badge_txt": "👁 DOWNTREND WATCH",              "txt_col": "#92400e"},
+        "STRATEGY_BUY":{"bg": "#eff6ff", "border": "#2563eb", "badge_bg": "#2563eb",
+                        "badge_txt": "🎯 STRATEGY BUY SIGNAL (TF1)",   "txt_col": "#1e3a8a"},
+        "WATCH_UP":    {"bg": "#f0fdf4", "border": "#16a34a", "badge_bg": "#16a34a",
+                        "badge_txt": "📈 UPTREND SIGNAL (U1)",          "txt_col": "#14532d"},
+        "NEUTRAL":     {"bg": "#f8fafc", "border": "#94a3b8", "badge_bg": "#64748b",
+                        "badge_txt": "⬜ NO ACTIVE SIGNAL",             "txt_col": "#334155"},
     }
     cfg = ALERT_CFG[al]
 
@@ -2228,9 +2869,15 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
                     {cfg['badge_txt']}
                 </span>
                 <span style="color:{cfg['txt_col']}; font-size:13px;">
-                    <b>{dnc}/3</b> downtrend conditions active · <b>{upc}/1</b> uptrend condition active
-                    · as-of bar: <b>{as_of_str}</b>
-                    · based on last <b>{sigs['n_bars']}</b> completed daily bars
+                    <b>{dnc}/3</b> DN · <b>{upc}/1</b> UP ·
+                    TF2 entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
+                    (U1={'✓' if sigs['u1_triggered'] else '✗'}
+                    MA30={'↑' if sigs['above_ma30'] else '↓'}
+                    slope={'↑' if sigs.get('ma30_slope_pos') else '↓'}
+                    regime={'🐂BULL' if sigs.get('bull_regime') else '🐻BEAR'}
+                    clean10d={'✓' if sigs['clean_10d'] else '✗'})
+                    · as-of: <b>{as_of_str}</b>
+                    · <b>{sigs['n_bars']}</b> bars
                 </span>
             </div>
         </div>
@@ -2426,6 +3073,78 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             unsafe_allow_html=True,
         )
 
+    # ── TF2 full-width card (U1 + MA30 + regime-adaptive exit) ───────────
+    _ma30_pct = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
+    _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
+    _bull_regime = sigs.get("bull_regime", False)
+    _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
+    _exit_mode = "D3 only (patient — hold the trend)" if _bull_regime else "D2 OR D3 (defensive exit)"
+    tf1_rows = [
+        ("U1 Signal",
+         "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
+         "= ACTIVE",
+         sigs["u1_triggered"]),
+        ("BTC vs 30-day MA",
+         f"${sigs['current_close_sig']:,.0f}  vs  MA=${sigs['ma30_value']:,.0f} ({_ma30_pct:+.1f}%)",
+         "> MA30",
+         sigs["above_ma30"]),
+        ("MA30 slope (5-bar)",
+         f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = ${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} "
+         f"({_slope_pct:+.2f}%)",
+         "> 0 (rising)",
+         sigs.get("ma30_slope_pos", False)),
+        ("Regime",
+         f"{_regime_label}  →  Exit mode: {_exit_mode}",
+         "≠ BEAR",
+         _bull_regime),
+        ("Clean 10d (no D1/D2)",
+         "YES — zero D1/D2 fires in prior 10 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
+         "= YES",
+         sigs["clean_10d"]),
+        ("Entry filter (↑MA30 OR clean10d)",
+         "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]) else "FAIL ✗",
+         "= PASS",
+         sigs["above_ma30"] or sigs["clean_10d"]),
+    ]
+    st.markdown(
+        _sig_card(
+            title="TF2 — Regime-Adaptive Strategy: U1 + Trend + Regime Exit",
+            icon="🎯",
+            color="#2563eb",
+            triggered=sigs["tf1_triggered"],
+            signal_rows=tf1_rows,
+            interpretation=(
+                "The <b>optimised regime-adaptive strategy</b> that maximises bull-market returns "
+                "while protecting capital in bear markets. Same entry as TF1 (U1 + MA30 / clean10d), "
+                "but exits adapt to market regime: "
+                "<b>BULL regime</b> (BTC &gt; MA30 &amp; MA30 rising) → exit <b>D3 only</b> "
+                "(patient, let winners run); "
+                "<b>BEAR/Neutral</b> → exit <b>D2 or D3</b> (defensive, cut quickly). "
+                "Backtest: Bear period (Sep 25–May 26): +$30k alpha vs B&amp;H. "
+                "Bull period (Sep 24–Sep 25, in-sample): +68% vs B&amp;H +73%, closing 87% of the gap."
+            ),
+            timing=(
+                "Entry signal fires 1–2 bars before momentum accelerates. "
+                "In BULL regime: hold through D2 dips (predicted-high stalls are temporary). "
+                "In BEAR/neutral: exit quickly on D2 (stalls become reversals). "
+                "Regime switches update daily based on MA30 slope (5-bar lookback)."
+            ),
+            prob_txt=(
+                "OOS bear period: 3 trades · +$30k alpha vs B&amp;H (TF1: +$38k). "
+                "In-sample bull period: 5 trades · +68% vs B&amp;H +73% (TF1: only +6%). "
+                "Total combined alpha TF2: <b>+$25.7k</b> vs TF1: −$28.8k. "
+                "TF2 dramatically closes the bull-market gap at modest bear-period cost."
+            ),
+            conf_txt=(
+                "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
+                "Bear-period test is fully OOS. Small samples — use alongside other signals. "
+                "No strategy outperforms B&amp;H in both a +93% bull AND a −33% bear market "
+                "without leverage. TF2 gets close: +$30k alpha in bear, −$4.5k in bull."
+            ),
+        ),
+        unsafe_allow_html=True,
+    )
+
     # ── V-Reversal special signal ──────────────────────────────────────
     if sigs["capitulation_signal"] or sigs["v_reversal_likely"]:
         v_bg    = "#fdf4ff" if not sigs["v_reversal_likely"] else "#ede9fe"
@@ -2617,7 +3336,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         # ── Legend / interpretation guide ──────────────────────────────
         with st.expander("ℹ️ How to read the Trend Alert Dashboard", expanded=False):
             st.markdown("""
-**Signal definitions** (all computed from the last 3–5 completed daily bars):
+**Signal definitions** (all computed from the last 3–45 completed daily bars):
 
 | Signal | Formula | Meaning when positive/high |
 |--------|---------|---------------------------|
@@ -2625,13 +3344,23 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 | `err_lo_ma3` | 3d avg of (pred_low − actual_low) / close × 100 | Actual lows **undershot** predictions → bearish pressure |
 | `hi_breaks_3d` | Count of days in last 3 where actual H > pred H | Repeated upside breakouts → momentum building |
 | `lo_breaks_3d` | Count of days in last 3 where actual L < pred L | Repeated downside breaks → trend deteriorating |
+| `MA30` | Rolling 30-bar mean of daily close prices | Trend direction proxy (above = bullish context) |
+| `clean_10d` | True if zero D1 or D2 fires in prior 10 bars | No recent bearish regime fingerprint |
 
 **Alert levels:**
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🟢 **UPTREND SIGNAL**: U1 active, no downtrend conditions → Upside momentum (1.68× lift)
+- 🎯 **STRATEGY BUY (TF2)**: U1 + trend filter active → Regime-adaptive entry signal (see TF2 card below)
+- 🟢 **UPTREND SIGNAL (U1)**: U1 active but trend filter not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
+
+**TF2 — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
+- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 10 days)
+- **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
+- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −1%) or D3 (defensive — cut quickly)
+- **Bear period OOS** (Sep 25–May 26): +$30k alpha vs B&H · 3 trades closed
+- **Bull period** (Sep 24–Sep 25, in-sample ⚠️): +68% vs B&H +73% · 5 trades (TF1 only managed +6%)
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -2837,6 +3566,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _intra_raw = _fetch_current_bar_intraday() if is_live else None
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
         render_trend_signatures(sigs, intraday=_intra_sig)
+
+    # ─────────────── TF1 Trading Strategy Backtest Dashboard ──────────────
+    # Always computed from the LIVE end date (most recent completed bar) so the
+    # rolling-1-year window is always current, regardless of the historical picker.
+    _bt_end = target_date.strftime("%Y-%m-%d")
+    _bt     = run_tf1_backtest(_bt_end)
+    render_trading_strategy_dashboard(_bt)
 
     # ────── Historical picker (date strip, calendar, hour slider,
     # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate

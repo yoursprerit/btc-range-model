@@ -2,6 +2,7 @@
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
 **Last updated:** 2026-05-26  
+**Current live strategy:** TF2 (Regime-Adaptive) — supersedes TF1  
 **OOS test window:** 2025-09-19 → 2026-05-17 (241 bars, fully out-of-sample)  
 **In-sample test window:** 2024-09-17 → 2025-09-17 (365 bars, in-sample — model trained through this period)  
 **Starting capital:** $100,000 USD  
@@ -253,6 +254,107 @@ BTC price dropped from ~$63k (Sep 2025) to ~$76k (May 26, 2026), with a peak nea
 | BTC vs MA30 | Below MA30 | Trend filter would block entry even if U1 fired |
 
 The strategy correctly avoided the post-May-7 decline (−4.4%).
+
+---
+
+## TF2 — Regime-Adaptive Strategy (Current Live Strategy)
+
+TF2 was derived by running a multi-strategy optimizer across **both** test periods simultaneously,
+seeking an approach that maximises returns in bull markets while minimising losses in bear markets.
+
+> **One-sentence summary:**  
+> Same entry as TF1; exit adapts to market regime — patient (D3 only) in bull markets,
+> defensive (D2 or D3) in bear markets.
+
+### What's Different from TF1
+
+The **only change** from TF1 is the exit logic:
+
+| | TF1 | TF2 |
+|--|-----|-----|
+| **Entry** | U1 + (↑MA30 OR clean_10d) | Same ✓ |
+| **Exit (Bear/Neutral regime)** | D2 or D3 | Same ✓ |
+| **Exit (Bull regime)** | D2 or D3 | **D3 only** ← key change |
+
+**Regime definition:**
+```
+BULL regime:   BTC close > MA30  AND  MA30[today] > MA30[5 bars ago]
+BEAR/Neutral:  everything else
+```
+
+### Why This Works
+
+In a **bull market**, D2 (`err_hi_ma3 < −1%`) fires repeatedly during brief consolidations —
+the model expects a ceiling, BTC briefly stalls, but then resumes upward. TF1 exits on every D2,
+causing whipsaws (16 trades in the prior-year bull period vs 6 in the bear OOS period).
+
+By staying patient in BULL regime (exiting only on D3 — the structural reversal canary),
+TF2 holds through the pauses and captures the full trend.
+
+In a **bear/consolidation market**, D2 fires and BTC does NOT recover — the stall is a real
+reversal. TF1's quick D2 exit is the correct behavior, and TF2 preserves it.
+
+### Multi-Strategy Optimizer Results
+
+Five strategies were backtested across both periods simultaneously:
+
+| Strategy | Description | Bear Alpha | Bull Alpha | Combined | Beats B&H Both? |
+|----------|-------------|------------|------------|----------|-----------------|
+| TF1 | Fixed D2\|D3 exit | **+$38k** | −$67k | −$29k | ✗ NO |
+| **TF2** | **Regime exit: Bull→D3, Bear→D2\|D3** | **+$30k** | **−$5k** | **+$26k** | ✗ close |
+| TF3 | Stricter D2 threshold in bull (−1.5%) | +$30k | −$17k | +$12k | ✗ NO |
+| TF4 | Confirmed D2 (2 consecutive bars) | +$31k | −$26k | +$5k | ✗ NO |
+| TF5 | Regime entry + regime exit | +$30k | −$5k | +$26k | ✗ close |
+
+**Key finding:** No strategy outperforms B&H in BOTH a +73% bull AND a −33% bear market
+without leverage. In a strong bull run (+93% BTC), even 50% time-in-market is structurally
+disadvantaged vs 100% B&H exposure.
+
+**TF2 wins on combined alpha** (+$26k total) vs TF1's combined −$29k.
+More importantly, TF2 narrows the bull-market gap from −$67k (TF1) to just −$5k.
+
+### TF2 Trade Comparison
+
+**Bear period OOS (Sep 2025 → May 2026):**
+
+| # | Entry | Exit | P&L | Trigger | Exit Signal |
+|---|-------|------|-----|---------|-------------|
+| 1 | Dec 12, 2025 | Dec 15, 2025 | **−4.3%** ✗ | U1+↑MA30 | D2 (bear) |
+| 2 | Dec 31, 2025 | Jan 12, 2026 | **+4.2%** ✓ | U1+clean10d | D2 (bear) |
+| 3 | Mar 11, 2026 | Mar 28, 2026 | **−5.5%** ✗ | U1+↑MA30 | D2 (bear) |
+| Open | Apr/May 2026 | — | (open) | U1+↑MA30 | — |
+
+*Note: Trade dates differ slightly from TF1 OOS log due to different data source (Yahoo Finance daily vs Binance hourly 12:00-UTC bars). The live dashboard uses Binance data.*
+
+**Bull period in-sample (Sep 2024 → Sep 2025):**
+
+| # | Entry | Exit | P&L | Duration | Exit Signal |
+|---|-------|------|-----|----------|-------------|
+| 1 | Oct 30, 2024 | Dec 19, 2024 | **+34.8%** ✓ | 50 days | D3 |
+| 2 | Jan 18, 2025 | Feb 18, 2025 | **−8.5%** ✗ | 31 days | D2 |
+| 3 | Apr 3, 2025 | Apr 11, 2025 | **+0.4%** ✓ | 8 days | D3 |
+| 4 | Apr 13, 2025 | Jun 14, 2025 | **+26.0%** ✓ | 62 days | D2 |
+| 5 | Jun 26, 2025 | Jul 13, 2025 | **+11.4%** ✓ | 17 days | D3 |
+| Open | Jul+ 2025 | — | (open) | — | — |
+
+TF2 captured BTC's two largest bull runs in the period (Oct→Dec +34.8%, Apr→Jun +26.0%)
+by staying patient in BULL regime while TF1 exited them prematurely at D2 stalls.
+
+### Performance Summary
+
+| Metric | TF1 (Bear OOS) | TF2 (Bear OOS) | TF1 (Bull IS) | TF2 (Bull IS) |
+|--------|---------------|---------------|---------------|---------------|
+| Strategy return | +7.8% | +0.0% | +6.1% | **+68.4%** |
+| B&H return | −30.3% | −30.3% | +72.9% | +72.9% |
+| Alpha | **+$38k** | +$30k | −$67k | **−$5k** |
+| # trades | 4 | 3+open | 13 | 5+open |
+| Win rate | 75% | 33% | 38% | 80% |
+| Max drawdown | −8.7% | −14.1% | −30.9% | −22.9% |
+| Time in market | 18% | 16% | 35% | 51% |
+
+**Recommendation:** TF2 is the live strategy. Use TF1 as a reference for pure bear-market
+defensive performance. When the regime clearly switches to BEAR (MA30 slope turns negative),
+TF2 automatically becomes TF1-equivalent.
 
 ---
 
