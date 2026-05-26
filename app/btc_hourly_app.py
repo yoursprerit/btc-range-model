@@ -1858,6 +1858,155 @@ live_spot, live_spot_ts = fetch_live_spot()
 # significant uptrends / downtrends, based on prediction-vs-actual patterns.
 # ════════════════════════════════════════════════════════════════════════
 
+def _fetch_current_bar_intraday():
+    """Return a dict describing the **current in-progress** 12 UTC daily bar.
+
+    Not cached independently — relies on _fetch_binance_hourly()'s 10-minute
+    cache for freshness. This means intraday H/L updates every ~10 minutes,
+    matching the app's live auto-refresh cycle, without being frozen by the
+    6-hour TTL of compute_trend_signatures().
+
+    Returns None if the current bar has no hourly data yet.
+    """
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Bar boundary: today 12:00 UTC if hour >= 12, else yesterday 12:00 UTC
+    if now_utc.hour >= ANCHOR_HOUR_UTC:
+        bar_start = now_utc.replace(hour=ANCHOR_HOUR_UTC, minute=0, second=0, microsecond=0)
+    else:
+        bar_start = (now_utc - timedelta(days=1)).replace(
+            hour=ANCHOR_HOUR_UTC, minute=0, second=0, microsecond=0)
+    bar_date_iso = bar_start.date().isoformat()
+
+    # Fetch hourly data for the last ~2 days (covers all hours since bar_start)
+    try:
+        hourly = _fetch_binance_hourly(days_back=3)
+    except Exception:
+        return None
+    if hourly is None or hourly.empty:
+        return None
+
+    # Filter to candles within the current bar: bar_start ≤ ts < bar_start + 24h
+    bar_end = bar_start + timedelta(hours=24)
+    # The hourly index is the candle open time
+    mask = (hourly.index >= bar_start) & (hourly.index < bar_end)
+    bar_data = hourly.loc[mask]
+    if bar_data.empty:
+        return None
+
+    hours_elapsed = len(bar_data)
+    running_high  = float(bar_data["high"].max())
+    running_low   = float(bar_data["low"].min())
+    current_close = float(bar_data["close"].iloc[-1])
+
+    return dict(
+        bar_date_iso   = bar_date_iso,
+        bar_start      = bar_start,
+        running_high   = running_high,
+        running_low    = running_low,
+        current_close  = current_close,
+        hours_elapsed  = hours_elapsed,
+        pct_through    = hours_elapsed / 24.0,
+    )
+
+
+def _compute_intraday_signal(intraday: dict, daily_fc: dict) -> dict:
+    """Compare the current bar's running H/L against today's frozen daily forecast.
+
+    Returns a dict describing whether the bar is already breaking the
+    predicted high/low bands — a real-time early warning that doesn't
+    require waiting for bar close.
+
+    Args:
+        intraday: output of _fetch_current_bar_intraday()
+        daily_fc: output of compute_daily_forecast() for today's bar date
+
+    Returns:
+        dict with intraday signal values and trigger flags, or None.
+    """
+    if intraday is None or daily_fc is None:
+        return None
+
+    pred_hi   = float(daily_fc["pred_high"])
+    pred_lo   = float(daily_fc["pred_low"])
+    close_ref = float(daily_fc["close_asof"])   # previous bar's close (model's reference)
+
+    run_hi   = float(intraday["running_high"])
+    run_lo   = float(intraday["running_low"])
+    cur_close= float(intraday["current_close"])
+    hrs      = int(intraday["hours_elapsed"])
+    pct      = float(intraday["pct_through"])
+
+    # Error vs daily prediction (same sign convention as bar-close signals)
+    # Positive err_hi → intraday high already exceeded predicted high (bullish)
+    # Positive err_lo → intraday low already undershot predicted low (bearish)
+    err_hi_intra = (run_hi  - pred_hi) / close_ref * 100.0
+    err_lo_intra = (pred_lo - run_lo)  / close_ref * 100.0
+
+    hi_break_intra = run_hi  > pred_hi
+    lo_break_intra = run_lo  < pred_lo
+
+    # How far in % terms has price moved from the reference close
+    move_pct = (cur_close - close_ref) / close_ref * 100.0
+
+    # Severity buckets for the lo break (bearish intraday pressure)
+    # We scale expectations by how many hours have elapsed:
+    # - early in the bar (< 8h): even a small break is notable
+    # - late in the bar (> 18h): already confirming what will show in bar close
+    if lo_break_intra:
+        if err_lo_intra > 2.0:
+            lo_severity = "HIGH"
+        elif err_lo_intra > 0.8:
+            lo_severity = "MODERATE"
+        else:
+            lo_severity = "WATCH"
+    else:
+        lo_severity = "NONE"
+
+    if hi_break_intra:
+        if err_hi_intra > 2.0:
+            hi_severity = "HIGH"
+        elif err_hi_intra > 0.8:
+            hi_severity = "MODERATE"
+        else:
+            hi_severity = "WATCH"
+    else:
+        hi_severity = "NONE"
+
+    # Composite intraday alert
+    if lo_break_intra and lo_severity == "HIGH":
+        intra_alert = "INTRA_BEARISH_STRONG"
+    elif lo_break_intra and lo_severity == "MODERATE":
+        intra_alert = "INTRA_BEARISH"
+    elif hi_break_intra and hi_severity == "HIGH":
+        intra_alert = "INTRA_BULLISH_STRONG"
+    elif hi_break_intra and hi_severity == "MODERATE":
+        intra_alert = "INTRA_BULLISH"
+    elif lo_break_intra or hi_break_intra:
+        intra_alert = "INTRA_WATCH"
+    else:
+        intra_alert = "INTRA_NEUTRAL"
+
+    return dict(
+        bar_date_iso    = intraday["bar_date_iso"],
+        hours_elapsed   = hrs,
+        pct_through     = pct,
+        pred_hi         = pred_hi,
+        pred_lo         = pred_lo,
+        close_ref       = close_ref,
+        running_high    = run_hi,
+        running_low     = run_lo,
+        current_close   = cur_close,
+        move_pct        = move_pct,
+        err_hi_intra    = err_hi_intra,
+        err_lo_intra    = err_lo_intra,
+        hi_break_intra  = hi_break_intra,
+        lo_break_intra  = lo_break_intra,
+        hi_severity     = hi_severity,
+        lo_severity     = lo_severity,
+        intra_alert     = intra_alert,
+    )
+
+
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
 def compute_trend_signatures(target_date_iso: str):
     """Compute trend signature signals for the dashboard alert card.
@@ -2030,14 +2179,20 @@ def compute_trend_signatures(target_date_iso: str):
     )
 
 
-def render_trend_signatures(sigs: dict):
+def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     """Render the Trend Signature Alert Dashboard in the Streamlit UI.
 
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
       • V-reversal special signal
+      • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
+
+    Args:
+        sigs:     Output of compute_trend_signatures() — historical bar signals.
+        intraday: Output of _compute_intraday_signal() — current bar status.
+                  None in historical mode or when data unavailable.
     """
     al   = sigs["alert_level"]
     dnc  = sigs["dn_count"]
@@ -2300,6 +2455,129 @@ def render_trend_signatures(sigs: dict):
             unsafe_allow_html=True,
         )
 
+    # ── Live Intraday Bar Panel ────────────────────────────────────────
+    # Shows the current in-progress bar's running H/L vs today's frozen
+    # daily predictions. Updates every ~10 minutes via _fetch_binance_hourly.
+    # This is the answer to "does an intraday move update the signals?" —
+    # it won't update the completed-bar signals (those are frozen until bar
+    # close) but it does give you a live read on where the current bar is
+    # tracking relative to today's predicted H/L band.
+    if intraday is not None:
+        ia = intraday
+        ia_alert = ia["intra_alert"]
+
+        # Color scheme for intraday panel
+        INTRA_CFG = {
+            "INTRA_BEARISH_STRONG": {
+                "bg": "#fee2e2", "border": "#dc2626", "icon": "🔴",
+                "label": "INTRADAY BEARISH — Strong Low Break",
+                "txt": "#7f1d1d",
+            },
+            "INTRA_BEARISH": {
+                "bg": "#fef3c7", "border": "#d97706", "icon": "🟠",
+                "label": "INTRADAY BEARISH — Moderate Low Break",
+                "txt": "#78350f",
+            },
+            "INTRA_BULLISH_STRONG": {
+                "bg": "#dcfce7", "border": "#16a34a", "icon": "🟢",
+                "label": "INTRADAY BULLISH — Strong High Break",
+                "txt": "#14532d",
+            },
+            "INTRA_BULLISH": {
+                "bg": "#f0fdf4", "border": "#16a34a", "icon": "🟢",
+                "label": "INTRADAY BULLISH — Moderate High Break",
+                "txt": "#14532d",
+            },
+            "INTRA_WATCH": {
+                "bg": "#fffbeb", "border": "#f59e0b", "icon": "👁",
+                "label": "INTRADAY WATCH — Band Touch",
+                "txt": "#92400e",
+            },
+            "INTRA_NEUTRAL": {
+                "bg": "#f8fafc", "border": "#94a3b8", "icon": "⬜",
+                "label": "INTRADAY NEUTRAL — Within Predicted Range",
+                "txt": "#334155",
+            },
+        }
+        ic = INTRA_CFG.get(ia_alert, INTRA_CFG["INTRA_NEUTRAL"])
+
+        # Progress bar fraction for the bar completion gauge
+        pct_done = ia["pct_through"]
+        pct_bar_filled = int(pct_done * 20)
+        progress_bar = "█" * pct_bar_filled + "░" * (20 - pct_bar_filled)
+
+        hi_brk_color = "#16a34a" if ia["hi_break_intra"] else "#94a3b8"
+        lo_brk_color = "#dc2626" if ia["lo_break_intra"] else "#94a3b8"
+        move_color   = "#16a34a" if ia["move_pct"] >= 0 else "#dc2626"
+
+        st.markdown(
+            "<div style='background:" + ic["bg"] + "; border:2px solid " + ic["border"] + "; "
+            "border-radius:10px; padding:14px 18px; margin:10px 0;'>"
+            # Header
+            "<div style='font-size:14px; font-weight:700; color:" + ic["txt"] + "; margin-bottom:10px;'>"
+            + ic["icon"] + " LIVE INTRADAY BAR — " + ic["label"]
+            + " <span style='font-weight:400; font-size:12px;'>"
+            "· Daily predictions frozen at bar open, intraday refreshes every ~10 min</span></div>"
+            # Bar completion gauge
+            "<div style='font-family:monospace; font-size:12px; color:#475569; margin-bottom:10px;'>"
+            "Bar " + ia["bar_date_iso"] + " · "
+            + str(ia["hours_elapsed"]) + "/24 h elapsed  "
+            "[" + progress_bar + "]  "
+            + str(int(pct_done * 100)) + "% through</div>"
+            # 3-column value grid
+            "<div style='display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:10px;'>"
+            # Col 1: Running High
+            "<div style='background:rgba(0,0,0,0.04); border-radius:6px; padding:8px;'>"
+            "<div style='font-size:11px; color:#64748b; margin-bottom:2px;'>Running High</div>"
+            "<div style='font-size:15px; font-weight:700; color:" + hi_brk_color + ";'>"
+            "$" + f"{ia['running_high']:,.0f}" + "</div>"
+            "<div style='font-size:11px; color:#64748b;'>Pred: $" + f"{ia['pred_hi']:,.0f}" + "</div>"
+            "<div style='font-size:12px; color:" + hi_brk_color + "; font-weight:600;'>"
+            + ("✓ ABOVE pred +" if ia["hi_break_intra"] else "○ below pred ")
+            + f"{ia['err_hi_intra']:+.2f}%" + "</div></div>"
+            # Col 2: Running Low
+            "<div style='background:rgba(0,0,0,0.04); border-radius:6px; padding:8px;'>"
+            "<div style='font-size:11px; color:#64748b; margin-bottom:2px;'>Running Low</div>"
+            "<div style='font-size:15px; font-weight:700; color:" + lo_brk_color + ";'>"
+            "$" + f"{ia['running_low']:,.0f}" + "</div>"
+            "<div style='font-size:11px; color:#64748b;'>Pred: $" + f"{ia['pred_lo']:,.0f}" + "</div>"
+            "<div style='font-size:12px; color:" + lo_brk_color + "; font-weight:600;'>"
+            + ("✓ BELOW pred " if ia["lo_break_intra"] else "○ above pred ")
+            + f"{ia['err_lo_intra']:+.2f}%" + "</div></div>"
+            # Col 3: Current price vs reference close
+            "<div style='background:rgba(0,0,0,0.04); border-radius:6px; padding:8px;'>"
+            "<div style='font-size:11px; color:#64748b; margin-bottom:2px;'>Current Close</div>"
+            "<div style='font-size:15px; font-weight:700; color:" + move_color + ";'>"
+            "$" + f"{ia['current_close']:,.0f}" + "</div>"
+            "<div style='font-size:11px; color:#64748b;'>vs bar-open ref: $" + f"{ia['close_ref']:,.0f}" + "</div>"
+            "<div style='font-size:12px; color:" + move_color + "; font-weight:600;'>"
+            + f"{ia['move_pct']:+.2f}%" + " vs prev close</div></div>"
+            "</div>"
+            # Interpretation text
+            "<div style='font-size:12px; color:#1e293b; line-height:1.5;'>"
+            "📌 <b>What this means:</b> The completed-bar signals above are based on the last "
+            "<b>closed</b> daily bars — they don't include this bar until 12:00 UTC tomorrow. "
+            "This panel shows whether the <b>current bar</b> is already breaking the model's "
+            "predicted H/L band intraday. "
+            + (
+                "⚠️ The <b>low</b> has already broken the predicted floor by "
+                "<b>" + f"{ia['err_lo_intra']:+.2f}%" + "</b>. "
+                "If this persists to bar close, D1 and D2 signals will update tomorrow."
+                if ia["lo_break_intra"] and ia["lo_severity"] in ("MODERATE", "HIGH")
+                else (
+                    "✓ The <b>high</b> has already exceeded the predicted ceiling by "
+                    "<b>" + f"{ia['err_hi_intra']:+.2f}%" + "</b>. "
+                    "If this persists to bar close, U1 will get a fresh data point tomorrow."
+                    if ia["hi_break_intra"] and ia["hi_severity"] in ("MODERATE", "HIGH")
+                    else
+                    "The bar is currently trading <b>within</b> the predicted H/L range — "
+                    "no intraday band break to report yet."
+                )
+            )
+            + "</div></div>",
+            unsafe_allow_html=True,
+        )
+
     # ── Last 5 bars mini-table ─────────────────────────────────────────
     if sigs["detail_rows"]:
         with st.expander("📋 Last 5 bars — signal detail", expanded=False):
@@ -2545,7 +2823,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # ─────────────────── Trend Signature Alert Dashboard ──────────────────
     sigs = compute_trend_signatures(target_date.strftime("%Y-%m-%d"))
     if sigs is not None:
-        render_trend_signatures(sigs)
+        # Compute live intraday signal independently of the 6h-cached sigs.
+        # _fetch_current_bar_intraday uses _fetch_binance_hourly (10-min TTL),
+        # so intraday H/L refreshes every ~10 min — no waiting for bar close.
+        # Only attach intraday signal in live mode; historical view shows closed bars only.
+        _intra_raw = _fetch_current_bar_intraday() if is_live else None
+        _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
+        render_trend_signatures(sigs, intraday=_intra_sig)
 
     # ────── Historical picker (date strip, calendar, hour slider,
     # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate
