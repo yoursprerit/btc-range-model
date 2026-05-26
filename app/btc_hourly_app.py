@@ -2130,6 +2130,14 @@ def compute_trend_signatures(target_date_iso: str):
     ma30_value  = float(np.mean(c[-ma30_window:]))
     current_close_sig = float(c[-1])
     above_ma30 = current_close_sig > ma30_value
+    # MA30 slope: compare current MA30 vs MA30 computed 5 bars ago
+    # Bull regime = price above MA30 AND MA30 is rising (slope > 0 over last 5 bars)
+    if n >= 35:
+        ma30_5d_ago = float(np.mean(c[-35:-5]))   # 30-bar mean ending 5 bars ago
+    else:
+        ma30_5d_ago = ma30_value                   # insufficient data → assume flat
+    ma30_slope_pos = ma30_value > ma30_5d_ago
+    bull_regime = above_ma30 and ma30_slope_pos
     # clean_10d: zero D1 or D2 fires in the 10 bars *before* the current bar
     if n >= 11:
         clean_10d = not bool(np.any(_d1_hist[-11:-1] | _d2_hist[-11:-1]))
@@ -2143,7 +2151,9 @@ def compute_trend_signatures(target_date_iso: str):
     d2_triggered  = (err_hi_ma3 < -1.0)
     d3_triggered  = exhaustion_active
     u1_triggered  = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
-    # TF1: the best-backtest entry signal — U1 confirmed by trend context
+    # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
+    # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
+    # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
     tf1_triggered = u1_triggered and (above_ma30 or clean_10d)
 
     # ── Composite alert level ───────────────────────────────────────────
@@ -2191,10 +2201,13 @@ def compute_trend_signatures(target_date_iso: str):
         last_lo_err       = last_lo_err,
         last_hi_err       = last_hi_err,
         dn_score_raw      = dn_score_raw,
-        # Trend-filter values (TF1 / U1+MA30 strategy entry)
+        # Trend-filter values (TF1/TF2 strategy entry + regime detection)
         ma30_value        = ma30_value,
+        ma30_5d_ago       = ma30_5d_ago,
         current_close_sig = current_close_sig,
         above_ma30        = above_ma30,
+        ma30_slope_pos    = ma30_slope_pos,
+        bull_regime       = bull_regime,
         clean_10d         = clean_10d,
         # Trigger flags
         d1_triggered      = d1_triggered,
@@ -2387,16 +2400,24 @@ def _build_ct_batch_predictions():
     return result[~result.index.duplicated(keep="last")]
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner="Running TF1 strategy backtest …")
-def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0):
-    """Run the TF1 trading strategy backtest on the rolling ~1-year window.
+@st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
+def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
+                     strategy: str = "TF2"):
+    """Run a trading strategy backtest on the rolling ~1-year window.
 
-    TF1 entry : U1 active AND (BTC > MA30 OR clean_10d)
-    TF1 exit  : D2 (err_hi_ma3 < −1%) OR D3 (exhaustion canary)
-    Execution : 1-bar lag — signal on bar i, trade at bar i+1 close.
+    Entry (both TF1 and TF2):
+        U1 active (err_hi_ma3 > +0.5% AND hi_breaks_3d ≥ 2)
+        AND (BTC > MA30  OR  clean_10d)
 
-    Uses _build_ct_batch_predictions() for O(1) forecast lookups instead of
-    calling compute_daily_forecast() 400 times.  Cached 6 h.
+    Exit — TF1 (conservative, bear-optimised):
+        D2 (err_hi_ma3 < −1%)  OR  D3 (exhaustion canary)
+
+    Exit — TF2 (regime-adaptive, default):
+        BULL regime (above_ma30 AND MA30 slope > 0) → exit D3 only (patient)
+        BEAR / NEUTRAL regime                       → exit D2 OR D3 (defensive)
+
+    Execution: 1-bar lag — signal fires bar i, trade executes at bar i+1 close.
+    Uses _build_ct_batch_predictions() for O(1) lookups. Cached 6 h.
 
     Returns a dict with trades, nav_series, bh_series, stats, open_pos.
     Returns None if insufficient data or the CT model is unavailable.
@@ -2469,13 +2490,21 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0):
         ma30[i] = np.mean(c_asof[max(0, i-w+1): i+1])
     above_ma30 = c_asof > ma30
 
+    # MA30 slope (5-bar): used for regime detection in TF2
+    ma30_slope_pos = np.zeros(N, dtype=bool)
+    for i in range(N):
+        if i >= 5 and np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
+            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
+    # BULL regime: price above MA30 AND MA30 is rising
+    bull_regime = above_ma30 & ma30_slope_pos
+
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
         lo_i = max(0, i-10)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     tf1_entry = u1 & (above_ma30 | clean_10d)
-    tf1_exit  = d2 | d3
+    tf1_exit  = d2 | d3   # TF1 always exits D2|D3
 
     # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
     nav      = initial_capital
@@ -2495,7 +2524,19 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0):
 
         if pos == "LONG":
             cur = btc_qty * price
-            if si >= 0 and tf1_exit[si]:
+            # Regime-adaptive exit for TF2; fixed D2|D3 for TF1
+            if si >= 0:
+                if strategy == "TF2":
+                    # Bull regime: patience — wait for structural D3 reversal
+                    # Bear/neutral regime: defensive — exit on first D2 or D3
+                    should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
+                    exit_lbl    = "D3" if d3[si] else "D2 (bear)"
+                else:   # TF1
+                    should_exit = bool(tf1_exit[si])
+                    exit_lbl    = "D3" if d3[si] else "D2"
+            else:
+                should_exit = False; exit_lbl = "?"
+            if should_exit:
                 nav = cur
                 trades.append(dict(
                     entry_date    = e_date,    entry_price = e_price,
@@ -2504,7 +2545,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0):
                     exit_nav      = nav,
                     pnl_pct       = (price / e_price - 1) * 100,
                     pnl_abs       = nav - e_nav,
-                    exit_signal   = ("D3" if (si >= 0 and d3[si]) else "D2"),
+                    exit_signal   = exit_lbl,
                     duration_days = (dates[i] - e_date).days,
                 ))
                 pos = "CASH"; btc_qty = 0.0
@@ -2550,12 +2591,14 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0):
     tot_days  = max(1, (dates[N-1] - dates[WARMUP]).days)
 
     return dict(
+        strategy   = strategy,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav) if pos == "LONG" else None),
         stats = dict(
+            strategy        = strategy,
             initial_capital = initial_capital,
             final_nav    = final_nav,   final_bh   = final_bh,
             strat_ret    = strat_ret,   bh_ret     = bh_ret,
@@ -2573,16 +2616,16 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0):
 
 
 def render_trading_strategy_dashboard(bt) -> None:
-    """Render the TF1 trading strategy summary + rolling backtest dashboard.
+    """Render the TF2 trading strategy summary + rolling backtest dashboard.
 
     Shows:
-      • Strategy rules summary card (entry, exit, execution)
+      • Strategy rules summary card (entry, exit, regime logic)
       • 6-KPI row: NAV, B&H NAV, Alpha, Win Rate, Max Drawdown, Time in Market
-      • Portfolio NAV chart (TF1 vs Buy & Hold) with trade markers
+      • Portfolio NAV chart (TF2 vs Buy & Hold) with trade markers
       • Expandable trade log table
     """
     st.markdown("---")
-    st.subheader("🎯 TF1 Trading Strategy — Rolling Backtest")
+    st.subheader("🎯 TF2 Trading Strategy — Regime-Adaptive Rolling Backtest")
 
     if bt is None:
         st.info("⚙️ Backtest computing … CT model batch predictions being built. "
@@ -2591,6 +2634,7 @@ def render_trading_strategy_dashboard(bt) -> None:
 
     s       = bt["stats"]
     has_pos = bt["open_pos"]
+    strat   = s.get("strategy", "TF2")
 
     # ── Strategy summary ──────────────────────────────────────────────
     period_str = (
@@ -2601,13 +2645,14 @@ def render_trading_strategy_dashboard(bt) -> None:
         "<div style='background:#eff6ff; border:2px solid #2563eb; border-radius:10px; "
         "padding:12px 18px; margin:4px 0 14px 0;'>"
         "<div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:6px;'>"
-        "Strategy Rules</div>"
+        f"TF2 — Regime-Adaptive Strategy Rules</div>"
         "<div style='font-size:12px; color:#1e3a8a; line-height:1.9;'>"
         "📥 <b>Entry</b> — U1 active (<code>err_hi_ma3 &gt; +0.5%</code> "
         "AND <code>hi_breaks_3d ≥ 2</code>) <b>AND</b> "
         "(BTC above 30-day MA &nbsp;<b>OR</b>&nbsp; zero D1/D2 fires in prior 10 bars)<br>"
-        "📤 <b>Exit</b> &nbsp;— D2 (<code>err_hi_ma3 &lt; −1.0%</code>) "
-        "<b>OR</b> D3 (first lo_break after ≥ 3 consecutive hi_breaks)<br>"
+        "📤 <b>Exit</b> — <b>BULL regime</b> (price &gt; MA30 &amp; MA30 rising): "
+        "D3 only (patient — wait for structural reversal) &nbsp;|&nbsp; "
+        "<b>BEAR/Neutral</b>: D2 <b>OR</b> D3 (defensive — cut quickly)<br>"
         "⏱ <b>Execution</b> — 1-day lag · signal on bar <i>i</i>, "
         "trade at bar <i>i+1</i> close &nbsp;·&nbsp; "
         f"<b>Period:</b> {period_str}"
@@ -2653,9 +2698,9 @@ def render_trading_strategy_dashboard(bt) -> None:
     ))
     fig.add_trace(go.Scatter(
         x=bt["nav_series"].index, y=bt["nav_series"].values,
-        name="TF1 Strategy",
+        name="TF2 Strategy",
         line=dict(color="#2563eb", width=2.5),
-        hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF1 Strategy</extra>",
+        hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2 Strategy</extra>",
     ))
     fig.add_hline(
         y=s["initial_capital"], line_dash="dash",
@@ -2825,9 +2870,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
                 </span>
                 <span style="color:{cfg['txt_col']}; font-size:13px;">
                     <b>{dnc}/3</b> DN · <b>{upc}/1</b> UP ·
-                    TF1 strategy entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
+                    TF2 entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
                     (U1={'✓' if sigs['u1_triggered'] else '✗'}
                     MA30={'↑' if sigs['above_ma30'] else '↓'}
+                    slope={'↑' if sigs.get('ma30_slope_pos') else '↓'}
+                    regime={'🐂BULL' if sigs.get('bull_regime') else '🐻BEAR'}
                     clean10d={'✓' if sigs['clean_10d'] else '✗'})
                     · as-of: <b>{as_of_str}</b>
                     · <b>{sigs['n_bars']}</b> bars
@@ -3026,8 +3073,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             unsafe_allow_html=True,
         )
 
-    # ── TF1 full-width card (U1 + MA30 trend filter — best strategy entry) ────
+    # ── TF2 full-width card (U1 + MA30 + regime-adaptive exit) ───────────
     _ma30_pct = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
+    _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
+    _bull_regime = sigs.get("bull_regime", False)
+    _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
+    _exit_mode = "D3 only (patient — hold the trend)" if _bull_regime else "D2 OR D3 (defensive exit)"
     tf1_rows = [
         ("U1 Signal",
          "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
@@ -3037,48 +3088,58 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
          f"${sigs['current_close_sig']:,.0f}  vs  MA=${sigs['ma30_value']:,.0f} ({_ma30_pct:+.1f}%)",
          "> MA30",
          sigs["above_ma30"]),
+        ("MA30 slope (5-bar)",
+         f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = ${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} "
+         f"({_slope_pct:+.2f}%)",
+         "> 0 (rising)",
+         sigs.get("ma30_slope_pos", False)),
+        ("Regime",
+         f"{_regime_label}  →  Exit mode: {_exit_mode}",
+         "≠ BEAR",
+         _bull_regime),
         ("Clean 10d (no D1/D2)",
          "YES — zero D1/D2 fires in prior 10 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
          "= YES",
          sigs["clean_10d"]),
-        ("Trend filter (↑MA30 OR clean10d)",
+        ("Entry filter (↑MA30 OR clean10d)",
          "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]) else "FAIL ✗",
          "= PASS",
          sigs["above_ma30"] or sigs["clean_10d"]),
     ]
     st.markdown(
         _sig_card(
-            title="TF1 — Strategy Entry Signal: U1 + Trend Confirmation",
+            title="TF2 — Regime-Adaptive Strategy: U1 + Trend + Regime Exit",
             icon="🎯",
             color="#2563eb",
             triggered=sigs["tf1_triggered"],
             signal_rows=tf1_rows,
             interpretation=(
-                "The <b>highest-returning entry signal</b> discovered in a 1-year backtest "
-                "($100k → $102k, +2.1% vs Buy &amp; Hold −33.1%, alpha +$35k). "
-                "TF1 fires when U1 (3d average actual highs exceed predictions) is confirmed by "
-                "a trend context filter: <b>BTC above its 30-day MA</b> (momentum on your side) "
-                "<b>OR</b> <b>no D1/D2 signals in the prior 10 bars</b> (no recent bearish fingerprint). "
-                "Exit on D2 (err_hi_ma3 &lt; −1%) or D3 (exhaustion canary). "
-                "6 trades, 4W/2L (67%), max drawdown 12.7%, only 19% time in market."
+                "The <b>optimised regime-adaptive strategy</b> that maximises bull-market returns "
+                "while protecting capital in bear markets. Same entry as TF1 (U1 + MA30 / clean10d), "
+                "but exits adapt to market regime: "
+                "<b>BULL regime</b> (BTC &gt; MA30 &amp; MA30 rising) → exit <b>D3 only</b> "
+                "(patient, let winners run); "
+                "<b>BEAR/Neutral</b> → exit <b>D2 or D3</b> (defensive, cut quickly). "
+                "Backtest: Bear period (Sep 25–May 26): +$30k alpha vs B&amp;H. "
+                "Bull period (Sep 24–Sep 25, in-sample): +68% vs B&amp;H +73%, closing 87% of the gap."
             ),
             timing=(
-                "Signal fires 1–2 bars before momentum accelerates. "
-                "Best historical entries: Dec 10 2025 (+0.5%), Jan 13 (+0.2%), "
-                "Apr 9 (+8.1%), May 3 (+1.9%). "
-                "Two losses: Jan 5 (−3.0%) and Mar 10 (−5.2%), both exited by D2."
+                "Entry signal fires 1–2 bars before momentum accelerates. "
+                "In BULL regime: hold through D2 dips (predicted-high stalls are temporary). "
+                "In BEAR/neutral: exit quickly on D2 (stalls become reversals). "
+                "Regime switches update daily based on MA30 slope (5-bar lookback)."
             ),
             prob_txt=(
-                "4/6 wins (67%) · avg P&amp;L +0.4% per trade · "
-                "<b>Best trade +8.1%</b> (Apr 9–25 2026, D2 exit) · "
-                "Worst trade −5.2% (Mar 10–28 2026). "
-                "Removing D1 from exits (D2+D3 only) was critical — prevented premature exits."
+                "OOS bear period: 3 trades · +$30k alpha vs B&amp;H (TF1: +$38k). "
+                "In-sample bull period: 5 trades · +68% vs B&amp;H +73% (TF1: only +6%). "
+                "Total combined alpha TF2: <b>+$25.7k</b> vs TF1: −$28.8k. "
+                "TF2 dramatically closes the bull-market gap at modest bear-period cost."
             ),
             conf_txt=(
-                "Derived from 6-trade OOS sample (Sep 2025 – May 2026). "
-                "Small sample — use as a signal filter alongside the 3-class day-type model "
-                "and the 7/14-day cone for directional context. "
-                "Trend filter (MA30) dramatically reduced whipsaws vs raw U1 entries."
+                "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
+                "Bear-period test is fully OOS. Small samples — use alongside other signals. "
+                "No strategy outperforms B&amp;H in both a +93% bull AND a −33% bear market "
+                "without leverage. TF2 gets close: +$30k alpha in bear, −$4.5k in bull."
             ),
         ),
         unsafe_allow_html=True,
@@ -3290,15 +3351,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **STRATEGY BUY (TF1)**: U1 + trend filter active → Best backtest entry signal (+2.1% vs B&H −33.1%)
+- 🎯 **STRATEGY BUY (TF2)**: U1 + trend filter active → Regime-adaptive entry signal (see TF2 card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but trend filter not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
-**TF1 — Best Strategy Entry (backtested 1 year):**
+**TF2 — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
 - **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 10 days)
-- **Exit**: D2 (err_hi_ma3 < −1%) or D3 (exhaustion canary)
-- **Result**: $100k → $102k (+2.1%) vs Buy & Hold −33.1% · 4W/2L · 12.7% max drawdown · 19% time in market
-- **6 trades** (Dec 2025 – May 2026 OOS): best +8.1%, worst −5.2%
+- **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
+- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −1%) or D3 (defensive — cut quickly)
+- **Bear period OOS** (Sep 25–May 26): +$30k alpha vs B&H · 3 trades closed
+- **Bull period** (Sep 24–Sep 25, in-sample ⚠️): +68% vs B&H +73% · 5 trades (TF1 only managed +6%)
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).

@@ -262,13 +262,18 @@ CT ensemble uses raw 103-feature matrix).
 
 ## 8. Backtested Trading Strategy
 
-A systematic trading strategy built on these signatures has been backtested on the full
-241-bar OOS test window. See [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) for the complete
-specification, all variant results, and the full trade log.
+A systematic trading strategy built on these signatures has been backtested across two periods.
+See [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) for the complete specification, all variant
+results, and full trade logs.
 
-**Best strategy (TF1) summary:** Entry on U1 + (BTC above 30-day MA OR clean_10d),
-exit on D2 or D3 only. Result: $100k → $102k (+2.1%) vs Buy & Hold −33.1%; alpha +$35k;
-4W/2L; 12.7% max drawdown; 19% time in market.
+**Best strategy (TF1) summary — OOS period (Sep 2025 → May 2026):**  
+Entry on U1 + (BTC above 30-day MA OR clean_10d), exit on D2 or D3 only.  
+Result: $100k → $102k (+2.1%) vs Buy & Hold −33.1%; alpha +$35k; 4W/2L; 12.7% max drawdown; 19% time in market.
+
+**Prior-year test (Sep 2024 → Sep 2025, in-sample):**  
+Same TF1 strategy in a strong bull market (+93% BTC).  
+Result: $100k → $106k (+6.3%) vs Buy & Hold +93.1%; alpha −$87k; 5W/11L; 34.3% max drawdown; 44% time in market.  
+Strategy underperforms in bull regimes — by design it minimises exposure, which is costly when the trend is strongly up.
 
 ---
 
