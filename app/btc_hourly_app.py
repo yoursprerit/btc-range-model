@@ -2034,8 +2034,9 @@ def compute_trend_signatures(target_date_iso: str):
     Returns a dict with all computed values and trigger flags.
     Returns None if fewer than 5 completed bars are available.
     """
-    # Pull last 10 completed daily bars (actual H/L present)
-    series = compute_daily_series(target_date_iso, days_back=10)
+    # Pull last 45 completed daily bars — 30 needed for MA30, 10 for clean_10d,
+    # plus buffer; core rolling metrics still use only last 3/5 bars.
+    series = compute_daily_series(target_date_iso, days_back=45)
     if series is None or series.empty:
         return None
     completed = series[series["actual_high"].notna() & series["actual_low"].notna()].copy()
@@ -2111,11 +2112,39 @@ def compute_trend_signatures(target_date_iso: str):
     capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 5.0)
     v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 5.0)
 
+    # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
+    # Re-compute D1/D2 signal for every historical bar so we can check
+    # whether any fired in the 10 bars preceding the current bar (clean_10d).
+    _d1_hist = np.zeros(n, dtype=bool)
+    _d2_hist = np.zeros(n, dtype=bool)
+    for _i in range(n):
+        _s = max(0, _i - 2)
+        _ehma_i = float(np.mean(err_hi[_s: _i + 1]))
+        _elma_i = float(np.mean(err_lo[_s: _i + 1]))
+        _hb3_i  = int(np.sum(hi_break[_s: _i + 1]))
+        _lb3_i  = int(np.sum(lo_break[_s: _i + 1]))
+        _d1_hist[_i] = (_lb3_i >= 2) and (_elma_i > 0.5)
+        _d2_hist[_i] = (_ehma_i < -1.0)
+    # 30-bar rolling mean of close prices (close_asof = the daily close proxy)
+    ma30_window = min(30, n)
+    ma30_value  = float(np.mean(c[-ma30_window:]))
+    current_close_sig = float(c[-1])
+    above_ma30 = current_close_sig > ma30_value
+    # clean_10d: zero D1 or D2 fires in the 10 bars *before* the current bar
+    if n >= 11:
+        clean_10d = not bool(np.any(_d1_hist[-11:-1] | _d2_hist[-11:-1]))
+    elif n >= 2:
+        clean_10d = not bool(np.any(_d1_hist[:-1] | _d2_hist[:-1]))
+    else:
+        clean_10d = False
+
     # ── Signature trigger flags ─────────────────────────────────────────
-    d1_triggered = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
-    d2_triggered = (err_hi_ma3 < -1.0)
-    d3_triggered = exhaustion_active
-    u1_triggered = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
+    d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
+    d2_triggered  = (err_hi_ma3 < -1.0)
+    d3_triggered  = exhaustion_active
+    u1_triggered  = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
+    # TF1: the best-backtest entry signal — U1 confirmed by trend context
+    tf1_triggered = u1_triggered and (above_ma30 or clean_10d)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -2127,6 +2156,8 @@ def compute_trend_signatures(target_date_iso: str):
         alert_level = "ELEVATED_DN"
     elif dn_count == 1 and not u1_triggered:
         alert_level = "WATCH_DN"
+    elif tf1_triggered:
+        alert_level = "STRATEGY_BUY"
     elif up_count >= 1 and dn_count == 0:
         alert_level = "WATCH_UP"
     else:
@@ -2150,21 +2181,27 @@ def compute_trend_signatures(target_date_iso: str):
 
     return dict(
         # Signal values
-        err_hi_ma3   = err_hi_ma3,
-        err_lo_ma3   = err_lo_ma3,
-        hi_breaks_3d = hi_breaks_3d,
-        lo_breaks_3d = lo_breaks_3d,
-        hi_breaks_5d = hi_breaks_5d,
-        lo_breaks_5d = lo_breaks_5d,
-        streak       = streak,
-        last_lo_err  = last_lo_err,
-        last_hi_err  = last_hi_err,
-        dn_score_raw = dn_score_raw,
+        err_hi_ma3        = err_hi_ma3,
+        err_lo_ma3        = err_lo_ma3,
+        hi_breaks_3d      = hi_breaks_3d,
+        lo_breaks_3d      = lo_breaks_3d,
+        hi_breaks_5d      = hi_breaks_5d,
+        lo_breaks_5d      = lo_breaks_5d,
+        streak            = streak,
+        last_lo_err       = last_lo_err,
+        last_hi_err       = last_hi_err,
+        dn_score_raw      = dn_score_raw,
+        # Trend-filter values (TF1 / U1+MA30 strategy entry)
+        ma30_value        = ma30_value,
+        current_close_sig = current_close_sig,
+        above_ma30        = above_ma30,
+        clean_10d         = clean_10d,
         # Trigger flags
-        d1_triggered = d1_triggered,
-        d2_triggered = d2_triggered,
-        d3_triggered = d3_triggered,
-        u1_triggered = u1_triggered,
+        d1_triggered      = d1_triggered,
+        d2_triggered      = d2_triggered,
+        d3_triggered      = d3_triggered,
+        u1_triggered      = u1_triggered,
+        tf1_triggered     = tf1_triggered,
         capitulation_signal = capitulation_signal,
         v_reversal_likely   = v_reversal_likely,
         exhaustion_active   = exhaustion_active,
@@ -2185,6 +2222,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
+      • TF1 full-width card (U1 + MA30 trend-filter — best backtest strategy)
       • V-reversal special signal
       • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
@@ -2200,16 +2238,18 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # ── Color scheme ───────────────────────────────────────────────────
     ALERT_CFG = {
-        "HIGH_DN":    {"bg": "#fee2e2", "border": "#dc2626", "badge_bg": "#dc2626",
-                       "badge_txt": "⚠️ HIGH DOWNTREND ALERT",  "txt_col": "#7f1d1d"},
-        "ELEVATED_DN":{"bg": "#fef3c7", "border": "#d97706", "badge_bg": "#d97706",
-                       "badge_txt": "🟠 ELEVATED DOWNTREND RISK","txt_col": "#78350f"},
-        "WATCH_DN":   {"bg": "#fffbeb", "border": "#f59e0b", "badge_bg": "#f59e0b",
-                       "badge_txt": "👁 DOWNTREND WATCH",         "txt_col": "#92400e"},
-        "WATCH_UP":   {"bg": "#f0fdf4", "border": "#16a34a", "badge_bg": "#16a34a",
-                       "badge_txt": "📈 UPTREND SIGNAL",          "txt_col": "#14532d"},
-        "NEUTRAL":    {"bg": "#f8fafc", "border": "#94a3b8", "badge_bg": "#64748b",
-                       "badge_txt": "⬜ NO ACTIVE SIGNAL",        "txt_col": "#334155"},
+        "HIGH_DN":     {"bg": "#fee2e2", "border": "#dc2626", "badge_bg": "#dc2626",
+                        "badge_txt": "⚠️ HIGH DOWNTREND ALERT",       "txt_col": "#7f1d1d"},
+        "ELEVATED_DN": {"bg": "#fef3c7", "border": "#d97706", "badge_bg": "#d97706",
+                        "badge_txt": "🟠 ELEVATED DOWNTREND RISK",     "txt_col": "#78350f"},
+        "WATCH_DN":    {"bg": "#fffbeb", "border": "#f59e0b", "badge_bg": "#f59e0b",
+                        "badge_txt": "👁 DOWNTREND WATCH",              "txt_col": "#92400e"},
+        "STRATEGY_BUY":{"bg": "#eff6ff", "border": "#2563eb", "badge_bg": "#2563eb",
+                        "badge_txt": "🎯 STRATEGY BUY SIGNAL (TF1)",   "txt_col": "#1e3a8a"},
+        "WATCH_UP":    {"bg": "#f0fdf4", "border": "#16a34a", "badge_bg": "#16a34a",
+                        "badge_txt": "📈 UPTREND SIGNAL (U1)",          "txt_col": "#14532d"},
+        "NEUTRAL":     {"bg": "#f8fafc", "border": "#94a3b8", "badge_bg": "#64748b",
+                        "badge_txt": "⬜ NO ACTIVE SIGNAL",             "txt_col": "#334155"},
     }
     cfg = ALERT_CFG[al]
 
@@ -2228,9 +2268,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
                     {cfg['badge_txt']}
                 </span>
                 <span style="color:{cfg['txt_col']}; font-size:13px;">
-                    <b>{dnc}/3</b> downtrend conditions active · <b>{upc}/1</b> uptrend condition active
-                    · as-of bar: <b>{as_of_str}</b>
-                    · based on last <b>{sigs['n_bars']}</b> completed daily bars
+                    <b>{dnc}/3</b> DN · <b>{upc}/1</b> UP ·
+                    TF1 strategy entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
+                    (U1={'✓' if sigs['u1_triggered'] else '✗'}
+                    MA30={'↑' if sigs['above_ma30'] else '↓'}
+                    clean10d={'✓' if sigs['clean_10d'] else '✗'})
+                    · as-of: <b>{as_of_str}</b>
+                    · <b>{sigs['n_bars']}</b> bars
                 </span>
             </div>
         </div>
@@ -2426,6 +2470,64 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             unsafe_allow_html=True,
         )
 
+    # ── TF1 full-width card (U1 + MA30 trend filter — best strategy entry) ────
+    _ma30_pct = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
+    tf1_rows = [
+        ("U1 Signal",
+         "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
+         "= ACTIVE",
+         sigs["u1_triggered"]),
+        ("BTC vs 30-day MA",
+         f"${sigs['current_close_sig']:,.0f}  vs  MA=${sigs['ma30_value']:,.0f} ({_ma30_pct:+.1f}%)",
+         "> MA30",
+         sigs["above_ma30"]),
+        ("Clean 10d (no D1/D2)",
+         "YES — zero D1/D2 fires in prior 10 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
+         "= YES",
+         sigs["clean_10d"]),
+        ("Trend filter (↑MA30 OR clean10d)",
+         "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]) else "FAIL ✗",
+         "= PASS",
+         sigs["above_ma30"] or sigs["clean_10d"]),
+    ]
+    st.markdown(
+        _sig_card(
+            title="TF1 — Strategy Entry Signal: U1 + Trend Confirmation",
+            icon="🎯",
+            color="#2563eb",
+            triggered=sigs["tf1_triggered"],
+            signal_rows=tf1_rows,
+            interpretation=(
+                "The <b>highest-returning entry signal</b> discovered in a 1-year backtest "
+                "($100k → $102k, +2.1% vs Buy &amp; Hold −33.1%, alpha +$35k). "
+                "TF1 fires when U1 (3d average actual highs exceed predictions) is confirmed by "
+                "a trend context filter: <b>BTC above its 30-day MA</b> (momentum on your side) "
+                "<b>OR</b> <b>no D1/D2 signals in the prior 10 bars</b> (no recent bearish fingerprint). "
+                "Exit on D2 (err_hi_ma3 &lt; −1%) or D3 (exhaustion canary). "
+                "6 trades, 4W/2L (67%), max drawdown 12.7%, only 19% time in market."
+            ),
+            timing=(
+                "Signal fires 1–2 bars before momentum accelerates. "
+                "Best historical entries: Dec 10 2025 (+0.5%), Jan 13 (+0.2%), "
+                "Apr 9 (+8.1%), May 3 (+1.9%). "
+                "Two losses: Jan 5 (−3.0%) and Mar 10 (−5.2%), both exited by D2."
+            ),
+            prob_txt=(
+                "4/6 wins (67%) · avg P&amp;L +0.4% per trade · "
+                "<b>Best trade +8.1%</b> (Apr 9–25 2026, D2 exit) · "
+                "Worst trade −5.2% (Mar 10–28 2026). "
+                "Removing D1 from exits (D2+D3 only) was critical — prevented premature exits."
+            ),
+            conf_txt=(
+                "Derived from 6-trade OOS sample (Sep 2025 – May 2026). "
+                "Small sample — use as a signal filter alongside the 3-class day-type model "
+                "and the 7/14-day cone for directional context. "
+                "Trend filter (MA30) dramatically reduced whipsaws vs raw U1 entries."
+            ),
+        ),
+        unsafe_allow_html=True,
+    )
+
     # ── V-Reversal special signal ──────────────────────────────────────
     if sigs["capitulation_signal"] or sigs["v_reversal_likely"]:
         v_bg    = "#fdf4ff" if not sigs["v_reversal_likely"] else "#ede9fe"
@@ -2617,7 +2719,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         # ── Legend / interpretation guide ──────────────────────────────
         with st.expander("ℹ️ How to read the Trend Alert Dashboard", expanded=False):
             st.markdown("""
-**Signal definitions** (all computed from the last 3–5 completed daily bars):
+**Signal definitions** (all computed from the last 3–45 completed daily bars):
 
 | Signal | Formula | Meaning when positive/high |
 |--------|---------|---------------------------|
@@ -2625,13 +2727,22 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 | `err_lo_ma3` | 3d avg of (pred_low − actual_low) / close × 100 | Actual lows **undershot** predictions → bearish pressure |
 | `hi_breaks_3d` | Count of days in last 3 where actual H > pred H | Repeated upside breakouts → momentum building |
 | `lo_breaks_3d` | Count of days in last 3 where actual L < pred L | Repeated downside breaks → trend deteriorating |
+| `MA30` | Rolling 30-bar mean of daily close prices | Trend direction proxy (above = bullish context) |
+| `clean_10d` | True if zero D1 or D2 fires in prior 10 bars | No recent bearish regime fingerprint |
 
 **Alert levels:**
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🟢 **UPTREND SIGNAL**: U1 active, no downtrend conditions → Upside momentum (1.68× lift)
+- 🎯 **STRATEGY BUY (TF1)**: U1 + trend filter active → Best backtest entry signal (+2.1% vs B&H −33.1%)
+- 🟢 **UPTREND SIGNAL (U1)**: U1 active but trend filter not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
+
+**TF1 — Best Strategy Entry (backtested 1 year):**
+- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 10 days)
+- **Exit**: D2 (err_hi_ma3 < −1%) or D3 (exhaustion canary)
+- **Result**: $100k → $102k (+2.1%) vs Buy & Hold −33.1% · 4W/2L · 12.7% max drawdown · 19% time in market
+- **6 trades** (Dec 2025 – May 2026 OOS): best +8.1%, worst −5.2%
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
