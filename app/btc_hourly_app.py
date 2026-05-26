@@ -2402,8 +2402,8 @@ def _build_ct_batch_predictions():
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
 def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
-                     strategy: str = "TF2"):
-    """Run a trading strategy backtest on the rolling ~1-year window.
+                     strategy: str = "TF2", start_date_iso: str = None):
+    """Run a trading strategy backtest on a configurable window.
 
     Entry (both TF1 and TF2):
         U1 active (err_hi_ma3 > +0.5% AND hi_breaks_3d ≥ 2)
@@ -2415,6 +2415,10 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     Exit — TF2 (regime-adaptive, default):
         BULL regime (above_ma30 AND MA30 slope > 0) → exit D3 only (patient)
         BEAR / NEUTRAL regime                       → exit D2 OR D3 (defensive)
+
+    Args:
+        start_date_iso: If provided, backtest starts from this date.
+                        If None, defaults to ~1-year rolling (end - 400 days).
 
     Execution: 1-bar lag — signal fires bar i, trade executes at bar i+1 close.
     Uses _build_ct_batch_predictions() for O(1) lookups. Cached 6 h.
@@ -2433,9 +2437,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     highs  = raw["btc_high"]
     lows   = raw["btc_low"]
 
-    # Restrict to ~1-year window + warm-up, ending at end_date_iso
+    # Determine window: explicit start or rolling ~1-year default
     end_dt   = pd.Timestamp(end_date_iso)
-    start_dt = end_dt - pd.Timedelta(days=400)
+    start_dt = pd.Timestamp(start_date_iso) if start_date_iso else end_dt - pd.Timedelta(days=400)
     preds    = preds.loc[(preds.index >= start_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
         return None
@@ -2638,37 +2642,33 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     )
 
 
-def render_trading_strategy_dashboard(bt) -> None:
-    """Render the TF2 trading strategy summary + rolling backtest dashboard.
+def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
+    """Render the TF2 trading strategy summary + backtest dashboard.
 
     Shows:
       • Strategy rules summary card (entry, exit, regime logic)
-      • 6-KPI row: NAV, B&H NAV, Alpha, Win Rate, Max Drawdown, Time in Market
-      • Portfolio NAV chart (TF2 vs Buy & Hold) with trade markers
-      • Expandable trade log table
+      • Unified comparison table: two periods × three columns (TF2 | TF2-tax | B&H)
+      • Two equity-curve charts — one per period — in tabs
+      • Expandable trade log for each period
     """
     st.markdown("---")
-    st.subheader("🎯 TF2 Trading Strategy — Regime-Adaptive Rolling Backtest")
+    st.subheader("🎯 TF2 Trading Strategy — Regime-Adaptive Backtest")
 
-    if bt is None:
+    if bt_rolling is None and bt_full is None:
         st.info("⚙️ Backtest computing … CT model batch predictions being built. "
                 "Refresh in a moment.")
         return
 
-    s       = bt["stats"]
-    has_pos = bt["open_pos"]
-    strat   = s.get("strategy", "TF2")
+    # Use whichever is available for the rules card period label
+    _bt_ref = bt_rolling if bt_rolling is not None else bt_full
+    s_ref   = _bt_ref["stats"]
 
-    # ── Strategy summary ──────────────────────────────────────────────
-    period_str = (
-        f"{pd.Timestamp(s['start_date']).strftime('%b %d, %Y')} → "
-        f"{pd.Timestamp(s['end_date']).strftime('%b %d, %Y')}"
-    )
+    # ── Strategy rules card ───────────────────────────────────────────
     st.markdown(
         "<div style='background:#eff6ff; border:2px solid #2563eb; border-radius:10px; "
         "padding:12px 18px; margin:4px 0 14px 0;'>"
         "<div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:6px;'>"
-        f"TF2 — Regime-Adaptive Strategy Rules</div>"
+        "TF2 — Regime-Adaptive Strategy Rules</div>"
         "<div style='font-size:12px; color:#1e3a8a; line-height:1.9;'>"
         "📥 <b>Entry</b> — U1 active (<code>err_hi_ma3 &gt; +0.5%</code> "
         "AND <code>hi_breaks_3d ≥ 2</code>) <b>AND</b> "
@@ -2678,233 +2678,315 @@ def render_trading_strategy_dashboard(bt) -> None:
         "<b>BEAR/Neutral</b>: D2 <b>OR</b> D3 (defensive — cut quickly)<br>"
         "⏱ <b>Execution</b> — 1-day lag · signal on bar <i>i</i>, "
         "trade at bar <i>i+1</i> close &nbsp;·&nbsp; "
-        f"<b>Period:</b> {period_str}"
+        "<b>Capital:</b> $100,000 initial &nbsp;·&nbsp; "
+        "⚠️ pre-Sep 2025 = <b>in-sample</b>"
         "</div></div>",
         unsafe_allow_html=True,
     )
 
-    # ── KPI headline row ──────────────────────────────────────────────
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("TF2 NAV",        f"${s['final_nav']:,.0f}",  delta=f"{s['strat_ret']:+.1f}%")
-    c2.metric("TF2 After Tax",  f"${s['after_tax_nav']:,.0f}", delta=f"{s['after_tax_ret']:+.1f}%")
-    c3.metric("B&H NAV (0% tax)", f"${s['final_bh']:,.0f}", delta=f"{s['bh_ret']:+.1f}%")
-    c4.metric("Alpha vs B&H",   f"${s['alpha_abs']:+,.0f}",
-              delta=f"{s['strat_ret'] - s['bh_ret']:+.1f} pp")
-    c5.metric("Max Drawdown",   f"{s['max_drawdown']:.1f}%")
-    c6.metric("Time in Market", f"{s['time_in_mkt']:.0f}%",
-              delta=f"{s['n_trades']} trades")
-
-    # ── Side-by-side comparison table ────────────────────────────────
-    def _fmt_nav(v):    return f"${v:,.0f}"
-    def _fmt_pct(v):    return f"{v:+.1f}%"
-    def _fmt_dd(v):     return f"{v:.1f}%"
-    def _fmt_plain(v):  return f"{v:.2f}"
-    def _fmt_time(v):   return f"{v:.0f}%"
-
-    # Determine cell colour: green = better for investor, red = worse
-    # For drawdown "better" = less negative (closer to 0)
-    def _cell(val, ref, fmt_fn, higher_is_better=True, neutral=False):
+    # ── Helpers ───────────────────────────────────────────────────────
+    def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
+        """Coloured table cell vs a reference value."""
+        if na:
+            return "<td style='text-align:center; color:#94a3b8;'>—</td>"
         fv = fmt_fn(val)
-        if neutral:
-            return f"<td style='text-align:center;'>{fv}</td>"
         if higher_is_better:
             bg = "#dcfce7" if val > ref else ("#fee2e2" if val < ref else "#f8fafc")
         else:
             bg = "#dcfce7" if val < ref else ("#fee2e2" if val > ref else "#f8fafc")
-        return f"<td style='text-align:center; background:{bg}; font-weight:600;'>{fv}</td>"
+        return (f"<td style='text-align:center; background:{bg}; "
+                f"font-weight:600; padding:7px 10px;'>{fv}</td>")
 
-    fv_tf2  = s["final_nav"]
-    fv_tax  = s["after_tax_nav"]
-    fv_bh   = s["final_bh"]
-    ret_tf2 = s["strat_ret"]
-    ret_tax = s["after_tax_ret"]
-    ret_bh  = s["bh_ret"]
-    dd_tf2  = s["max_drawdown"]
-    dd_bh   = s["bh_max_dd"]
-    sh_tf2  = s["sharpe"]
-    sh_bh   = s["bh_sharpe"]
-    tim_tf2 = s["time_in_mkt"]
+    def _plain(val, fmt_fn):
+        return f"<td style='text-align:center; padding:7px 10px;'>{fmt_fn(val)}</td>"
 
-    rows_html = [
-        ("Final NAV",
-         _cell(fv_tf2, fv_bh, _fmt_nav),
-         _cell(fv_tax,  fv_bh, _fmt_nav),
-         f"<td style='text-align:center;'>{_fmt_nav(fv_bh)}</td>"),
-        ("Total Return",
-         _cell(ret_tf2, ret_bh, _fmt_pct),
-         _cell(ret_tax,  ret_bh, _fmt_pct),
-         f"<td style='text-align:center;'>{_fmt_pct(ret_bh)}</td>"),
-        ("Max Drawdown",
-         _cell(dd_tf2, dd_bh, _fmt_dd, higher_is_better=False),
-         "<td style='text-align:center; color:#64748b;'>—</td>",
-         f"<td style='text-align:center;'>{_fmt_dd(dd_bh)}</td>"),
-        ("Sharpe Ratio (4.5% RF)",
-         _cell(sh_tf2, sh_bh, _fmt_plain),
-         "<td style='text-align:center; color:#64748b;'>—</td>",
-         f"<td style='text-align:center;'>{_fmt_plain(sh_bh)}</td>"),
-        ("Time in Market",
-         f"<td style='text-align:center; font-weight:600;'>{_fmt_time(tim_tf2)}</td>",
-         "<td style='text-align:center; color:#64748b;'>—</td>",
-         "<td style='text-align:center;'>100%</td>"),
-        ("Tax Rate Applied",
-         "<td style='text-align:center;'>0% (pre-tax)</td>",
-         "<td style='text-align:center; background:#fef3c7; font-weight:600;'>35% on gains</td>",
-         "<td style='text-align:center; background:#dcfce7; font-weight:600;'>0% (unrealised)</td>"),
-        ("Tax Paid ($)",
-         "<td style='text-align:center; color:#64748b;'>—</td>",
-         f"<td style='text-align:center; background:#fef3c7; font-weight:600;'>"
-         f"${s['total_tax_paid']:,.0f}</td>",
-         "<td style='text-align:center; background:#dcfce7;'>$0</td>"),
-        ("Win Rate",
-         f"<td style='text-align:center; font-weight:600;'>{s['win_rate']:.0f}% "
-         f"({s['n_wins']}W/{s['n_losses']}L)</td>",
-         "<td style='text-align:center; color:#64748b;'>—</td>",
-         "<td style='text-align:center; color:#64748b;'>—</td>"),
+    def _tag(txt, bg, fg="#1e293b"):
+        return (f"<td style='text-align:center; background:{bg}; "
+                f"color:{fg}; font-weight:600; padding:7px 10px;'>{txt}</td>")
+
+    fmt_nav   = lambda v: f"${v:,.0f}"
+    fmt_pct   = lambda v: f"{v:+.1f}%"
+    fmt_dd    = lambda v: f"{v:.1f}%"
+    fmt_ratio = lambda v: f"{v:.2f}"
+    fmt_time  = lambda v: f"{v:.0f}%"
+    fmt_tax   = lambda v: f"${v:,.0f}"
+
+    def _period_cells(s):
+        """Generate 3-cell group (TF2 pre-tax | TF2 after-tax | B&H) for one stats dict."""
+        if s is None:
+            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 3)
+        tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
+        r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
+        dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
+        sh2  = s["sharpe"];          shb = s["bh_sharpe"]
+        tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
+        wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        return {
+            "nav":  (_cell(tf2, bh, fmt_nav) +
+                     _cell(tax, bh, fmt_nav) +
+                     _plain(bh,  fmt_nav)),
+            "ret":  (_cell(r2, rb, fmt_pct) +
+                     _cell(rt, rb, fmt_pct) +
+                     _plain(rb, fmt_pct)),
+            "dd":   (_cell(dd2, ddb, fmt_dd, higher_is_better=False) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd) +
+                     _plain(ddb, fmt_dd)),
+            "sh":   (_cell(sh2, shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio) +
+                     _plain(shb, fmt_ratio)),
+            "tim":  (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
+                     f"{fmt_time(tim)}</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_time) +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>"),
+            "tax":  (_tag("0% pre-tax", "#f1f5f9") +
+                     _tag("35% on gains", "#fef3c7") +
+                     _tag("0% unrealised", "#dcfce7")),
+            "taxpd": (_cell(na=True, val=0, ref=0, fmt_fn=fmt_tax) +
+                      _tag(f"${txp:,.0f}", "#fef3c7") +
+                      _tag("$0", "#dcfce7")),
+            "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
+                     f"{wr:.0f}% ({nw}W/{nl}L)</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
+        }
+
+    s_r = bt_rolling["stats"] if bt_rolling else None
+    s_f = bt_full["stats"]    if bt_full    else None
+
+    pr = _period_cells(s_r)
+    pf = _period_cells(s_f)
+
+    # Period header labels
+    if s_r:
+        lbl_r = (f"📅 1-Year Rolling<br>"
+                 f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                 f"{pd.Timestamp(s_r['start_date']).strftime('%b %d, %Y')} → "
+                 f"{pd.Timestamp(s_r['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_r = "📅 1-Year Rolling"
+
+    if s_f:
+        lbl_f = (f"📆 Full Period (May 26, 2024 → Today)<br>"
+                 f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                 f"{pd.Timestamp(s_f['start_date']).strftime('%b %d, %Y')} → "
+                 f"{pd.Timestamp(s_f['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_f = "📆 Full Period"
+
+    sub_hdr = (
+        "<tr style='background:#334155; color:white; font-size:11px;'>"
+        "<th style='padding:5px 12px;'></th>"
+        "<th style='padding:5px 8px; text-align:center;'>📊 TF2</th>"
+        "<th style='padding:5px 8px; text-align:center;'>🧾 TF2 (35% tax)</th>"
+        "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>"
+        "<th style='padding:5px 8px; text-align:center;'>📊 TF2</th>"
+        "<th style='padding:5px 8px; text-align:center;'>🧾 TF2 (35% tax)</th>"
+        "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>"
+        "</tr>"
+    )
+
+    metric_rows = [
+        ("Final NAV ($)",          "nav"),
+        ("Total Return",           "ret"),
+        ("Max Drawdown",           "dd"),
+        ("Sharpe Ratio (RF 4.5%)", "sh"),
+        ("Time in Market",         "tim"),
+        ("Tax Treatment",          "tax"),
+        ("Tax Paid",               "taxpd"),
+        ("Win Rate",               "wr"),
     ]
 
-    table_rows = "\n".join(
-        f"<tr><td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
-        f"color:#334155;'>{lbl}</td>{c1}{c2}{c3}</tr>"
-        for lbl, c1, c2, c3 in rows_html
-    )
+    tbody = ""
+    for i, (lbl, key) in enumerate(metric_rows):
+        bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+        tbody += (
+            f"<tr style='background:{bg};'>"
+            f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
+            f"color:#334155; border-right:2px solid #e2e8f0;'>{lbl}</td>"
+            f"{pr[key]}"
+            f"<td style='border-left:2px solid #cbd5e1; padding:0;'></td>"
+            f"{pf[key]}"
+            f"</tr>"
+        )
 
     st.markdown(
         f"""
-        <div style="overflow-x:auto; margin:10px 0 18px 0;">
+        <div style="overflow-x:auto; margin:10px 0 6px 0;">
         <table style="width:100%; border-collapse:collapse; font-size:13px;
                       border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
           <thead>
             <tr style="background:#1e3a8a; color:white;">
-              <th style="padding:9px 12px; text-align:left; font-weight:600;">Metric</th>
-              <th style="padding:9px 12px; text-align:center; font-weight:600;">
-                📊 TF2 Strategy<br><span style="font-size:11px; font-weight:400; opacity:0.85;">
-                pre-tax</span></th>
-              <th style="padding:9px 12px; text-align:center; font-weight:600;">
-                🧾 TF2 After Tax<br><span style="font-size:11px; font-weight:400; opacity:0.85;">
-                35% on realised gains</span></th>
-              <th style="padding:9px 12px; text-align:center; font-weight:600;">
-                🏦 Buy &amp; Hold<br><span style="font-size:11px; font-weight:400; opacity:0.85;">
-                0% tax — unrealised</span></th>
+              <th style="padding:10px 12px; text-align:left; font-weight:600; min-width:160px;">
+                Metric</th>
+              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+                  border-right:2px solid #4c72b5;">
+                {lbl_r}</th>
+              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;">
+                {lbl_f}</th>
             </tr>
+            {sub_hdr}
           </thead>
           <tbody>
-            {table_rows}
+            {tbody}
           </tbody>
         </table>
         </div>
-        <p style="font-size:11px; color:#64748b; margin-top:2px;">
-        💡 <b>Tax note:</b> TF2 triggers a taxable event on every closed winning trade
-        (35% short-term CGT applied to each gain).
-        B&amp;H never sells, so <em>all</em> gains remain unrealised — $0 tax until exit.
-        Green = better for investor vs the comparison column.
-        ⚠️ Dates before ~Sep 2025 are <b>in-sample</b>.
+        <p style="font-size:11px; color:#64748b; margin:2px 0 14px 0;">
+        🟢 Green = better for investor vs B&amp;H &nbsp;|&nbsp;
+        🔴 Red = worse &nbsp;|&nbsp;
+        💡 TF2 triggers 35% short-term CGT on each winning trade;
+        B&amp;H holds unrealised → <b>$0 tax until eventual exit</b>.
+        ⚠️ Pre-Sep 2025 dates are <b>in-sample</b>.
         </p>
         """,
         unsafe_allow_html=True,
     )
 
-    # ── Open-position badge ───────────────────────────────────────────
-    if has_pos and bt["open_entry"]:
-        oe  = bt["open_entry"]
-        unr = (float(bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+    # ── Open-position badge (from rolling period) ─────────────────────
+    if bt_rolling and bt_rolling["open_pos"] and bt_rolling["open_entry"]:
+        oe  = bt_rolling["open_entry"]
+        unr = (float(bt_rolling["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
         oe_col = "#16a34a" if unr >= 0 else "#dc2626"
         st.markdown(
             f"<div style='background:#f0fdf4; border:1px solid #16a34a; border-radius:8px; "
-            f"padding:8px 14px; margin:2px 0 10px 0; font-size:13px; color:#14532d;'>"
-            f"📍 <b>Open position</b> — bought {pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
+            f"padding:8px 14px; margin:0 0 10px 0; font-size:13px; color:#14532d;'>"
+            f"📍 <b>Open position</b> — bought "
+            f"{pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
             f"@ ${oe['price']:,.0f} · "
-            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>{unr:+.1f}%</span>"
-            f"</div>",
+            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>"
+            f"{unr:+.1f}%</span></div>",
             unsafe_allow_html=True,
         )
 
-    # ── NAV vs B&H chart ──────────────────────────────────────────────
-    fig = go.Figure()
+    # ── Charts in tabs ────────────────────────────────────────────────
+    def _make_chart(bt, title):
+        """Return a Plotly figure for one backtest result."""
+        if bt is None:
+            return None
+        s   = bt["stats"]
+        nav_s = bt["nav_series"]
+        bh_s  = bt["bh_series"]
+        has_p = bt["open_pos"]
 
-    fig.add_trace(go.Scatter(
-        x=bt["bh_series"].index, y=bt["bh_series"].values,
-        name="Buy & Hold",
-        line=dict(color="#94a3b8", width=1.5, dash="dot"),
-        hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=bt["nav_series"].index, y=bt["nav_series"].values,
-        name="TF2 Strategy",
-        line=dict(color="#2563eb", width=2.5),
-        hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2 Strategy</extra>",
-    ))
-    fig.add_hline(
-        y=s["initial_capital"], line_dash="dash",
-        line_color="#64748b", line_width=1, opacity=0.4,
-        annotation_text=f"  $100k start",
-        annotation_position="bottom right",
-    )
-
-    # Trade markers
-    nav_s = bt["nav_series"]
-    for t in bt["trades"]:
-        # Find NAV series value closest to entry/exit dates
-        entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
-        exit_y  = float(t["exit_nav"])
-        win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
-
+        fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=[t["entry_date"]], y=[entry_y], mode="markers",
-            marker=dict(symbol="triangle-up", size=13, color="#16a34a",
-                        line=dict(width=1.5, color="white")),
-            showlegend=False,
-            hovertemplate=(
-                f"<b>BUY</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
-                f" @ ${t['entry_price']:,.0f}<br>{t['entry_trigger']}<extra></extra>"
-            ),
+            x=bh_s.index, y=bh_s.values, name="Buy & Hold",
+            line=dict(color="#94a3b8", width=1.5, dash="dot"),
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=[t["exit_date"]], y=[exit_y], mode="markers",
-            marker=dict(symbol="triangle-down", size=13, color=win_col,
-                        line=dict(width=1.5, color="white")),
-            showlegend=False,
-            hovertemplate=(
-                f"<b>SELL</b> {pd.Timestamp(t['exit_date']).strftime('%b %d')}"
-                f" @ ${t['exit_price']:,.0f} "
-                f"({t['pnl_pct']:+.1f}%) — {t['exit_signal']}<extra></extra>"
-            ),
+            x=nav_s.index, y=nav_s.values, name="TF2 Strategy",
+            line=dict(color="#2563eb", width=2.5),
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2 Strategy</extra>",
         ))
+        fig.add_hline(
+            y=s["initial_capital"], line_dash="dash",
+            line_color="#64748b", line_width=1, opacity=0.4,
+            annotation_text="  $100k start", annotation_position="bottom right",
+        )
+        for t in bt["trades"]:
+            entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
+            exit_y  = float(t["exit_nav"])
+            win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            fig.add_trace(go.Scatter(
+                x=[t["entry_date"]], y=[entry_y], mode="markers",
+                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>BUY</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
+                    f" @ ${t['entry_price']:,.0f}<br>{t['entry_trigger']}<extra></extra>"
+                ),
+            ))
+            fig.add_trace(go.Scatter(
+                x=[t["exit_date"]], y=[exit_y], mode="markers",
+                marker=dict(symbol="triangle-down", size=13, color=win_col,
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>SELL</b> {pd.Timestamp(t['exit_date']).strftime('%b %d')}"
+                    f" @ ${t['exit_price']:,.0f} "
+                    f"({t['pnl_pct']:+.1f}%) — {t['exit_signal']}<extra></extra>"
+                ),
+            ))
+        if has_p and bt["open_entry"]:
+            oe   = bt["open_entry"]
+            oe_y = float(nav_s.asof(oe["date"])) if oe["date"] >= nav_s.index[0] else s["initial_capital"]
+            fig.add_trace(go.Scatter(
+                x=[oe["date"]], y=[oe_y], mode="markers",
+                marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>BUY (OPEN)</b> {pd.Timestamp(oe['date']).strftime('%b %d')}"
+                    f" @ ${oe['price']:,.0f}<extra></extra>"
+                ),
+            ))
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
+            xaxis_title=None,
+            yaxis_title="Portfolio Value ($)",
+            yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+            height=360,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=0, r=0, t=36, b=0),
+            hovermode="x unified",
+            plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
+            xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+        )
+        return fig
 
-    # Open-position entry marker (no exit yet)
-    if has_pos and bt["open_entry"]:
-        oe = bt["open_entry"]
-        oe_y = float(nav_s.asof(oe["date"])) if oe["date"] >= nav_s.index[0] else s["initial_capital"]
-        fig.add_trace(go.Scatter(
-            x=[oe["date"]], y=[oe_y], mode="markers",
-            marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
-                        line=dict(width=1.5, color="white")),
-            showlegend=False,
-            hovertemplate=(
-                f"<b>BUY (OPEN)</b> {pd.Timestamp(oe['date']).strftime('%b %d')}"
-                f" @ ${oe['price']:,.0f}<extra></extra>"
-            ),
-        ))
+    tab_labels = []
+    if bt_rolling:
+        sr = bt_rolling["stats"]
+        tab_labels.append(
+            f"📅 1-Year Rolling  "
+            f"({pd.Timestamp(sr['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sr['end_date']).strftime('%b %Y')})"
+        )
+    if bt_full:
+        sf = bt_full["stats"]
+        tab_labels.append(
+            f"📆 Full Period  "
+            f"({pd.Timestamp(sf['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sf['end_date']).strftime('%b %Y')})"
+        )
 
-    fig.update_layout(
-        xaxis_title=None,
-        yaxis_title="Portfolio Value ($)",
-        yaxis_tickprefix="$", yaxis_tickformat=",.0f",
-        height=380,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=0, r=0, t=8, b=0),
-        hovermode="x unified",
-        plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
-        xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if tab_labels:
+        tabs = st.tabs(tab_labels)
+        tab_idx = 0
+        if bt_rolling:
+            with tabs[tab_idx]:
+                sr = bt_rolling["stats"]
+                fig_r = _make_chart(
+                    bt_rolling,
+                    f"TF2 vs B&H — 1-Year Rolling  "
+                    f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})"
+                )
+                if fig_r:
+                    st.plotly_chart(fig_r, use_container_width=True)
+            tab_idx += 1
+        if bt_full:
+            with tabs[tab_idx]:
+                sf = bt_full["stats"]
+                fig_f = _make_chart(
+                    bt_full,
+                    f"TF2 vs B&H — Full Period  "
+                    f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})"
+                )
+                if fig_f:
+                    st.plotly_chart(fig_f, use_container_width=True)
 
     # ── Trade log ─────────────────────────────────────────────────────
-    total_label = f"{s['n_trades']} closed trades"
-    if has_pos:
-        total_label += " + 1 open"
-    with st.expander(f"📋 Trade log — {total_label}", expanded=True):
-        rows = []
+    def _trade_log_rows(bt):
+        if bt is None:
+            return [], False, None
+        s     = bt["stats"]
+        has_p = bt["open_pos"]
+        rows  = []
         for i, t in enumerate(bt["trades"], 1):
             rows.append({
                 "#":           i,
@@ -2919,7 +3001,7 @@ def render_trading_strategy_dashboard(bt) -> None:
                 "Exit Signal": t["exit_signal"],
                 "NAV After":   f"${t['exit_nav']:,.0f}",
             })
-        if has_pos and bt["open_entry"]:
+        if has_p and bt["open_entry"]:
             oe = bt["open_entry"]
             unr_pct = (float(bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
             rows.append({
@@ -2935,17 +3017,33 @@ def render_trading_strategy_dashboard(bt) -> None:
                 "Exit Signal": "—",
                 "NAV After":   "—",
             })
-        if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-        if not rows:
-            st.info("No trades in this period — strategy has been in cash throughout.")
+        return rows, has_p, s
 
-        st.caption(
-            "💡 P&L is computed at execution prices (bar close, 1-day lag from signal). "
-            "B&H is normalised to $100k at the backtest start date. "
-            "⚠️ Dates before the CT model's training cutoff are in-sample — "
-            "out-of-sample period starts ~Sep 2025."
-        )
+    log_tabs = []
+    if bt_rolling: log_tabs.append("📋 1-Year Trade Log")
+    if bt_full:    log_tabs.append("📋 Full Period Trade Log")
+
+    if log_tabs:
+        ltabs = st.tabs(log_tabs)
+        lt_idx = 0
+        for bt_src, lbl in [(bt_rolling, "rolling"), (bt_full, "full")]:
+            if bt_src is None:
+                continue
+            rows, has_p, s = _trade_log_rows(bt_src)
+            n_closed = len(bt_src["trades"])
+            header   = f"{n_closed} closed trades" + (" + 1 open" if has_p else "")
+            with ltabs[lt_idx]:
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True,
+                                 use_container_width=True)
+                else:
+                    st.info("No trades in this period — strategy was in cash throughout.")
+                st.caption(
+                    "💡 P&L at execution prices (1-day lag from signal). "
+                    "B&H normalised to $100k at period start. "
+                    "⚠️ pre-Sep 2025 = in-sample."
+                )
+            lt_idx += 1
 
 
 def render_trend_signatures(sigs: dict, *, intraday: dict = None):
@@ -3701,9 +3799,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # ─────────────── TF1 Trading Strategy Backtest Dashboard ──────────────
     # Always computed from the LIVE end date (most recent completed bar) so the
     # rolling-1-year window is always current, regardless of the historical picker.
-    _bt_end = target_date.strftime("%Y-%m-%d")
-    _bt     = run_tf1_backtest(_bt_end)
-    render_trading_strategy_dashboard(_bt)
+    _bt_end     = target_date.strftime("%Y-%m-%d")
+    _bt_rolling = run_tf1_backtest(_bt_end)                              # ~1-year rolling
+    _bt_full    = run_tf1_backtest(_bt_end, start_date_iso="2024-05-26") # full period
+    render_trading_strategy_dashboard(_bt_rolling, _bt_full)
 
     # ────── Historical picker (date strip, calendar, hour slider,
     # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate
