@@ -2590,6 +2590,26 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     days_in   = sum(t["duration_days"] for t in trades)
     tot_days  = max(1, (dates[N-1] - dates[WARMUP]).days)
 
+    # Sharpe ratio (annualised, RF = 4.5%, daily × √252)
+    rf_daily   = (1.045) ** (1 / 252) - 1
+    dr_strat   = nav_series.pct_change().fillna(0)
+    dr_bh      = bh_series.pct_change().fillna(0)
+    exc_strat  = dr_strat - rf_daily
+    exc_bh     = dr_bh    - rf_daily
+    sharpe     = float(exc_strat.mean() / exc_strat.std() * np.sqrt(252)) if exc_strat.std() > 0 else 0.0
+    bh_sharpe  = float(exc_bh.mean()    / exc_bh.std()    * np.sqrt(252)) if exc_bh.std()    > 0 else 0.0
+
+    # B&H max drawdown
+    rm_bh      = bh_series.cummax()
+    bh_max_dd  = float(((bh_series - rm_bh) / rm_bh * 100).min())
+
+    # After-tax NAV — TF2 pays 35% short-term capital gains on each winning trade;
+    # B&H pays 0% (gains unrealised, no tax event triggered)
+    TAX_RATE        = 0.35
+    total_tax_paid  = sum(TAX_RATE * t["pnl_abs"] for t in trades if t["pnl_abs"] > 0)
+    after_tax_nav   = final_nav - total_tax_paid
+    after_tax_ret   = (after_tax_nav / initial_capital - 1) * 100
+
     return dict(
         strategy   = strategy,
         trades     = trades,
@@ -2600,17 +2620,20 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         stats = dict(
             strategy        = strategy,
             initial_capital = initial_capital,
-            final_nav    = final_nav,   final_bh   = final_bh,
-            strat_ret    = strat_ret,   bh_ret     = bh_ret,
-            alpha_abs    = final_nav - final_bh,
-            n_trades     = len(trades),
-            n_wins       = len(wins),   n_losses   = len(losses),
-            win_rate     = win_rate,    avg_pnl    = avg_pnl,
-            best_trade   = best_t,      worst_trade = worst_t,
-            max_drawdown = max_dd,
-            time_in_mkt  = 100 * days_in / tot_days,
-            start_date   = dates[WARMUP],
-            end_date     = dates[N-1],
+            final_nav       = final_nav,      final_bh      = final_bh,
+            strat_ret       = strat_ret,      bh_ret        = bh_ret,
+            alpha_abs       = final_nav - final_bh,
+            n_trades        = len(trades),
+            n_wins          = len(wins),      n_losses      = len(losses),
+            win_rate        = win_rate,       avg_pnl       = avg_pnl,
+            best_trade      = best_t,         worst_trade   = worst_t,
+            max_drawdown    = max_dd,         bh_max_dd     = bh_max_dd,
+            sharpe          = sharpe,         bh_sharpe     = bh_sharpe,
+            time_in_mkt     = 100 * days_in / tot_days,
+            after_tax_nav   = after_tax_nav,  after_tax_ret = after_tax_ret,
+            total_tax_paid  = total_tax_paid,
+            start_date      = dates[WARMUP],
+            end_date        = dates[N-1],
         ),
     )
 
@@ -2660,17 +2683,125 @@ def render_trading_strategy_dashboard(bt) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── KPI row ────────────────────────────────────────────────────────
+    # ── KPI headline row ──────────────────────────────────────────────
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Strategy NAV",   f"${s['final_nav']:,.0f}", delta=f"{s['strat_ret']:+.1f}%")
-    c2.metric("Buy & Hold NAV", f"${s['final_bh']:,.0f}",  delta=f"{s['bh_ret']:+.1f}%")
-    c3.metric("Alpha vs B&H",   f"${s['alpha_abs']:+,.0f}",
+    c1.metric("TF2 NAV",        f"${s['final_nav']:,.0f}",  delta=f"{s['strat_ret']:+.1f}%")
+    c2.metric("TF2 After Tax",  f"${s['after_tax_nav']:,.0f}", delta=f"{s['after_tax_ret']:+.1f}%")
+    c3.metric("B&H NAV (0% tax)", f"${s['final_bh']:,.0f}", delta=f"{s['bh_ret']:+.1f}%")
+    c4.metric("Alpha vs B&H",   f"${s['alpha_abs']:+,.0f}",
               delta=f"{s['strat_ret'] - s['bh_ret']:+.1f} pp")
-    c4.metric("Win Rate",       f"{s['win_rate']:.0f}%",
-              delta=f"{s['n_wins']}W / {s['n_losses']}L")
     c5.metric("Max Drawdown",   f"{s['max_drawdown']:.1f}%")
     c6.metric("Time in Market", f"{s['time_in_mkt']:.0f}%",
               delta=f"{s['n_trades']} trades")
+
+    # ── Side-by-side comparison table ────────────────────────────────
+    def _fmt_nav(v):    return f"${v:,.0f}"
+    def _fmt_pct(v):    return f"{v:+.1f}%"
+    def _fmt_dd(v):     return f"{v:.1f}%"
+    def _fmt_plain(v):  return f"{v:.2f}"
+    def _fmt_time(v):   return f"{v:.0f}%"
+
+    # Determine cell colour: green = better for investor, red = worse
+    # For drawdown "better" = less negative (closer to 0)
+    def _cell(val, ref, fmt_fn, higher_is_better=True, neutral=False):
+        fv = fmt_fn(val)
+        if neutral:
+            return f"<td style='text-align:center;'>{fv}</td>"
+        if higher_is_better:
+            bg = "#dcfce7" if val > ref else ("#fee2e2" if val < ref else "#f8fafc")
+        else:
+            bg = "#dcfce7" if val < ref else ("#fee2e2" if val > ref else "#f8fafc")
+        return f"<td style='text-align:center; background:{bg}; font-weight:600;'>{fv}</td>"
+
+    fv_tf2  = s["final_nav"]
+    fv_tax  = s["after_tax_nav"]
+    fv_bh   = s["final_bh"]
+    ret_tf2 = s["strat_ret"]
+    ret_tax = s["after_tax_ret"]
+    ret_bh  = s["bh_ret"]
+    dd_tf2  = s["max_drawdown"]
+    dd_bh   = s["bh_max_dd"]
+    sh_tf2  = s["sharpe"]
+    sh_bh   = s["bh_sharpe"]
+    tim_tf2 = s["time_in_mkt"]
+
+    rows_html = [
+        ("Final NAV",
+         _cell(fv_tf2, fv_bh, _fmt_nav),
+         _cell(fv_tax,  fv_bh, _fmt_nav),
+         f"<td style='text-align:center;'>{_fmt_nav(fv_bh)}</td>"),
+        ("Total Return",
+         _cell(ret_tf2, ret_bh, _fmt_pct),
+         _cell(ret_tax,  ret_bh, _fmt_pct),
+         f"<td style='text-align:center;'>{_fmt_pct(ret_bh)}</td>"),
+        ("Max Drawdown",
+         _cell(dd_tf2, dd_bh, _fmt_dd, higher_is_better=False),
+         "<td style='text-align:center; color:#64748b;'>—</td>",
+         f"<td style='text-align:center;'>{_fmt_dd(dd_bh)}</td>"),
+        ("Sharpe Ratio (4.5% RF)",
+         _cell(sh_tf2, sh_bh, _fmt_plain),
+         "<td style='text-align:center; color:#64748b;'>—</td>",
+         f"<td style='text-align:center;'>{_fmt_plain(sh_bh)}</td>"),
+        ("Time in Market",
+         f"<td style='text-align:center; font-weight:600;'>{_fmt_time(tim_tf2)}</td>",
+         "<td style='text-align:center; color:#64748b;'>—</td>",
+         "<td style='text-align:center;'>100%</td>"),
+        ("Tax Rate Applied",
+         "<td style='text-align:center;'>0% (pre-tax)</td>",
+         "<td style='text-align:center; background:#fef3c7; font-weight:600;'>35% on gains</td>",
+         "<td style='text-align:center; background:#dcfce7; font-weight:600;'>0% (unrealised)</td>"),
+        ("Tax Paid ($)",
+         "<td style='text-align:center; color:#64748b;'>—</td>",
+         f"<td style='text-align:center; background:#fef3c7; font-weight:600;'>"
+         f"${s['total_tax_paid']:,.0f}</td>",
+         "<td style='text-align:center; background:#dcfce7;'>$0</td>"),
+        ("Win Rate",
+         f"<td style='text-align:center; font-weight:600;'>{s['win_rate']:.0f}% "
+         f"({s['n_wins']}W/{s['n_losses']}L)</td>",
+         "<td style='text-align:center; color:#64748b;'>—</td>",
+         "<td style='text-align:center; color:#64748b;'>—</td>"),
+    ]
+
+    table_rows = "\n".join(
+        f"<tr><td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
+        f"color:#334155;'>{lbl}</td>{c1}{c2}{c3}</tr>"
+        for lbl, c1, c2, c3 in rows_html
+    )
+
+    st.markdown(
+        f"""
+        <div style="overflow-x:auto; margin:10px 0 18px 0;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;
+                      border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+          <thead>
+            <tr style="background:#1e3a8a; color:white;">
+              <th style="padding:9px 12px; text-align:left; font-weight:600;">Metric</th>
+              <th style="padding:9px 12px; text-align:center; font-weight:600;">
+                📊 TF2 Strategy<br><span style="font-size:11px; font-weight:400; opacity:0.85;">
+                pre-tax</span></th>
+              <th style="padding:9px 12px; text-align:center; font-weight:600;">
+                🧾 TF2 After Tax<br><span style="font-size:11px; font-weight:400; opacity:0.85;">
+                35% on realised gains</span></th>
+              <th style="padding:9px 12px; text-align:center; font-weight:600;">
+                🏦 Buy &amp; Hold<br><span style="font-size:11px; font-weight:400; opacity:0.85;">
+                0% tax — unrealised</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {table_rows}
+          </tbody>
+        </table>
+        </div>
+        <p style="font-size:11px; color:#64748b; margin-top:2px;">
+        💡 <b>Tax note:</b> TF2 triggers a taxable event on every closed winning trade
+        (35% short-term CGT applied to each gain).
+        B&amp;H never sells, so <em>all</em> gains remain unrealised — $0 tax until exit.
+        Green = better for investor vs the comparison column.
+        ⚠️ Dates before ~Sep 2025 are <b>in-sample</b>.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # ── Open-position badge ───────────────────────────────────────────
     if has_pos and bt["open_entry"]:
