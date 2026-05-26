@@ -260,7 +260,19 @@ CT ensemble uses raw 103-feature matrix).
 
 ---
 
-## 8. Implementation Recommendation
+## 8. Backtested Trading Strategy
+
+A systematic trading strategy built on these signatures has been backtested on the full
+241-bar OOS test window. See [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) for the complete
+specification, all variant results, and the full trade log.
+
+**Best strategy (TF1) summary:** Entry on U1 + (BTC above 30-day MA OR clean_10d),
+exit on D2 or D3 only. Result: $100k → $102k (+2.1%) vs Buy & Hold −33.1%; alpha +$35k;
+4W/2L; 12.7% max drawdown; 19% time in market.
+
+---
+
+## 9. Implementation Recommendation
 
 A daily signal dashboard should compute and display:
 
