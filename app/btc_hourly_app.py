@@ -2533,8 +2533,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             "$" + f"{ia['running_high']:,.0f}" + "</div>"
             "<div style='font-size:11px; color:#64748b;'>Pred: $" + f"{ia['pred_hi']:,.0f}" + "</div>"
             "<div style='font-size:12px; color:" + hi_brk_color + "; font-weight:600;'>"
-            + ("✓ ABOVE pred +" if ia["hi_break_intra"] else "○ below pred ")
-            + f"{ia['err_hi_intra']:+.2f}%" + "</div></div>"
+            + ("🔒 LOCKED IN — bar high will close above pred" if ia["hi_break_intra"]
+               else "○ not yet above pred")
+            + " (" + f"{ia['err_hi_intra']:+.2f}%" + ")" + "</div></div>"
             # Col 2: Running Low
             "<div style='background:rgba(0,0,0,0.04); border-radius:6px; padding:8px;'>"
             "<div style='font-size:11px; color:#64748b; margin-bottom:2px;'>Running Low</div>"
@@ -2542,8 +2543,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             "$" + f"{ia['running_low']:,.0f}" + "</div>"
             "<div style='font-size:11px; color:#64748b;'>Pred: $" + f"{ia['pred_lo']:,.0f}" + "</div>"
             "<div style='font-size:12px; color:" + lo_brk_color + "; font-weight:600;'>"
-            + ("✓ BELOW pred " if ia["lo_break_intra"] else "○ above pred ")
-            + f"{ia['err_lo_intra']:+.2f}%" + "</div></div>"
+            + ("🔒 LOCKED IN — bar low will close below pred" if ia["lo_break_intra"]
+               else "○ not yet below pred")
+            + " (" + f"{ia['err_lo_intra']:+.2f}%" + ")" + "</div></div>"
             # Col 3: Current price vs reference close
             "<div style='background:rgba(0,0,0,0.04); border-radius:6px; padding:8px;'>"
             "<div style='font-size:11px; color:#64748b; margin-bottom:2px;'>Current Close</div>"
@@ -2555,23 +2557,28 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             "</div>"
             # Interpretation text
             "<div style='font-size:12px; color:#1e293b; line-height:1.5;'>"
-            "📌 <b>What this means:</b> The completed-bar signals above are based on the last "
-            "<b>closed</b> daily bars — they don't include this bar until 12:00 UTC tomorrow. "
-            "This panel shows whether the <b>current bar</b> is already breaking the model's "
-            "predicted H/L band intraday. "
+            "📌 <b>How to read this:</b> Running High/Low are monotonic within a bar — once broken, "
+            "they <b>cannot recover</b>. A 🔒 LOCKED IN break at hour " + str(ia["hours_elapsed"])
+            + " means this bar's final H/L at close <b>will</b> include that break, "
+            "updating D1/D2/U1 signals tomorrow. "
             + (
-                "⚠️ The <b>low</b> has already broken the predicted floor by "
-                "<b>" + f"{ia['err_lo_intra']:+.2f}%" + "</b>. "
-                "If this persists to bar close, D1 and D2 signals will update tomorrow."
-                if ia["lo_break_intra"] and ia["lo_severity"] in ("MODERATE", "HIGH")
+                "⚠️ <b>Lo break confirmed:</b> This bar's final low is already locked in below the predicted floor "
+                "by <b>" + f"{ia['err_lo_intra']:.2f}%" + "</b>. "
+                "The magnitude may increase further in the remaining "
+                + str(24 - ia["hours_elapsed"]) + "h but cannot decrease. "
+                "D1 (lo_breaks_3d) will increment by 1 after bar close tomorrow."
+                if ia["lo_break_intra"]
                 else (
-                    "✓ The <b>high</b> has already exceeded the predicted ceiling by "
-                    "<b>" + f"{ia['err_hi_intra']:+.2f}%" + "</b>. "
-                    "If this persists to bar close, U1 will get a fresh data point tomorrow."
-                    if ia["hi_break_intra"] and ia["hi_severity"] in ("MODERATE", "HIGH")
+                    "✅ <b>Hi break confirmed:</b> This bar's final high is already locked in above the predicted ceiling "
+                    "by <b>" + f"{ia['err_hi_intra']:.2f}%" + "</b>. "
+                    "The magnitude may increase in the remaining "
+                    + str(24 - ia["hours_elapsed"]) + "h. "
+                    "U1 (hi_breaks_3d) will increment by 1 after bar close tomorrow."
+                    if ia["hi_break_intra"]
                     else
-                    "The bar is currently trading <b>within</b> the predicted H/L range — "
-                    "no intraday band break to report yet."
+                    "⏳ No band break yet after " + str(ia["hours_elapsed"]) + "h. "
+                    "The remaining <b>" + str(24 - ia["hours_elapsed"]) + " hours</b> "
+                    "could still produce a break — a neutral reading now does not guarantee a neutral close."
                 )
             )
             + "</div></div>",
