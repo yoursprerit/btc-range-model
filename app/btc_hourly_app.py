@@ -3048,7 +3048,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     )
 
 
-def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
+def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "") -> None:
     """Render the TF2 trading strategy summary + backtest dashboard.
 
     Shows:
@@ -3056,6 +3056,9 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
       • Unified comparison table: two periods × three columns (TF2 | TF2-tax | B&H)
       • Two equity-curve charts — one per period — in tabs
       • Expandable trade log for each period
+
+    key_suffix: appended to plotly_chart keys to avoid DuplicateElementKey when
+    this function is rendered inside multiple Streamlit tabs in the same run.
     """
     st.markdown("---")
     st.subheader("🎯 TF2 Trading Strategy — Regime-Adaptive Backtest")
@@ -3399,7 +3402,7 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})"
                 )
                 if fig_r:
-                    st.plotly_chart(fig_r, use_container_width=True, key="chart_rolling")
+                    st.plotly_chart(fig_r, use_container_width=True, key=f"chart_rolling_{key_suffix}")
             tab_idx += 1
         if bt_full:
             with tabs[tab_idx]:
@@ -3411,7 +3414,7 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})"
                 )
                 if fig_f:
-                    st.plotly_chart(fig_f, use_container_width=True, key="chart_full")
+                    st.plotly_chart(fig_f, use_container_width=True, key=f"chart_full_{key_suffix}")
 
     # ── Trade log ─────────────────────────────────────────────────────
     def _trade_log_rows(bt):
@@ -4235,7 +4238,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_end     = target_date.strftime("%Y-%m-%d")
     _bt_rolling = run_tf1_backtest(_bt_end)           # ~1-year rolling (app hourly data)
     _bt_full    = run_full_period_backtest(_bt_end)   # full period from May 26 2024 (yf daily)
-    render_trading_strategy_dashboard(_bt_rolling, _bt_full)
+    _chart_key = "live" if is_live else "hist"
+    render_trading_strategy_dashboard(_bt_rolling, _bt_full, key_suffix=_chart_key)
 
     # ────── Historical picker (date strip, calendar, hour slider,
     # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate
