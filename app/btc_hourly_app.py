@@ -2400,6 +2400,397 @@ def _build_ct_batch_predictions():
     return result[~result.index.duplicated(keep="last")]
 
 
+@st.cache_data(ttl=3600 * 6, show_spinner="Building extended 2-year predictions …")
+def _build_ct_predictions_extended():
+    """Build CT predictions using yfinance daily data fetched from 2024-02-01.
+
+    Provides 115+ days of feature warmup before the May 26, 2024 backtest start
+    so all 90-day rolling features (dist_hi_90, corr_30, etc.) are fully
+    initialised.  Uses yfinance midnight-UTC daily closes — same source as
+    backtest_2year.py — so results match the documented +83.5% two-year figure.
+
+    Returns (preds_df, raw_df) or None on failure.
+      preds_df : target_date index with close_asof / pred_high / pred_low
+      raw_df   : date index with btc_close / btc_high / btc_low / btc_volume
+    """
+    path = str(DAILY_MODEL_CT)
+    if not os.path.exists(path):
+        return None
+    try:
+        AD = joblib.load(path)
+    except Exception:
+        return None
+
+    FETCH_START = "2024-02-01"
+    FETCH_END   = (datetime.now(timezone.utc).date()
+                   + pd.Timedelta(days=1).to_pytimedelta()).strftime("%Y-%m-%d")
+
+    # ── BTC daily (yfinance midnight-UTC close) ─────────────────────
+    try:
+        d_btc = yf.download("BTC-USD", start=FETCH_START, end=FETCH_END,
+                            progress=False, auto_adjust=False)
+        if isinstance(d_btc.columns, pd.MultiIndex):
+            d_btc.columns = [c[0] for c in d_btc.columns]
+        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
+    except Exception:
+        return None
+
+    raw_df = pd.DataFrame({
+        "btc_close":  d_btc["Close"],
+        "btc_high":   d_btc["High"],
+        "btc_low":    d_btc["Low"],
+        "btc_volume": d_btc["Volume"],
+    })
+
+    # ── Macro (yfinance daily) ──────────────────────────────────────
+    SYMS = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
+            "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
+    df = raw_df.copy()
+    for name, sym in SYMS.items():
+        try:
+            d = yf.download(sym, start=FETCH_START, end=FETCH_END,
+                            progress=False, auto_adjust=False)
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = [c[0] for c in d.columns]
+            d.index = pd.DatetimeIndex(d.index).tz_localize(None).normalize()
+            df[f"{name}_close"] = d["Close"].reindex(df.index)
+        except Exception:
+            pass
+
+    # ── On-chain (blockchain.info) ──────────────────────────────────
+    ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
+               "n-unique-addresses","transaction-fees-usd","mempool-size",
+               "estimated-transaction-volume-usd","market-cap",
+               "avg-block-size","cost-per-transaction"]
+    for m in ONCHAIN:
+        col = f"oc_{m.replace('-','_')}"
+        try:
+            r = requests.get(
+                f"https://api.blockchain.info/charts/{m}",
+                params={"timespan":"3years","format":"json","sampled":"true"},
+                timeout=20)
+            vals = r.json().get("values", [])
+            s = pd.Series(
+                {pd.Timestamp(v["x"], unit="s").normalize(): v["y"] for v in vals},
+                name=col, dtype=float)
+            s = s[~s.index.duplicated(keep="last")].sort_index()
+            s.index = pd.DatetimeIndex(s.index).tz_localize(None)
+            df[col] = s.reindex(df.index).ffill(limit=7)
+        except Exception:
+            pass
+
+    df = df.sort_index().ffill(limit=5)
+
+    # ── Feature engineering (identical to _build_ct_batch_predictions) ─
+    feat  = pd.DataFrame(index=df.index)
+    c     = df["btc_close"]; h = df["btc_high"]
+    l_    = df["btc_low"];   v = df["btc_volume"]
+    ret   = np.log(c).diff()
+    for k in [1,3,5,7,14,30]: feat[f"ret_{k}"] = ret.rolling(k).sum()
+    for k in [5,10,20,30]:    feat[f"vol_{k}"] = ret.rolling(k).std()
+    prev_c = c.shift(1)
+    tr = pd.concat([(h-l_),(h-prev_c).abs(),(l_-prev_c).abs()], axis=1).max(axis=1)
+    for k in [7,14,30]: feat[f"atr_{k}"] = tr.rolling(k).mean()/c
+    feat["range_today"] = (h-l_)/c
+    feat["range_ma7"]   = ((h-l_)/c).rolling(7).mean()
+    feat["range_ma30"]  = ((h-l_)/c).rolling(30).mean()
+    feat["range_std30"] = ((h-l_)/c).rolling(30).std()
+    gain  = c.diff().clip(lower=0).rolling(14).mean()
+    loss  = (-c.diff().clip(upper=0)).rolling(14).mean()
+    feat["rsi_14"] = 100 - 100/(1 + gain/loss.replace(0, np.nan))
+    e12 = c.ewm(span=12,adjust=False).mean(); e26 = c.ewm(span=26,adjust=False).mean()
+    macd = e12 - e26
+    feat["macd"]      = macd/c
+    feat["macd_sig"]  = macd.ewm(span=9,adjust=False).mean()/c
+    feat["macd_hist"] = (macd - macd.ewm(span=9,adjust=False).mean())/c
+    ma20 = c.rolling(20).mean(); sd20 = c.rolling(20).std()
+    feat["bb_width"]   = (4*sd20)/ma20
+    feat["dist_hi_30"] = c/c.rolling(30).max() - 1
+    feat["dist_lo_30"] = c/c.rolling(30).min() - 1
+    feat["dist_hi_90"] = c/c.rolling(90).max() - 1
+    feat["vol_chg_1"]    = np.log(v).diff()
+    feat["vol_z_20"]     = (np.log(v)-np.log(v).rolling(20).mean())/np.log(v).rolling(20).std()
+    feat["vol_ma_ratio"] = v/v.rolling(20).mean()
+    dow = df.index.dayofweek
+    for i in range(6): feat[f"dow_{i}"] = (dow==i).astype(float)
+    for nm in ["spx","ndx","vix","gold","dxy","tnx","eth"]:
+        col = f"{nm}_close"
+        if col not in df.columns: continue
+        s = df[col]
+        for k in (1,5,20): feat[f"{nm}_ret_{k}"] = np.log(s).diff(k)
+        feat[f"{nm}_vol_20"] = np.log(s).diff().rolling(20).std()
+    for nm, col in [("spx","spx_close"),("ndx","ndx_close"),
+                    ("gold","gold_close"),("dxy","dxy_close")]:
+        if col in df.columns:
+            feat[f"btc_{nm}_corr_30"] = ret.rolling(30).corr(np.log(df[col]).diff())
+    for col in [x for x in df.columns if x.startswith("oc_")]:
+        s = df[col].astype(float); sl = np.log(s.replace(0, np.nan))
+        feat[f"{col}_d1"]  = sl.diff(1)
+        feat[f"{col}_d7"]  = sl.diff(7)
+        feat[f"{col}_z30"] = (sl - sl.rolling(30).mean())/sl.rolling(30).std()
+    nh, nl = h.shift(-1), l_.shift(-1)
+    y_hi = (nh-c)/c; y_lo = (c-nl)/c
+    feat["y_hi_ema3"] = y_hi.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_lo_ema3"] = y_lo.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_hi_ema7"] = y_hi.shift(1).ewm(span=7,adjust=False).mean()
+    feat["y_lo_ema7"] = y_lo.shift(1).ewm(span=7,adjust=False).mean()
+    p3h = h.shift(1).rolling(3).max(); p3l = l_.shift(1).rolling(3).min()
+    feat["above_3d_high"]  = (c > p3h).astype(float)
+    feat["below_3d_low"]   = (c < p3l).astype(float)
+    feat["bo_strength_up"] = (c/p3h - 1).clip(lower=0)
+    feat["bo_strength_dn"] = (1 - c/p3l).clip(lower=0)
+    yhl = y_hi.shift(1); yll = y_lo.shift(1)
+    feat["y_hi_surprise"] = yhl - yhl.ewm(span=7,adjust=False).mean()
+    feat["y_lo_surprise"] = yll - yll.ewm(span=7,adjust=False).mean()
+    nr = ret.clip(upper=0)
+    feat["dn_vol_5"]  = nr.rolling(5).std()
+    feat["dn_vol_20"] = nr.rolling(20).std()
+    sma50 = c.rolling(50).mean()
+    feat["below_sma50"]    = (c < sma50).astype(float)
+    feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
+
+    fc = AD["feat_cols"]
+    feat = feat.replace([np.inf, -np.inf], np.nan)
+    for col in fc:
+        if col not in feat.columns: feat[col] = np.nan
+    F = feat[fc].dropna()
+    if F.empty:
+        return None
+
+    # ── Batch prediction (same as _build_ct_batch_predictions) ────────
+    if AD.get("ensemble") and AD.get("constituents"):
+        yhi = np.mean([con["m_hi"].predict(F) for con in AD["constituents"]], axis=0)
+        ylo = np.mean([con["m_lo"].predict(F) for con in AD["constituents"]], axis=0)
+        if AD.get("blended") and float(AD.get("alpha", 1.0)) < 1.0:
+            a = float(AD["alpha"])
+            yhi = a*yhi + (1-a)*float(AD.get("mu_hi", 0))
+            ylo = a*ylo + (1-a)*float(AD.get("mu_lo", 0))
+    else:
+        yhi = AD["hi_model"].predict(F)
+        ylo = AD["lo_model"].predict(F)
+    dh = AD.get("direction_head")
+    if dh is not None and dh.get("classifier") is not None:
+        try:
+            clf = dh["classifier"]
+            beta_base   = float(dh.get("beta", 1.0))
+            reduction   = float(dh.get("beta_trend_reduction", 0.0))
+            trend_sat   = float(dh.get("trend_saturation", 0.05))
+            trend_feat  = dh.get("trend_feature", "ret_5")
+            d_bull_mean = float(dh.get("d_bull_mean", 0.0))
+            d_bear_mean = float(dh.get("d_bear_mean", 0.0))
+            p_bull   = clf.predict_proba(F)[:, 1]
+            t_vals   = F[trend_feat].fillna(0).values if trend_feat in F.columns else np.zeros(len(F))
+            t_str    = np.minimum(np.abs(t_vals)/trend_sat, 1.0)
+            b_eff    = np.clip(beta_base*(1.0 - reduction*t_str), 0.0, 1.0)
+            m_pred   = (yhi + ylo)/2.0; d_pred = (yhi - ylo)/2.0
+            d_dir    = p_bull*d_bull_mean + (1-p_bull)*d_bear_mean
+            d_blnd   = b_eff*d_pred + (1-b_eff)*d_dir
+            yhi = m_pred + d_blnd; ylo = m_pred - d_blnd
+        except Exception:
+            pass
+
+    c_vals       = c.reindex(F.index).values
+    pred_hi_vals = c_vals * (1 + np.clip(yhi, 0, None))
+    pred_lo_vals = c_vals * (1 - np.clip(ylo, 0, None))
+    idx_arr    = np.asarray(F.index, dtype="datetime64[ns]")
+    next_dates = np.empty(len(F), dtype="datetime64[ns]")
+    next_dates[:-1] = idx_arr[1:]; next_dates[-1] = idx_arr[-1] + np.timedelta64(1,"D")
+    preds_df = pd.DataFrame(
+        {"close_asof": c_vals, "pred_high": pred_hi_vals, "pred_low": pred_lo_vals},
+        index=pd.DatetimeIndex(next_dates, name="target_date"),
+    )
+    preds_df = preds_df[~preds_df.index.duplicated(keep="last")]
+    return preds_df, raw_df
+
+
+@st.cache_data(ttl=3600 * 6, show_spinner="Running full 2-year backtest …")
+def run_full_period_backtest(end_date_iso: str,
+                             backtest_start_iso: str = "2024-05-26",
+                             initial_capital: float = 100_000.0):
+    """Full-period TF2 backtest using extended yfinance daily data.
+
+    Fetches from 2024-02-01 to ensure 90-day feature warmup before the
+    May 26, 2024 backtest start — reproduces the backtest_2year.py +83.5% figure.
+    Returns the same dict structure as run_tf1_backtest.
+    """
+    WARMUP = 35
+
+    ext = _build_ct_predictions_extended()
+    if ext is None:
+        return None
+    preds, raw_df = ext
+
+    closes = raw_df["btc_close"]
+    highs  = raw_df["btc_high"]
+    lows   = raw_df["btc_low"]
+
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    preds    = preds.loc[(preds.index >= start_dt) & (preds.index <= end_dt)].copy()
+    if len(preds) < WARMUP + 3:
+        return None
+
+    preds["actual_high"]  = highs.reindex(preds.index).values
+    preds["actual_low"]   = lows.reindex(preds.index).values
+    preds["actual_close"] = closes.reindex(preds.index).values
+
+    comp = (preds.dropna(subset=["actual_high","actual_low","actual_close"])
+                 .reset_index())
+    N = len(comp)
+    if N < WARMUP + 3:
+        return None
+
+    dates   = pd.DatetimeIndex(comp["target_date"])
+    c_asof  = comp["close_asof"].values.astype(float)
+    exec_px = comp["actual_close"].values.astype(float)
+    pred_hi = comp["pred_high"].values.astype(float)
+    pred_lo = comp["pred_low"].values.astype(float)
+    act_hi  = comp["actual_high"].values.astype(float)
+    act_lo  = comp["actual_low"].values.astype(float)
+
+    err_hi = (act_hi - pred_hi) / c_asof * 100
+    err_lo = (pred_lo - act_lo) / c_asof * 100
+    hi_brk = (act_hi > pred_hi).astype(int)
+    lo_brk = (act_lo < pred_lo).astype(int)
+
+    ehma3 = np.zeros(N); elma3 = np.zeros(N)
+    hb3   = np.zeros(N, dtype=int); lb3 = np.zeros(N, dtype=int)
+    for i in range(N):
+        s = max(0, i-2)
+        ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
+        hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
+
+    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    d1 = (lb3 >= 2)    & (elma3 > 0.5)
+    d2 = ehma3 < -1.0
+    d3 = np.zeros(N, dtype=bool)
+    for i in range(1, N):
+        consec = 0
+        for k in range(i-1, -1, -1):
+            if hi_brk[k]: consec += 1
+            else: break
+        if consec >= 3 and lo_brk[i]:
+            d3[i] = True
+
+    ma30 = np.full(N, np.nan)
+    for i in range(N):
+        w = min(30, i+1)
+        ma30[i] = np.mean(c_asof[max(0, i-w+1):i+1])
+    above_ma30     = c_asof > ma30
+    ma30_slope_pos = np.zeros(N, dtype=bool)
+    for i in range(N):
+        if i >= 5 and np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
+            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
+    bull_regime = above_ma30 & ma30_slope_pos
+
+    clean_10d = np.zeros(N, dtype=bool)
+    for i in range(N):
+        lo_i = max(0, i-10)
+        clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
+
+    tf1_entry = u1 & (above_ma30 | clean_10d)
+
+    nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
+    e_price = e_nav = e_date = e_trigger = None
+    trades  = []; nav_arr = np.full(N, np.nan)
+
+    for i in range(N):
+        si    = i - 1; price = exec_px[i]
+        if i < WARMUP:
+            nav_arr[i] = initial_capital; continue
+        if pos == "LONG":
+            cur = btc_qty * price
+            if si >= 0:
+                should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
+                exit_lbl    = "D3" if d3[si] else "D2 (bear)"
+            else:
+                should_exit = False; exit_lbl = "?"
+            if should_exit:
+                nav = cur
+                trades.append(dict(
+                    entry_date=e_date, entry_price=e_price, entry_nav=e_nav,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
+                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    pnl_abs=nav-e_nav, exit_signal=exit_lbl,
+                    duration_days=(dates[i]-e_date).days,
+                ))
+                pos = "CASH"; btc_qty = 0.0
+            else:
+                nav = cur
+        else:
+            if si >= 0 and tf1_entry[si]:
+                btc_qty = nav/price; e_price = price; e_date = dates[i]
+                e_nav = nav; pos = "LONG"
+                if above_ma30[si] and clean_10d[si]:
+                    e_trigger = "U1 + ↑MA30 + clean10d"
+                elif above_ma30[si]:
+                    e_trigger = "U1 + ↑MA30"
+                else:
+                    e_trigger = "U1 + clean10d"
+        nav_arr[i] = btc_qty * price if pos == "LONG" else nav
+
+    if pos == "LONG":
+        nav_arr[N-1] = btc_qty * exec_px[N-1]
+
+    nav_series = pd.Series(nav_arr[WARMUP:], index=dates[WARMUP:]).ffill()
+    bh_series  = pd.Series(
+        initial_capital * exec_px[WARMUP:] / exec_px[WARMUP], index=dates[WARMUP:])
+
+    # ── Statistics (identical to run_tf1_backtest) ───────────────────
+    final_nav = float(nav_series.iloc[-1]); final_bh = float(bh_series.iloc[-1])
+    strat_ret = (final_nav/initial_capital - 1)*100
+    bh_ret    = (final_bh/initial_capital  - 1)*100
+    wins      = [t for t in trades if t["pnl_pct"] > 0]
+    losses    = [t for t in trades if t["pnl_pct"] <= 0]
+    win_rate  = 100*len(wins)/len(trades) if trades else 0.0
+    avg_pnl   = float(np.mean([t["pnl_pct"] for t in trades])) if trades else 0.0
+    best_t    = float(max([t["pnl_pct"] for t in trades])) if trades else 0.0
+    worst_t   = float(min([t["pnl_pct"] for t in trades])) if trades else 0.0
+    rm        = nav_series.cummax()
+    max_dd    = float(((nav_series - rm)/rm*100).min())
+    rm_bh     = bh_series.cummax()
+    bh_max_dd = float(((bh_series - rm_bh)/rm_bh*100).min())
+    days_in   = sum(t["duration_days"] for t in trades)
+    tot_days  = max(1, (dates[N-1] - dates[WARMUP]).days)
+    rf_daily  = (1.045)**(1/252) - 1
+    dr_s      = nav_series.pct_change().fillna(0)
+    dr_b      = bh_series.pct_change().fillna(0)
+    exc_s     = dr_s - rf_daily; exc_b = dr_b - rf_daily
+    sharpe    = float(exc_s.mean()/exc_s.std()*np.sqrt(252)) if exc_s.std()>0 else 0.0
+    bh_sharpe = float(exc_b.mean()/exc_b.std()*np.sqrt(252)) if exc_b.std()>0 else 0.0
+    TAX_RATE       = 0.35
+    total_tax_paid = sum(TAX_RATE*t["pnl_abs"] for t in trades if t["pnl_abs"]>0)
+    after_tax_nav  = final_nav - total_tax_paid
+    after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
+
+    return dict(
+        strategy   = "TF2",
+        trades     = trades,
+        nav_series = nav_series,
+        bh_series  = bh_series,
+        open_pos   = pos == "LONG",
+        open_entry = (dict(price=e_price, date=e_date, nav=e_nav) if pos == "LONG" else None),
+        stats = dict(
+            strategy        = "TF2",
+            initial_capital = initial_capital,
+            final_nav       = final_nav,      final_bh      = final_bh,
+            strat_ret       = strat_ret,      bh_ret        = bh_ret,
+            alpha_abs       = final_nav - final_bh,
+            n_trades        = len(trades),
+            n_wins          = len(wins),      n_losses      = len(losses),
+            win_rate        = win_rate,       avg_pnl       = avg_pnl,
+            best_trade      = best_t,         worst_trade   = worst_t,
+            max_drawdown    = max_dd,         bh_max_dd     = bh_max_dd,
+            sharpe          = sharpe,         bh_sharpe     = bh_sharpe,
+            time_in_mkt     = 100*days_in/tot_days,
+            after_tax_nav   = after_tax_nav,  after_tax_ret = after_tax_ret,
+            total_tax_paid  = total_tax_paid,
+            start_date      = dates[WARMUP],
+            end_date        = dates[N-1],
+        ),
+    )
+
+
 @st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
 def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
                      strategy: str = "TF2", start_date_iso: str = None):
@@ -2778,7 +3169,8 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
         "<th style='padding:5px 12px;'></th>"
         "<th style='padding:5px 8px; text-align:center;'>📊 TF2</th>"
         "<th style='padding:5px 8px; text-align:center;'>🧾 TF2 (35% tax)</th>"
-        "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>"
+        "<th style='padding:5px 8px; text-align:center; border-right:3px solid #475569;'>🏦 B&amp;H (0% tax)</th>"
+        "<th style='width:6px; padding:0;'></th>"
         "<th style='padding:5px 8px; text-align:center;'>📊 TF2</th>"
         "<th style='padding:5px 8px; text-align:center;'>🧾 TF2 (35% tax)</th>"
         "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>"
@@ -2802,9 +3194,9 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
         tbody += (
             f"<tr style='background:{bg};'>"
             f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
-            f"color:#334155; border-right:2px solid #e2e8f0;'>{lbl}</td>"
+            f"color:#334155;'>{lbl}</td>"
             f"{pr[key]}"
-            f"<td style='border-left:2px solid #cbd5e1; padding:0;'></td>"
+            f"<td style='width:6px; padding:0; border-left:3px solid #cbd5e1;'></td>"
             f"{pf[key]}"
             f"</tr>"
         )
@@ -2819,8 +3211,9 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
               <th style="padding:10px 12px; text-align:left; font-weight:600; min-width:160px;">
                 Metric</th>
               <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
-                  border-right:2px solid #4c72b5;">
+                  border-right:3px solid #4c72b5;">
                 {lbl_r}</th>
+              <th style="width:6px; padding:0; background:#1e3a8a;"></th>
               <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;">
                 {lbl_f}</th>
             </tr>
@@ -3800,8 +4193,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # Always computed from the LIVE end date (most recent completed bar) so the
     # rolling-1-year window is always current, regardless of the historical picker.
     _bt_end     = target_date.strftime("%Y-%m-%d")
-    _bt_rolling = run_tf1_backtest(_bt_end)                              # ~1-year rolling
-    _bt_full    = run_tf1_backtest(_bt_end, start_date_iso="2024-05-26") # full period
+    _bt_rolling = run_tf1_backtest(_bt_end)           # ~1-year rolling (app hourly data)
+    _bt_full    = run_full_period_backtest(_bt_end)   # full period from May 26 2024 (yf daily)
     render_trading_strategy_dashboard(_bt_rolling, _bt_full)
 
     # ────── Historical picker (date strip, calendar, hour slider,
