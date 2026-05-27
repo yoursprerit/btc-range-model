@@ -3952,6 +3952,55 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         """,
         unsafe_allow_html=True,
     )
+
+    # ── Intraday V-gate watch note (safe: advisory only, no action possible) ──
+    # Shown when today's running low has already breached the V-reversal
+    # threshold intraday (err_lo > 5%) but the gate is NOT yet confirmed from
+    # completed bars. Entry still requires U1 at bar close — nothing to act on
+    # now — but this tells the user to watch for U1 tonight.
+    # D2/D1 intraday data is intentionally NOT surfaced here (premature exit
+    # risk); it remains in the LIVE INTRADAY BAR panel below.
+    if (intraday is not None
+            and intraday.get("lo_break_intra", False)
+            and intraday.get("err_lo_intra", 0) > 5.0
+            and intraday.get("pct_through", 0) >= 0.40
+            and not sigs.get("v_reversal_likely", False)
+            and not sigs.get("capitulation_signal", False)):
+        _ia_pct  = intraday["pct_through"] * 100
+        _ia_hrs  = intraday["hours_elapsed"]
+        _ia_elo  = intraday["err_lo_intra"]
+        _ia_lo   = intraday["running_low"]
+        _ia_plo  = intraday["pred_lo"]
+        st.markdown(
+            f"""
+            <div style="background:#faf5ff; border:1.5px dashed #7c3aed;
+                border-radius:10px; padding:11px 16px; margin:2px 0 6px 0;
+                display:flex; align-items:flex-start; gap:12px;">
+              <div style="font-size:20px; line-height:1.3;">📍</div>
+              <div style="flex:1;">
+                <div style="font-size:13px; font-weight:700; color:#5b21b6;
+                    margin-bottom:3px;">
+                  INTRADAY WATCH — V-Reversal Threshold Hit
+                </div>
+                <div style="font-size:12px; color:#334155; line-height:1.6;">
+                  Today's low <b>${_ia_lo:,.0f}</b> is already
+                  <b>{_ia_elo:.1f}% below</b> the predicted floor
+                  (${_ia_plo:,.0f}) with <b>{_ia_hrs}h elapsed
+                  ({_ia_pct:.0f}% of bar complete)</b>.
+                  If the bar closes here, the <b>⚡ V-gate will open</b> for
+                  the next 3 daily closes.<br>
+                  <span style="color:#7c3aed; font-weight:600;">
+                  ⚠️ No action yet — entry also requires U1 to fire at bar
+                  close (err_hi_ma3 &gt; +0.5% AND hi_breaks_3d ≥ 2).
+                  Watch tonight's close; the ACTION SIGNAL above will update
+                  within 6 hours of bar close.</span>
+                </div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     tf1_rows = [
         ("U1 Signal",
          "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
