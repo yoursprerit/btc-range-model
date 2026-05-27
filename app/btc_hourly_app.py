@@ -3382,6 +3382,163 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
         unsafe_allow_html=True,
     )
 
+    # ── OOS Performance Section ───────────────────────────────────────────
+    OOS_START = pd.Timestamp("2025-09-18")
+
+    if bt_full is not None:
+        full_nav    = bt_full["nav_series"]
+        full_bh     = bt_full["bh_series"]
+        full_trades = bt_full["trades"]
+        ic          = bt_full["stats"]["initial_capital"]
+
+        oos_nav_raw = full_nav[full_nav.index >= OOS_START]
+        oos_bh_raw  = full_bh[full_bh.index  >= OOS_START]
+
+        if len(oos_nav_raw) > 1:
+            # Normalise OOS curves to $100k at OOS_START so metrics are
+            # independent of the IS accumulation/loss.
+            oos_start_nav = float(full_nav.asof(OOS_START)) or ic
+            oos_start_bh  = float(full_bh.asof(OOS_START))  or ic
+            oos_nav = oos_nav_raw / oos_start_nav * ic
+            oos_bh  = oos_bh_raw  / oos_start_bh  * ic
+
+            oos_final  = float(oos_nav.iloc[-1])
+            oos_bh_fin = float(oos_bh.iloc[-1])
+            oos_ret    = (oos_final  / ic - 1) * 100
+            oos_bh_ret = (oos_bh_fin / ic - 1) * 100
+            oos_alpha  = oos_final - oos_bh_fin
+
+            # Trades entered on/after OOS_START
+            oos_trades = [t for t in full_trades
+                          if pd.Timestamp(t["entry_date"]) >= OOS_START]
+            n_oos   = len(oos_trades)
+            oos_wins = [t for t in oos_trades if t["pnl_pct"] > 0]
+            oos_wr  = 100 * len(oos_wins) / n_oos if n_oos else 0.0
+            oos_avg = float(np.mean([t["pnl_pct"] for t in oos_trades])) if oos_trades else 0.0
+
+            # Sharpe (annualised)
+            rf_daily  = (1.045) ** (1/252) - 1
+            oos_dr    = oos_nav.pct_change().fillna(0)
+            oos_exc   = oos_dr - rf_daily
+            oos_sharpe = (float(oos_exc.mean() / oos_exc.std() * np.sqrt(252))
+                          if oos_exc.std() > 0 else 0.0)
+            bh_dr     = oos_bh.pct_change().fillna(0)
+            bh_exc    = bh_dr - rf_daily
+            oos_bh_sh = (float(bh_exc.mean() / bh_exc.std() * np.sqrt(252))
+                         if bh_exc.std() > 0 else 0.0)
+
+            # Max drawdown on OOS window
+            oos_peak   = oos_nav.cummax()
+            oos_max_dd = float(((oos_nav - oos_peak) / oos_peak * 100).min())
+
+            # After-tax (net annual gains on OOS trades)
+            _oos_yr: dict = {}
+            for t in oos_trades:
+                yr = pd.Timestamp(t["exit_date"]).year
+                _oos_yr[yr] = _oos_yr.get(yr, 0.0) + t["pnl_abs"]
+            oos_tax = sum(0.35 * max(0.0, v) for v in _oos_yr.values())
+            oos_after_tax = oos_final - oos_tax
+            oos_at_ret    = (oos_after_tax / ic - 1) * 100
+
+            # Model training cutoffs
+            cutoffs   = _training_cutoffs()
+            ct_cutoff = cutoffs.get("daily H/L")
+            ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Sep 17, 2025"
+            oos_end   = oos_nav.index[-1].strftime("%b %d, %Y")
+
+            def _oos_cell(val, ref, fmt, higher_better=True):
+                better = val > ref if higher_better else val < ref
+                col = "#16a34a" if better else ("#dc2626" if val != ref else "#334155")
+                return (f"<td style='text-align:center; font-weight:700; "
+                        f"color:{col}; padding:8px 12px;'>{fmt(val)}</td>")
+
+            def _oos_plain(val, fmt):
+                return (f"<td style='text-align:center; color:#334155; "
+                        f"padding:8px 12px;'>{fmt(val)}</td>")
+
+            oos_rows = [
+                ("Final NAV (from $100k)",
+                 _oos_cell(oos_final, oos_bh_fin, lambda v: f"${v:,.0f}") +
+                 _oos_cell(oos_after_tax, oos_bh_fin, lambda v: f"${v:,.0f}") +
+                 _oos_plain(oos_bh_fin, lambda v: f"${v:,.0f}")),
+                ("Total return",
+                 _oos_cell(oos_ret, oos_bh_ret, lambda v: f"{v:+.1f}%") +
+                 _oos_cell(oos_at_ret, oos_bh_ret, lambda v: f"{v:+.1f}%") +
+                 _oos_plain(oos_bh_ret, lambda v: f"{v:+.1f}%")),
+                ("Alpha vs B&H",
+                 f"<td style='text-align:center; font-weight:700; "
+                 f"color:{'#16a34a' if oos_alpha>0 else '#dc2626'}; padding:8px 12px;'>"
+                 f"${oos_alpha:+,.0f}</td>"
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>—</td>"
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>—</td>"),
+                ("Sharpe ratio",
+                 _oos_cell(oos_sharpe, oos_bh_sh, lambda v: f"{v:.2f}") +
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>—</td>" +
+                 _oos_plain(oos_bh_sh, lambda v: f"{v:.2f}")),
+                ("Max drawdown",
+                 _oos_cell(oos_max_dd, 0, lambda v: f"{v:.1f}%", higher_better=False) +
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>—</td>"
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>—</td>"),
+                ("OOS trades (entered)",
+                 f"<td colspan='2' style='text-align:center; font-weight:600; "
+                 f"padding:8px 12px;'>{n_oos} trades · {oos_wr:.0f}% win rate · "
+                 f"avg {oos_avg:+.1f}% / trade</td>"
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>—</td>"),
+                ("Tax paid (35% net gains)",
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>pre-tax</td>"
+                 f"<td style='text-align:center; font-weight:600; color:#b45309; "
+                 f"padding:8px 12px;'>${oos_tax:,.0f}</td>"
+                 f"<td style='text-align:center; color:#94a3b8; padding:8px 12px;'>$0 unrealised</td>"),
+            ]
+
+            oos_tbody = "".join(
+                f"<tr style='border-bottom:1px solid #e2e8f0;'>"
+                f"<td style='padding:8px 12px; font-size:12px; color:#475569; "
+                f"white-space:nowrap;'>{label}</td>{cells}</tr>"
+                for label, cells in oos_rows
+            )
+
+            st.markdown(
+                f"""
+                <div style='margin:18px 0 6px 0;'>
+                <div style='background:#f0fdf4; border:2px solid #16a34a;
+                    border-radius:10px; padding:14px 18px 10px 18px;'>
+                  <div style='font-size:14px; font-weight:700; color:#14532d;
+                      margin-bottom:4px;'>
+                    🔬 Out-of-Sample (OOS) Period — Fully Blind Test
+                  </div>
+                  <div style='font-size:11px; color:#166534; margin-bottom:10px;
+                      line-height:1.6;'>
+                    <b>OOS window:</b> {OOS_START.strftime("%b %d, %Y")} → {oos_end}
+                    &nbsp;·&nbsp;
+                    <b>CT model last training date:</b> {ct_str}
+                    &nbsp;·&nbsp;
+                    Model had <b>never seen</b> this data when trained.
+                    All signals, thresholds, and regime logic were frozen before this date.
+                  </div>
+                  <div style='overflow-x:auto;'>
+                  <table style='width:100%; border-collapse:collapse; font-size:13px;'>
+                    <thead>
+                      <tr style='background:#166534; color:white; font-size:11px;'>
+                        <th style='padding:7px 12px; text-align:left;'>Metric</th>
+                        <th style='padding:7px 10px; text-align:center;'>📊 TF2 (pre-tax)</th>
+                        <th style='padding:7px 10px; text-align:center;'>🧾 TF2 (35% tax)</th>
+                        <th style='padding:7px 10px; text-align:center;'>🏦 B&amp;H (0% tax)</th>
+                      </tr>
+                    </thead>
+                    <tbody>{oos_tbody}</tbody>
+                  </table>
+                  </div>
+                  <div style='font-size:11px; color:#166534; margin-top:8px;'>
+                    NAV normalised to $100k at OOS start · 🟢 green = better than B&amp;H ·
+                    Trades counted only if <b>entry</b> falls on/after {OOS_START.strftime("%b %d, %Y")}
+                  </div>
+                </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
     # ── Open-position badge (from rolling period) ─────────────────────
     if bt_rolling and bt_rolling["open_pos"] and bt_rolling["open_entry"]:
         oe  = bt_rolling["open_entry"]
