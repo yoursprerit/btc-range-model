@@ -2154,7 +2154,9 @@ def compute_trend_signatures(target_date_iso: str):
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
-    tf1_triggered = u1_triggered and (above_ma30 or clean_10d)
+    # V-gate: V-reversal (dn_score>0.8 & err_lo>5%) within last 3 bars also satisfies trend gate.
+    v_gate_ok     = v_reversal_likely or capitulation_signal
+    tf1_triggered = u1_triggered and (above_ma30 or clean_10d or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -3862,6 +3864,94 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     _bull_regime = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
     _exit_mode = "D3 only (patient — hold the trend)" if _bull_regime else "D2 OR D3 (defensive exit)"
+
+    # ── ACTION SIGNAL banner — synthesised top-level indicator ────────────
+    _v_gate_ok   = sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
+    _trend_ok    = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
+    _entry_signal = sigs["u1_triggered"] and _trend_ok
+    _exit_d3     = sigs.get("exhaustion_active", False)
+    _exit_d2     = (sigs.get("err_hi_ma3", 0) < -1.0) and not _bull_regime
+    _exit_signal = _exit_d3 or _exit_d2
+
+    if _exit_signal and _entry_signal:
+        # Both fire simultaneously — rare edge; exit takes priority
+        _action_bg    = "#fef2f2"
+        _action_brd   = "#dc2626"
+        _action_emoji = "🔴"
+        _action_label = "EXIT SIGNAL ACTIVE"
+        _action_sub   = (
+            f"D3={'FIRED' if _exit_d3 else 'clear'}, "
+            f"D2 (bear-only)={'FIRED' if _exit_d2 else 'clear'}  |  "
+            f"Entry conditions also met — EXIT takes priority if in position"
+        )
+    elif _exit_signal:
+        _action_bg    = "#fef2f2"
+        _action_brd   = "#dc2626"
+        _action_emoji = "🔴"
+        _action_label = "EXIT SIGNAL ACTIVE"
+        _exit_parts   = []
+        if _exit_d3:
+            _exit_parts.append("D3 exhaustion fired (exit in all regimes)")
+        if _exit_d2:
+            _exit_parts.append(f"D2 hi-band collapse in {_regime_label} regime → defensive exit")
+        _action_sub   = " · ".join(_exit_parts)
+    elif _entry_signal:
+        _action_bg    = "#f0fdf4"
+        _action_brd   = "#16a34a"
+        _action_emoji = "🟢"
+        _action_label = "ENTRY SIGNAL ACTIVE"
+        _entry_gates  = []
+        if sigs["above_ma30"]:    _entry_gates.append("↑MA30")
+        if sigs["clean_10d"]:     _entry_gates.append("Clean 10d")
+        if _v_gate_ok:            _entry_gates.append("⚡V-reversal")
+        _action_sub   = (
+            f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
+            f"Regime: {_regime_label}"
+        )
+    elif sigs["u1_triggered"] and not _trend_ok:
+        _action_bg    = "#fefce8"
+        _action_brd   = "#ca8a04"
+        _action_emoji = "🟡"
+        _action_label = "U1 ACTIVE — TREND GATE BLOCKED"
+        _action_sub   = (
+            "U1 fired but entry requires ↑MA30 OR clean10d OR ⚡V-reversal. "
+            f"BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
+            f"clean10d={'YES' if sigs['clean_10d'] else 'NO'}, "
+            f"V-rev={'YES' if _v_gate_ok else 'NO'} — watch for reversal"
+        )
+    else:
+        _action_bg    = "#f8fafc"
+        _action_brd   = "#94a3b8"
+        _action_emoji = "⬜"
+        _action_label = "NO ACTIVE SIGNAL — NEUTRAL / WATCH"
+        _action_sub   = (
+            f"U1={'active' if sigs['u1_triggered'] else 'inactive'}, "
+            f"Trend={'pass' if _trend_ok else 'blocked'}, "
+            f"Exit={'none' if not _exit_signal else 'active'}  |  "
+            f"Regime: {_regime_label}"
+        )
+
+    st.markdown(
+        f"""
+        <div style="background:{_action_bg}; border:2.5px solid {_action_brd};
+            border-radius:12px; padding:14px 20px; margin:8px 0 4px 0;
+            display:flex; align-items:center; gap:14px;">
+          <div style="font-size:28px; line-height:1;">{_action_emoji}</div>
+          <div>
+            <div style="font-size:16px; font-weight:800; color:{_action_brd};
+                letter-spacing:0.5px;">{_action_label}</div>
+            <div style="font-size:12px; color:#334155; margin-top:3px;
+                line-height:1.5;">{_action_sub}</div>
+          </div>
+          <div style="margin-left:auto; font-size:11px; color:#64748b;
+              text-align:right; line-height:1.6;">
+            <b>TF2 + V-Gate Strategy</b><br>
+            Signal as of today's close
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     tf1_rows = [
         ("U1 Signal",
          "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
