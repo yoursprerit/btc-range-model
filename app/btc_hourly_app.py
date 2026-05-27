@@ -4361,6 +4361,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         render_replay_in_sample_warning(target_date)
     daily = compute_daily_forecast(target_date.strftime("%Y-%m-%d"))
 
+    # Pre-compute backtest results (cached, no latency hit) so they can be
+    # rendered at the top of the page right after the KPI strip.
+    _bt_end     = target_date.strftime("%Y-%m-%d")
+    _bt_rolling = run_tf1_backtest(_bt_end)
+    _bt_full    = run_full_period_backtest(_bt_end)
+    _chart_key  = "live" if is_live else "hist"
+
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
         now_utc = pd.Timestamp(datetime.now(timezone.utc)).tz_convert(None)
@@ -4402,6 +4409,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
               f"{fng_now if fng_now is not None else 'n/a'}",
               delta=(f"{df['fng'].diff().iloc[-1]:+.0f} d/d"
                      if fng_now is not None else None))
+
+    # ─────────────── TF2 + V-Gate Strategy Dashboard ─────────────────────
+    render_trading_strategy_dashboard(_bt_rolling, _bt_full, key_suffix=_chart_key)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
@@ -4522,15 +4532,6 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _intra_raw = _fetch_current_bar_intraday() if is_live else None
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
         render_trend_signatures(sigs, intraday=_intra_sig)
-
-    # ─────────────── TF1 Trading Strategy Backtest Dashboard ──────────────
-    # Always computed from the LIVE end date (most recent completed bar) so the
-    # rolling-1-year window is always current, regardless of the historical picker.
-    _bt_end     = target_date.strftime("%Y-%m-%d")
-    _bt_rolling = run_tf1_backtest(_bt_end)           # ~1-year rolling (app hourly data)
-    _bt_full    = run_full_period_backtest(_bt_end)   # full period from May 26 2024 (yf daily)
-    _chart_key = "live" if is_live else "hist"
-    render_trading_strategy_dashboard(_bt_rolling, _bt_full, key_suffix=_chart_key)
 
     # ────── Historical picker (date strip, calendar, hour slider,
     # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate
