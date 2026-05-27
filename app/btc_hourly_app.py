@@ -3117,26 +3117,99 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
     s_ref   = _bt_ref["stats"]
 
     # ── Strategy rules card ───────────────────────────────────────────
-    st.markdown(
-        "<div style='background:#eff6ff; border:2px solid #2563eb; border-radius:10px; "
-        "padding:12px 18px; margin:4px 0 14px 0;'>"
-        "<div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:6px;'>"
-        "TF2 + V-Gate — Regime-Adaptive Strategy Rules</div>"
-        "<div style='font-size:12px; color:#1e3a8a; line-height:1.9;'>"
-        "📥 <b>Entry</b> — U1 active (<code>err_hi_ma3 &gt; +0.5%</code> "
-        "AND <code>hi_breaks_3d ≥ 2</code>) <b>AND</b> "
-        "(BTC above 30-day MA &nbsp;<b>OR</b>&nbsp; zero D1/D2 fires in prior 10 bars "
-        "&nbsp;<b>OR</b>&nbsp; ⚡ V-reversal within 3 bars)<br>"
-        "📤 <b>Exit</b> — <b>BULL regime</b> (price &gt; MA30 &amp; MA30 rising): "
-        "D3 only (patient — wait for structural reversal) &nbsp;|&nbsp; "
-        "<b>BEAR/Neutral</b>: D2 <b>OR</b> D3 (defensive — cut quickly)<br>"
-        "⏱ <b>Execution</b> — 1-day lag · signal on bar <i>i</i>, "
-        "trade at bar <i>i+1</i> close &nbsp;·&nbsp; "
-        "<b>Capital:</b> $100,000 initial &nbsp;·&nbsp; "
-        "⚠️ pre-Sep 2025 = <b>in-sample</b>"
-        "</div></div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("""
+<div style='background:#eff6ff; border:2px solid #2563eb; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+
+  <div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    🎯 TF2 + V-Gate &nbsp;—&nbsp; Strategy Rules at a Glance
+  </div>
+
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#1e40af; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — two conditions, both required</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#1e3a8a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#2563eb;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active</b> — model's predicted highs are being beaten consistently<br>
+          <span style='color:#3b82f6; font-size:11px;'>
+            err_hi_ma3 &gt; +0.5% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#2563eb;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>At least one trend gate passes</b> (any of the three):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
+            &nbsp; BTC close above its 30-day moving average
+            <br>
+            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 10d</span>
+            &nbsp; No D1 or D2 signal in the prior 10 bars (no recent bearish fingerprint)
+            <br>
+            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; Capitulation spike detected within the last 3 bars
+            <span style='color:#7c3aed; font-size:11px;'>
+              (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 5%)
+            </span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div style='border-top:1px solid #bfdbfe; margin:10px 0;'></div>
+
+  <!-- EXIT -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#1e40af; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📤 Exit — depends on current regime</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#1e3a8a;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL regime</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Price above MA30 <b>AND</b> MA30 is rising (5-bar slope &gt; 0)<br>
+          <span style='color:#166534;'>→ Exit on <b>D3 only</b></span>
+          &nbsp;— wait for structural exhaustion, let winners run
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR / Neutral</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Everything else (below MA30, or MA30 flat/falling)<br>
+          <span style='color:#991b1b;'>→ Exit on <b>D2 or D3</b></span>
+          &nbsp;— cut quickly, stalls become reversals
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div style='border-top:1px solid #bfdbfe; margin:10px 0;'></div>
+
+  <!-- MECHANICS -->
+  <div style='font-size:11px; color:#3b5280; line-height:1.8;'>
+    ⏱ <b>Execution:</b> 1-day lag — signal on bar <i>i</i>, trade fills at bar <i>i+1</i> close
+    &nbsp;·&nbsp;
+    💰 <b>Capital:</b> $100,000 initial
+    &nbsp;·&nbsp;
+    ⚠️ Data before Sep 18, 2025 is <b>in-sample</b> (CT model training period)
+  </div>
+
+</div>""", unsafe_allow_html=True)
+
 
     # ── Helpers ───────────────────────────────────────────────────────
     def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
