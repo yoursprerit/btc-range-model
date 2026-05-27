@@ -2102,9 +2102,12 @@ def compute_trend_signatures(target_date_iso: str):
     # Last bar's single-day lo error > 5% (massive undershoot = capitulation)
     last_lo_err = float(err_lo[-1])
     last_hi_err = float(err_hi[-1])
-    # Downtrend composite score (raw, same formula as analysis script)
+    # Downtrend composite score — first term normalised by rolling 30-bar mean
+    # (same window as backtest) so the 0.8 threshold has consistent meaning
+    # regardless of total history available (live function loads up to 45 bars).
+    _dn_norm = float(np.mean(err_hi[-min(30, n):]))
     dn_score_raw = (
-        (-float(np.mean(err_hi[-window3:])) / max(abs(float(np.mean(err_hi))), 0.01)) * 0.30 +
+        (-float(np.mean(err_hi[-window3:])) / max(abs(_dn_norm), 0.01)) * 0.30 +
         float(lo_breaks_3d) / 3 * 0.30 +
         float(err_lo_ma3)   / max(abs(err_lo_ma3), 0.1) * 0.20 +
         float(lo_break[-1]) * 0.20
@@ -2695,12 +2698,15 @@ def run_full_period_backtest(end_date_iso: str,
     # single bar shows capitulation (dn_score > 0.8 AND err_lo > 5%).
     # v_recent[i] = True if v_rev_bar fired within the last 3 bars — bridges
     # the 1-2 bar lag before U1 co-fires after the bounce starts.
-    cum_ehi_mean = np.zeros(N)
-    for i in range(N):
-        cum_ehi_mean[i] = float(np.mean(err_hi[:i+1]))
+    # 30-bar rolling mean keeps the normaliser stable across regimes.
+    _DN_NORM_W    = 30
+    roll_ehi_norm = np.array([
+        float(np.mean(err_hi[max(0, i - _DN_NORM_W + 1):i + 1]))
+        for i in range(N)
+    ])
     dn_score_arr = np.zeros(N)
     for i in range(N):
-        norm = max(abs(cum_ehi_mean[i]), 0.01)
+        norm = max(abs(roll_ehi_norm[i]), 0.01)
         dn_score_arr[i] = (
             (-ehma3[i] / norm)                               * 0.30 +
             (lb3[i]    / 3.0)                                * 0.30 +
@@ -2933,12 +2939,15 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
-    cum_ehi_mean = np.zeros(N)
-    for i in range(N):
-        cum_ehi_mean[i] = float(np.mean(err_hi[:i+1]))
+    # 30-bar rolling mean keeps the normaliser stable across regimes.
+    _DN_NORM_W    = 30
+    roll_ehi_norm = np.array([
+        float(np.mean(err_hi[max(0, i - _DN_NORM_W + 1):i + 1]))
+        for i in range(N)
+    ])
     dn_score_arr = np.zeros(N)
     for i in range(N):
-        norm = max(abs(cum_ehi_mean[i]), 0.01)
+        norm = max(abs(roll_ehi_norm[i]), 0.01)
         dn_score_arr[i] = (
             (-ehma3[i] / norm)                               * 0.30 +
             (lb3[i]    / 3.0)                                * 0.30 +
