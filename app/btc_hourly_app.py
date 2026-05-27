@@ -4410,7 +4410,14 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
               delta=(f"{df['fng'].diff().iloc[-1]:+.0f} d/d"
                      if fng_now is not None else None))
 
-    # ─────────────── TF2 + V-Gate Strategy Dashboard ─────────────────────
+    # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
+    sigs = compute_trend_signatures(target_date.strftime("%Y-%m-%d"))
+    if sigs is not None:
+        _intra_raw = _fetch_current_bar_intraday() if is_live else None
+        _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
+        render_trend_signatures(sigs, intraday=_intra_sig)
+
+    # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
     render_trading_strategy_dashboard(_bt_rolling, _bt_full, key_suffix=_chart_key)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
@@ -4521,17 +4528,6 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             f"(majority baseline ≈ 33% on three balanced classes)."
             + sel_note
         )
-
-    # ─────────────────── Trend Signature Alert Dashboard ──────────────────
-    sigs = compute_trend_signatures(target_date.strftime("%Y-%m-%d"))
-    if sigs is not None:
-        # Compute live intraday signal independently of the 6h-cached sigs.
-        # _fetch_current_bar_intraday uses _fetch_binance_hourly (10-min TTL),
-        # so intraday H/L refreshes every ~10 min — no waiting for bar close.
-        # Only attach intraday signal in live mode; historical view shows closed bars only.
-        _intra_raw = _fetch_current_bar_intraday() if is_live else None
-        _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
-        render_trend_signatures(sigs, intraday=_intra_sig)
 
     # ────── Historical picker (date strip, calendar, hour slider,
     # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate
