@@ -1,6 +1,6 @@
 """
-TF2 V-Entry Gate — Four-Variant Backtest Comparison
-====================================================
+TF2 V-Entry Gate — Backtest Comparison (all variants)
+======================================================
 Period: May 26, 2024 → May 26, 2026  |  OOS boundary: Sep 18, 2025
 
 Variants tested
@@ -9,7 +9,16 @@ Variants tested
   B  V-Gate 3-bar       U1 AND (above_MA30 OR clean_10d OR v_recent_3)
   C  V-Gate 7-bar       U1 AND (above_MA30 OR clean_10d OR v_recent_7)
   D  V-Standalone       (dn_score > 1.5 AND err_lo > 5%)  — no U1 required
-                        High-conviction only; regular U1 gate still active too
+  E  V-Gate + D2-sup 5  V-Gate 3-bar, suppress D2 exit for first 5 bars on V-entries
+  F  V-Gate + D2-sup 10 V-Gate 3-bar, suppress D2 exit for first 10 bars on V-entries
+  G  V-Gate + D2-sup 15 V-Gate 3-bar, suppress D2 exit for first 15 bars on V-entries
+
+D2-suppression rationale:
+  Post-capitulation recovery is inherently noisy — err_hi_ma3 can dip
+  below -1% during the first few days of a bounce, triggering a premature
+  D2/bear exit before the trend re-establishes.  Suppressing D2 exits on
+  V-initiated positions for N bars lets the recovery breathe while D3
+  (the structural exhaustion signal) still provides a hard stop.
 
 V-reversal signal (per bar):
   dn_score  = (-ehma3 / max(|cum_mean_errhi|, 0.01)) * 0.30
@@ -17,16 +26,8 @@ V-reversal signal (per bar):
             + (elma3 / max(|elma3|, 0.10)) * 0.20
             + lb * 0.20
   v_rev_bar = (dn_score > 0.8) AND (err_lo > 5.0%)
-
-Lookback windows:
-  v_recent_3[i] = any v_rev_bar in [i-2 .. i]  (original 3-bar)
-  v_recent_7[i] = any v_rev_bar in [i-6 .. i]  (wider 7-bar)
-
-Standalone gate (variant D):
-  v_standalone[i] = (dn_score[i] > 1.5) AND (err_lo[i] > 5.0%)
-  Enters on bar i+1 regardless of MA30 or clean_10d; does NOT require U1.
-  Rationale: highest-conviction capitulations (score > 1.5, e.g. Feb 2026
-  at 4.59) don't need model confirmation — price action alone signals turn.
+  v_recent_3[i] = any v_rev_bar in [i-2 .. i]
+  v_recent_7[i] = any v_rev_bar in [i-6 .. i]
 """
 
 import sys, os, warnings, joblib, requests
@@ -257,24 +258,30 @@ def build_signals(comp):
 
 # ── Unified backtest engine ────────────────────────────────────────────────────
 VARIANTS = {
-    "A": dict(label="TF2 Baseline",    use_v3=False, use_v7=False, use_vs=False),
-    "B": dict(label="V-Gate 3-bar",    use_v3=True,  use_v7=False, use_vs=False),
-    "C": dict(label="V-Gate 7-bar",    use_v3=False, use_v7=True,  use_vs=False),
-    "D": dict(label="V-Standalone",    use_v3=False, use_v7=False, use_vs=True),
+    "A": dict(label="TF2 Baseline",        use_v3=False, use_v7=False, use_vs=False, d2_sup=0),
+    "B": dict(label="V-Gate 3-bar",         use_v3=True,  use_v7=False, use_vs=False, d2_sup=0),
+    "C": dict(label="V-Gate 7-bar",         use_v3=False, use_v7=True,  use_vs=False, d2_sup=0),
+    "D": dict(label="V-Standalone",         use_v3=False, use_v7=False, use_vs=True,  d2_sup=0),
+    "E": dict(label="V-Gate+D2sup5",        use_v3=True,  use_v7=False, use_vs=False, d2_sup=5),
+    "F": dict(label="V-Gate+D2sup10",       use_v3=True,  use_v7=False, use_vs=False, d2_sup=10),
+    "G": dict(label="V-Gate+D2sup15",       use_v3=True,  use_v7=False, use_vs=False, d2_sup=15),
 }
 
 def run_backtest(dates, sigs, cfg: dict, cap: float = INITIAL_CAP):
-    WARMUP = 35
-    N    = sigs["N"]
-    ep   = sigs["ep"];   abv  = sigs["abv"];  c10  = sigs["c10"]
-    u1   = sigs["u1"];   d2   = sigs["d2"];   d3   = sigs["d3"];  bull = sigs["bull"]
-    v3   = sigs["v_recent_3"]
-    v7   = sigs["v_recent_7"]
-    v_hi = sigs["v_hi_bar"]
-    use_v3 = cfg["use_v3"]; use_v7 = cfg["use_v7"]; use_vs = cfg["use_vs"]
+    WARMUP  = 35
+    N       = sigs["N"]
+    ep      = sigs["ep"];  abv  = sigs["abv"];  c10  = sigs["c10"]
+    u1      = sigs["u1"];  d2   = sigs["d2"];   d3   = sigs["d3"];  bull = sigs["bull"]
+    v3      = sigs["v_recent_3"]
+    v7      = sigs["v_recent_7"]
+    v_hi    = sigs["v_hi_bar"]
+    use_v3  = cfg["use_v3"]; use_v7 = cfg["use_v7"]; use_vs = cfg["use_vs"]
+    d2_sup  = int(cfg.get("d2_sup", 0))   # bars to suppress D2 on V-entries (0 = no suppression)
 
     nav = cap; pos = "CASH"; qty = 0.0
     ep_r = en = ed_r = et = None
+    is_v_pos   = False   # whether current open position was V-gate initiated
+    bars_in_pos = 0      # bars elapsed since entry (for D2 suppression countdown)
     trades = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -284,11 +291,17 @@ def run_backtest(dates, sigs, cfg: dict, cap: float = INITIAL_CAP):
             nav_arr[i] = cap; continue
 
         if pos == "LONG":
+            bars_in_pos += 1
             cur = qty * price
             should_exit = False; xl = "?"
             if si >= 0:
-                should_exit = bool(d3[si] or (d2[si] and not bull[si]))
-                xl = "D3" if d3[si] else "D2(bear)"
+                # D2 is suppressed for the first d2_sup bars of a V-initiated position
+                d2_blocked = (d2_sup > 0 and is_v_pos and bars_in_pos <= d2_sup)
+                should_exit = bool(d3[si] or (d2[si] and not bull[si] and not d2_blocked))
+                xl = "D3" if d3[si] else ("D2(bear,sup)" if d2_blocked else "D2(bear)")
+                # override: if D2 was the only trigger and we blocked it, don't exit
+                if d2_blocked and not d3[si]:
+                    should_exit = False
             if should_exit:
                 nav = cur
                 trades.append(dict(
@@ -305,25 +318,23 @@ def run_backtest(dates, sigs, cfg: dict, cap: float = INITIAL_CAP):
                     v_entry       = et.startswith("V"),
                 ))
                 pos = "CASH"; qty = 0.0
+                is_v_pos = False; bars_in_pos = 0
             else:
                 nav = cur
 
         else:
-            # Determine whether to enter
             allow = False; trigger = ""
             if si >= 0:
                 gate_abv = bool(abv[si])
                 gate_c10 = bool(c10[si])
                 gate_v3  = bool(v3[si])  if use_v3 else False
                 gate_v7  = bool(v7[si])  if use_v7 else False
-                gate_vs  = bool(v_hi[si]) if use_vs else False   # standalone — no U1 needed
+                gate_vs  = bool(v_hi[si]) if use_vs else False
 
-                # Standalone path: high-conviction V, no U1 required
                 if use_vs and gate_vs:
                     allow   = True
                     trigger = f"V-standalone(score>{V_STANDALONE_THRESH:.1f})"
 
-                # Standard path: U1 + at least one gate passes
                 if not allow and u1[si]:
                     if gate_abv or gate_c10 or gate_v3 or gate_v7:
                         allow = True
@@ -339,6 +350,8 @@ def run_backtest(dates, sigs, cfg: dict, cap: float = INITIAL_CAP):
             if allow:
                 qty = nav / price; ep_r = price; ed_r = dates[i]; en = nav; pos = "LONG"
                 et = trigger
+                is_v_pos    = trigger.startswith("V")
+                bars_in_pos = 0
 
         nav_arr[i] = qty * price if pos == "LONG" else nav
 
@@ -354,7 +367,8 @@ def run_backtest(dates, sigs, cfg: dict, cap: float = INITIAL_CAP):
                           entry_nav=en, entry_trigger=et,
                           cur_price=ep[-1], cur_nav=qty*ep[-1],
                           pnl_pct=(ep[-1]/ep_r-1)*100,
-                          v_entry=et.startswith("V"))
+                          v_entry=et.startswith("V"),
+                          d2_suppressed_until=bars_in_pos if is_v_pos and bars_in_pos <= d2_sup else 0)
 
     return dict(trades=trades, nav=nav_s, bh=bh_s, open=open_trade)
 
@@ -584,19 +598,66 @@ if __name__ == "__main__":
     print(f"  v_rev_bar (score>0.8 & lo_err>5%):    {sigs['v_rev_bar'].sum():3d} bars")
     print(f"  v_hi_bar  (score>{V_STANDALONE_THRESH} & lo_err>5%):  {sigs['v_hi_bar'].sum():3d} bars")
 
-    # Signal quality table
+    # Signal quality table (shown once)
     print_v_signal_analysis(dates, sigs)
 
-    # Run all four variants
+    # Run all variants
     results = {}
     for tag, cfg in VARIANTS.items():
         print(f"Running [{tag}] {cfg['label']} …")
         results[tag] = run_backtest(dates, sigs, cfg)
 
-    # Trade log
+    # ── Part 1: Full trade log (all variants) ─────────────────────────────────
     print_trade_log(results, dates, sigs)
 
-    # Summary table
-    metrics = [summarise(results[tag], f"[{tag}] {cfg['label']}")
-               for tag, cfg in VARIANTS.items()]
-    print_summary_table(metrics)
+    # ── Part 2: Full summary (all seven variants) ──────────────────────────────
+    all_metrics = [summarise(results[tag], f"[{tag}] {cfg['label']}")
+                   for tag, cfg in VARIANTS.items()]
+    print_summary_table(all_metrics)
+
+    # ── Part 3: Focused D2-suppression summary (A, B, E, F, G only) ───────────
+    focus_tags = ["A", "B", "E", "F", "G"]
+    focus_metrics = [m for m in all_metrics if any(m["label"].startswith(f"[{t}]") for t in focus_tags)]
+
+    W = 18
+    sep = "─" * (28 + W * len(focus_metrics) + 2)
+    print("\n" + "═" * (28 + W * len(focus_metrics) + 2))
+    print(f"{'D2-SUPPRESSION FOCUSED VIEW  (A, B, E, F, G)':^{28 + W*len(focus_metrics)}}")
+    print(sep)
+    print(f"  {'Metric':<26}" + "".join(f"{m['label']:>{W}}" for m in focus_metrics))
+    print(sep)
+
+    def frow(lbl, key, fmt):
+        vals = [fmt.format(m[key]) for m in focus_metrics]
+        print(f"  {lbl:<26}" + "".join(f"{v:>{W}}" for v in vals))
+
+    frow("Final NAV",        "final_nav",   "${:,.0f}")
+    frow("Total Return",     "ret_pct",     "{:+.1f}%")
+    frow("After-Tax NAV",    "after_tax",   "${:,.0f}")
+    frow("Alpha vs B&H",     "alpha",       "${:+,.0f}")
+    frow("Sharpe Ratio",     "sharpe",      "{:.3f}")
+    frow("Max Drawdown",     "max_dd",      "{:.1f}%")
+    print(sep)
+    frow("# Trades",         "n_trades",    "{:d}")
+    frow("  V-entries",      "n_v_entries", "{:d}")
+    frow("Win Rate",         "win_rate",    "{:.1f}%")
+    frow("Avg Trade PnL",    "avg_pnl",     "{:+.1f}%")
+    frow("Time in Market",   "time_in",     "{:.1f}%")
+    print(sep)
+    frow("OOS Trades",       "oos_trades",  "{:d}")
+    frow("OOS Win Rate",     "oos_wr",      "{:.1f}%")
+    frow("OOS Avg PnL",      "oos_avg_pnl", "{:+.1f}%")
+    print("═" * (28 + W * len(focus_metrics) + 2))
+
+    base_m = focus_metrics[0]
+    print(f"\n  Δ vs [A] Baseline:")
+    for m in focus_metrics[1:]:
+        dn = m["final_nav"]  - base_m["final_nav"]
+        da = m["after_tax"]  - base_m["after_tax"]
+        ds = m["sharpe"]     - base_m["sharpe"]
+        dd = m["max_dd"]     - base_m["max_dd"]
+        flag = "✓ best" if dn == max(x["final_nav"]-base_m["final_nav"] for x in focus_metrics[1:]) else ""
+        print(f"    {m['label']:22}  NAV {dn:>+9,.0f}  "
+              f"After-tax {da:>+9,.0f}  "
+              f"Sharpe {ds:>+6.3f}  "
+              f"MaxDD {dd:>+5.1f}pp  {flag}")
