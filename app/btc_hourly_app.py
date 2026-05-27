@@ -2631,7 +2631,10 @@ def run_full_period_backtest(end_date_iso: str,
 
     end_dt   = pd.Timestamp(end_date_iso)
     start_dt = pd.Timestamp(backtest_start_iso)
-    preds    = preds.loc[(preds.index >= start_dt) & (preds.index <= end_dt)].copy()
+    # Load 60 extra calendar days before start so MA30/clean10d/dn_score are
+    # fully warm by the time the backtest window actually begins.
+    pre_dt   = start_dt - pd.Timedelta(days=60)
+    preds    = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
         return None
 
@@ -2646,6 +2649,11 @@ def run_full_period_backtest(end_date_iso: str,
         return None
 
     dates   = pd.DatetimeIndex(comp["target_date"])
+    # _bt0: first bar at/after the requested start, and always >= WARMUP so
+    # all rolling indicators (MA30, clean_10d, dn_score) are fully populated.
+    _bt0 = max(WARMUP, int(dates.searchsorted(start_dt)))
+    if N - _bt0 < 3:
+        return None
     c_asof  = comp["close_asof"].values.astype(float)
     exec_px = comp["actual_close"].values.astype(float)
     pred_hi = comp["pred_high"].values.astype(float)
@@ -2726,7 +2734,7 @@ def run_full_period_backtest(end_date_iso: str,
 
     for i in range(N):
         si    = i - 1; price = exec_px[i]
-        if i < WARMUP:
+        if i < _bt0:
             nav_arr[i] = initial_capital; continue
         if pos == "LONG":
             cur = btc_qty * price
@@ -2764,9 +2772,9 @@ def run_full_period_backtest(end_date_iso: str,
     if pos == "LONG":
         nav_arr[N-1] = btc_qty * exec_px[N-1]
 
-    nav_series = pd.Series(nav_arr[WARMUP:], index=dates[WARMUP:]).ffill()
+    nav_series = pd.Series(nav_arr[_bt0:], index=dates[_bt0:]).ffill()
     bh_series  = pd.Series(
-        initial_capital * exec_px[WARMUP:] / exec_px[WARMUP], index=dates[WARMUP:])
+        initial_capital * exec_px[_bt0:] / exec_px[_bt0], index=dates[_bt0:])
 
     # ── Statistics (identical to run_tf1_backtest) ───────────────────
     final_nav = float(nav_series.iloc[-1]); final_bh = float(bh_series.iloc[-1])
@@ -2783,7 +2791,7 @@ def run_full_period_backtest(end_date_iso: str,
     rm_bh     = bh_series.cummax()
     bh_max_dd = float(((bh_series - rm_bh)/rm_bh*100).min())
     days_in   = sum(t["duration_days"] for t in trades)
-    tot_days  = max(1, (dates[N-1] - dates[WARMUP]).days)
+    tot_days  = max(1, (dates[N-1] - dates[_bt0]).days)
     rf_daily  = (1.045)**(1/252) - 1
     dr_s      = nav_series.pct_change().fillna(0)
     dr_b      = bh_series.pct_change().fillna(0)
@@ -2800,7 +2808,7 @@ def run_full_period_backtest(end_date_iso: str,
     after_tax_nav  = final_nav - total_tax_paid
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
-    bull_regime_series = pd.Series(bull_regime[WARMUP:].astype(bool), index=dates[WARMUP:])
+    bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
     return dict(
         strategy   = "TF2",
@@ -2825,7 +2833,7 @@ def run_full_period_backtest(end_date_iso: str,
             time_in_mkt     = 100*days_in/tot_days,
             after_tax_nav   = after_tax_nav,  after_tax_ret = after_tax_ret,
             total_tax_paid  = total_tax_paid,
-            start_date      = dates[WARMUP],
+            start_date      = dates[_bt0],
             end_date        = dates[N-1],
         ),
     )
