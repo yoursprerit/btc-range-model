@@ -2758,10 +2758,17 @@ def run_full_period_backtest(end_date_iso: str,
     exc_s     = dr_s - rf_daily; exc_b = dr_b - rf_daily
     sharpe    = float(exc_s.mean()/exc_s.std()*np.sqrt(252)) if exc_s.std()>0 else 0.0
     bh_sharpe = float(exc_b.mean()/exc_b.std()*np.sqrt(252)) if exc_b.std()>0 else 0.0
-    TAX_RATE       = 0.35
-    total_tax_paid = sum(TAX_RATE*t["pnl_abs"] for t in trades if t["pnl_abs"]>0)
+    # Tax: net gains/losses per calendar year; 35% rate on annual net gains only
+    TAX_RATE = 0.35
+    _annual_net: dict = {}
+    for t in trades:
+        yr = pd.Timestamp(t["exit_date"]).year
+        _annual_net[yr] = _annual_net.get(yr, 0.0) + t["pnl_abs"]
+    total_tax_paid = sum(TAX_RATE * max(0.0, net) for net in _annual_net.values())
     after_tax_nav  = final_nav - total_tax_paid
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
+
+    bull_regime_series = pd.Series(bull_regime[WARMUP:].astype(bool), index=dates[WARMUP:])
 
     return dict(
         strategy   = "TF2",
@@ -2770,6 +2777,7 @@ def run_full_period_backtest(end_date_iso: str,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav) if pos == "LONG" else None),
+        bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2",
             initial_capital = initial_capital,
@@ -2998,12 +3006,18 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     rm_bh      = bh_series.cummax()
     bh_max_dd  = float(((bh_series - rm_bh) / rm_bh * 100).min())
 
-    # After-tax NAV — TF2 pays 35% short-term capital gains on each winning trade;
+    # After-tax NAV — net gains/losses per calendar year; 35% rate on annual net gains only.
     # B&H pays 0% (gains unrealised, no tax event triggered)
-    TAX_RATE        = 0.35
-    total_tax_paid  = sum(TAX_RATE * t["pnl_abs"] for t in trades if t["pnl_abs"] > 0)
+    TAX_RATE = 0.35
+    _annual_net: dict = {}
+    for t in trades:
+        yr = pd.Timestamp(t["exit_date"]).year
+        _annual_net[yr] = _annual_net.get(yr, 0.0) + t["pnl_abs"]
+    total_tax_paid  = sum(TAX_RATE * max(0.0, net) for net in _annual_net.values())
     after_tax_nav   = final_nav - total_tax_paid
     after_tax_ret   = (after_tax_nav / initial_capital - 1) * 100
+
+    bull_regime_series = pd.Series(bull_regime[WARMUP:].astype(bool), index=dates[WARMUP:])
 
     return dict(
         strategy   = strategy,
@@ -3012,6 +3026,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav) if pos == "LONG" else None),
+        bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = strategy,
             initial_capital = initial_capital,
@@ -3262,6 +3277,31 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
         has_p = bt["open_pos"]
 
         fig = go.Figure()
+
+        # ── Regime background shading (bull=green, bear/neutral=red) ──────────
+        regime = bt.get("bull_regime_series")
+        if regime is not None and len(regime) > 0:
+            arr     = regime.values.astype(bool)
+            idx     = regime.index
+            changes = np.where(np.diff(arr.astype(int)) != 0)[0] + 1
+            starts  = np.concatenate([[0], changes])
+            ends    = np.concatenate([changes, [len(arr)]])
+            bull_leg = bear_leg = False
+            for s_i, e_i in zip(starts, ends):
+                is_bull  = bool(arr[s_i])
+                color    = "rgba(34,197,94,0.10)" if is_bull else "rgba(239,68,68,0.07)"
+                lname    = "🐂 Bull Regime" if is_bull else "🐻 Bear/Neutral"
+                show_leg = (is_bull and not bull_leg) or (not is_bull and not bear_leg)
+                e_idx    = min(e_i, len(idx) - 1)
+                fig.add_vrect(
+                    x0=idx[s_i], x1=idx[e_idx],
+                    fillcolor=color, line_width=0,
+                    name=lname, showlegend=show_leg,
+                    legendgrouptitle_text=None,
+                )
+                if is_bull: bull_leg = True
+                else:       bear_leg = True
+
         fig.add_trace(go.Scatter(
             x=bh_s.index, y=bh_s.values, name="Buy & Hold",
             line=dict(color="#94a3b8", width=1.5, dash="dot"),
