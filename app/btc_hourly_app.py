@@ -3661,7 +3661,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 "Sell @":      "—",
                 "P&L":         f"{unr_pct:+.1f}% (unrlzd)",
                 "Result":      "🟡 OPEN",
-                "Days":        (pd.Timestamp.utcnow() - pd.Timestamp(oe["date"])).days,
+                "Days":        (pd.Timestamp.now() - pd.Timestamp(oe["date"])).days,
                 "Exit Signal": "—",
                 "NAV After":   "—",
             })
