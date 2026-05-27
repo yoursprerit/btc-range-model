@@ -3399,7 +3399,7 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})"
                 )
                 if fig_r:
-                    st.plotly_chart(fig_r, use_container_width=True)
+                    st.plotly_chart(fig_r, use_container_width=True, key="chart_rolling")
             tab_idx += 1
         if bt_full:
             with tabs[tab_idx]:
@@ -3411,7 +3411,7 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full) -> None:
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})"
                 )
                 if fig_f:
-                    st.plotly_chart(fig_f, use_container_width=True)
+                    st.plotly_chart(fig_f, use_container_width=True, key="chart_full")
 
     # ── Trade log ─────────────────────────────────────────────────────
     def _trade_log_rows(bt):
