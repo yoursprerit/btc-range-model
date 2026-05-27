@@ -4419,9 +4419,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     # Pre-compute cached results (no latency hit) for display at top of page.
     _bt_end      = target_date.strftime("%Y-%m-%d")
-    _bt_bear     = run_tf1_backtest(_bt_end, start_date_iso="2025-06-01")   # Jun 2025 → today
-    _bt_bull     = run_tf1_backtest("2025-05-31", start_date_iso="2024-06-01")  # Jun 2024 → May 2025
-    _bt_full_oos = run_full_period_backtest(_bt_end)   # full period — OOS extraction only
+    # Both periods use run_full_period_backtest so predictions come from the same
+    # extended data pipeline (_build_ct_predictions_extended, Feb 2024 warmup).
+    _bt_bear     = run_full_period_backtest(_bt_end,      backtest_start_iso="2025-06-01")
+    _bt_bull     = run_full_period_backtest("2025-05-31", backtest_start_iso="2024-06-01")
+    _bt_full_oos = run_full_period_backtest(_bt_end)   # default May 2024 start — OOS extraction
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
 
