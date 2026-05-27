@@ -6222,7 +6222,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 # ════════════════════════════════════════════════════════════════════════
 def render_retrain_dashboard():
     """Re-training status for the three models that power TF2 trading signals."""
-    today_utc = pd.Timestamp(datetime.now(timezone.utc)).normalize()
+    today_utc = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None).normalize()
     _end_iso  = today_utc.strftime("%Y-%m-%d")
 
     # ── Load artefact metadata (cache_resource — instant) ────────────────────
