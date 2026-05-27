@@ -2688,7 +2688,29 @@ def run_full_period_backtest(end_date_iso: str,
         lo_i = max(0, i-10)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d)
+    # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
+    # dn_score replicates the live signal formula; v_rev_bar fires when a
+    # single bar shows capitulation (dn_score > 0.8 AND err_lo > 5%).
+    # v_recent[i] = True if v_rev_bar fired within the last 3 bars — bridges
+    # the 1-2 bar lag before U1 co-fires after the bounce starts.
+    cum_ehi_mean = np.zeros(N)
+    for i in range(N):
+        cum_ehi_mean[i] = float(np.mean(err_hi[:i+1]))
+    dn_score_arr = np.zeros(N)
+    for i in range(N):
+        norm = max(abs(cum_ehi_mean[i]), 0.01)
+        dn_score_arr[i] = (
+            (-ehma3[i] / norm)                               * 0.30 +
+            (lb3[i]    / 3.0)                                * 0.30 +
+            (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
+            float(lo_brk[i])                                 * 0.20
+        )
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_recent  = np.zeros(N, dtype=bool)
+    for i in range(N):
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+
+    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -2721,7 +2743,9 @@ def run_full_period_backtest(end_date_iso: str,
             if si >= 0 and tf1_entry[si]:
                 btc_qty = nav/price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"
-                if above_ma30[si] and clean_10d[si]:
+                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                    e_trigger = "U1 + V-reversal"
+                elif above_ma30[si] and clean_10d[si]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[si]:
                     e_trigger = "U1 + ↑MA30"
@@ -2906,7 +2930,25 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         lo_i = max(0, i-10)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d)
+    # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
+    cum_ehi_mean = np.zeros(N)
+    for i in range(N):
+        cum_ehi_mean[i] = float(np.mean(err_hi[:i+1]))
+    dn_score_arr = np.zeros(N)
+    for i in range(N):
+        norm = max(abs(cum_ehi_mean[i]), 0.01)
+        dn_score_arr[i] = (
+            (-ehma3[i] / norm)                               * 0.30 +
+            (lb3[i]    / 3.0)                                * 0.30 +
+            (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
+            float(lo_brk[i])                                 * 0.20
+        )
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_recent  = np.zeros(N, dtype=bool)
+    for i in range(N):
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+
+    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
     tf1_exit  = d2 | d3   # TF1 always exits D2|D3
 
     # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
@@ -2959,7 +3001,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
                 btc_qty  = nav / price
                 e_price  = price; e_date = dates[i]
                 e_nav    = nav;   pos    = "LONG"
-                if above_ma30[si] and clean_10d[si]:
+                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                    e_trigger = "U1 + V-reversal"
+                elif above_ma30[si] and clean_10d[si]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[si]:
                     e_trigger = "U1 + ↑MA30"
