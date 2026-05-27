@@ -4342,12 +4342,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         render_replay_in_sample_warning(target_date)
     daily = compute_daily_forecast(target_date.strftime("%Y-%m-%d"))
 
-    # Pre-compute backtest results (cached, no latency hit) so they can be
-    # rendered at the top of the page right after the KPI strip.
+    # Pre-compute cached results (no latency hit) for display at top of page.
     _bt_end     = target_date.strftime("%Y-%m-%d")
     _bt_rolling = run_tf1_backtest(_bt_end)
     _bt_full    = run_full_period_backtest(_bt_end)
     _chart_key  = "live" if is_live else "hist"
+    sigs        = compute_trend_signatures(_bt_end)
 
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
@@ -4371,7 +4371,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     fng_now = int(df.loc[latest_t, "fng"]) if pd.notna(df.loc[latest_t, "fng"]) else None
 
     # ─────────────────────────── headline KPIs ────────────────────────────
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     if live_spot is not None:
         c1.metric("Live BTC spot (Binance)",
                   f"${live_spot:,.0f}",
@@ -4390,9 +4390,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
               f"{fng_now if fng_now is not None else 'n/a'}",
               delta=(f"{df['fng'].diff().iloc[-1]:+.0f} d/d"
                      if fng_now is not None else None))
+    _regime_bull = sigs.get("bull_regime", False) if sigs else None
+    if _regime_bull is not None:
+        _regime_val   = "🐂 BULL"          if _regime_bull else "🐻 BEAR / NEUTRAL"
+        _regime_delta = "↑MA30 + rising"   if _regime_bull else "below MA30 or flat"
+        c5.metric("Market Regime", _regime_val, delta=_regime_delta,
+                  delta_color="normal" if _regime_bull else "inverse")
+    else:
+        c5.metric("Market Regime", "—")
 
     # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
-    sigs = compute_trend_signatures(target_date.strftime("%Y-%m-%d"))
     if sigs is not None:
         _intra_raw = _fetch_current_bar_intraday() if is_live else None
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
