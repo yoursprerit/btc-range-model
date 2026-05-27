@@ -4419,11 +4419,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     # Pre-compute cached results (no latency hit) for display at top of page.
     _bt_end      = target_date.strftime("%Y-%m-%d")
-    _bear_start  = (target_date - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
-    _bull_start  = (target_date - pd.Timedelta(days=730)).strftime("%Y-%m-%d")
-    _bt_bear     = run_tf1_backtest(_bt_end, start_date_iso=_bear_start)
-    _bt_bull     = run_tf1_backtest(_bear_start, start_date_iso=_bull_start)
-    _bt_full_oos = run_full_period_backtest(_bt_end)   # kept solely for OOS extraction
+    _bt_bear     = run_tf1_backtest(_bt_end)           # ~400-day rolling window
+    _bt_full_oos = run_full_period_backtest(_bt_end)   # full period — bull column + OOS source
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
 
@@ -4484,7 +4481,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         render_trend_signatures(sigs, intraday=_intra_sig)
 
     # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
-    render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos, key_suffix=_chart_key)
+    render_trading_strategy_dashboard(_bt_bear, _bt_full_oos, bt_full_oos=_bt_full_oos, key_suffix=_chart_key)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
