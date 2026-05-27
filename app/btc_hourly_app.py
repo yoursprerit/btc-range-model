@@ -2833,7 +2833,7 @@ def run_full_period_backtest(end_date_iso: str,
             time_in_mkt     = 100*days_in/tot_days,
             after_tax_nav   = after_tax_nav,  after_tax_ret = after_tax_ret,
             total_tax_paid  = total_tax_paid,
-            start_date      = dates[_bt0],
+            start_date      = start_dt,      # requested window start (for label display)
             end_date        = dates[N-1],
         ),
     )
