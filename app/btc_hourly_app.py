@@ -6218,9 +6218,541 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical
+# Retrain Status Dashboard  (TF2 strategy models only)
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist = st.tabs(["🔴 Live (rolling now+1h)", "🕒 Historical replay"])
+def render_retrain_dashboard():
+    """Re-training status for the three models that power TF2 trading signals."""
+    today_utc = pd.Timestamp(datetime.now(timezone.utc)).normalize()
+    _end_iso  = today_utc.strftime("%Y-%m-%d")
+
+    # ── Load artefact metadata (cache_resource — instant) ────────────────────
+    _hl_art   = _load_daily_hl()
+    _hl_meta  = _hl_art.get("calibration_meta", {}) if _hl_art else {}
+    _hl_mtest = _hl_meta.get("metrics", {})
+    _cone_art  = _load_cone_7d()
+    _cone_meta = _cone_art.get("calibration_meta", {}) if _cone_art else {}
+    _dt_art   = _load_day_type()
+    _dt_meta  = _dt_art.get("calibration_meta", {}) if _dt_art else {}
+    cutoffs   = _training_cutoffs()
+
+    # ── 30-day & all-time performance (cache_data — shared with Live tab) ─────
+    hl30    = compute_30d_daily_hl_metrics(_end_iso)
+    cone30  = compute_30d_cone_metrics(_end_iso)
+    cone_at = compute_alltime_cone_metrics(_end_iso)
+    dt30    = compute_30d_daytype_metrics(_end_iso)
+    dt_at   = compute_alltime_daytype_metrics(_end_iso)
+    sigs    = compute_trend_signatures(_end_iso) or {}
+
+    # ── Age thresholds (days since train_end) ─────────────────────────────────
+    WARN_D    = {"daily H/L": 42, "7-day cone": 84, "3-class day type": 42}
+    OVERDUE_D = {"daily H/L": 56, "7-day cone": 90, "3-class day type": 56}
+
+    # ── Drift badge helper ────────────────────────────────────────────────────
+    def _drift(v, ref, lo_better=True, tol=0.20):
+        if ref is None or ref == 0:
+            return "⚪"
+        rel = (v - ref) / abs(ref) * (1 if lo_better else -1)
+        return "🟢" if rel <= tol else ("🟡" if rel <= tol * 2 else "🔴")
+
+    # ── Per-model age & performance status ───────────────────────────────────
+    RANK = {"🔴": 3, "🟡": 2, "🟢": 1, "⚪": 0}
+
+    def _worst(*icons):
+        return max(icons, key=lambda x: RANK.get(x[:2], 0))
+
+    def _age_status(key):
+        te   = cutoffs.get(key)
+        warn = WARN_D.get(key, 56)
+        over = OVERDUE_D.get(key, 56)
+        if te is None:
+            return None, "⚪", "unknown age"
+        age = (today_utc - te).days
+        if age >= over:
+            return age, "🔴", f"{age}d  (limit: {over}d)"
+        if age >= warn:
+            return age, "🟡", f"{age}d  (warn: {warn}d)"
+        return age, "🟢", f"{age}d  (limit: {over}d)"
+
+    def _perf_hl():
+        if not hl30:
+            return "⚪", "no data (< 5 bars)"
+        m = hl30["mape_h"]
+        if m > 2.5: return "🔴", f"MAPE-H = {m:.2f}%  (retrain > 2.5%)"
+        if m > 2.0: return "🟡", f"MAPE-H = {m:.2f}%  (warn > 2.0%)"
+        return "🟢", f"MAPE-H = {m:.2f}%"
+
+    def _perf_cone():
+        if not cone30:
+            return "⚪", "no data (< 5 obs.)"
+        cov = cone30["within_pct"]
+        if cov < 78: return "🔴", f"coverage = {cov:.1f}%  (retrain < 78%)"
+        if cov < 82: return "🟡", f"coverage = {cov:.1f}%  (warn < 82%)"
+        return "🟢", f"coverage = {cov:.1f}%"
+
+    def _perf_dt():
+        if not dt30:
+            return "⚪", "no data (< 5 bars)"
+        acc = dt30["accuracy"]
+        if acc < 50: return "🔴", f"accuracy = {acc:.1f}%  (retrain < 50%)"
+        if acc < 55: return "🟡", f"accuracy = {acc:.1f}%  (warn < 55%)"
+        return "🟢", f"accuracy = {acc:.1f}%"
+
+    hl_age_d,   hl_age_ic,   hl_age_lbl  = _age_status("daily H/L")
+    con_age_d,  con_age_ic,  con_age_lbl = _age_status("7-day cone")
+    dt_age_d,   dt_age_ic,   dt_age_lbl  = _age_status("3-class day type")
+    hl_perf_ic,  hl_perf_lbl  = _perf_hl()
+    con_perf_ic, con_perf_lbl = _perf_cone()
+    dt_perf_ic,  dt_perf_lbl  = _perf_dt()
+
+    hl_comp  = _worst(hl_age_ic,  hl_perf_ic)
+    con_comp = _worst(con_age_ic, con_perf_ic)
+    dt_comp  = _worst(dt_age_ic,  dt_perf_ic)
+    overall  = _worst(hl_comp, con_comp, dt_comp)
+
+    # ── 1. Top-level banner ───────────────────────────────────────────────────
+    if overall[:2] == "🔴":
+        st.error(
+            "🔴  **RETRAIN REQUIRED** — One or more TF2 strategy models are past their "
+            "maintenance threshold.  U1 / D2 / D3 signal accuracy may be degraded.  "
+            "See action plan below."
+        )
+    elif overall[:2] == "🟡":
+        st.warning(
+            "🟡  **PLAN RETRAIN** — Models are approaching their maintenance window.  "
+            "Schedule a retrain within the next 1–2 weeks."
+        )
+    else:
+        st.success(
+            "🟢  **Models are current** — All TF2 strategy models are within their maintenance "
+            "window and performance metrics are on target."
+        )
+
+    st.markdown("---")
+
+    # ── 2. Model cards (3 columns) ────────────────────────────────────────────
+    st.markdown("#### Model Freshness & Performance")
+    st.caption(
+        "Only the three models used by the TF2 strategy are shown.  "
+        "Hourly close model and 14-day cone are **not** included — they are not used for "
+        "trading signals.  Age limit = mandatory retrain by.  Warn = start planning."
+    )
+
+    BG  = {"🔴": "#fef2f2", "🟡": "#fffbeb", "🟢": "#f0fdf4", "⚪": "#f8fafc"}
+    BRD = {"🔴": "#fca5a5", "🟡": "#fcd34d", "🟢": "#86efac", "⚪": "#e2e8f0"}
+    TXT = {"🔴": "#991b1b", "🟡": "#92400e", "🟢": "#14532d", "⚪": "#374151"}
+    ACTION = {
+        "🔴": "RETRAIN NOW",
+        "🟡": "DUE SOON — plan retrain",
+        "🟢": "NO ACTION NEEDED",
+        "⚪": "STATUS UNKNOWN",
+    }
+
+    def _card(icon, title, role, comp, age_lbl, train_end_ts, perf_ic, perf_lbl, extra=None):
+        bg  = BG.get(comp[:2],  "#f8fafc")
+        brd = BRD.get(comp[:2], "#e2e8f0")
+        txt = TXT.get(comp[:2], "#374151")
+        lbl = ACTION.get(comp[:2], comp)
+        te  = str(pd.Timestamp(train_end_ts).date()) if train_end_ts else "unknown"
+        rows = ""
+        if extra:
+            for line in extra:
+                rows += f'<p style="margin:2px 0;font-size:11px;color:#6b7280;">{line}</p>'
+        return (
+            f'<div style="border:2px solid {brd};border-radius:10px;padding:16px;'
+            f'background:{bg};min-height:230px;">'
+            f'<div style="font-size:15px;font-weight:700;margin-bottom:2px;">{icon} {title}</div>'
+            f'<div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;'
+            f'letter-spacing:.05em;margin-bottom:10px;">{role}</div>'
+            f'<div style="font-size:19px;font-weight:800;color:{txt};margin-bottom:10px;">'
+            f'{comp[:2]} {lbl}</div>'
+            f'<p style="margin:3px 0;font-size:13px;"><strong>Last trained:</strong> {te}</p>'
+            f'<p style="margin:3px 0;font-size:13px;"><strong>Age:</strong> {age_lbl}</p>'
+            f'{rows}'
+            f'<hr style="border-color:{brd};margin:10px 0 8px;">'
+            f'<p style="margin:0;font-size:12px;color:#475569;">'
+            f'<strong>Perf (30d):</strong> {perf_ic} {perf_lbl}</p>'
+            f'</div>'
+        )
+
+    hl_te  = cutoffs.get("daily H/L")
+    con_te = cutoffs.get("7-day cone")
+    dt_te  = cutoffs.get("3-class day type")
+
+    cc1, cc2, cc3 = st.columns(3)
+    with cc1:
+        st.markdown(
+            _card("📅", "Daily H/L Model",
+                  "PRIMARY · drives U1 / D2 / D3 signals",
+                  hl_comp, hl_age_lbl, hl_te, hl_perf_ic, hl_perf_lbl,
+                  extra=[f"Warn at {WARN_D['daily H/L']}d  ·  limit {OVERDUE_D['daily H/L']}d"]),
+            unsafe_allow_html=True,
+        )
+    with cc2:
+        st.markdown(
+            _card("📐", "7-day Close Cone",
+                  "SUPPORTING · regime classification",
+                  con_comp, con_age_lbl, con_te, con_perf_ic, con_perf_lbl,
+                  extra=[f"Warn at {WARN_D['7-day cone']}d  ·  limit {OVERDUE_D['7-day cone']}d"]),
+            unsafe_allow_html=True,
+        )
+    with cc3:
+        st.markdown(
+            _card("🏷️", "3-class Day Type",
+                  "CONTEXT · BigUpper / BigLower / Quiet",
+                  dt_comp, dt_age_lbl, dt_te, dt_perf_ic, dt_perf_lbl,
+                  extra=[
+                      f"Warn at {WARN_D['3-class day type']}d  ·  limit {OVERDUE_D['3-class day type']}d",
+                      "⚠️ Must retrain <em>after</em> Daily H/L",
+                  ]),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── 3. Performance metrics ────────────────────────────────────────────────
+    st.markdown("#### 30-day Performance vs Test Baseline")
+    st.caption(
+        "Drift badges: 🟢 ≤20% degradation vs held-out test · 🟡 20–40% · 🔴 >40%.  "
+        "Hard retrain triggers: **MAPE-H >2.5%** · **coverage <78%** · **accuracy <50%**."
+    )
+
+    # 3a. Daily H/L — primary signal driver
+    with st.expander("📅 Daily H/L — prediction accuracy (drives U1 / D2 / D3 error terms)",
+                     expanded=True):
+        if hl30 and _hl_mtest:
+            mh30, ml30 = hl30["mape_h"], hl30["mape_l"]
+            hh30, hl_30 = hl30["hit_h"], hl30["hit_l"]
+            dh30 = hl30["dir_h"]
+            mh_t = _hl_mtest.get("MAPE_H", 1.32)
+            ml_t = _hl_mtest.get("MAPE_L", 1.30)
+            hh_t = _hl_mtest.get("hit2_H", 79.7)
+            hl_t = _hl_mtest.get("hit2_L", 87.9)
+            dh_t = _hl_mtest.get("direction_hit_rate", 50.0)
+            hl_c = st.columns(5)
+            hl_c[0].metric(
+                f"{_drift(mh30, mh_t)} MAPE-H (30d)",
+                f"{mh30:.2f}%",
+                delta=f"{mh30 - mh_t:+.2f} pp  (test: {mh_t:.2f}%)",
+                delta_color="inverse",
+                help=(
+                    "**Primary signal driver.**  "
+                    "`err_hi = (actual_high − pred_high) / close × 100`.  "
+                    "**U1** fires when `err_hi_ma3 > +0.5%`.  "
+                    "**D2** fires when `err_hi_ma3 < −1.0%`.  "
+                    "Higher MAPE → more noise in these error terms → false signals."
+                ),
+            )
+            hl_c[1].metric(
+                f"{_drift(ml30, ml_t)} MAPE-L (30d)",
+                f"{ml30:.2f}%",
+                delta=f"{ml30 - ml_t:+.2f} pp  (test: {ml_t:.2f}%)",
+                delta_color="inverse",
+                help=(
+                    "`err_lo = (pred_low − actual_low) / close × 100`.  "
+                    "**D1** fires when `err_lo_ma3 > +0.5%` & `lo_breaks_3d ≥ 2`."
+                ),
+            )
+            hl_c[2].metric(
+                f"{_drift(hh30, hh_t, False)} Hit ±1.5% HIGH (30d)",
+                f"{hh30:.1f}%",
+                delta=f"{hh30 - hh_t:+.1f} pp  (test: {hh_t:.1f}%)",
+                delta_color="normal",
+            )
+            hl_c[3].metric(
+                f"{_drift(hl_30, hl_t, False)} Hit ±1.5% LOW (30d)",
+                f"{hl_30:.1f}%",
+                delta=f"{hl_30 - hl_t:+.1f} pp  (test: {hl_t:.1f}%)",
+                delta_color="normal",
+            )
+            hl_c[4].metric(
+                f"{_drift(dh30, dh_t, False)} Direction acc (30d)",
+                f"{dh30:.1f}%",
+                delta=f"{dh30 - dh_t:+.1f} pp  (test: {dh_t:.1f}%)",
+                delta_color="normal",
+                help="Day-over-day: did pred_high trend the same direction as actual_high?",
+            )
+        else:
+            st.info("Insufficient data — need ≥5 completed daily bars in the last 30 days.")
+
+    # 3b. 7-day cone — regime coverage
+    with st.expander("📐 7-day Cone — regime band coverage", expanded=True):
+        if cone30:
+            cov30  = cone30["within_pct"]
+            bp30   = cone30["band_pct"]
+            da30   = cone30["dir_acc"]
+            cov_r  = cone_at["within_pct"] if cone_at else _cone_meta.get("held_out_band_coverage_pct", 88.0)
+            da_r   = cone_at["dir_acc"]    if cone_at else None
+            _cic   = "🔴" if cov30 < 78 else ("🟡" if cov30 < 82 else "🟢")
+            _daic  = ("⚪" if not da_r
+                      else "🔴" if da30 < da_r * 0.80
+                      else "🟡" if da30 < da_r * 0.90 else "🟢")
+            cone_c = st.columns(4)
+            cone_c[0].metric(
+                f"{_cic} Coverage ±{bp30*100:.1f}% band (30d)",
+                f"{cov30:.1f}%",
+                delta=f"{cov30 - cov_r:+.1f} pp  (ref: {cov_r:.1f}%)",
+                delta_color="normal",
+                help=(
+                    "Regime quality signal.  Fraction of 7-day forecasts where actual close "
+                    "fell within the ±band.  Regime tercile thresholds become unreliable when "
+                    "this drops below 80% — trigger to retrain the cone."
+                ),
+            )
+            _da_delta = (f"{da30 - da_r:+.1f} pp  (ref: {da_r:.1f}%)" if da_r
+                         else "no ref available")
+            cone_c[1].metric(
+                f"{_daic} Direction acc (30d)",
+                f"{da30:.1f}%",
+                delta=_da_delta,
+                delta_color="normal",
+            )
+            cone_c[2].metric(
+                "Resolved forecasts (30d)",
+                str(cone30["n"]),
+                help="Number of 7-day forecasts whose target date has passed in the last 30 days.",
+            )
+            # Regime distribution from test period
+            if cone_at and cone_at.get("regime_pct"):
+                rp = cone_at["regime_pct"]
+                cone_c[3].metric(
+                    "Regime mix (test period)",
+                    (f"L:{float(rp.get(0,0)):.0f}%  "
+                     f"M:{float(rp.get(1,0)):.0f}%  "
+                     f"H:{float(rp.get(2,0)):.0f}%"),
+                    help=(
+                        "L=low vol (range_ma30 < 3.79%)  "
+                        "M=mid (3.79–5.06%)  "
+                        "H=high (>5.06%).  "
+                        "A sustained shift toward H means the model's "
+                        "median-return estimates are less reliable."
+                    ),
+                )
+        else:
+            st.info("Insufficient data — need ≥5 resolved 7-day forecasts in the last 30 days.")
+
+    # 3c. 3-class day type — BigUpper / BigLower / Quiet
+    with st.expander("🏷️ 3-class Day Type — BigUpper / BigLower / Quiet accuracy",
+                     expanded=True):
+        if dt30:
+            acc30 = dt30["accuracy"]
+            acc_r = (dt_at["accuracy"] if dt_at
+                     else _dt_meta.get("test_accuracy_pct", 52.8))
+            _aic  = "🔴" if acc30 < 50 else ("🟡" if acc30 < 55 else "🟢")
+            _DI   = {"BigUpper": "🟢", "BigLower": "🔴", "Quiet": "⚪"}
+            dt_c  = st.columns(4)
+            dt_c[0].metric(
+                f"{_aic} Overall accuracy (30d)",
+                f"{acc30:.1f}%",
+                delta=f"{acc30 - acc_r:+.1f} pp  (test: {acc_r:.1f}%)",
+                delta_color="normal",
+                help=(
+                    "Retrain threshold: <50%.  "
+                    "This model uses OOF predictions from Daily H/L as input features — "
+                    "always retrain it immediately after retraining Daily H/L."
+                ),
+            )
+            for ci, cls in enumerate(["BigUpper", "BigLower", "Quiet"]):
+                bc   = dt30["by_class"][cls]
+                prec = bc["correct_n"] / bc["pred_n"] * 100 if bc["pred_n"] else 0.0
+                if dt_at:
+                    bca    = dt_at["by_class"][cls]
+                    prec_r = bca["correct_n"] / bca["pred_n"] * 100 if bca["pred_n"] else 0.0
+                    _pi    = "🔴" if prec < 40 else ("🟡" if prec < 55 else "🟢")
+                    dt_c[ci + 1].metric(
+                        f"{_DI[cls]} {cls} precision",
+                        f"{prec:.0f}%",
+                        delta=f"{prec - prec_r:+.0f} pp  (test: {prec_r:.0f}%)",
+                        delta_color="normal",
+                        help=f"Of the last 30 days predicted as {cls}, this fraction was correct.",
+                    )
+                else:
+                    dt_c[ci + 1].metric(f"{_DI[cls]} {cls}", f"{prec:.0f}% prec")
+        else:
+            st.info("Insufficient data — need ≥5 completed daily bars in the last 30 days.")
+
+    st.markdown("---")
+
+    # ── 4. Live signal state ──────────────────────────────────────────────────
+    st.markdown("#### TF2 Signal State — Current Values vs Thresholds")
+    st.caption(
+        "Computed from the last 3–5 completed daily H/L bars.  "
+        "Signal reliability degrades when MAPE-H exceeds ~2.5%."
+    )
+
+    _ehi  = sigs.get("err_hi_ma3")
+    _elo  = sigs.get("err_lo_ma3")
+    _hb3  = sigs.get("hi_breaks_3d")
+    _lb3  = sigs.get("lo_breaks_3d")
+    _dns  = sigs.get("dn_score_raw")
+    _lle  = sigs.get("last_lo_err")
+    _bull = sigs.get("bull_regime")
+    _ma30 = sigs.get("ma30_value")
+    _cur  = sigs.get("current_close_sig")
+
+    def _sig_val(v, fmt="+.2f"):
+        return (f"{v:{fmt}}%" if v is not None else "—")
+
+    sc = st.columns(5)
+    sc[0].metric(
+        "🟢 U1 — Entry",
+        "🔥 ACTIVE" if sigs.get("u1_triggered") else "💤 inactive",
+        delta=(f"err_hi_ma3 {_sig_val(_ehi)}  |  {_hb3}/3 hi-breaks"
+               if _ehi is not None else "threshold: err_hi_ma3 > +0.5%"),
+        delta_color="off",
+        help=(
+            "**Threshold:** `err_hi_ma3 > +0.5%` AND `hi_breaks_3d ≥ 2`.  "
+            "**Entry gate:** U1 confirmed by above-MA30, clean 10d, or V-reversal.  "
+            "Statistical lift: 1.68× over base rate."
+        ),
+    )
+    sc[1].metric(
+        "🔴 D2 — Exit (strongest)",
+        "🔥 ACTIVE" if sigs.get("d2_triggered") else "💤 inactive",
+        delta=(f"err_hi_ma3 {_sig_val(_ehi)}"
+               if _ehi is not None else "threshold: err_hi_ma3 < −1.0%"),
+        delta_color="off",
+        help=(
+            "**Threshold:** `err_hi_ma3 < −1.0%`.  "
+            "2.24× lift — strongest exit signal.  "
+            "Active in BEAR/NEUTRAL regime; in BULL regime only D3 triggers exit."
+        ),
+    )
+    sc[2].metric(
+        "🔴 D3 — Exhaustion",
+        "🔥 ACTIVE" if sigs.get("d3_triggered") else "💤 inactive",
+        delta=("exhaustion fired" if sigs.get("d3_triggered") else "no hi-break streak → lo-break"),
+        delta_color="off",
+        help=(
+            "First `lo_break` after ≥3 consecutive `hi_breaks`.  "
+            "Trend-exhaustion canary.  Active in ALL regimes (BULL + BEAR)."
+        ),
+    )
+    sc[3].metric(
+        "V-Gate — Reversal",
+        "🔥 ACTIVE" if sigs.get("v_reversal_likely") else "💤 inactive",
+        delta=(
+            (f"dn_score {_dns:.2f}  |  lo_err {_lle:+.1f}%"
+             if _dns is not None and _lle is not None else "threshold: dn_score >0.8 & lo_err >5%")
+        ),
+        delta_color="off",
+        help=(
+            "**Threshold:** `dn_score > 0.8` AND `lo_err > +5%`.  "
+            "Capitulation-reversal gate — allows U1 entry without MA30 confirmation."
+        ),
+    )
+    _regime_str = "🐂 BULL" if _bull else ("🐻 BEAR/NEUTRAL" if _bull is not None else "—")
+    _regime_delta = (
+        f"close {_cur:,.0f}  /  MA30 {_ma30:,.0f}"
+        if _ma30 is not None and _cur is not None
+        else "price > MA30 & slope rising"
+    )
+    sc[4].metric(
+        "Regime Filter",
+        _regime_str,
+        delta=_regime_delta,
+        delta_color="off",
+        help=(
+            "**BULL** = price > 30-day MA AND MA30[now] > MA30[5d ago] (rising slope).  "
+            "BULL: exit on D3 only.  BEAR/NEUTRAL: exit on D2 or D3."
+        ),
+    )
+
+    st.markdown("---")
+
+    # ── 5. Cone regime definitions ────────────────────────────────────────────
+    st.markdown("#### 7-day Cone — Regime Definitions & Band")
+    st.caption(
+        "Tercile boundaries are fit on the training set.  "
+        "If current `range_ma30` persistently sits outside these bounds, "
+        "regime classification becomes unreliable — an additional trigger to retrain the cone."
+    )
+
+    _edges    = (_cone_art.get("regime_edges") if _cone_art else None) or [0.0379, 0.0506]
+    _lo_edge  = float(_edges[0]) if len(_edges) >= 1 else 0.0379
+    _hi_edge  = float(_edges[1]) if len(_edges) >= 2 else 0.0506
+    _cone_bnd = float(_cone_art.get("band_pct", 0.097)) if _cone_art else 0.097
+    _cov_oos  = _cone_meta.get("held_out_band_coverage_pct", 88.0)
+
+    rd = st.columns(4)
+    rd[0].metric(
+        "Low vol regime",
+        f"range_ma30 < {_lo_edge*100:.2f}%",
+        delta="Train median 7d return: +1.06%",
+        delta_color="off",
+        help="Lowest volatility tercile. Daily H/L range averaged below 3.79% of close.",
+    )
+    rd[1].metric(
+        "Mid vol regime",
+        f"{_lo_edge*100:.2f}% – {_hi_edge*100:.2f}%",
+        delta="Train median 7d return: −0.25%",
+        delta_color="off",
+    )
+    rd[2].metric(
+        "High vol regime",
+        f"range_ma30 > {_hi_edge*100:.2f}%",
+        delta="Train median 7d return: +1.31%",
+        delta_color="off",
+        help="Highest uncertainty. Cone is least reliable here.",
+    )
+    rd[3].metric(
+        "Cone band width",
+        f"±{_cone_bnd*100:.1f}%",
+        delta=f"OOS coverage: {_cov_oos:.1f}%  (retrain if 30d < 80%)",
+        delta_color="off",
+        help="Fixed symmetric band derived from empirical return distribution.  "
+             "Retraining recalibrates this width.",
+    )
+
+    st.markdown("---")
+
+    # ── 6. Retrain action plan ────────────────────────────────────────────────
+    st.markdown("#### Retrain Action Plan")
+    urgent = [(ic, n) for ic, n in [(hl_comp, "Daily H/L"),
+                                     (dt_comp, "3-class Day Type"),
+                                     (con_comp, "7-day Cone")] if ic[:2] == "🔴"]
+    plan   = [(ic, n) for ic, n in [(hl_comp, "Daily H/L"),
+                                     (dt_comp, "3-class Day Type"),
+                                     (con_comp, "7-day Cone")] if ic[:2] == "🟡"]
+    if not urgent and not plan:
+        st.success("✅  No retrain action required at this time.")
+    else:
+        if urgent:
+            st.error("🔴  **Retrain immediately:** " + ", ".join(n for _, n in urgent))
+        if plan:
+            st.warning("🟡  **Plan retrain within 1–2 weeks:** " + ", ".join(n for _, n in plan))
+        if any(n == "3-class Day Type" for _, n in urgent + plan):
+            st.info(
+                "ℹ️  3-class Day Type uses OOF predictions from Daily H/L as stacked input features.  "
+                "Always run `pipeline_ct.py` first, then `train_3class_day_type.py`."
+            )
+
+    with st.expander(
+        "📋 Retrain commands (run from repo root)",
+        expanded=bool(urgent or plan),
+    ):
+        st.code(
+            "# Step 1 — Daily H/L ensemble  (PRIMARY — always run first)\n"
+            "python src/pipeline_ct.py\n\n"
+            "# Step 2 — 3-class day-type classifier  (dependency on Step 1)\n"
+            "python src/train_3class_day_type.py\n\n"
+            "# Step 3 — 7-day close cone  (independent; run quarterly or when coverage < 80%)\n"
+            "python src/train_7d_close_cone.py\n\n"
+            "# After retraining: click 'Refresh now' in the sidebar to reload model artefacts.",
+            language="bash",
+        )
+
+    st.caption(f"Dashboard status computed as of **{today_utc.date()} UTC**.")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tabs: Live | Historical | Retrain Status
+# ════════════════════════════════════════════════════════════════════════
+tab_live, tab_hist, tab_retrain = st.tabs([
+    "🔴 Live (rolling now+1h)",
+    "🕒 Historical replay",
+    "🔄 Retrain Status",
+])
 
 with tab_live:
     render_dashboard(latest_t_global, is_live=True,
@@ -6415,6 +6947,10 @@ with tab_hist:
             render_dashboard(actual_t, is_live=False,
                              live_spot=None, live_spot_ts=None,
                              hist_picker=_hist_picker)
+
+with tab_retrain:
+    render_retrain_dashboard()
+
 # ─────────────────────── timer-driven re-run ──────────────────────────
 time.sleep(REFRESH_SECONDS)
 st.rerun()
