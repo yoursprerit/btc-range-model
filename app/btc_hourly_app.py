@@ -3103,28 +3103,30 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     )
 
 
-def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "") -> None:
+def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_suffix: str = "") -> None:
     """Render the TF2 trading strategy summary + backtest dashboard.
 
     Shows:
       • Strategy rules summary card (entry, exit, regime logic)
-      • Unified comparison table: two periods × three columns (TF2 | TF2-tax | B&H)
+      • Unified comparison table: three periods × three columns (TF2 | TF2-tax | B&H)
       • Two equity-curve charts — one per period — in tabs
       • Expandable trade log for each period
 
-    key_suffix: appended to plotly_chart keys to avoid DuplicateElementKey when
-    this function is rendered inside multiple Streamlit tabs in the same run.
+    bt_bear:     Fixed bear window  (today-365d → today)
+    bt_bull:     Fixed bull window  (today-730d → today-365d)
+    bt_full_oos: Full-period result used only for OOS stats extraction
+    key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
     """
     st.markdown("---")
     st.subheader("🎯 TF2 + V-Gate Trading Strategy — Regime-Adaptive Backtest")
 
-    if bt_rolling is None and bt_full is None:
+    if bt_bear is None and bt_bull is None:
         st.info("⚙️ Backtest computing … CT model batch predictions being built. "
                 "Refresh in a moment.")
         return
 
     # Use whichever is available for the rules card period label
-    _bt_ref = bt_rolling if bt_rolling is not None else bt_full
+    _bt_ref = bt_bear if bt_bear is not None else bt_bull
     s_ref   = _bt_ref["stats"]
 
     # ── Strategy rules card ───────────────────────────────────────────
@@ -3288,8 +3290,8 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
         }
 
-    s_r = bt_rolling["stats"] if bt_rolling else None
-    s_f = bt_full["stats"]    if bt_full    else None
+    s_r = bt_bear["stats"] if bt_bear else None
+    s_f = bt_bull["stats"] if bt_bull else None
 
     # ── OOS stats dict (same shape as s_r / s_f so _period_cells reuses it) ──
     OOS_START  = pd.Timestamp("2025-09-18")
@@ -3297,9 +3299,9 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Sep 17, 2025"
     s_oos      = None
-    if bt_full is not None:
-        _fnav = bt_full["nav_series"];  _fbh = bt_full["bh_series"]
-        _ftr  = bt_full["trades"];      ic   = bt_full["stats"]["initial_capital"]
+    if bt_full_oos is not None:
+        _fnav = bt_full_oos["nav_series"];  _fbh = bt_full_oos["bh_series"]
+        _ftr  = bt_full_oos["trades"];      ic   = bt_full_oos["stats"]["initial_capital"]
         _onav_raw = _fnav[_fnav.index >= OOS_START]
         _obh_raw  = _fbh[_fbh.index  >= OOS_START]
         if len(_onav_raw) > 1:
@@ -3351,20 +3353,20 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
 
     # Period header labels
     if s_r:
-        lbl_r = (f"📅 1-Year Rolling<br>"
+        lbl_r = (f"🐻 Bear Market Performance (last 12 months)<br>"
                  f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                  f"{pd.Timestamp(s_r['start_date']).strftime('%b %d, %Y')} → "
                  f"{pd.Timestamp(s_r['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_r = "📅 1-Year Rolling"
+        lbl_r = "🐻 Bear Market Performance (last 12 months)"
 
     if s_f:
-        lbl_f = (f"📆 Full Period (May 26, 2024 → Today)<br>"
+        lbl_f = (f"🐂 Bull Market Performance (prior 12 months) ⚠️ IS<br>"
                  f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                  f"{pd.Timestamp(s_f['start_date']).strftime('%b %d, %Y')} → "
                  f"{pd.Timestamp(s_f['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_f = "📆 Full Period"
+        lbl_f = "🐂 Bull Market Performance (prior 12 months) ⚠️ IS"
 
     if s_oos:
         lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
@@ -3455,10 +3457,10 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
         unsafe_allow_html=True,
     )
 
-    # ── Open-position badge (from rolling period) ─────────────────────
-    if bt_rolling and bt_rolling["open_pos"] and bt_rolling["open_entry"]:
-        oe  = bt_rolling["open_entry"]
-        unr = (float(bt_rolling["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+    # ── Open-position badge (from bear period — most recent) ─────────────────────
+    if bt_bear and bt_bear["open_pos"] and bt_bear["open_entry"]:
+        oe  = bt_bear["open_entry"]
+        unr = (float(bt_bear["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
         oe_col = "#16a34a" if unr >= 0 else "#dc2626"
         st.markdown(
             f"<div style='background:#f0fdf4; border:1px solid #16a34a; border-radius:8px; "
@@ -3576,17 +3578,17 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
         return fig
 
     tab_labels = []
-    if bt_rolling:
-        sr = bt_rolling["stats"]
+    if bt_bear:
+        sr = bt_bear["stats"]
         tab_labels.append(
-            f"📅 1-Year Rolling  "
+            f"🐻 Bear Market  "
             f"({pd.Timestamp(sr['start_date']).strftime('%b %Y')} → "
             f"{pd.Timestamp(sr['end_date']).strftime('%b %Y')})"
         )
-    if bt_full:
-        sf = bt_full["stats"]
+    if bt_bull:
+        sf = bt_bull["stats"]
         tab_labels.append(
-            f"📆 Full Period  "
+            f"🐂 Bull Market  "
             f"({pd.Timestamp(sf['start_date']).strftime('%b %Y')} → "
             f"{pd.Timestamp(sf['end_date']).strftime('%b %Y')})"
         )
@@ -3594,29 +3596,29 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
     if tab_labels:
         tabs = st.tabs(tab_labels)
         tab_idx = 0
-        if bt_rolling:
+        if bt_bear:
             with tabs[tab_idx]:
-                sr = bt_rolling["stats"]
+                sr = bt_bear["stats"]
                 fig_r = _make_chart(
-                    bt_rolling,
-                    f"TF2 vs B&H — 1-Year Rolling  "
+                    bt_bear,
+                    f"TF2 vs B&H — Bear Market Performance  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})"
                 )
                 if fig_r:
-                    st.plotly_chart(fig_r, use_container_width=True, key=f"chart_rolling_{key_suffix}")
+                    st.plotly_chart(fig_r, use_container_width=True, key=f"chart_bear_{key_suffix}")
             tab_idx += 1
-        if bt_full:
+        if bt_bull:
             with tabs[tab_idx]:
-                sf = bt_full["stats"]
+                sf = bt_bull["stats"]
                 fig_f = _make_chart(
-                    bt_full,
-                    f"TF2 vs B&H — Full Period  "
+                    bt_bull,
+                    f"TF2 vs B&H — Bull Market Performance  "
                     f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})"
                 )
                 if fig_f:
-                    st.plotly_chart(fig_f, use_container_width=True, key=f"chart_full_{key_suffix}")
+                    st.plotly_chart(fig_f, use_container_width=True, key=f"chart_bull_{key_suffix}")
 
     # ── Trade log ─────────────────────────────────────────────────────
     def _trade_log_rows(bt):
@@ -3658,13 +3660,13 @@ def render_trading_strategy_dashboard(bt_rolling, bt_full, key_suffix: str = "")
         return rows, has_p, s
 
     log_tabs = []
-    if bt_rolling: log_tabs.append("📋 1-Year Trade Log")
-    if bt_full:    log_tabs.append("📋 Full Period Trade Log")
+    if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
+    if bt_bull: log_tabs.append("📋 Bull Market Trade Log")
 
     if log_tabs:
         ltabs = st.tabs(log_tabs)
         lt_idx = 0
-        for bt_src, lbl in [(bt_rolling, "rolling"), (bt_full, "full")]:
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull")]:
             if bt_src is None:
                 continue
             rows, has_p, s = _trade_log_rows(bt_src)
@@ -4416,11 +4418,14 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     daily = compute_daily_forecast(target_date.strftime("%Y-%m-%d"))
 
     # Pre-compute cached results (no latency hit) for display at top of page.
-    _bt_end     = target_date.strftime("%Y-%m-%d")
-    _bt_rolling = run_tf1_backtest(_bt_end)
-    _bt_full    = run_full_period_backtest(_bt_end)
-    _chart_key  = "live" if is_live else "hist"
-    sigs        = compute_trend_signatures(_bt_end)
+    _bt_end      = target_date.strftime("%Y-%m-%d")
+    _bear_start  = (target_date - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
+    _bull_start  = (target_date - pd.Timedelta(days=730)).strftime("%Y-%m-%d")
+    _bt_bear     = run_tf1_backtest(_bt_end, start_date_iso=_bear_start)
+    _bt_bull     = run_tf1_backtest(_bear_start, start_date_iso=_bull_start)
+    _bt_full_oos = run_full_period_backtest(_bt_end)   # kept solely for OOS extraction
+    _chart_key   = "live" if is_live else "hist"
+    sigs         = compute_trend_signatures(_bt_end)
 
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
@@ -4479,7 +4484,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         render_trend_signatures(sigs, intraday=_intra_sig)
 
     # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
-    render_trading_strategy_dashboard(_bt_rolling, _bt_full, key_suffix=_chart_key)
+    render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos, key_suffix=_chart_key)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
