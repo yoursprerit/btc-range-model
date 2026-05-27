@@ -3679,6 +3679,124 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         unsafe_allow_html=True,
     )
 
+    # ── ACTION SIGNAL banner — synthesised top-level indicator ────────────
+    _bull_regime  = sigs.get("bull_regime", False)
+    _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
+    _v_gate_ok    = sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
+    _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
+    _entry_signal = sigs["u1_triggered"] and _trend_ok
+    _exit_d3      = sigs.get("exhaustion_active", False)
+    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -1.0) and not _bull_regime
+    _exit_signal  = _exit_d3 or _exit_d2
+
+    if _exit_signal and _entry_signal:
+        _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
+        _action_label = "EXIT SIGNAL ACTIVE"
+        _action_sub   = (
+            f"D3={'FIRED' if _exit_d3 else 'clear'}, "
+            f"D2 (bear-only)={'FIRED' if _exit_d2 else 'clear'}  |  "
+            f"Entry conditions also met — EXIT takes priority if in position"
+        )
+    elif _exit_signal:
+        _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
+        _action_label = "EXIT SIGNAL ACTIVE"
+        _exit_parts   = []
+        if _exit_d3: _exit_parts.append("D3 exhaustion fired (exit in all regimes)")
+        if _exit_d2: _exit_parts.append(f"D2 hi-band collapse in {_regime_label} regime → defensive exit")
+        _action_sub   = " · ".join(_exit_parts)
+    elif _entry_signal:
+        _action_bg    = "#f0fdf4"; _action_brd = "#16a34a"; _action_emoji = "🟢"
+        _action_label = "ENTRY SIGNAL ACTIVE"
+        _entry_gates  = []
+        if sigs["above_ma30"]: _entry_gates.append("↑MA30")
+        if sigs["clean_10d"]:  _entry_gates.append("Clean 10d")
+        if _v_gate_ok:         _entry_gates.append("⚡V-reversal")
+        _action_sub   = (
+            f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
+            f"Regime: {_regime_label}"
+        )
+    elif sigs["u1_triggered"] and not _trend_ok:
+        _action_bg    = "#fefce8"; _action_brd = "#ca8a04"; _action_emoji = "🟡"
+        _action_label = "U1 ACTIVE — TREND GATE BLOCKED"
+        _action_sub   = (
+            "U1 fired but entry requires ↑MA30 OR clean10d OR ⚡V-reversal. "
+            f"BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
+            f"clean10d={'YES' if sigs['clean_10d'] else 'NO'}, "
+            f"V-rev={'YES' if _v_gate_ok else 'NO'} — watch for reversal"
+        )
+    else:
+        _action_bg    = "#f8fafc"; _action_brd = "#94a3b8"; _action_emoji = "⬜"
+        _action_label = "NO ACTIVE SIGNAL — NEUTRAL / WATCH"
+        _action_sub   = (
+            f"U1={'active' if sigs['u1_triggered'] else 'inactive'}, "
+            f"Trend={'pass' if _trend_ok else 'blocked'}, "
+            f"Exit={'none' if not _exit_signal else 'active'}  |  "
+            f"Regime: {_regime_label}"
+        )
+
+    st.markdown(
+        f"""
+        <div style="background:{_action_bg}; border:2.5px solid {_action_brd};
+            border-radius:12px; padding:14px 20px; margin:8px 0 4px 0;
+            display:flex; align-items:center; gap:14px;">
+          <div style="font-size:28px; line-height:1;">{_action_emoji}</div>
+          <div>
+            <div style="font-size:16px; font-weight:800; color:{_action_brd};
+                letter-spacing:0.5px;">{_action_label}</div>
+            <div style="font-size:12px; color:#334155; margin-top:3px;
+                line-height:1.5;">{_action_sub}</div>
+          </div>
+          <div style="margin-left:auto; font-size:11px; color:#64748b;
+              text-align:right; line-height:1.6;">
+            <b>TF2 + V-Gate Strategy</b><br>
+            Signal as of today's close
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Intraday V-gate watch note — advisory only, no premature action possible
+    if (intraday is not None
+            and intraday.get("lo_break_intra", False)
+            and intraday.get("err_lo_intra", 0) > 5.0
+            and intraday.get("pct_through", 0) >= 0.40
+            and not sigs.get("v_reversal_likely", False)
+            and not sigs.get("capitulation_signal", False)):
+        _ia_pct = intraday["pct_through"] * 100
+        _ia_hrs = intraday["hours_elapsed"]
+        _ia_elo = intraday["err_lo_intra"]
+        _ia_lo  = intraday["running_low"]
+        _ia_plo = intraday["pred_lo"]
+        st.markdown(
+            f"""
+            <div style="background:#faf5ff; border:1.5px dashed #7c3aed;
+                border-radius:10px; padding:11px 16px; margin:2px 0 6px 0;
+                display:flex; align-items:flex-start; gap:12px;">
+              <div style="font-size:20px; line-height:1.3;">📍</div>
+              <div style="flex:1;">
+                <div style="font-size:13px; font-weight:700; color:#5b21b6;
+                    margin-bottom:3px;">
+                  INTRADAY WATCH — V-Reversal Threshold Hit
+                </div>
+                <div style="font-size:12px; color:#334155; line-height:1.6;">
+                  Today's low <b>${_ia_lo:,.0f}</b> is already
+                  <b>{_ia_elo:.1f}% below</b> the predicted floor
+                  (${_ia_plo:,.0f}) with <b>{_ia_hrs}h elapsed
+                  ({_ia_pct:.0f}% of bar complete)</b>.
+                  If the bar closes here, the <b>⚡ V-gate will open</b> for
+                  the next 3 daily closes.<br>
+                  <span style="color:#7c3aed; font-weight:600;">
+                  ⚠️ No action yet — entry also requires U1 to fire at bar
+                  close. Watch tonight's close; ACTION SIGNAL above will
+                  update within 6 hours of bar close.</span>
+                </div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # ── 4 signature cards in 2×2 grid ─────────────────────────────────
     def _sig_card(title, icon, color, triggered, signal_rows, interpretation,
                   timing, prob_txt, conf_txt):
@@ -3868,147 +3986,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         )
 
     # ── TF2 full-width card (U1 + MA30 + regime-adaptive exit) ───────────
-    _ma30_pct = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
+    # _bull_regime / _regime_label already computed above for ACTION SIGNAL
+    _ma30_pct  = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
     _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
-    _bull_regime = sigs.get("bull_regime", False)
-    _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
     _exit_mode = "D3 only (patient — hold the trend)" if _bull_regime else "D2 OR D3 (defensive exit)"
-
-    # ── ACTION SIGNAL banner — synthesised top-level indicator ────────────
-    _v_gate_ok   = sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
-    _trend_ok    = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
-    _entry_signal = sigs["u1_triggered"] and _trend_ok
-    _exit_d3     = sigs.get("exhaustion_active", False)
-    _exit_d2     = (sigs.get("err_hi_ma3", 0) < -1.0) and not _bull_regime
-    _exit_signal = _exit_d3 or _exit_d2
-
-    if _exit_signal and _entry_signal:
-        # Both fire simultaneously — rare edge; exit takes priority
-        _action_bg    = "#fef2f2"
-        _action_brd   = "#dc2626"
-        _action_emoji = "🔴"
-        _action_label = "EXIT SIGNAL ACTIVE"
-        _action_sub   = (
-            f"D3={'FIRED' if _exit_d3 else 'clear'}, "
-            f"D2 (bear-only)={'FIRED' if _exit_d2 else 'clear'}  |  "
-            f"Entry conditions also met — EXIT takes priority if in position"
-        )
-    elif _exit_signal:
-        _action_bg    = "#fef2f2"
-        _action_brd   = "#dc2626"
-        _action_emoji = "🔴"
-        _action_label = "EXIT SIGNAL ACTIVE"
-        _exit_parts   = []
-        if _exit_d3:
-            _exit_parts.append("D3 exhaustion fired (exit in all regimes)")
-        if _exit_d2:
-            _exit_parts.append(f"D2 hi-band collapse in {_regime_label} regime → defensive exit")
-        _action_sub   = " · ".join(_exit_parts)
-    elif _entry_signal:
-        _action_bg    = "#f0fdf4"
-        _action_brd   = "#16a34a"
-        _action_emoji = "🟢"
-        _action_label = "ENTRY SIGNAL ACTIVE"
-        _entry_gates  = []
-        if sigs["above_ma30"]:    _entry_gates.append("↑MA30")
-        if sigs["clean_10d"]:     _entry_gates.append("Clean 10d")
-        if _v_gate_ok:            _entry_gates.append("⚡V-reversal")
-        _action_sub   = (
-            f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
-            f"Regime: {_regime_label}"
-        )
-    elif sigs["u1_triggered"] and not _trend_ok:
-        _action_bg    = "#fefce8"
-        _action_brd   = "#ca8a04"
-        _action_emoji = "🟡"
-        _action_label = "U1 ACTIVE — TREND GATE BLOCKED"
-        _action_sub   = (
-            "U1 fired but entry requires ↑MA30 OR clean10d OR ⚡V-reversal. "
-            f"BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
-            f"clean10d={'YES' if sigs['clean_10d'] else 'NO'}, "
-            f"V-rev={'YES' if _v_gate_ok else 'NO'} — watch for reversal"
-        )
-    else:
-        _action_bg    = "#f8fafc"
-        _action_brd   = "#94a3b8"
-        _action_emoji = "⬜"
-        _action_label = "NO ACTIVE SIGNAL — NEUTRAL / WATCH"
-        _action_sub   = (
-            f"U1={'active' if sigs['u1_triggered'] else 'inactive'}, "
-            f"Trend={'pass' if _trend_ok else 'blocked'}, "
-            f"Exit={'none' if not _exit_signal else 'active'}  |  "
-            f"Regime: {_regime_label}"
-        )
-
-    st.markdown(
-        f"""
-        <div style="background:{_action_bg}; border:2.5px solid {_action_brd};
-            border-radius:12px; padding:14px 20px; margin:8px 0 4px 0;
-            display:flex; align-items:center; gap:14px;">
-          <div style="font-size:28px; line-height:1;">{_action_emoji}</div>
-          <div>
-            <div style="font-size:16px; font-weight:800; color:{_action_brd};
-                letter-spacing:0.5px;">{_action_label}</div>
-            <div style="font-size:12px; color:#334155; margin-top:3px;
-                line-height:1.5;">{_action_sub}</div>
-          </div>
-          <div style="margin-left:auto; font-size:11px; color:#64748b;
-              text-align:right; line-height:1.6;">
-            <b>TF2 + V-Gate Strategy</b><br>
-            Signal as of today's close
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ── Intraday V-gate watch note (safe: advisory only, no action possible) ──
-    # Shown when today's running low has already breached the V-reversal
-    # threshold intraday (err_lo > 5%) but the gate is NOT yet confirmed from
-    # completed bars. Entry still requires U1 at bar close — nothing to act on
-    # now — but this tells the user to watch for U1 tonight.
-    # D2/D1 intraday data is intentionally NOT surfaced here (premature exit
-    # risk); it remains in the LIVE INTRADAY BAR panel below.
-    if (intraday is not None
-            and intraday.get("lo_break_intra", False)
-            and intraday.get("err_lo_intra", 0) > 5.0
-            and intraday.get("pct_through", 0) >= 0.40
-            and not sigs.get("v_reversal_likely", False)
-            and not sigs.get("capitulation_signal", False)):
-        _ia_pct  = intraday["pct_through"] * 100
-        _ia_hrs  = intraday["hours_elapsed"]
-        _ia_elo  = intraday["err_lo_intra"]
-        _ia_lo   = intraday["running_low"]
-        _ia_plo  = intraday["pred_lo"]
-        st.markdown(
-            f"""
-            <div style="background:#faf5ff; border:1.5px dashed #7c3aed;
-                border-radius:10px; padding:11px 16px; margin:2px 0 6px 0;
-                display:flex; align-items:flex-start; gap:12px;">
-              <div style="font-size:20px; line-height:1.3;">📍</div>
-              <div style="flex:1;">
-                <div style="font-size:13px; font-weight:700; color:#5b21b6;
-                    margin-bottom:3px;">
-                  INTRADAY WATCH — V-Reversal Threshold Hit
-                </div>
-                <div style="font-size:12px; color:#334155; line-height:1.6;">
-                  Today's low <b>${_ia_lo:,.0f}</b> is already
-                  <b>{_ia_elo:.1f}% below</b> the predicted floor
-                  (${_ia_plo:,.0f}) with <b>{_ia_hrs}h elapsed
-                  ({_ia_pct:.0f}% of bar complete)</b>.
-                  If the bar closes here, the <b>⚡ V-gate will open</b> for
-                  the next 3 daily closes.<br>
-                  <span style="color:#7c3aed; font-weight:600;">
-                  ⚠️ No action yet — entry also requires U1 to fire at bar
-                  close (err_hi_ma3 &gt; +0.5% AND hi_breaks_3d ≥ 2).
-                  Watch tonight's close; the ACTION SIGNAL above will update
-                  within 6 hours of bar close.</span>
-                </div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
     tf1_rows = [
         ("U1 Signal",
