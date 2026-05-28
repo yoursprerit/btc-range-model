@@ -6220,6 +6220,36 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 # ════════════════════════════════════════════════════════════════════════
 # Retrain Status Dashboard  (TF2 strategy models only)
 # ════════════════════════════════════════════════════════════════════════
+
+def _tabular_cusum(series: "pd.Series", k: float = 0.5, h: float = 4.0) -> dict:
+    """One-sided tabular CUSUM for detecting a sustained mean shift.
+
+    Normalises the series by its own mean/std, then accumulates upper and
+    lower CUSUM statistics.  Returns a dict with:
+      triggered_up / triggered_dn  bool
+      cusum_up_max / cusum_dn_max  float  (in σ units)
+      n                             int
+    """
+    s = series.dropna()
+    if len(s) < 8:
+        return dict(triggered_up=False, triggered_dn=False,
+                    cusum_up_max=0.0, cusum_dn_max=0.0, n=len(s))
+    mu  = float(s.mean())
+    std = float(s.std(ddof=1))
+    if std < 1e-9:
+        return dict(triggered_up=False, triggered_dn=False,
+                    cusum_up_max=0.0, cusum_dn_max=0.0, n=len(s))
+    z = (s - mu) / std
+    S_up = 0.0; S_dn = 0.0; mx_up = 0.0; mx_dn = 0.0
+    for zi in z:
+        S_up = max(0.0, S_up + float(zi) - k)
+        S_dn = max(0.0, S_dn - float(zi) - k)
+        mx_up = max(mx_up, S_up)
+        mx_dn = max(mx_dn, S_dn)
+    return dict(triggered_up=mx_up > h, triggered_dn=mx_dn > h,
+                cusum_up_max=mx_up, cusum_dn_max=mx_dn, n=len(z))
+
+
 def render_retrain_dashboard():
     """Re-training status for the three models that power TF2 trading signals."""
     today_utc = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None).normalize()
@@ -6308,6 +6338,63 @@ def render_retrain_dashboard():
     con_comp = _worst(con_age_ic, con_perf_ic)
     dt_comp  = _worst(dt_age_ic,  dt_perf_ic)
     overall  = _worst(hl_comp, con_comp, dt_comp)
+
+    # ── CUSUM on live H/L prediction errors (full pipeline data, not Yahoo) ──
+    _hl_cusum_triggered = False
+    _hl_cusum_val       = 0.0
+    _hl_series_45 = compute_daily_series(_end_iso, days_back=45)
+    if _hl_series_45 is not None and not _hl_series_45.empty:
+        _have45 = (_hl_series_45["actual_high"].notna() &
+                   _hl_series_45["actual_low"].notna())
+        _s45    = _hl_series_45[_have45].copy()
+        if len(_s45) >= 8:
+            _err_hi45 = (_s45["actual_high"] - _s45["pred_high"]) / _s45["actual_high"]
+            _cu45     = _tabular_cusum(_err_hi45)
+            _hl_cusum_triggered = _cu45["triggered_up"] or _cu45["triggered_dn"]
+            _hl_cusum_val       = max(_cu45["cusum_up_max"], _cu45["cusum_dn_max"])
+
+    # ── Drift from test baseline (how much worse is live vs when the model was trained) ──
+    _hl_test_mh   = _hl_mtest.get("MAPE_H")
+    _hl_drift_pct = (               # positive = live is worse
+        (hl30["mape_h"] - _hl_test_mh) / _hl_test_mh * 100
+        if (hl30 and _hl_test_mh) else None
+    )
+    _cone_test_cov = _cone_meta.get("held_out_band_coverage_pct")
+    _cone_cov_drop = (              # positive = coverage fell
+        _cone_test_cov - cone30["within_pct"]
+        if (cone30 and _cone_test_cov) else None
+    )
+    _dt_test_acc = _dt_meta.get("test_accuracy_pct")
+    _dt_acc_drop = (                # positive = accuracy fell
+        _dt_test_acc - dt30["accuracy"]
+        if (dt30 and _dt_test_acc) else None
+    )
+
+    # ── Gain-level estimate per model ─────────────────────────────────────────
+    def _gain_level(age, overdue, warn, drift_pct, cusum_ok, hard_dep_high=False):
+        """Returns 'HIGH', 'MEDIUM', 'LOW', or 'MARGINAL'."""
+        if hard_dep_high:
+            return "HIGH"
+        if age is not None and age >= overdue:
+            return "HIGH"
+        if cusum_ok:
+            return "HIGH"
+        if drift_pct is not None and drift_pct > 30:
+            return "HIGH"
+        if (age is not None and age >= warn) or (drift_pct is not None and drift_pct > 15):
+            return "MEDIUM"
+        if drift_pct is not None and drift_pct > 5:
+            return "LOW"
+        return "MARGINAL"
+
+    _hl_gain  = _gain_level(hl_age_d,  OVERDUE_D["daily H/L"],
+                            WARN_D["daily H/L"],  _hl_drift_pct,
+                            _hl_cusum_triggered)
+    _con_gain = _gain_level(con_age_d, OVERDUE_D["7-day cone"],
+                            WARN_D["7-day cone"],  _cone_cov_drop, False)
+    _dt_gain  = _gain_level(dt_age_d,  OVERDUE_D["3-class day type"],
+                            WARN_D["3-class day type"], _dt_acc_drop, False,
+                            hard_dep_high=(_hl_gain == "HIGH"))
 
     # ── 1. Top-level banner ───────────────────────────────────────────────────
     if overall[:2] == "🔴":
@@ -6573,7 +6660,149 @@ def render_retrain_dashboard():
 
     st.markdown("---")
 
-    # ── 4. Live signal state ──────────────────────────────────────────────────
+    # ── 4. Will Retraining Help? — unified assessment ─────────────────────────
+    st.markdown("#### Will Retraining Help?")
+    st.caption(
+        "Combines age, live 30-day performance drift vs test baseline, and "
+        "statistical error-drift detection (CUSUM k=0.5 h=4.0) to estimate "
+        "how much retraining could improve trading signal quality."
+    )
+
+    _GAIN_BG  = {"HIGH": "#fef2f2", "MEDIUM": "#fffbeb",
+                 "LOW":  "#f0fdf4", "MARGINAL": "#f8fafc"}
+    _GAIN_BRD = {"HIGH": "#fca5a5", "MEDIUM": "#fcd34d",
+                 "LOW":  "#86efac", "MARGINAL": "#e2e8f0"}
+    _GAIN_TXT = {"HIGH": "#991b1b", "MEDIUM": "#92400e",
+                 "LOW":  "#14532d", "MARGINAL": "#374151"}
+    _GAIN_IC  = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢", "MARGINAL": "⚪"}
+
+    def _gain_card_html(title, gain, bullets, trading_impact):
+        bg  = _GAIN_BG[gain];  brd = _GAIN_BRD[gain]
+        txt = _GAIN_TXT[gain]; ic  = _GAIN_IC[gain]
+        rows = "".join(
+            f'<li style="margin:3px 0;font-size:13px;">{b}</li>' for b in bullets
+        )
+        return (
+            f'<div style="border:2px solid {brd};border-radius:10px;padding:16px;'
+            f'background:{bg};min-height:270px;">'
+            f'<div style="font-size:15px;font-weight:700;margin-bottom:4px;">{title}</div>'
+            f'<div style="font-size:19px;font-weight:800;color:{txt};margin-bottom:10px;">'
+            f'{ic} {gain} expected gain</div>'
+            f'<ul style="padding-left:16px;margin:0 0 12px 0;">{rows}</ul>'
+            f'<hr style="border-color:{brd};margin:8px 0 6px;">'
+            f'<p style="margin:0;font-size:12px;color:#475569;">'
+            f'<strong>If retrained:</strong> {trading_impact}</p>'
+            f'</div>'
+        )
+
+    def _hl_bullets():
+        b = []
+        if hl_age_d is not None:
+            trained_mo = (today_utc - pd.Timedelta(days=hl_age_d)).strftime("%b %Y")
+            b.append(f"<strong>{hl_age_d}d old</strong> — trained before {trained_mo}; "
+                     f"excludes last {hl_age_d // 30} months of data")
+        if _hl_drift_pct is not None and hl30 and _hl_test_mh:
+            if _hl_drift_pct > 0:
+                b.append(f"MAPE-H <strong>{_hl_drift_pct:.0f}% worse</strong> than at "
+                         f"training ({hl30['mape_h']:.2f}% now vs {_hl_test_mh:.2f}% then)")
+            else:
+                b.append(f"MAPE-H holding within baseline "
+                         f"({hl30['mape_h']:.2f}% vs {_hl_test_mh:.2f}% at training)")
+        if _hl_cusum_triggered:
+            b.append(f"<strong>Statistical drift break detected</strong> (CUSUM = "
+                     f"{_hl_cusum_val:.1f}) — prediction errors have shifted "
+                     "systematically since training")
+        elif _s45 is not None and len(_s45) >= 8:
+            b.append("No statistical drift break in 45-day error series")
+        if not b:
+            b.append("Insufficient live data — age is the primary indicator")
+        return b
+
+    def _cone_bullets():
+        b = []
+        if con_age_d is not None:
+            trained_mo = (today_utc - pd.Timedelta(days=con_age_d)).strftime("%b %Y")
+            b.append(f"<strong>{con_age_d}d old</strong> — regime thresholds fit "
+                     f"before {trained_mo}")
+        if _cone_cov_drop is not None and cone30:
+            if _cone_cov_drop > 2:
+                b.append(f"Band coverage fell <strong>{_cone_cov_drop:.1f}pp</strong> "
+                         f"({cone30['within_pct']:.1f}% live vs "
+                         f"{_cone_test_cov:.1f}% at training) — more forecasts "
+                         "landing outside the ±band")
+            else:
+                b.append(f"Coverage holding near baseline "
+                         f"({cone30['within_pct']:.1f}% live vs "
+                         f"{_cone_test_cov:.1f}% at training)")
+        else:
+            b.append("Live coverage data unavailable — age is the primary indicator")
+        b.append("No CUSUM analysis for cone (binary outcome — insufficient signal)")
+        return b
+
+    def _dt_bullets():
+        b = []
+        if _hl_gain == "HIGH":
+            b.append("<strong>Hard dependency:</strong> Daily H/L is retraining — "
+                     "OOF predictions used as input features will change, "
+                     "making the current classifier misaligned")
+        if dt_age_d is not None:
+            b.append(f"<strong>{dt_age_d}d old</strong>")
+        if _dt_acc_drop is not None and dt30 and _dt_test_acc:
+            if _dt_acc_drop > 2:
+                b.append(f"Accuracy fell <strong>{_dt_acc_drop:.1f}pp</strong> "
+                         f"({dt30['accuracy']:.1f}% live vs "
+                         f"{_dt_test_acc:.1f}% at training)")
+            else:
+                b.append(f"Accuracy near baseline "
+                         f"({dt30['accuracy']:.1f}% live vs "
+                         f"{_dt_test_acc:.1f}% at training)")
+        elif not _dt_acc_drop:
+            b.append("Live accuracy data unavailable — age and H/L dependency drive verdict")
+        return b
+
+    # Use pre-computed _s45 safely in _hl_bullets (defined in enclosing scope above)
+    _s45 = (None if (_hl_series_45 is None or _hl_series_45.empty)
+            else _hl_series_45[_hl_series_45["actual_high"].notna()])
+
+    gc1, gc2, gc3 = st.columns(3)
+    with gc1:
+        st.markdown(
+            _gain_card_html(
+                "📅 Daily H/L",
+                _hl_gain,
+                _hl_bullets(),
+                "Sharper err_hi/err_lo terms → fewer false U1 entries "
+                "and cleaner D2 exit signals",
+            ),
+            unsafe_allow_html=True,
+        )
+    with gc2:
+        st.markdown(
+            _gain_card_html(
+                "📐 7-day Cone",
+                _con_gain,
+                _cone_bullets(),
+                "Recalibrated regime tercile thresholds and ±band width → "
+                "more accurate dn_score for V-Gate",
+            ),
+            unsafe_allow_html=True,
+        )
+    with gc3:
+        st.markdown(
+            _gain_card_html(
+                "🏷️ 3-class Day Type",
+                _dt_gain,
+                _dt_bullets(),
+                "Fresh BigUpper/BigLower context from updated OOF predictions "
+                "→ more reliable position-sizing signals",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── 5. Live signal state ──────────────────────────────────────────────────
     st.markdown("#### TF2 Signal State — Current Values vs Thresholds")
     st.caption(
         "Computed from the last 3–5 completed daily H/L bars.  "
@@ -6708,20 +6937,30 @@ def render_retrain_dashboard():
 
     # ── 6. Retrain action plan ────────────────────────────────────────────────
     st.markdown("#### Retrain Action Plan")
-    urgent = [(ic, n) for ic, n in [(hl_comp, "Daily H/L"),
-                                     (dt_comp, "3-class Day Type"),
-                                     (con_comp, "7-day Cone")] if ic[:2] == "🔴"]
-    plan   = [(ic, n) for ic, n in [(hl_comp, "Daily H/L"),
-                                     (dt_comp, "3-class Day Type"),
-                                     (con_comp, "7-day Cone")] if ic[:2] == "🟡"]
+    _gain_map = {
+        "Daily H/L":        _hl_gain,
+        "7-day Cone":       _con_gain,
+        "3-class Day Type": _dt_gain,
+    }
+    _comp_map = {
+        "Daily H/L":        hl_comp,
+        "7-day Cone":       con_comp,
+        "3-class Day Type": dt_comp,
+    }
+    urgent = [(n, _gain_map[n]) for n in ["Daily H/L", "3-class Day Type", "7-day Cone"]
+              if _comp_map[n][:2] == "🔴"]
+    plan   = [(n, _gain_map[n]) for n in ["Daily H/L", "3-class Day Type", "7-day Cone"]
+              if _comp_map[n][:2] == "🟡"]
     if not urgent and not plan:
         st.success("✅  No retrain action required at this time.")
     else:
         if urgent:
-            st.error("🔴  **Retrain immediately:** " + ", ".join(n for _, n in urgent))
+            parts = ",  ".join(f"**{n}** ({g} expected gain)" for n, g in urgent)
+            st.error(f"🔴  **Retrain immediately:** {parts}")
         if plan:
-            st.warning("🟡  **Plan retrain within 1–2 weeks:** " + ", ".join(n for _, n in plan))
-        if any(n == "3-class Day Type" for _, n in urgent + plan):
+            parts = ",  ".join(f"**{n}** ({g} expected gain)" for n, g in plan)
+            st.warning(f"🟡  **Plan retrain within 1–2 weeks:** {parts}")
+        if any(n == "3-class Day Type" for n, _ in urgent + plan):
             st.info(
                 "ℹ️  3-class Day Type uses OOF predictions from Daily H/L as stacked input features.  "
                 "Always run `pipeline_ct.py` first, then `train_3class_day_type.py`."
@@ -6732,12 +6971,15 @@ def render_retrain_dashboard():
         expanded=bool(urgent or plan),
     ):
         st.code(
+            "# Full pipeline (recommended — handles dependency order automatically)\n"
+            "python retrain_pipeline.py\n\n"
+            "# Or run individual steps:\n"
             "# Step 1 — Daily H/L ensemble  (PRIMARY — always run first)\n"
             "python src/pipeline_ct.py\n\n"
-            "# Step 2 — 3-class day-type classifier  (dependency on Step 1)\n"
-            "python src/train_3class_day_type.py\n\n"
-            "# Step 3 — 7-day close cone  (independent; run quarterly or when coverage < 80%)\n"
+            "# Step 2 — 7-day close cone  (independent)\n"
             "python src/train_7d_close_cone.py\n\n"
+            "# Step 3 — 3-class day-type  (depends on Steps 1 & 2)\n"
+            "python src/train_3class_day_type.py\n\n"
             "# After retraining: click 'Refresh now' in the sidebar to reload model artefacts.",
             language="bash",
         )
