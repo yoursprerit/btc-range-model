@@ -3111,18 +3111,20 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     )
 
 
-def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_suffix: str = "") -> None:
+def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
+                                       bt_full=None, key_suffix: str = "") -> None:
     """Render the TF2 trading strategy summary + backtest dashboard.
 
     Shows:
       • Strategy rules summary card (entry, exit, regime logic)
-      • Unified comparison table: three periods × three columns (TF2+V-Gate | TF2+V-Gate-tax | B&H)
-      • Two equity-curve charts — one per period — in tabs
+      • Unified comparison table: four periods × three columns (TF2+V-Gate | TF2+V-Gate-tax | B&H)
+      • Equity-curve charts — one per period — in tabs
       • Expandable trade log for each period
 
     bt_bear:     Fixed bear window  (today-365d → today)
-    bt_bull:     Fixed bull window  (today-730d → today-365d)
+    bt_bull:     Fixed bull window  (Jun 2024 → Jun 2025)
     bt_full_oos: Full-period result used only for OOS stats extraction
+    bt_full:     Full market period  (Jun 2024 → today)
     key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
     """
     st.markdown("---")
@@ -3382,9 +3384,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 bull_regime_series = _oos_reg,
             )
 
-    pr   = _period_cells(s_r)
-    pf   = _period_cells(s_f)
+    s_full = bt_full["stats"] if bt_full else None
+
+    pr    = _period_cells(s_r)
+    pf    = _period_cells(s_f)
     p_oos = _period_cells(s_oos)
+    p_full = _period_cells(s_full)
 
     # Period header labels
     if s_r:
@@ -3414,12 +3419,22 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     else:
         lbl_oos = "🔬 OOS Only"
 
+    if s_full:
+        lbl_full = (f"🌐 Full Market Performance ⚠️ Mixed IS/OOS<br>"
+                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                    f"{pd.Timestamp(s_full['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(s_full['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_full = "🌐 Full Market Performance"
+
     _sub3 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate</th>"
              "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% tax)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>")
     sub_hdr = (
         "<tr style='background:#334155; color:white; font-size:11px;'>"
         "<th style='padding:5px 12px;'></th>"
+        + _sub3 +
+        "<th style='width:6px; padding:0;'></th>"
         + _sub3 +
         "<th style='width:6px; padding:0;'></th>"
         + _sub3 +
@@ -3447,7 +3462,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
             f"<tr style='background:{bg};'>"
             f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
             f"color:#334155;'>{lbl}</td>"
-            f"{pr[key]}{_sep}{pf[key]}{_sep}{p_oos[key]}"
+            f"{pr[key]}{_sep}{pf[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
             f"</tr>"
         )
 
@@ -3469,8 +3484,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 {lbl_f}</th>
               <th style="width:6px; padding:0; background:#1e3a8a;"></th>
               <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
-                  background:#14532d;">
+                  background:#14532d; border-right:3px solid #166534;">
                 {lbl_oos}</th>
+              <th style="width:6px; padding:0; background:#1e3a8a;"></th>
+              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#581c87;">
+                {lbl_full}</th>
             </tr>
             {sub_hdr}
           </thead>
@@ -3487,6 +3506,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
         ⚠️ Pre-Sep 2025 dates are <b>in-sample</b>.
         🔬 OOS column: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         only trades entered on/after that date counted; CT model last trained {ct_str}.
+        🌐 Full Market: entire Jun 2024–today window (mixed IS + OOS).
         </p>
         """,
         unsafe_allow_html=True,
@@ -3634,6 +3654,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
             f"({pd.Timestamp(so['start_date']).strftime('%b %Y')} → "
             f"{pd.Timestamp(so['end_date']).strftime('%b %Y')})"
         )
+    if bt_full:
+        sfl = bt_full["stats"]
+        tab_labels.append(
+            f"🌐 Full Market  "
+            f"({pd.Timestamp(sfl['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sfl['end_date']).strftime('%b %Y')})"
+        )
 
     if tab_labels:
         tabs = st.tabs(tab_labels)
@@ -3673,6 +3700,18 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 )
                 if fig_o:
                     st.plotly_chart(fig_o, use_container_width=True, key=f"chart_oos_{key_suffix}")
+            tab_idx += 1
+        if bt_full:
+            with tabs[tab_idx]:
+                sfl = bt_full["stats"]
+                fig_fl = _make_chart(
+                    bt_full,
+                    f"TF2+V-Gate vs B&H — Full Market Performance  "
+                    f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})"
+                )
+                if fig_fl:
+                    st.plotly_chart(fig_fl, use_container_width=True, key=f"chart_full_{key_suffix}")
 
     # ── Trade log ─────────────────────────────────────────────────────
     def _trade_log_rows(bt):
@@ -3717,11 +3756,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
     if bt_bull: log_tabs.append("📋 Bull Market Trade Log")
     if bt_oos:  log_tabs.append("📋 OOS Trade Log")
+    if bt_full: log_tabs.append("📋 Full Market Trade Log")
 
     if log_tabs:
         ltabs = st.tabs(log_tabs)
         lt_idx = 0
-        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull"), (bt_oos, "oos")]:
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull"),
+                             (bt_oos, "oos"), (bt_full, "full")]:
             if bt_src is None:
                 continue
             rows, has_p, s = _trade_log_rows(bt_src)
@@ -3737,9 +3778,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                     "💡 P&L at execution prices (1-day lag from signal). "
                     "B&H normalised to $100k at period start. "
                 )
-                caption += ("✅ Fully OOS — model never saw this data."
-                            if lbl == "oos"
-                            else "⚠️ pre-Sep 2025 = in-sample.")
+                if lbl == "oos":
+                    caption += "✅ Fully OOS — model never saw this data."
+                elif lbl == "full":
+                    caption += "⚠️ Mixed IS/OOS — pre-Sep 2025 trades are in-sample."
+                else:
+                    caption += "⚠️ pre-Sep 2025 = in-sample."
                 st.caption(caption)
             lt_idx += 1
 
@@ -4357,6 +4401,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_bear     = run_full_period_backtest(_bt_end,      backtest_start_iso="2025-06-01", model_mtime=_model_mtime)
     _bt_bull     = run_full_period_backtest("2025-06-14", backtest_start_iso="2024-06-05", model_mtime=_model_mtime)
     _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # May 2024 start — OOS extraction
+    _bt_full     = run_full_period_backtest(_bt_end, backtest_start_iso="2024-06-05", model_mtime=_model_mtime)
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
 
@@ -4417,7 +4462,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         render_trend_signatures(sigs, intraday=_intra_sig)
 
     # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
-    render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos, key_suffix=_chart_key)
+    render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
+                                       bt_full=_bt_full, key_suffix=_chart_key)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
