@@ -2608,7 +2608,6 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     return preds_df, raw_df
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner="Running full 2-year backtest …")
 def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
                              initial_capital: float = 100_000.0,
