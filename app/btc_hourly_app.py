@@ -2406,7 +2406,7 @@ def _build_ct_batch_predictions():
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Building extended 2-year predictions …")
-def _build_ct_predictions_extended():
+def _build_ct_predictions_extended(model_mtime: float = 0.0):
     """Build CT predictions using yfinance daily data fetched from 2024-02-01.
 
     Provides 115+ days of feature warmup before the May 26, 2024 backtest start
@@ -2611,7 +2611,8 @@ def _build_ct_predictions_extended():
 @st.cache_data(ttl=3600 * 6, show_spinner="Running full 2-year backtest …")
 def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
-                             initial_capital: float = 100_000.0):
+                             initial_capital: float = 100_000.0,
+                             model_mtime: float = 0.0):
     """Full-period TF2 backtest using extended yfinance daily data.
 
     Fetches from 2024-02-01 to ensure 90-day feature warmup before the
@@ -2620,7 +2621,7 @@ def run_full_period_backtest(end_date_iso: str,
     """
     WARMUP = 35
 
-    ext = _build_ct_predictions_extended()
+    ext = _build_ct_predictions_extended(model_mtime=model_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -4300,11 +4301,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     # Pre-compute cached results (no latency hit) for display at top of page.
     _bt_end      = target_date.strftime("%Y-%m-%d")
+    # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
+    _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
     # Both periods use run_full_period_backtest so predictions come from the same
     # extended data pipeline (_build_ct_predictions_extended, Feb 2024 warmup).
-    _bt_bear     = run_full_period_backtest(_bt_end,      backtest_start_iso="2025-06-01")
-    _bt_bull     = run_full_period_backtest("2025-05-31", backtest_start_iso="2024-06-01")
-    _bt_full_oos = run_full_period_backtest(_bt_end)   # default May 2024 start — OOS extraction
+    _bt_bear     = run_full_period_backtest(_bt_end,      backtest_start_iso="2025-06-01", model_mtime=_model_mtime)
+    _bt_bull     = run_full_period_backtest("2025-05-31", backtest_start_iso="2024-06-01", model_mtime=_model_mtime)
+    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # May 2024 start — OOS extraction
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
 
