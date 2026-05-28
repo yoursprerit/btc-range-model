@@ -235,7 +235,7 @@ BACKTEST_END   = "2026-05-27"
 FETCH_START    = "2024-02-01"
 FETCH_END      = "2026-05-28"
 CAP = 100_000.0
-OOS_START = pd.Timestamp("2025-11-25")
+OOS_START = pd.Timestamp("2025-08-27")
 
 df  = fetch_data(FETCH_START, FETCH_END)
 print("Building CT predictions …", end=" ", flush=True)
@@ -348,7 +348,7 @@ C_BH  = "#3fb950"   # green
 C_OOS = "#6e40c9"   # purple shade for OOS shading
 
 # ── Panel 1: Equity curves ────────────────────────────────────────────────────
-ax1.axvline(OOS_START, color=C_OOS, lw=1.2, ls="--", alpha=0.7, label="OOS start (Nov 2025)")
+ax1.axvline(OOS_START, color=C_OOS, lw=1.2, ls="--", alpha=0.7, label="OOS start (Aug 2025)")
 ax1.axhspan(0, CAP, alpha=0.04, color="white")  # starting capital band
 
 ax1.plot(nav_bh.index,  nav_bh.values,  color=C_BH,  lw=1.5, alpha=0.85, label=f"Buy & Hold  (final: ${final_bh:,.0f})")
@@ -365,7 +365,7 @@ ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
 ax1.set_ylabel("Portfolio Value", fontsize=10)
 ax1.legend(loc="upper left", framealpha=0.2, fontsize=9,
            facecolor="#161b22", edgecolor="#30363d", labelcolor="white")
-ax1.set_title("Month-by-Month Portfolio Profile  |  $100k Initial Capital  (⚠️ pre-Nov 2025 = in-sample)",
+ax1.set_title("Month-by-Month Portfolio Profile  |  $100k Initial Capital  (⚠️ pre-Aug 2025 = in-sample)",
               color="white", fontsize=12, fontweight="bold", pad=10)
 ax1.grid(axis="y", color="#21262d", lw=0.6)
 ax1.grid(axis="x", color="#21262d", lw=0.4)
