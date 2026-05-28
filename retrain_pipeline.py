@@ -294,8 +294,13 @@ def _load_art(path: Path) -> dict | None:
 
 
 def _model_age(art: dict) -> int | None:
-    """Days since calibration_meta.train_end, or None if unavailable."""
-    te = art.get("calibration_meta", {}).get("train_end")
+    """Days since calibration_meta.test_end (how much new data exists beyond
+    the model's last evaluated date).  Falls back to train_end if test_end
+    is absent.  This is the correct staleness measure for models with a
+    fixed holdout window — train_end is always months in the past by design.
+    """
+    meta = art.get("calibration_meta", {})
+    te   = meta.get("test_end") or meta.get("train_end")
     if not te:
         return None
     today = pd.Timestamp.now().normalize()

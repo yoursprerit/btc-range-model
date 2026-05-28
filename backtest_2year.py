@@ -406,7 +406,7 @@ def print_report(m):
     print("  TRADE LOG (all closed trades)")
     print(f"{'═'*72}")
     print(f"  {'#':>3}  {'Entry':12}  {'Exit':12}  {'P&L':>7}  {'Days':>5}  Regime  Exit")
-    oos_start = pd.Timestamp("2025-09-18")
+    oos_start = pd.Timestamp("2025-11-25")
     for j,t in enumerate(m["trades"],1):
         tag = " (OOS)" if t["entry_date"] >= oos_start else " (IS) "
         mk  = "✓" if t["pnl_pct"]>0 else "✗"
@@ -424,9 +424,9 @@ def print_report(m):
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 BACKTEST_START = "2024-05-26"   # 2 years ago from today
-BACKTEST_END   = "2026-05-17"   # last complete daily bar available
+BACKTEST_END   = "2026-05-27"   # last complete daily bar available
 FETCH_START    = "2024-02-01"   # 90+ days extra for warmup features
-FETCH_END      = "2026-05-26"
+FETCH_END      = "2026-05-28"
 
 print(f"\nRunning 2-year backtest: {BACKTEST_START} → {BACKTEST_END}")
 df = fetch_data(FETCH_START, FETCH_END)

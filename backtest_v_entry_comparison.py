@@ -41,10 +41,10 @@ import pandas as pd
 import yfinance as yf
 
 BACKTEST_START  = "2024-05-26"
-BACKTEST_END    = "2026-05-26"
+BACKTEST_END    = "2026-05-27"
 FETCH_START     = "2024-02-01"
 INITIAL_CAP     = 100_000.0
-OOS_BOUNDARY    = pd.Timestamp("2025-09-18")
+OOS_BOUNDARY    = pd.Timestamp("2025-11-25")
 V_STANDALONE_THRESH = 1.5   # dn_score threshold for no-U1 entry
 
 # ── Model ──────────────────────────────────────────────────────────────────────

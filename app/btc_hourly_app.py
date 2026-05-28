@@ -1419,7 +1419,7 @@ def compute_alltime_cone_14d_metrics(end_date_iso):
     if cone is None:
         return None
     meta = cone.get("calibration_meta", {})
-    test_start_str = meta.get("test_start", "2025-09-25")
+    test_start_str = meta.get("test_start", "2025-11-25")
     test_start_ts  = pd.Timestamp(test_start_str)
     end_ts = pd.Timestamp(end_date_iso)
     days_back = int((end_ts - test_start_ts).days) + 28  # +14d lag + buffer
@@ -3226,7 +3226,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
-    ⚠️ Data before Sep 18, 2025 is <b>in-sample</b> (CT model training period)
+    ⚠️ Data before Nov 25, 2025 is <b>in-sample</b> (CT model training + validation period)
   </div>
 
 </div>""", unsafe_allow_html=True)
@@ -3302,10 +3302,10 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     s_f = bt_bull["stats"] if bt_bull else None
 
     # ── OOS stats dict (same shape as s_r / s_f so _period_cells reuses it) ──
-    OOS_START  = pd.Timestamp("2025-09-18")
+    OOS_START  = pd.Timestamp("2025-11-25")   # H/L test_start (after val embargo)
     cutoffs    = _training_cutoffs()
     ct_cutoff  = cutoffs.get("daily H/L")
-    ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Sep 17, 2025"
+    ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Sep 24, 2025"
     s_oos      = None
     if bt_full_oos is not None:
         _fnav = bt_full_oos["nav_series"];  _fbh = bt_full_oos["bh_series"]
@@ -6290,18 +6290,24 @@ def render_retrain_dashboard():
     def _worst(*icons):
         return max(icons, key=lambda x: RANK.get(x[:2], 0))
 
-    def _age_status(key):
-        te   = cutoffs.get(key)
+    def _age_status(key, test_end_str=None):
+        # Age = days since test_end (how much new data the model hasn't seen yet).
+        # Falls back to train_end if test_end is not stored in the artefact.
+        train_end = cutoffs.get(key)
+        if test_end_str:
+            te_for_age = pd.Timestamp(test_end_str).normalize()
+        elif train_end is not None:
+            te_for_age = train_end
+        else:
+            return None, "⚪", "unknown age"
         warn = WARN_D.get(key, 56)
         over = OVERDUE_D.get(key, 56)
-        if te is None:
-            return None, "⚪", "unknown age"
-        age = (today_utc - te).days
+        age  = int((today_utc - te_for_age).days)
         if age >= over:
-            return age, "🔴", f"{age}d  (limit: {over}d)"
+            return age, "🔴", f"{age}d since OOS end  (limit: {over}d)"
         if age >= warn:
-            return age, "🟡", f"{age}d  (warn: {warn}d)"
-        return age, "🟢", f"{age}d  (limit: {over}d)"
+            return age, "🟡", f"{age}d since OOS end  (warn: {warn}d)"
+        return age, "🟢", f"{age}d since OOS end  (limit: {over}d)"
 
     def _perf_hl():
         if not hl30:
@@ -6327,9 +6333,12 @@ def render_retrain_dashboard():
         if acc < 55: return "🟡", f"accuracy = {acc:.1f}%  (warn < 55%)"
         return "🟢", f"accuracy = {acc:.1f}%"
 
-    hl_age_d,   hl_age_ic,   hl_age_lbl  = _age_status("daily H/L")
-    con_age_d,  con_age_ic,  con_age_lbl = _age_status("7-day cone")
-    dt_age_d,   dt_age_ic,   dt_age_lbl  = _age_status("3-class day type")
+    hl_age_d,  hl_age_ic,  hl_age_lbl  = _age_status("daily H/L",
+                                              _hl_meta.get("test_end"))
+    con_age_d, con_age_ic, con_age_lbl = _age_status("7-day cone",
+                                              _cone_meta.get("test_end"))
+    dt_age_d,  dt_age_ic,  dt_age_lbl  = _age_status("3-class day type",
+                                              _dt_meta.get("test_end"))
     hl_perf_ic,  hl_perf_lbl  = _perf_hl()
     con_perf_ic, con_perf_lbl = _perf_cone()
     dt_perf_ic,  dt_perf_lbl  = _perf_dt()
