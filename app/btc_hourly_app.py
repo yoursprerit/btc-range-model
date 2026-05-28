@@ -2608,6 +2608,12 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     return preds_df, raw_df
 
 
+# Fixed backtest period end dates — locked to the dates established on 2026-05-28.
+# Only the OOS period rolls daily; these never change until the model is retrained.
+_BT_BEAR_END_LOCKED = "2026-05-28"
+_BT_FULL_END_LOCKED = "2026-05-28"
+
+
 def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
                              initial_capital: float = 100_000.0,
@@ -2837,6 +2843,19 @@ def run_full_period_backtest(end_date_iso: str,
             end_date        = dates[N-1],
         ),
     )
+
+
+@st.cache_data(show_spinner="Loading fixed-period backtest …")
+def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
+                                model_mtime: float = 0.0):
+    """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
+
+    No TTL — results persist for the app process lifetime and only invalidate
+    when the model file changes (via model_mtime).  The OOS period is NOT routed
+    through here; it calls run_full_period_backtest directly so it rolls daily.
+    """
+    return run_full_period_backtest(end_date_iso, backtest_start_iso,
+                                    model_mtime=model_mtime)
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
@@ -4396,12 +4415,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_end      = target_date.strftime("%Y-%m-%d")
     # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
-    # Both periods use run_full_period_backtest so predictions come from the same
-    # extended data pipeline (_build_ct_predictions_extended, Feb 2024 warmup).
-    _bt_bear     = run_full_period_backtest(_bt_end,      backtest_start_iso="2025-06-01", model_mtime=_model_mtime)
-    _bt_bull     = run_full_period_backtest("2025-06-14", backtest_start_iso="2024-06-05", model_mtime=_model_mtime)
-    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # May 2024 start — OOS extraction
-    _bt_full     = run_full_period_backtest(_bt_end, backtest_start_iso="2024-06-05", model_mtime=_model_mtime)
+    # Bear / Bull / Full Market use locked end dates (established 2026-05-28) and a
+    # no-TTL cache so results are computed once per model version, not on every load.
+    # Only the OOS period rolls daily; it calls run_full_period_backtest directly.
+    _bt_bear     = _run_fixed_period_backtest(_BT_BEAR_END_LOCKED, "2025-06-01",  _model_mtime)
+    _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime)
+    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # rolls daily
+    _bt_full     = _run_fixed_period_backtest(_BT_FULL_END_LOCKED,  "2024-06-05", _model_mtime)
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
 
