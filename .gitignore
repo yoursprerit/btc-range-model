@@ -30,6 +30,7 @@ legacy/data/features.csv
 
 # joblib backups from prior retrain runs — not needed in repo
 legacy/backups/*.bak
+models/backups/
 
 # Bulky legacy model artefact (35 MB), regeneratable via legacy/train_7d_model.py
 legacy/models/inference_assets_7d.joblib
