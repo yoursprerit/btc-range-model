@@ -3116,7 +3116,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
 
     Shows:
       • Strategy rules summary card (entry, exit, regime logic)
-      • Unified comparison table: three periods × three columns (TF2 | TF2-tax | B&H)
+      • Unified comparison table: three periods × three columns (TF2+V-Gate | TF2+V-Gate-tax | B&H)
       • Two equity-curve charts — one per period — in tabs
       • Expandable trade log for each period
 
@@ -3260,7 +3260,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     fmt_tax   = lambda v: f"${v:,.0f}"
 
     def _period_cells(s):
-        """Generate 3-cell group (TF2 pre-tax | TF2 after-tax | B&H) for one stats dict."""
+        """Generate 3-cell group (TF2+V-Gate pre-tax | TF2+V-Gate after-tax | B&H) for one stats dict."""
         if s is None:
             return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 3)
         tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
@@ -3387,8 +3387,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     else:
         lbl_oos = "🔬 OOS Only"
 
-    _sub3 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2 (35% tax)</th>"
+    _sub3 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% tax)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>")
     sub_hdr = (
         "<tr style='background:#334155; color:white; font-size:11px;'>"
@@ -3523,9 +3523,9 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2 Strategy",
+            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate Strategy",
             line=dict(color="#2563eb", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2 Strategy</extra>",
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate Strategy</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -3609,7 +3609,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 sr = bt_bear["stats"]
                 fig_r = _make_chart(
                     bt_bear,
-                    f"TF2 vs B&H — Bear Market Performance  "
+                    f"TF2+V-Gate vs B&H — Bear Market Performance  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -3621,7 +3621,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 sf = bt_bull["stats"]
                 fig_f = _make_chart(
                     bt_bull,
-                    f"TF2 vs B&H — Bull Market Performance  "
+                    f"TF2+V-Gate vs B&H — Bull Market Performance  "
                     f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})"
                 )
