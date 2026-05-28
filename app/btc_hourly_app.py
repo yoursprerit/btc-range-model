@@ -1419,7 +1419,7 @@ def compute_alltime_cone_14d_metrics(end_date_iso):
     if cone is None:
         return None
     meta = cone.get("calibration_meta", {})
-    test_start_str = meta.get("test_start", "2025-09-25")
+    test_start_str = meta.get("test_start", "2025-08-27")
     test_start_ts  = pd.Timestamp(test_start_str)
     end_ts = pd.Timestamp(end_date_iso)
     days_back = int((end_ts - test_start_ts).days) + 28  # +14d lag + buffer
@@ -3226,7 +3226,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
-    ⚠️ Data before Sep 18, 2025 is <b>in-sample</b> (CT model training period)
+    ⚠️ Data before Aug 27, 2025 is <b>in-sample</b> (CT model training + validation period)
   </div>
 
 </div>""", unsafe_allow_html=True)
@@ -3302,7 +3302,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     s_f = bt_bull["stats"] if bt_bull else None
 
     # ── OOS stats dict (same shape as s_r / s_f so _period_cells reuses it) ──
-    OOS_START  = pd.Timestamp("2025-09-18")
+    OOS_START  = pd.Timestamp("2025-08-27")   # H/L test_start (after val embargo)
     cutoffs    = _training_cutoffs()
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Sep 17, 2025"

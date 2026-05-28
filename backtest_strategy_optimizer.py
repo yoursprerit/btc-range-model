@@ -489,9 +489,9 @@ def run_backtest(
 STRATEGIES = ["TF1", "TF2", "TF3", "TF4", "TF5"]
 
 PERIODS = {
-    "OOS Bear/Consolidation (Sep25→May26)": {
-        "start": "2025-09-19", "end": "2026-05-17",
-        "fetch_start": "2025-06-01", "fetch_end": "2026-05-26",
+    "OOS Bear/Consolidation (Aug25→May26)": {
+        "start": "2025-08-27", "end": "2026-05-27",
+        "fetch_start": "2025-05-01", "fetch_end": "2026-05-28",
         "regime": "bear",
     },
     "Prior-Year Bull+93% (Sep24→Sep25)": {
