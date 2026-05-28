@@ -28,6 +28,7 @@ Artefact keys (backward-compatible with v1, plus new ML keys):
   ml_point_model, ml_feature_cols,
   ml_metrics_oos, use_ml               ← new in v2
 """
+import argparse as _argparse
 import sys, json, warnings, time
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,10 @@ from sklearn.pipeline import Pipeline
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from paths import RAW_CT_CSV, FEATURES_CT_CSV, MODELS_DIR
+
+_p = _argparse.ArgumentParser(add_help=False)
+_p.add_argument("--test-start", type=str, default=None)
+_ARGS, _ = _p.parse_known_args()
 
 HORIZON           = 7
 N_REGIMES         = 3
@@ -392,16 +397,24 @@ print(f"\n  Feature matrix: {feats_df.shape}  "
 # ─────────────────────────────────────────────────────────────────────────────
 TODAY        = pd.Timestamp(datetime.utcnow().date())
 EMBARGO_DAYS = HORIZON   # = 7
-test_start   = TODAY      - pd.DateOffset(months=8)
-train_end    = test_start - pd.Timedelta(days=EMBARGO_DAYS)
+if _ARGS.test_start:
+    test_start = pd.Timestamp(_ARGS.test_start).normalize()
+else:
+    test_start = TODAY - pd.DateOffset(months=8)
+train_end  = test_start - pd.Timedelta(days=EMBARGO_DAYS)
 
 clean = feats_df.dropna(subset=["y_logret_7"])
+# Deploy mode: test_start beyond available data → train on all, empty test
+DEPLOY_MODE = test_start > clean.index.max()
 train = clean.loc[:train_end]
 test  = clean.loc[test_start:]
 
 print(f"\nTRAIN {train.index.min().date()} → {train.index.max().date()}  n={len(train)}")
 print(f"  embargo of {EMBARGO_DAYS} days")
-print(f"TEST  {test.index.min().date()} → {test.index.max().date()}   n={len(test)}")
+if DEPLOY_MODE:
+    print(f"TEST  (none — deploy mode, test_start={test_start.date()} beyond available data)")
+else:
+    print(f"TEST  {test.index.min().date()} → {test.index.max().date()}   n={len(test)}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. FIT REGIME CONE  (unchanged from v1 — used for band calibration)
@@ -456,7 +469,7 @@ gbm_pipeline.fit(X_tr, y_tr)
 print("  GBM training complete.")
 
 pred_gbm_tr = gbm_pipeline.predict(X_tr)
-pred_gbm_te = gbm_pipeline.predict(X_te)
+pred_gbm_te = gbm_pipeline.predict(X_te) if len(X_te) > 0 else np.array([])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. CALIBRATE BAND WIDTH FROM RETURN DISTRIBUTION (same method as v1)
@@ -511,9 +524,6 @@ def eval_metrics(pred_lr, actual_lr, close_today, band, label=""):
     return dict(label=label, mape=mape, cov=cov, dir=dacc,
                 hit5=hit5, hit10=hit10, hit15=hit15)
 
-# Regime-cone baseline (v1 behaviour — still computed for comparison)
-test_regimes_arr = to_regime(test["range_ma30"])
-cone_pred_te_lr  = np.array([regime_stats[r][0.50] for r in test_regimes_arr])
 cone_pred_tr_lr  = np.array([regime_stats[r][0.50] for r in train_regimes])
 
 # v1 band (from training quantiles — same calibration as above, reference)
@@ -523,60 +533,76 @@ band_v1 = float(np.ceil(np.mean(hw_v1) * 200) / 200 + 0.005)
 if band_v1 < 0.07 or band_v1 > 0.14:
     band_v1 = BAND_PCT_FALLBACK
 
-m_cone_te = eval_metrics(cone_pred_te_lr, y_te.values,  close_te, band_v1,  "Cone (v1)")
-m_cone_tr = eval_metrics(cone_pred_tr_lr, y_tr.values,  close_tr, band_v1,  "Cone (v1) TRAIN")
-m_gbm_te  = eval_metrics(pred_gbm_te,     y_te.values,  close_te, band_pct, "GBM (v2)")
-m_gbm_tr  = eval_metrics(pred_gbm_tr,     y_tr.values,  close_tr, band_pct, "GBM (v2) TRAIN")
+m_cone_tr = eval_metrics(cone_pred_tr_lr, y_tr.values, close_tr, band_v1, "Cone (v1) TRAIN")
+m_gbm_tr  = eval_metrics(pred_gbm_tr,     y_tr.values, close_tr, band_pct, "GBM (v2) TRAIN")
 
 # ── Feature importances ───────────────────────────────────────────────────────
 gbm_model  = gbm_pipeline.named_steps["gbm"]
 imp_series = (pd.Series(gbm_model.feature_importances_, index=ML_FEAT_COLS)
               .sort_values(ascending=False))
 
-# ── Print comparison table ────────────────────────────────────────────────────
-print("\n" + "="*72)
-print("  7-DAY MODEL — PERFORMANCE COMPARISON")
-print("="*72)
-print(f"\n  Band widths:  v1 (cone) ±{band_v1*100:.1f}%   v2 (GBM) ±{band_pct*100:.1f}%\n")
+_EMPTY_METRICS = dict(label="N/A", mape=float("nan"), cov=float("nan"),
+                      dir=float("nan"), hit5=float("nan"), hit10=float("nan"),
+                      hit15=float("nan"))
 
-hdr = f"  {'Metric':28s}  {'Cone v1 TRAIN':>14} {'Cone v1 OOS':>13}  {'GBM v2 TRAIN':>14} {'GBM v2 OOS':>12}"
-sep = "  " + "─"*78
-print(hdr); print(sep)
-for key, label in [("mape",  "MAPE (point forecast)"),
-                   ("cov",   "Band coverage"),
-                   ("dir",   "Direction accuracy"),
-                   ("hit5",  "Hit rate ±5%"),
-                   ("hit10", "Hit rate ±10%"),
-                   ("hit15", "Hit rate ±15%")]:
-    v_ctr = m_cone_tr[key]; v_cte = m_cone_te[key]
-    v_gtr = m_gbm_tr[key];  v_gte = m_gbm_te[key]
-    if key == "mape":
-        tag = " ✅" if v_gte < v_cte else (" ⚠" if v_gte > v_cte + 0.5 else "")
-    else:
-        tag = " ✅" if v_gte > v_cte + 1.0 else ""
-    print(f"  {label:28s}  {v_ctr:13.1f}%  {v_cte:13.1f}%   "
-          f"{v_gtr:13.1f}%  {v_gte:11.1f}%{tag}")
-print(sep)
+if DEPLOY_MODE:
+    m_cone_te = _EMPTY_METRICS.copy(); m_cone_te["label"] = "Cone (v1)"
+    m_gbm_te  = _EMPTY_METRICS.copy(); m_gbm_te["label"]  = "GBM (v2)"
+    print("\n  DEPLOY MODE — no test holdout; skipping OOS eval table.")
+    print(f"\n  Top-15 features by GBM importance:")
+    for i, (feat, imp) in enumerate(imp_series.head(15).items(), 1):
+        bar = "█" * int(imp * 1000)
+        print(f"  {i:3d}. {feat:35s}  {imp:.4f}  {bar}")
+else:
+    # Regime-cone baseline (v1 behaviour — still computed for comparison)
+    test_regimes_arr = to_regime(test["range_ma30"])
+    cone_pred_te_lr  = np.array([regime_stats[r][0.50] for r in test_regimes_arr])
+    m_cone_te = eval_metrics(cone_pred_te_lr, y_te.values,  close_te, band_v1,  "Cone (v1)")
+    m_gbm_te  = eval_metrics(pred_gbm_te,     y_te.values,  close_te, band_pct, "GBM (v2)")
 
-print(f"\n  Top-15 features by GBM importance:")
-for i, (feat, imp) in enumerate(imp_series.head(15).items(), 1):
-    bar = "█" * int(imp * 1000)
-    print(f"  {i:3d}. {feat:35s}  {imp:.4f}  {bar}")
+    print("\n" + "="*72)
+    print("  7-DAY MODEL — PERFORMANCE COMPARISON")
+    print("="*72)
+    print(f"\n  Band widths:  v1 (cone) ±{band_v1*100:.1f}%   v2 (GBM) ±{band_pct*100:.1f}%\n")
 
-print(f"\n  Regime breakdown on TEST (GBM v2):")
-for r in range(N_REGIMES):
-    mask_r  = (test_regimes_arr == r)
-    if mask_r.sum() == 0:
-        continue
-    pred_r  = pred_gbm_te[mask_r]
-    act_r   = y_te.values[mask_r]
-    close_r = close_te[mask_r]
-    m_r     = eval_metrics(pred_r, act_r, close_r, band_pct)
-    label   = ["low vol", "mid vol", "high vol"][r]
-    print(f"    [{label:>8}]  n={mask_r.sum():3d}  "
-          f"MAPE={m_r['mape']:5.2f}%  Dir={m_r['dir']:4.1f}%  Cov={m_r['cov']:5.1f}%")
+    hdr = f"  {'Metric':28s}  {'Cone v1 TRAIN':>14} {'Cone v1 OOS':>13}  {'GBM v2 TRAIN':>14} {'GBM v2 OOS':>12}"
+    sep = "  " + "─"*78
+    print(hdr); print(sep)
+    for key, label in [("mape",  "MAPE (point forecast)"),
+                       ("cov",   "Band coverage"),
+                       ("dir",   "Direction accuracy"),
+                       ("hit5",  "Hit rate ±5%"),
+                       ("hit10", "Hit rate ±10%"),
+                       ("hit15", "Hit rate ±15%")]:
+        v_ctr = m_cone_tr[key]; v_cte = m_cone_te[key]
+        v_gtr = m_gbm_tr[key];  v_gte = m_gbm_te[key]
+        if key == "mape":
+            tag = " ✅" if v_gte < v_cte else (" ⚠" if v_gte > v_cte + 0.5 else "")
+        else:
+            tag = " ✅" if v_gte > v_cte + 1.0 else ""
+        print(f"  {label:28s}  {v_ctr:13.1f}%  {v_cte:13.1f}%   "
+              f"{v_gtr:13.1f}%  {v_gte:11.1f}%{tag}")
+    print(sep)
 
-print("\n" + "="*72)
+    print(f"\n  Top-15 features by GBM importance:")
+    for i, (feat, imp) in enumerate(imp_series.head(15).items(), 1):
+        bar = "█" * int(imp * 1000)
+        print(f"  {i:3d}. {feat:35s}  {imp:.4f}  {bar}")
+
+    print(f"\n  Regime breakdown on TEST (GBM v2):")
+    for r in range(N_REGIMES):
+        mask_r  = (test_regimes_arr == r)
+        if mask_r.sum() == 0:
+            continue
+        pred_r  = pred_gbm_te[mask_r]
+        act_r   = y_te.values[mask_r]
+        close_r = close_te[mask_r]
+        m_r     = eval_metrics(pred_r, act_r, close_r, band_pct)
+        label   = ["low vol", "mid vol", "high vol"][r]
+        print(f"    [{label:>8}]  n={mask_r.sum():3d}  "
+              f"MAPE={m_r['mape']:5.2f}%  Dir={m_r['dir']:4.1f}%  Cov={m_r['cov']:5.1f}%")
+
+    print("\n" + "="*72)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 11. SAVE ARTEFACT  (backward-compatible + new ML keys)
@@ -600,11 +626,11 @@ art = dict(
     # ── calibration metadata ─────────────────────────────────────────────────
     calibration_meta = dict(
         train_start    = str(train.index.min().date()),
-        train_end      = str(train.index.max().date()),
-        test_start     = str(test.index.min().date()),
-        test_end       = str(test.index.max().date()),
-        train_n        = int(len(train)),
-        test_n         = int(len(test)),
+        train_end      = str(clean.index.max().date()) if DEPLOY_MODE else str(train.index.max().date()),
+        test_start     = str(test_start.date()),
+        test_end       = str(test_start.date()),
+        train_n        = int(len(clean)) if DEPLOY_MODE else int(len(train)),
+        test_n         = 0 if DEPLOY_MODE else int(len(test)),
         embargo_days   = int(EMBARGO_DAYS),
         method_v2      = ("GBM point prediction (BTC + macro + yield spread + "
                           "econ activity + energy + ETH/BTC ratio + "
@@ -616,8 +642,8 @@ art = dict(
         feature_count  = int(len(ML_FEAT_COLS)),
         cone_oos_metrics  = m_cone_te,
         ml_oos_metrics    = m_gbm_te,
-        held_out_band_coverage_pct = float(m_gbm_te["cov"]),
-        held_out_mape_pct          = float(m_gbm_te["mape"]),
+        held_out_band_coverage_pct = float(m_gbm_te["cov"]) if not DEPLOY_MODE else float("nan"),
+        held_out_mape_pct          = float(m_gbm_te["mape"]) if not DEPLOY_MODE else float("nan"),
     ),
 )
 

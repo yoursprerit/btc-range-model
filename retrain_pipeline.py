@@ -662,15 +662,17 @@ def _archive_model(path: Path, label: str, skip: bool = False):
 # 9.  SCRIPT RUNNER
 # ---------------------------------------------------------------------------
 
-def _run_script(script_rel: str, label: str) -> tuple[bool, float]:
+def _run_script(script_rel: str, label: str,
+                extra_args: list[str] | None = None) -> tuple[bool, float]:
     """Run a training script, stream output, return (success, elapsed_secs)."""
     script = ROOT / script_rel
     if not script.exists():
         _err(f"Script not found: {script}")
         return False, 0.0
-    _info(f"  $ python {script_rel}")
+    cmd = [sys.executable, str(script)] + (extra_args or [])
+    _info(f"  $ python {script_rel}" + (f" {' '.join(extra_args)}" if extra_args else ""))
     t0     = time.time()
-    result = subprocess.run([sys.executable, str(script)], cwd=str(ROOT))
+    result = subprocess.run(cmd, cwd=str(ROOT))
     elapsed = time.time() - t0
     if result.returncode == 0:
         _ok(f"{label} completed in {elapsed / 60:.1f} min")
@@ -717,7 +719,8 @@ def run_training(models: list[str], args) -> dict[str, bool]:
         _info(f"\n── {label} ─────────────────────────────────────────────────")
 
         _archive_model(ARTEFACT_MAP[model_key], label, skip=args.no_archive)
-        success, _ = _run_script(SCRIPT_MAP[model_key], label)
+        extra = ["--test-start", args.test_start] if getattr(args, "test_start", None) else None
+        success, _ = _run_script(SCRIPT_MAP[model_key], label, extra_args=extra)
         results[model_key] = success
 
         if model_key == "daily_hl" and not success:
@@ -877,6 +880,11 @@ def main():
     parser.add_argument(
         "--no-fetch", action="store_true",
         help="Skip the Yahoo Finance fetch used for live MAPE / CUSUM assessment.",
+    )
+    parser.add_argument(
+        "--test-start", type=str, default=None, metavar="YYYY-MM-DD",
+        help="Force test_start date passed to each training script. When beyond "
+             "available data, scripts use deploy-retrain mode (all data in training).",
     )
     args = parser.parse_args()
 

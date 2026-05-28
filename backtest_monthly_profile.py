@@ -235,7 +235,7 @@ BACKTEST_END   = "2026-05-27"
 FETCH_START    = "2024-02-01"
 FETCH_END      = "2026-05-28"
 CAP = 100_000.0
-OOS_START = pd.Timestamp("2025-08-27")
+OOS_START = pd.Timestamp("2026-03-01")
 
 df  = fetch_data(FETCH_START, FETCH_END)
 print("Building CT predictions …", end=" ", flush=True)

@@ -406,7 +406,7 @@ def print_report(m):
     print("  TRADE LOG (all closed trades)")
     print(f"{'═'*72}")
     print(f"  {'#':>3}  {'Entry':12}  {'Exit':12}  {'P&L':>7}  {'Days':>5}  Regime  Exit")
-    oos_start = pd.Timestamp("2025-08-27")
+    oos_start = pd.Timestamp("2026-03-01")
     for j,t in enumerate(m["trades"],1):
         tag = " (OOS)" if t["entry_date"] >= oos_start else " (IS) "
         mk  = "✓" if t["pnl_pct"]>0 else "✗"
