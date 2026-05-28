@@ -3307,6 +3307,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
     s_oos      = None
+    bt_oos     = None
     if bt_full_oos is not None:
         _fnav = bt_full_oos["nav_series"];  _fbh = bt_full_oos["bh_series"]
         _ftr  = bt_full_oos["trades"];      ic   = bt_full_oos["stats"]["initial_capital"]
@@ -3353,6 +3354,32 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 win_rate        = 100*len(_ow)/len(_otr) if _otr else 0.0,
                 n_wins          = len(_ow),   n_losses    = len(_ol),
                 start_date      = OOS_START,  end_date    = _onav.index[-1],
+            )
+            # Scale trade exit_nav values to OOS-normalised capital so chart
+            # markers and "NAV After" column align with the $100k OOS baseline.
+            _norm = ic / _osn
+            _otr_scaled = [dict(t, exit_nav=t["exit_nav"] * _norm) for t in _otr]
+            # Open position in OOS window (if any)
+            _oos_open = False
+            _oos_oe   = None
+            if bt_full_oos.get("open_pos") and bt_full_oos.get("open_entry"):
+                _oe = bt_full_oos["open_entry"]
+                if pd.Timestamp(_oe["date"]) >= OOS_START:
+                    _oos_open = True
+                    _oos_oe   = dict(price=_oe["price"], date=_oe["date"],
+                                     nav=_oe["nav"] * _norm)
+            # Slice regime shading to OOS window
+            _full_reg = bt_full_oos.get("bull_regime_series")
+            _oos_reg  = (_full_reg[_full_reg.index >= OOS_START]
+                         if _full_reg is not None else None)
+            bt_oos = dict(
+                nav_series         = _onav,
+                bh_series          = _obh,
+                open_pos           = _oos_open,
+                open_entry         = _oos_oe,
+                trades             = _otr_scaled,
+                stats              = s_oos,
+                bull_regime_series = _oos_reg,
             )
 
     pr   = _period_cells(s_r)
@@ -3600,6 +3627,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
             f"({pd.Timestamp(sf['start_date']).strftime('%b %Y')} → "
             f"{pd.Timestamp(sf['end_date']).strftime('%b %Y')})"
         )
+    if bt_oos:
+        so = bt_oos["stats"]
+        tab_labels.append(
+            f"🔬 OOS Only  "
+            f"({pd.Timestamp(so['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(so['end_date']).strftime('%b %Y')})"
+        )
 
     if tab_labels:
         tabs = st.tabs(tab_labels)
@@ -3627,6 +3661,18 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                 )
                 if fig_f:
                     st.plotly_chart(fig_f, use_container_width=True, key=f"chart_bull_{key_suffix}")
+            tab_idx += 1
+        if bt_oos:
+            with tabs[tab_idx]:
+                so = bt_oos["stats"]
+                fig_o = _make_chart(
+                    bt_oos,
+                    f"TF2+V-Gate vs B&H — OOS Period (Fully Blind)  "
+                    f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})"
+                )
+                if fig_o:
+                    st.plotly_chart(fig_o, use_container_width=True, key=f"chart_oos_{key_suffix}")
 
     # ── Trade log ─────────────────────────────────────────────────────
     def _trade_log_rows(bt):
@@ -3670,11 +3716,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
     log_tabs = []
     if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
     if bt_bull: log_tabs.append("📋 Bull Market Trade Log")
+    if bt_oos:  log_tabs.append("📋 OOS Trade Log")
 
     if log_tabs:
         ltabs = st.tabs(log_tabs)
         lt_idx = 0
-        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull")]:
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull"), (bt_oos, "oos")]:
             if bt_src is None:
                 continue
             rows, has_p, s = _trade_log_rows(bt_src)
@@ -3686,11 +3733,14 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
                                  use_container_width=True)
                 else:
                     st.info("No trades in this period — strategy was in cash throughout.")
-                st.caption(
+                caption = (
                     "💡 P&L at execution prices (1-day lag from signal). "
                     "B&H normalised to $100k at period start. "
-                    "⚠️ pre-Sep 2025 = in-sample."
                 )
+                caption += ("✅ Fully OOS — model never saw this data."
+                            if lbl == "oos"
+                            else "⚠️ pre-Sep 2025 = in-sample.")
+                st.caption(caption)
             lt_idx += 1
 
 
