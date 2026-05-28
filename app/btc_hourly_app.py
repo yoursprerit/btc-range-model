@@ -3370,12 +3370,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None, key_su
         lbl_r = "🐻 Bear Market Performance (last 12 months) ⚠️ IS"
 
     if s_f:
-        lbl_f = (f"🐂 Bull Market Performance (prior 12 months) ⚠️ IS<br>"
+        lbl_f = (f"🐂 Bull Market Performance ⚠️ IS<br>"
                  f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                  f"{pd.Timestamp(s_f['start_date']).strftime('%b %d, %Y')} → "
                  f"{pd.Timestamp(s_f['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_f = "🐂 Bull Market Performance (prior 12 months) ⚠️ IS"
+        lbl_f = "🐂 Bull Market Performance ⚠️ IS"
 
     if s_oos:
         lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
@@ -4306,7 +4306,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # Both periods use run_full_period_backtest so predictions come from the same
     # extended data pipeline (_build_ct_predictions_extended, Feb 2024 warmup).
     _bt_bear     = run_full_period_backtest(_bt_end,      backtest_start_iso="2025-06-01", model_mtime=_model_mtime)
-    _bt_bull     = run_full_period_backtest("2025-05-31", backtest_start_iso="2024-06-01", model_mtime=_model_mtime)
+    _bt_bull     = run_full_period_backtest("2025-06-14", backtest_start_iso="2024-06-05", model_mtime=_model_mtime)
     _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # May 2024 start — OOS extraction
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
