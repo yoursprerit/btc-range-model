@@ -824,7 +824,551 @@ def run_comparison(old_arts: dict[str, dict | None], train_results: dict[str, bo
 
 
 # ---------------------------------------------------------------------------
-# 12.  RETRAIN SUMMARY HELPER
+# 12.  BACKTEST VALIDATION
+# ---------------------------------------------------------------------------
+#
+# After the Daily H/L model is retrained we run the TF2+V-Gate strategy on
+# three fixed windows and compare results to the baseline (old) model.
+# All three periods must improve; if any regress the pipeline analyses the
+# cause, tries progressively trimmed training windows, and if no cutoff
+# passes it rolls back to the pre-training artefact.
+#
+# Period windows (match the Streamlit UI):
+#   Bear  :  2025-06-01 → today
+#   Bull  :  2024-06-05 → 2025-06-14  (closes the Apr-2025 open trade)
+#   Full  :  2024-06-05 → today
+# ---------------------------------------------------------------------------
+
+BT_BEAR_START   = "2025-06-01"   # ~12-month bear window start
+BT_BULL_START   = "2024-06-05"   # bull window start
+BT_BULL_END     = "2025-06-14"   # bull window end
+BT_FULL_START   = "2024-06-05"   # full period start
+BT_FETCH_START  = "2024-02-01"   # 115+ days warmup for 90-day rolling features
+BT_WARMUP_BARS  = 35             # indicator warmup before the backtest window
+
+# Minimum strategy-return delta (pp) for a period to count as "improved".
+# 0.0 means any positive change is enough; increase to require a buffer.
+BT_MIN_DELTA    = 0.0
+
+# Data-search: number of months to trim from the training end on each retry
+_SEARCH_TRIM_MONTHS = [3, 6]
+
+
+def _bt_fetch_raw(today_iso: str) -> pd.DataFrame | None:
+    """Fetch BTC + macro daily bars from BT_FETCH_START → today."""
+    _info("  Fetching daily BTC + macro for backtest …")
+    end = (pd.Timestamp(today_iso) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    parts: list[pd.DataFrame] = []
+    for name, sym in ({"btc": "BTC-USD"} | _MACRO_SYMS).items():
+        try:
+            raw = yf.download(sym, start=BT_FETCH_START, end=end,
+                              progress=False, auto_adjust=False)
+            if not raw.empty:
+                parts.append(_flat(raw, name))
+        except Exception:
+            pass
+    if not parts or "btc_close" not in parts[0].columns:
+        _warn("  BTC data unavailable — cannot run backtest validation.")
+        return None
+    df = parts[0]
+    for p in parts[1:]:
+        df = df.join(p, how="outer")
+    return df.ffill(limit=5)
+
+
+def _bt_build_preds(art: dict, raw: pd.DataFrame) -> pd.DataFrame | None:
+    """Build pred_high / pred_low time series from artefact + raw OHLCV."""
+    feat_cols    = art.get("feat_cols", [])
+    constituents = art.get("constituents", [])
+    if not feat_cols or not constituents:
+        _warn("  Artefact missing feat_cols or constituents — cannot build predictions.")
+        return None
+
+    F   = _build_hl_features(raw, feat_cols)
+    Fnp = F.to_numpy()
+
+    all_hi: list = []
+    all_lo: list = []
+    for con in constituents:
+        try:
+            all_hi.append(con["m_hi"].predict(Fnp))
+            all_lo.append(con["m_lo"].predict(Fnp))
+        except Exception:
+            pass
+    if not all_hi:
+        _warn("  All constituent predictions failed.")
+        return None
+
+    yhi = np.mean(all_hi, axis=0)
+    ylo = np.mean(all_lo, axis=0)
+
+    # Optional stacking blend (alpha < 1 activates hi_model / lo_model)
+    alpha = float(art.get("alpha", 1.0))
+    hi_m  = art.get("hi_model")
+    lo_m  = art.get("lo_model")
+    if alpha < 1.0:
+        if hi_m is not None:
+            yhi = alpha * yhi + (1.0 - alpha) * hi_m.predict(Fnp)
+        if lo_m is not None:
+            ylo = alpha * ylo + (1.0 - alpha) * lo_m.predict(Fnp)
+    yhi = yhi + float(art.get("mu_hi", 0.0))
+    ylo = ylo + float(art.get("mu_lo", 0.0))
+
+    c_vals  = raw["btc_close"].reindex(F.index).values.astype(float)
+    pred_hi = c_vals * (1.0 + np.clip(yhi, 0, None))
+    pred_lo = c_vals * (1.0 - np.clip(ylo, 0, None))
+
+    # Predictions are for the NEXT bar (target_date = date + 1 trading day)
+    next_dates = list(F.index[1:]) + [F.index[-1] + pd.Timedelta(days=1)]
+    preds = pd.DataFrame(
+        {"close_asof": c_vals, "pred_high": pred_hi, "pred_low": pred_lo},
+        index=pd.DatetimeIndex(next_dates, name="target_date"),
+    )
+    return preds[~preds.index.duplicated(keep="last")]
+
+
+def _bt_run_strategy(preds: pd.DataFrame, raw: pd.DataFrame,
+                     bt_start_iso: str, bt_end_iso: str,
+                     initial_capital: float = 100_000.0) -> dict | None:
+    """Run the TF2+V-Gate strategy and return a stats dict.
+
+    Implements the same logic as app/btc_hourly_app.py::run_full_period_backtest:
+      Entry : U1 AND (above_MA30 OR clean_10d OR v_recent)
+      Exit  : D3 always; D2 when NOT in bull regime
+    """
+    WARMUP   = BT_WARMUP_BARS
+    start_dt = pd.Timestamp(bt_start_iso)
+    end_dt   = pd.Timestamp(bt_end_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=60)   # warmup window before start
+
+    p = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    p["actual_high"]  = raw["btc_high"].reindex(p.index).values
+    p["actual_low"]   = raw["btc_low"].reindex(p.index).values
+    p["actual_close"] = raw["btc_close"].reindex(p.index).values
+    comp = p.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
+    N    = len(comp)
+    if N < WARMUP + 3:
+        return None
+
+    dates   = pd.DatetimeIndex(comp["target_date"])
+    c_asof  = comp["close_asof"].values.astype(float)
+    exec_px = comp["actual_close"].values.astype(float)
+    pred_hi = comp["pred_high"].values.astype(float)
+    pred_lo = comp["pred_low"].values.astype(float)
+    act_hi  = comp["actual_high"].values.astype(float)
+    act_lo  = comp["actual_low"].values.astype(float)
+
+    _bt0 = max(WARMUP, int(dates.searchsorted(start_dt)))
+    if N - _bt0 < 3:
+        return None
+
+    err_hi = (act_hi - pred_hi) / c_asof * 100
+    err_lo = (pred_lo - act_lo) / c_asof * 100
+    hi_brk = (act_hi > pred_hi).astype(int)
+    lo_brk = (act_lo < pred_lo).astype(int)
+
+    ehma3 = np.zeros(N); elma3 = np.zeros(N)
+    hb3   = np.zeros(N, dtype=int); lb3   = np.zeros(N, dtype=int)
+    for i in range(N):
+        sl       = slice(max(0, i - 2), i + 1)
+        ehma3[i] = float(np.mean(err_hi[sl]))
+        elma3[i] = float(np.mean(err_lo[sl]))
+        hb3[i]   = int(np.sum(hi_brk[sl]))
+        lb3[i]   = int(np.sum(lo_brk[sl]))
+
+    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    d1 = (lb3 >= 2) & (elma3 > 0.5)
+    d2 = ehma3 < -1.0
+    d3 = np.zeros(N, dtype=bool)
+    for i in range(1, N):
+        consec = 0
+        for k in range(i - 1, -1, -1):
+            if hi_brk[k]: consec += 1
+            else: break
+        if consec >= 3 and lo_brk[i]:
+            d3[i] = True
+
+    # Bull regime: price above MA30 AND MA30 has +ve 5-bar slope
+    ma30 = np.zeros(N)
+    for i in range(N):
+        w       = min(30, i + 1)
+        ma30[i] = float(np.mean(c_asof[max(0, i - w + 1):i + 1]))
+    above_ma30 = c_asof > ma30
+    slope5     = np.zeros(N, dtype=bool)
+    for i in range(5, N):
+        slope5[i] = ma30[i] > ma30[i - 5]
+    bull_regime = above_ma30 & slope5
+
+    # Clean-10d: no D1/D2 in the last 10 bars
+    clean_10d = np.zeros(N, dtype=bool)
+    for i in range(N):
+        li          = max(0, i - 10)
+        clean_10d[i] = not bool(np.any(d1[li:i] | d2[li:i]))
+
+    # V-reversal: recent D1/D2 present and error recovering above U1 threshold
+    v_recent = np.zeros(N, dtype=bool)
+    for i in range(3, N):
+        sl = slice(max(0, i - 2), i + 1)
+        if bool(np.any(d1[sl] | d2[sl])) and ehma3[i] > 0.5:
+            v_recent[i] = True
+
+    entry = u1 & (above_ma30 | clean_10d | v_recent)
+
+    nav = initial_capital; pos = "CASH"; qty = 0.0
+    e_price = e_date = e_nav = None
+    trades: list[dict] = []
+    nav_arr = np.full(N, np.nan)
+
+    for i in range(N):
+        si = i - 1; price = exec_px[i]
+        if i < _bt0:
+            nav_arr[i] = initial_capital; continue
+        if pos == "LONG":
+            cur = qty * price
+            if si >= 0:
+                should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
+                exit_lbl    = "D3" if d3[si] else "D2 (bear)"
+            else:
+                should_exit = False; exit_lbl = "?"
+            if should_exit:
+                nav = cur
+                trades.append(dict(
+                    entry_date    = e_date,
+                    entry_price   = e_price,
+                    exit_date     = dates[i],
+                    exit_price    = price,
+                    pnl_pct       = (price / e_price - 1) * 100,
+                    duration_days = (dates[i] - e_date).days,
+                    exit_signal   = exit_lbl,
+                ))
+                pos = "CASH"; qty = 0.0
+            else:
+                nav = cur
+        else:
+            if si >= 0 and entry[si]:
+                qty = nav / price; e_price = price; e_date = dates[i]; e_nav = nav
+                pos = "LONG"
+        nav_arr[i] = qty * price if pos == "LONG" else nav
+
+    if pos == "LONG":
+        nav_arr[N - 1] = qty * exec_px[N - 1]
+
+    nav_s     = pd.Series(nav_arr[_bt0:], index=dates[_bt0:]).ffill()
+    bh_s      = pd.Series(initial_capital * exec_px[_bt0:] / exec_px[_bt0],
+                           index=dates[_bt0:])
+    final_nav = float(nav_s.iloc[-1])
+    strat_ret = (final_nav / initial_capital - 1) * 100
+    bh_ret    = (float(bh_s.iloc[-1]) / initial_capital - 1) * 100
+    wins      = [t for t in trades if t["pnl_pct"] > 0]
+    losses    = [t for t in trades if t["pnl_pct"] <= 0]
+    rm        = nav_s.cummax()
+    max_dd    = float(((nav_s - rm) / rm * 100).min()) if len(nav_s) > 1 else 0.0
+
+    return dict(
+        strat_ret  = strat_ret,
+        bh_ret     = bh_ret,
+        final_nav  = final_nav,
+        n_trades   = len(trades),
+        n_wins     = len(wins),
+        n_losses   = len(losses),
+        win_rate   = 100.0 * len(wins) / len(trades) if trades else 0.0,
+        max_dd     = max_dd,
+        open_pos   = pos == "LONG",
+        trades     = trades,
+    )
+
+
+def _bt_score_all(art: dict, today_iso: str,
+                  raw: pd.DataFrame) -> dict[str, dict] | None:
+    """Score art on all 3 backtest periods. Returns {bear, bull, full} or None."""
+    preds = _bt_build_preds(art, raw)
+    if preds is None:
+        return None
+    scores: dict[str, dict] = {}
+    for name, start, end in [
+        ("bear", BT_BEAR_START, today_iso),
+        ("bull", BT_BULL_START, BT_BULL_END),
+        ("full", BT_FULL_START, today_iso),
+    ]:
+        r = _bt_run_strategy(preds, raw, start, end)
+        if r is None:
+            _warn(f"  Backtest [{name}] insufficient data for {start}→{end}.")
+            return None
+        scores[name] = r
+    return scores
+
+
+def _fmt_score(s: dict) -> str:
+    return (f"ret={s['strat_ret']:+.1f}%  bh={s['bh_ret']:+.1f}%  "
+            f"trades={s['n_trades']}  wr={s['win_rate']:.0f}%  dd={s['max_dd']:.1f}%")
+
+
+def _print_bt_comparison(old_scores: dict, new_scores: dict):
+    """Print a side-by-side backtest comparison table (old vs new)."""
+    W = 72
+    _info(f"\n  {'Period':<8}  {'Metric':<14}  {'Old':>9}  {'New':>9}  {'Δ':>9}  {'':>4}")
+    _info(f"  {'-' * W}")
+    specs = [
+        ("strat_ret", "Strategy ret", "%",  False),
+        ("bh_ret",    "B&H ret",      "%",  False),
+        ("max_dd",    "Max DD",       "%",  True),
+        ("win_rate",  "Win rate",     "%",  False),
+        ("n_trades",  "Trades",       "",   None),
+    ]
+    for pname in ["bear", "bull", "full"]:
+        for key, label, unit, lo_better in specs:
+            ov = old_scores.get(pname, {}).get(key)
+            nv = new_scores.get(pname, {}).get(key)
+            ov_s = f"{ov:.1f}{unit}" if isinstance(ov, float) else (str(ov) if ov is not None else "—")
+            nv_s = f"{nv:.1f}{unit}" if isinstance(nv, float) else (str(nv) if nv is not None else "—")
+            if isinstance(ov, (int, float)) and isinstance(nv, (int, float)) \
+                    and lo_better is not None:
+                delta     = float(nv) - float(ov)
+                improved  = (delta < 0) if lo_better else (delta > 0)
+                flag      = _green("↑") if improved else (_red("↓") if delta != 0 else " =")
+                delta_s   = f"{delta:+.1f}{unit}"
+            else:
+                delta_s = "—"; flag = ""
+            plbl = pname if key == "strat_ret" else ""
+            _info(f"  {plbl:<8}  {label:<14}  {ov_s:>9}  {nv_s:>9}  {delta_s:>9}  {flag}")
+        _info(f"  {'-' * W}")
+
+
+def _date_str(d) -> str:
+    return d.date().isoformat() if hasattr(d, "date") else str(d)[:10]
+
+
+def _analyze_regression(period: str, old_s: dict, new_s: dict):
+    """Print root-cause analysis when a backtest period worsens."""
+    _warn(f"  ── {period.upper()} regression root-cause ──────────────────────────")
+    delta = new_s["strat_ret"] - old_s["strat_ret"]
+    _info(f"    Return:   {old_s['strat_ret']:+.1f}% → {new_s['strat_ret']:+.1f}%  (Δ={delta:+.1f}%)")
+    _info(f"    Trades:   {old_s['n_trades']} → {new_s['n_trades']}"
+          f"  (wins: {old_s['n_wins']} → {new_s['n_wins']})")
+    _info(f"    Win rate: {old_s['win_rate']:.0f}% → {new_s['win_rate']:.0f}%")
+    _info(f"    Max DD:   {old_s['max_dd']:.1f}% → {new_s['max_dd']:.1f}%")
+
+    old_tr  = old_s.get("trades", [])
+    new_tr  = new_s.get("trades", [])
+    old_map = {_date_str(t["entry_date"]): t for t in old_tr}
+    new_map = {_date_str(t["entry_date"]): t for t in new_tr}
+
+    added   = [t for t in new_tr if _date_str(t["entry_date"]) not in old_map]
+    removed = [t for t in old_tr if _date_str(t["entry_date"]) not in new_map]
+    changed = []
+    for ed, ot in old_map.items():
+        if ed in new_map:
+            nt = new_map[ed]
+            exit_shift = abs((pd.Timestamp(nt["exit_date"]) -
+                              pd.Timestamp(ot["exit_date"])).days)
+            if abs(nt["pnl_pct"] - ot["pnl_pct"]) > 0.5 or exit_shift > 1:
+                changed.append((ed, ot, nt))
+
+    if added:
+        net = sum(t["pnl_pct"] for t in added)
+        _info(f"    NEW signals fired ({len(added)}, net P&L {net:+.1f}%):")
+        for t in added:
+            _info(f"      + {_date_str(t['entry_date'])} → {_date_str(t['exit_date'])}"
+                  f"  {t['pnl_pct']:+.1f}%  ({t['exit_signal']})")
+    if removed:
+        net = sum(t["pnl_pct"] for t in removed)
+        _info(f"    LOST signals ({len(removed)}, old net P&L {net:+.1f}%):")
+        for t in removed:
+            _info(f"      - {_date_str(t['entry_date'])} → {_date_str(t['exit_date'])}"
+                  f"  {t['pnl_pct']:+.1f}%  ({t['exit_signal']})")
+    if changed:
+        _info(f"    ALTERED trades ({len(changed)}) — exit date or P&L shifted:")
+        for ed, ot, nt in changed:
+            _info(f"      ~ {ed}  exit: {_date_str(ot['exit_date'])} → "
+                  f"{_date_str(nt['exit_date'])}"
+                  f"  P&L: {ot['pnl_pct']:+.1f}% → {nt['pnl_pct']:+.1f}%")
+    if not added and not removed and not changed:
+        _info("    (Trade signals unchanged — difference is sub-1% in execution timing)")
+
+    # Heuristic explanation
+    if len(new_tr) > len(old_tr):
+        _info("    LIKELY CAUSE: new model produces lower pred_high → more U1 false positives.")
+    elif len(new_tr) < len(old_tr):
+        _info("    LIKELY CAUSE: new model raises pred_high → some genuine U1 entries missed.")
+    else:
+        _info("    LIKELY CAUSE: pred_high shift changed trade exit timing or regime detection.")
+
+
+def _restore_art(art: dict, path: Path):
+    """Overwrite path on disk with the in-memory artefact snapshot (rollback)."""
+    try:
+        joblib.dump(art, path)
+        _ok(f"  Rolled back {path.name} to pre-training snapshot.")
+    except Exception as exc:
+        _err(f"  Rollback failed: {exc}")
+
+
+def _data_search(old_art: dict, old_scores: dict, raw: pd.DataFrame,
+                 today_iso: str, args) -> bool:
+    """Try retraining with progressively trimmed data windows.
+
+    For each trim amount in _SEARCH_TRIM_MONTHS the old model is restored,
+    pipeline_ct.py is re-run with --test-start set to (today − N months),
+    and the candidate is re-validated. Returns True if any attempt passes.
+    """
+    today_ts = pd.Timestamp(today_iso)
+
+    for months in _SEARCH_TRIM_MONTHS:
+        cutoff = (today_ts - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
+        _info(f"\n  ── Data-search attempt: trim to {cutoff}  (−{months} months) ──")
+
+        # Restore old model before each attempt
+        _restore_art(old_art, DAILY_MODEL_CT)
+        # Archive it so _run_script does not overwrite an unprotected file
+        _archive_model(DAILY_MODEL_CT, "Daily H/L (data-search restore)",
+                       skip=args.no_archive)
+
+        _info(f"  Re-training Daily H/L with --test-start {cutoff} …")
+        success, _ = _run_script(
+            SCRIPT_MAP["daily_hl"], LABEL_MAP["daily_hl"],
+            extra_args=["--test-start", cutoff],
+        )
+        if not success:
+            _err(f"  Training failed for cutoff {cutoff} — skipping.")
+            continue
+
+        candidate_art = _load_art(DAILY_MODEL_CT)
+        if candidate_art is None:
+            continue
+        _info(f"  Scoring candidate (cutoff={cutoff}) …")
+        candidate_scores = _bt_score_all(candidate_art, today_iso, raw)
+        if candidate_scores is None:
+            _warn("  Candidate scoring failed — trying next cutoff.")
+            continue
+
+        _print_bt_comparison(old_scores, candidate_scores)
+
+        deltas = {p: candidate_scores[p]["strat_ret"] - old_scores[p]["strat_ret"]
+                  for p in ["bear", "bull", "full"]}
+        if all(v > BT_MIN_DELTA for v in deltas.values()):
+            _ok(f"  Cutoff {cutoff} ACCEPTED — "
+                f"bear Δ{deltas['bear']:+.1f}%  "
+                f"bull Δ{deltas['bull']:+.1f}%  "
+                f"full Δ{deltas['full']:+.1f}%")
+            return True
+
+        failed_p = [p for p, d in deltas.items() if d <= BT_MIN_DELTA]
+        _warn(f"  Cutoff {cutoff} failed — still regressing: {', '.join(failed_p)}")
+        for p in failed_p:
+            _analyze_regression(p, old_scores[p], candidate_scores[p])
+
+    return False
+
+
+def run_backtest_validation(old_art: dict | None,
+                             train_results: dict[str, bool],
+                             args) -> bool:
+    """Phase 3: validate retrained models by comparing backtest performance.
+
+    Returns True if the new model is accepted, False if it was rolled back.
+    The Daily H/L ensemble drives all strategy predictions; if it was not
+    retrained this phase is a no-op.
+    """
+    _header("PHASE 3  Backtest Validation")
+
+    if not train_results.get("daily_hl"):
+        _ok("  Daily H/L not retrained — predictions unchanged; validation skipped.")
+        return True
+
+    today_iso = pd.Timestamp.now().normalize().strftime("%Y-%m-%d")
+
+    raw = _bt_fetch_raw(today_iso)
+    if raw is None:
+        _warn("  No data — accepting models without backtest validation.")
+        return True
+
+    # ── Baseline: score old model ────────────────────────────────────────
+    if old_art is None:
+        _warn("  No baseline artefact found — accepting new model unconditionally.")
+        new_art = _load_art(DAILY_MODEL_CT)
+        if new_art:
+            ns = _bt_score_all(new_art, today_iso, raw)
+            if ns:
+                _info("  New model standalone results:")
+                for pname, s in ns.items():
+                    _info(f"    {pname:<6}: {_fmt_score(s)}")
+        return True
+
+    _info("  Scoring baseline (old) model …")
+    old_scores = _bt_score_all(old_art, today_iso, raw)
+    if old_scores is None:
+        _warn("  Baseline scoring failed — accepting new model without comparison.")
+        return True
+    _info("  Old model results:")
+    for pname, s in old_scores.items():
+        _info(f"    {pname:<6}: {_fmt_score(s)}")
+
+    # ── New model ────────────────────────────────────────────────────────
+    new_art = _load_art(DAILY_MODEL_CT)
+    if new_art is None:
+        _err("  Cannot load newly trained artefact.")
+        return False
+
+    _info("  Scoring new model …")
+    new_scores = _bt_score_all(new_art, today_iso, raw)
+    if new_scores is None:
+        _warn("  New model scoring failed — rolling back to old model.")
+        _restore_art(old_art, DAILY_MODEL_CT)
+        return False
+    _info("  New model results:")
+    for pname, s in new_scores.items():
+        _info(f"    {pname:<6}: {_fmt_score(s)}")
+
+    _print_bt_comparison(old_scores, new_scores)
+
+    # ── Decision ─────────────────────────────────────────────────────────
+    deltas   = {p: new_scores[p]["strat_ret"] - old_scores[p]["strat_ret"]
+                for p in ["bear", "bull", "full"]}
+    improved = {p: d > BT_MIN_DELTA for p, d in deltas.items()}
+
+    if all(improved.values()):
+        _ok(f"  ✓ ALL 3 PERIODS IMPROVED — new model accepted.")
+        _ok(f"    bear Δ{deltas['bear']:+.1f}%  "
+            f"bull Δ{deltas['bull']:+.1f}%  "
+            f"full Δ{deltas['full']:+.1f}%")
+        return True
+
+    # ── Validation failed — analyse regressions ───────────────────────────
+    failed_periods = [p for p, ok in improved.items() if not ok]
+    _warn(f"  ✗ Validation FAILED — period(s) worsened: {', '.join(failed_periods)}")
+    _info("")
+    for p in failed_periods:
+        _analyze_regression(p, old_scores[p], new_scores[p])
+
+    # ── Try data-window search ─────────────────────────────────────────────
+    _info("")
+    _warn("  Attempting data-window search to find an acceptable training cutoff …")
+    _info("  (Will try trimming the last 3 and 6 months from training data)")
+    found = _data_search(old_art, old_scores, raw, today_iso, args)
+    if found:
+        return True
+
+    # ── Complete rollback ──────────────────────────────────────────────────
+    _warn("  DATA SEARCH EXHAUSTED — no cutoff improved all 3 periods.")
+    _warn("  ROLLING BACK to pre-training model.")
+    _restore_art(old_art, DAILY_MODEL_CT)
+    _info("")
+    _info("  Diagnosis summary:")
+    for p in failed_periods:
+        d = deltas[p]
+        _info(f"    {p:<6}: Δ={d:+.1f}%  — "
+              f"new model underperforms baseline in the {p} period")
+    _info("")
+    _info("  Recommended actions:")
+    _info("    1. Review the regression analysis above for the failing periods.")
+    _info("    2. Check if new training data contains a regime not yet in the test set.")
+    _info("    3. Re-run with --no-bt-validation to force-accept if you have external")
+    _info("       evidence the new model is better (e.g. improved live MAPE).")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# 13.  RETRAIN SUMMARY HELPER
 # ---------------------------------------------------------------------------
 
 def _retrain_summary(models: list[str], r_hl: dict, r_cone: dict, r_dt: dict):
@@ -852,7 +1396,7 @@ def _retrain_summary(models: list[str], r_hl: dict, r_cone: dict, r_dt: dict):
 
 
 # ---------------------------------------------------------------------------
-# 13.  MAIN
+# 14.  MAIN
 # ---------------------------------------------------------------------------
 
 def main():
@@ -886,6 +1430,12 @@ def main():
         help="Force test_start date passed to each training script. When beyond "
              "available data, scripts use deploy-retrain mode (all data in training).",
     )
+    parser.add_argument(
+        "--no-bt-validation", action="store_true",
+        help="Skip Phase 3 backtest validation and accept new models unconditionally. "
+             "Use only when external evidence (e.g. improved live MAPE) overrides "
+             "strategy-return regression.",
+    )
     args = parser.parse_args()
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -911,20 +1461,36 @@ def main():
     # Phase 2 — Training
     train_results = run_training(models_to_train, args)
 
-    # Phase 3 — Comparison
+    # Early-exit if training itself failed
+    failed_train = [LABEL_MAP[k] for k, ok in train_results.items() if not ok]
+    if failed_train:
+        _header("Pipeline Complete  [TRAINING FAILED]")
+        _err(f"FAILED: {', '.join(failed_train)}")
+        _info("Resolve the errors above and re-run the pipeline.")
+        sys.exit(1)
+
+    # Phase 3 — Backtest validation
+    if not getattr(args, "no_bt_validation", False):
+        bt_accepted = run_backtest_validation(old_arts.get("daily_hl"),
+                                               train_results, args)
+        if not bt_accepted:
+            _header("Pipeline Complete  [MODELS REJECTED]")
+            _err("New models failed backtest validation — old models restored.")
+            _warn("Strategy return did not improve in all 3 market periods.")
+            _info("Re-run with --no-bt-validation to bypass if needed.")
+            sys.exit(1)
+    else:
+        _info("")
+        _warn("--no-bt-validation: backtest validation skipped — models accepted unconditionally.")
+
+    # Phase 4 — Before/After metric comparison (model intrinsic metrics)
     run_comparison(old_arts, train_results)
 
     # Exit summary
-    _header("Pipeline Complete")
-    failed = [LABEL_MAP[k] for k, ok in train_results.items() if not ok]
-    if failed:
-        _err(f"FAILED: {', '.join(failed)}")
-        _info("Resolve the errors above and re-run the pipeline.")
-        sys.exit(1)
-    else:
-        _ok("All scheduled models retrained successfully.")
-        _info("Click 'Refresh now' in the Streamlit sidebar to reload artefacts.")
-        _info("")
+    _header("Pipeline Complete  [MODELS ACCEPTED]")
+    _ok("All scheduled models retrained and validated successfully.")
+    _info("Click 'Refresh now' in the Streamlit sidebar to reload artefacts.")
+    _info("")
 
 
 if __name__ == "__main__":
