@@ -43,6 +43,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.base import clone
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+import argparse as _argparse
 import sys as _sys
 from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
@@ -51,6 +52,12 @@ from paths import (
     RAW_CT_CSV, FEATURES_CT_CSV, DAILY_MODEL_CT, LEGACY_DIR,
 )
 ANCHOR_HOUR_UTC = 12  # = 7am CDT / 6am CST
+
+_p = _argparse.ArgumentParser(add_help=False)
+_p.add_argument("--test-start", type=str, default=None,
+                help="Force test_start date (YYYY-MM-DD). When beyond available data, "
+                     "uses val as tuning set then retrains on all data (deploy mode).")
+_ARGS, _ = _p.parse_known_args()
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -333,10 +340,19 @@ TEST_MONTHS  = 6
 VAL_MONTHS   = 2
 EMBARGO_DAYS = 1   # = forecast horizon for daily H/L
 
-test_start  = LATEST     - pd.DateOffset(months=TEST_MONTHS)
-val_start   = test_start - pd.DateOffset(months=VAL_MONTHS)
-train_end   = val_start  - pd.Timedelta(days=EMBARGO_DAYS)
-val_end     = test_start - pd.Timedelta(days=EMBARGO_DAYS)
+if _ARGS.test_start:
+    test_start = pd.Timestamp(_ARGS.test_start).normalize()
+    val_end    = LATEST                                        # val goes to last available bar
+    val_start  = test_start - pd.DateOffset(months=VAL_MONTHS)
+    train_end  = val_start  - pd.Timedelta(days=EMBARGO_DAYS)
+else:
+    test_start  = LATEST     - pd.DateOffset(months=TEST_MONTHS)
+    val_start   = test_start - pd.DateOffset(months=VAL_MONTHS)
+    train_end   = val_start  - pd.Timedelta(days=EMBARGO_DAYS)
+    val_end     = test_start - pd.Timedelta(days=EMBARGO_DAYS)
+
+# Deploy mode: test_start beyond available data → no test rows
+DEPLOY_MODE = test_start > LATEST
 
 train = data.loc[: train_end]
 val   = data.loc[val_start: val_end]
@@ -354,8 +370,11 @@ lo_true = test["next_low"].values
 print(f"\n>>> TRAIN {train.index.min().date()} → {train.index.max().date()}  n={len(train)}")
 print(f">>> VAL   {val.index.min().date()}  → {val.index.max().date()}   n={len(val)}  "
       f"(embargo {EMBARGO_DAYS}d before val_start)")
-print(f">>> TEST  {test.index.min().date()}  → {test.index.max().date()}   n={len(test)}  "
-      f"(embargo {EMBARGO_DAYS}d before test_start)")
+if DEPLOY_MODE:
+    print(f">>> TEST  (none — deploy mode, test_start={test_start.date()} beyond available data)")
+else:
+    print(f">>> TEST  {test.index.min().date()}  → {test.index.max().date()}   n={len(test)}  "
+          f"(embargo {EMBARGO_DAYS}d before test_start)")
 
 
 def mk(model): return Pipeline([("sc", StandardScaler()), ("m", model)])
@@ -379,17 +398,19 @@ preds = {}
 for name, ctor in [("huber", M_HUBER), ("quant_lin", M_QUANTLR), ("gbm_quant", M_GBQUANT)]:
     mh = clone(ctor); mh.fit(X_tr, yhi_tr)
     ml = clone(ctor); ml.fit(X_tr, ylo_tr)
+    _ph_te = np.array([]) if DEPLOY_MODE else mh.predict(X_te)
+    _pl_te = np.array([]) if DEPLOY_MODE else ml.predict(X_te)
     preds[name] = dict(
         m_hi=mh, m_lo=ml,
         ph_va=mh.predict(X_va), pl_va=ml.predict(X_va),
-        ph_te=mh.predict(X_te), pl_te=ml.predict(X_te),
+        ph_te=_ph_te, pl_te=_pl_te,
     )
     print(f"  {name}: fitted")
 
 ens_ph_va = np.mean([p["ph_va"] for p in preds.values()], axis=0)
 ens_pl_va = np.mean([p["pl_va"] for p in preds.values()], axis=0)
-ens_ph_te = np.mean([p["ph_te"] for p in preds.values()], axis=0)
-ens_pl_te = np.mean([p["pl_te"] for p in preds.values()], axis=0)
+ens_ph_te = np.mean([p["ph_te"] for p in preds.values()], axis=0) if not DEPLOY_MODE else np.array([])
+ens_pl_te = np.mean([p["pl_te"] for p in preds.values()], axis=0) if not DEPLOY_MODE else np.array([])
 
 mu_hi, mu_lo = float(yhi_tr.mean()), float(ylo_tr.mean())
 print(f"\nTraining-set means: hi={mu_hi:.4f}  lo={mu_lo:.4f}")
@@ -447,14 +468,15 @@ final_pl    = alpha_use * ens_pl_te + (1 - alpha_use) * mu_lo
 print("\n>>> Training direction head (sign of asymmetry y_hi − y_lo) …")
 d_tr = (yhi_tr - ylo_tr) / 2
 d_va = (yhi_va - ylo_va) / 2
-d_te = (yhi_te - ylo_te) / 2
+d_te = (yhi_te - ylo_te) / 2 if not DEPLOY_MODE else pd.Series([], dtype=float)
 label_tr = (d_tr > 0).astype(int)
 label_va = (d_va > 0).astype(int)
-label_te = (d_te > 0).astype(int)
+label_te = (d_te > 0).astype(int) if not DEPLOY_MODE else pd.Series([], dtype=int)
 print(f"   train bullish fraction = {label_tr.mean():.3f}  "
       f"(n_bull={int(label_tr.sum())}, n_bear={int((1-label_tr).sum())})")
 print(f"   val   bullish fraction = {label_va.mean():.3f}")
-print(f"   test  bullish fraction = {label_te.mean():.3f}")
+if not DEPLOY_MODE:
+    print(f"   test  bullish fraction = {label_te.mean():.3f}")
 
 dir_clf = Pipeline([
     ("sc", StandardScaler()),
@@ -464,11 +486,12 @@ dir_clf = Pipeline([
 ])
 dir_clf.fit(X_tr, label_tr)
 p_bull_va = dir_clf.predict_proba(X_va)[:, 1]
-p_bull_te = dir_clf.predict_proba(X_te)[:, 1]
+p_bull_te = np.array([]) if DEPLOY_MODE else dir_clf.predict_proba(X_te)[:, 1]
 clf_acc_va = float(((p_bull_va > 0.5).astype(int) == label_va).mean())
-clf_acc    = float(((p_bull_te > 0.5).astype(int) == label_te).mean())
+clf_acc    = float(((p_bull_te > 0.5).astype(int) == label_te).mean()) if not DEPLOY_MODE else float("nan")
 print(f"   classifier accuracy on val:  {clf_acc_va*100:.1f}%")
-print(f"   classifier accuracy on test: {clf_acc*100:.1f}%   (unbiased — not used for tuning)")
+if not DEPLOY_MODE:
+    print(f"   classifier accuracy on test: {clf_acc*100:.1f}%   (unbiased — not used for tuning)")
 
 # Calibration: typical asymmetry under each regime (train-only)
 d_bull_mean = float(d_tr[label_tr == 1].mean())
@@ -548,43 +571,115 @@ print(f"   VAL  Adaptive (β={best_beta:.2f}, r={best_red:.2f}): "
       f"MAPE_H={results[next(i for i,(b,r,*_) in enumerate(results) if b==best_beta and r==best_red)][2]:.3f}  "
       f"MAPE_L={results[next(i for i,(b,r,*_) in enumerate(results) if b==best_beta and r==best_red)][3]:.3f}")
 
-# Final UNBIASED evaluation on TEST using tuned (α, β, r).
-mh_best, ml_best, hit_best, beta_eff_te = _eval_on_test(best_beta, best_red)
-mh_base, ml_base, hit_base, _ = _eval_on_test(1.0, 0.0)
-mh_dir,  ml_dir,  hit_dir,  _ = _eval_on_test(0.0, 0.0)
-print(f"\n   TEST No direction (β=1.00): MAPE_H={mh_base:.3f}  MAPE_L={ml_base:.3f}  dir_hit={hit_base:.1f}%")
-print(f"   TEST Pure direction (β=0):  MAPE_H={mh_dir:.3f}   MAPE_L={ml_dir:.3f}   dir_hit={hit_dir:.1f}%")
-print(f"   TEST Tuned (β={best_beta:.2f}, r={best_red:.2f}): "
-      f"MAPE_H={mh_best:.3f}  MAPE_L={ml_best:.3f}  dir_hit={hit_best:.1f}%  ← unbiased estimate")
+if DEPLOY_MODE:
+    # ── Deploy mode: no test data — report val-period metrics as proxy OOS ──
+    mh_best_va, ml_best_va, hit_best_va, beta_eff_va2 = _eval_on_val(best_beta, best_red)
+    mh_base_va2, ml_base_va2, hit_base_va2, _ = _eval_on_val(1.0, 0.0)
+    print(f"\n   DEPLOY MODE — no test holdout; val metrics used as proxy OOS")
+    print(f"   VAL  No direction (β=1.00): MAPE_H={mh_base_va2:.3f}  MAPE_L={ml_base_va2:.3f}  dir_hit={hit_base_va2:.1f}%")
+    print(f"   VAL  Tuned (β={best_beta:.2f}, r={best_red:.2f}): "
+          f"MAPE_H={mh_best_va:.3f}  MAPE_L={ml_best_va:.3f}  dir_hit={hit_best_va:.1f}%  ← val proxy")
 
-# Replace final_ph/final_pl with the direction-blended versions for test
-# reporting (residuals, σ, headline metrics).
-d_blend_te = beta_eff_te * ens_d_te + (1 - beta_eff_te) * d_dir_te
-final_ph = ens_m_te + d_blend_te
-final_pl = ens_m_te - d_blend_te
+    # ── Retrain ALL base models and direction classifier on full dataset ──
+    print(f"\n>>> Deploy retrain: fitting all models on full dataset (n={len(data)}) …")
+    X_all  = data[feat_cols]
+    yhi_all, ylo_all = data["y_hi"], data["y_lo"]
+    for name, ctor in [("huber", M_HUBER), ("quant_lin", M_QUANTLR), ("gbm_quant", M_GBQUANT)]:
+        mh = clone(ctor); mh.fit(X_all, yhi_all)
+        ml = clone(ctor); ml.fit(X_all, ylo_all)
+        preds[name]["m_hi"] = mh; preds[name]["m_lo"] = ml
+        print(f"  {name}: refitted on full dataset")
+    label_all = ((data["y_hi"] - data["y_lo"]) / 2 > 0).astype(int)
+    dir_clf.fit(X_all, label_all)
+    print("  direction classifier: refitted on full dataset")
 
-pred_hi = close_te * (1 + np.clip(final_ph, 0, None))
-pred_lo = close_te * (1 - np.clip(final_pl, 0, None))
-rel_h = np.abs(pred_hi - hi_true) / hi_true
-rel_l = np.abs(pred_lo - lo_true) / lo_true
-final = dict(
-    model=(f"blend(α={alpha_use:.2f} climatology, β_base={best_beta:.2f} × "
-           f"(1−{best_red:.2f}×trend) direction-head, "
-           f"ensemble huber+quant_lin+gbm_quant (q={ALPHA_QUANT}) + GBC direction)"),
-    MAPE_H=float(rel_h.mean() * 100), MAPE_L=float(rel_l.mean() * 100),
-    MAPE_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
-    hit05_H=float((rel_h <= 0.005).mean() * 100), hit05_L=float((rel_l <= 0.005).mean() * 100),
-    hit1_H=float((rel_h <= 0.01).mean() * 100), hit1_L=float((rel_l <= 0.01).mean() * 100),
-    hit2_H=float((rel_h <= 0.02).mean() * 100), hit2_L=float((rel_l <= 0.02).mean() * 100),
-    hit5_H=float((rel_h <= 0.05).mean() * 100), hit5_L=float((rel_l <= 0.05).mean() * 100),
-    MAE_H_USD=float(mean_absolute_error(hi_true, pred_hi)),
-    MAE_L_USD=float(mean_absolute_error(lo_true, pred_lo)),
-    RMSE_H_USD=float(np.sqrt(mean_squared_error(hi_true, pred_hi))),
-    RMSE_L_USD=float(np.sqrt(mean_squared_error(lo_true, pred_lo))),
-    direction_hit_rate=float(hit_best),
-    direction_hit_rate_baseline=float(hit_base),
-    direction_classifier_acc=float(clf_acc),
-)
+    # σ from val-period predictions (proxy OOS residuals)
+    ens_ph_all = np.mean([p["m_hi"].predict(X_va) for p in preds.values()], axis=0)
+    ens_pl_all = np.mean([p["m_lo"].predict(X_va) for p in preds.values()], axis=0)
+    ens_ph_va2 = alpha_use * ens_ph_all + (1 - alpha_use) * mu_hi
+    ens_pl_va2 = alpha_use * ens_pl_all + (1 - alpha_use) * mu_lo
+    ens_m_va2  = (ens_ph_va2 + ens_pl_va2) / 2
+    ens_d_va2  = (ens_ph_va2 - ens_pl_va2) / 2
+    p_bull_va2 = dir_clf.predict_proba(X_va)[:, 1]
+    d_dir_va2  = p_bull_va2 * d_bull_mean + (1 - p_bull_va2) * d_bear_mean
+    trend_str_va2 = np.minimum(np.abs(X_va["ret_5"].values) / TREND_SAT, 1.0)
+    beta_eff_all = np.clip(best_beta * (1.0 - best_red * trend_str_va2), 0.0, 1.0)
+    d_blend_all  = beta_eff_all * ens_d_va2 + (1 - beta_eff_all) * d_dir_va2
+    final_ph_sigma = ens_m_va2 + d_blend_all
+    final_pl_sigma = ens_m_va2 - d_blend_all
+    res_hi = yhi_va.values - final_ph_sigma
+    res_lo = ylo_va.values - final_pl_sigma
+
+    # Val-period metrics dict (proxy for test metrics in metadata)
+    d_va_values = ((yhi_va - ylo_va) / 2).values
+    hit_va_dir  = float((np.sign(d_blend_all) == np.sign(d_va_values)).mean() * 100)
+    pred_hi_va  = close_va * (1 + np.clip(final_ph_sigma, 0, None))
+    pred_lo_va  = close_va * (1 - np.clip(final_pl_sigma, 0, None))
+    rel_h = np.abs(pred_hi_va - hi_true_va) / hi_true_va
+    rel_l = np.abs(pred_lo_va - lo_true_va) / lo_true_va
+    final = dict(
+        model=(f"blend(α={alpha_use:.2f} climatology, β_base={best_beta:.2f} × "
+               f"(1−{best_red:.2f}×trend) direction-head, "
+               f"ensemble huber+quant_lin+gbm_quant (q={ALPHA_QUANT}) + GBC direction) "
+               f"[deploy-retrain: trained on full dataset, metrics from val proxy]"),
+        MAPE_H=float(rel_h.mean() * 100), MAPE_L=float(rel_l.mean() * 100),
+        MAPE_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
+        hit05_H=float((rel_h <= 0.005).mean() * 100), hit05_L=float((rel_l <= 0.005).mean() * 100),
+        hit1_H=float((rel_h <= 0.01).mean() * 100),   hit1_L=float((rel_l <= 0.01).mean() * 100),
+        hit2_H=float((rel_h <= 0.02).mean() * 100),   hit2_L=float((rel_l <= 0.02).mean() * 100),
+        hit5_H=float((rel_h <= 0.05).mean() * 100),   hit5_L=float((rel_l <= 0.05).mean() * 100),
+        MAE_H_USD=float(mean_absolute_error(hi_true_va, pred_hi_va)),
+        MAE_L_USD=float(mean_absolute_error(lo_true_va, pred_lo_va)),
+        RMSE_H_USD=float(np.sqrt(mean_squared_error(hi_true_va, pred_hi_va))),
+        RMSE_L_USD=float(np.sqrt(mean_squared_error(lo_true_va, pred_lo_va))),
+        direction_hit_rate=float(hit_va_dir),
+        direction_hit_rate_baseline=float(mh_base_va2),
+        direction_classifier_acc=float(((dir_clf.predict_proba(X_va)[:, 1] > 0.5).astype(int)
+                                        == label_va).mean()),
+    )
+    clf_acc = final["direction_classifier_acc"]
+    hit_best = final["direction_hit_rate"]
+    hit_base = final["direction_hit_rate_baseline"]
+else:
+    # Final UNBIASED evaluation on TEST using tuned (α, β, r).
+    mh_best, ml_best, hit_best, beta_eff_te = _eval_on_test(best_beta, best_red)
+    mh_base, ml_base, hit_base, _ = _eval_on_test(1.0, 0.0)
+    mh_dir,  ml_dir,  hit_dir,  _ = _eval_on_test(0.0, 0.0)
+    print(f"\n   TEST No direction (β=1.00): MAPE_H={mh_base:.3f}  MAPE_L={ml_base:.3f}  dir_hit={hit_base:.1f}%")
+    print(f"   TEST Pure direction (β=0):  MAPE_H={mh_dir:.3f}   MAPE_L={ml_dir:.3f}   dir_hit={hit_dir:.1f}%")
+    print(f"   TEST Tuned (β={best_beta:.2f}, r={best_red:.2f}): "
+          f"MAPE_H={mh_best:.3f}  MAPE_L={ml_best:.3f}  dir_hit={hit_best:.1f}%  ← unbiased estimate")
+
+    # Direction-blended predictions for test reporting.
+    d_blend_te = beta_eff_te * ens_d_te + (1 - beta_eff_te) * d_dir_te
+    final_ph = ens_m_te + d_blend_te
+    final_pl = ens_m_te - d_blend_te
+
+    pred_hi = close_te * (1 + np.clip(final_ph, 0, None))
+    pred_lo = close_te * (1 - np.clip(final_pl, 0, None))
+    rel_h = np.abs(pred_hi - hi_true) / hi_true
+    rel_l = np.abs(pred_lo - lo_true) / lo_true
+    final = dict(
+        model=(f"blend(α={alpha_use:.2f} climatology, β_base={best_beta:.2f} × "
+               f"(1−{best_red:.2f}×trend) direction-head, "
+               f"ensemble huber+quant_lin+gbm_quant (q={ALPHA_QUANT}) + GBC direction)"),
+        MAPE_H=float(rel_h.mean() * 100), MAPE_L=float(rel_l.mean() * 100),
+        MAPE_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
+        hit05_H=float((rel_h <= 0.005).mean() * 100), hit05_L=float((rel_l <= 0.005).mean() * 100),
+        hit1_H=float((rel_h <= 0.01).mean() * 100), hit1_L=float((rel_l <= 0.01).mean() * 100),
+        hit2_H=float((rel_h <= 0.02).mean() * 100), hit2_L=float((rel_l <= 0.02).mean() * 100),
+        hit5_H=float((rel_h <= 0.05).mean() * 100), hit5_L=float((rel_l <= 0.05).mean() * 100),
+        MAE_H_USD=float(mean_absolute_error(hi_true, pred_hi)),
+        MAE_L_USD=float(mean_absolute_error(lo_true, pred_lo)),
+        RMSE_H_USD=float(np.sqrt(mean_squared_error(hi_true, pred_hi))),
+        RMSE_L_USD=float(np.sqrt(mean_squared_error(lo_true, pred_lo))),
+        direction_hit_rate=float(hit_best),
+        direction_hit_rate_baseline=float(hit_base),
+        direction_classifier_acc=float(clf_acc),
+    )
+    res_hi = yhi_te.values - final_ph
+    res_lo = ylo_te.values - final_pl
+
 print("\n=== FINAL METRICS (12:00 UTC bars) ===")
 print(json.dumps(final, indent=2))
 
@@ -599,9 +694,27 @@ if _legacy_utc.exists():
     shutil.copy(_legacy_utc, bk)
     print(f"\nBackup of UTC-midnight model: {bk}")
 
-res_hi = yhi_te.values - final_ph
-res_lo = ylo_te.values - final_pl
 sigma_hi = float(np.std(res_hi)); sigma_lo = float(np.std(res_lo))
+
+# In deploy mode: train_end = last data row, test dates = forced date
+if DEPLOY_MODE:
+    _meta_train_end  = str(data.index.max().date())
+    _meta_test_start = str(test_start.date())
+    _meta_test_end   = str(test_start.date())
+    _meta_test_n     = 0
+    _tuning_notes    = ("α (climatology blend) and (β_base, r) (direction-head "
+                        "weight) were selected on VAL only. Deploy mode: base models "
+                        "then retrained on full dataset (train+val); metrics from val proxy.")
+    _hit_dir_pure    = float(hit_best)   # not separately computed in deploy mode
+else:
+    _meta_train_end  = str(train.index.max().date())
+    _meta_test_start = str(test.index.min().date())
+    _meta_test_end   = str(test.index.max().date())
+    _meta_test_n     = int(len(test))
+    _tuning_notes    = ("α (climatology blend) and (β_base, r) (direction-head "
+                        "weight) were selected on VAL only; TEST is held out for "
+                        "unbiased reporting.")
+    _hit_dir_pure    = float(hit_dir)
 
 assets = dict(
     ensemble=True, blended=True, alpha=float(alpha_use),
@@ -626,7 +739,7 @@ assets = dict(
         test_classifier_acc=float(clf_acc),
         test_dir_hit_baseline=float(hit_base),
         test_dir_hit_blended=float(hit_best),
-        test_dir_hit_pure=float(hit_dir),
+        test_dir_hit_pure=float(_hit_dir_pure),
         notes=("d = (y_hi - y_lo)/2 ; m = (y_hi + y_lo)/2 ; "
                "trend_str = min(|ret_5|/trend_saturation, 1) ; "
                "β_eff = clip(beta × (1 − beta_trend_reduction × trend_str), 0, 1) ; "
@@ -638,18 +751,17 @@ assets = dict(
         anchor_hour_utc=ANCHOR_HOUR_UTC,
         anchor_label="12:00 UTC (=7am CDT / 6am CST)",
         train_start=str(train.index.min().date()),
-        train_end=str(train.index.max().date()),
+        train_end=_meta_train_end,
         val_start=str(val.index.min().date()),
         val_end=str(val.index.max().date()),
-        test_start=str(test.index.min().date()),
-        test_end=str(test.index.max().date()),
-        train_n=int(len(train)), val_n=int(len(val)), test_n=int(len(test)),
+        test_start=_meta_test_start,
+        test_end=_meta_test_end,
+        train_n=int(len(data)) if DEPLOY_MODE else int(len(train)),
+        val_n=int(len(val)), test_n=_meta_test_n,
         embargo_days=int(EMBARGO_DAYS),
         winner=final["model"],
         metrics=final,
-        tuning_notes=("α (climatology blend) and (β_base, r) (direction-head "
-                      "weight) were selected on VAL only; TEST is held out for "
-                      "unbiased reporting."),
+        tuning_notes=_tuning_notes,
     ),
 )
 joblib.dump(assets, src_path)

@@ -173,8 +173,8 @@ FEATS = [
 # ── Split with 1-day embargo so the last train row's shift(-1) target
 #    does not live inside the test window.
 EMBARGO_DAYS = 1   # = forecast horizon for daily H/L
-test_start   = pd.Timestamp("2026-02-19")
-train_end    = test_start - pd.Timedelta(days=EMBARGO_DAYS + 1)  # one day of embargo
+test_start   = pd.Timestamp("2026-03-01")
+train_end    = test_start - pd.Timedelta(days=EMBARGO_DAYS)  # 1-day embargo → train_end = Feb 28
 tr = data.loc[: train_end].copy()
 te = data.loc[test_start:].copy()
 print(f"TRAIN n={len(tr)}  ({tr.index.min().date()} → {tr.index.max().date()})")
@@ -205,28 +205,33 @@ gbm = GradientBoostingClassifier(
 ).fit(tr[FEATS], tr["label"])
 
 # ── Evaluate on TEST ────────────────────────────────────────────────────
-pred = gbm.predict(te[FEATS])
-acc  = accuracy_score(te["label"], pred) * 100
-bacc = balanced_accuracy_score(te["label"], pred) * 100
-print(f"\nTEST accuracy = {acc:.2f}%   balanced = {bacc:.2f}%")
-print(classification_report(te["label"], pred,
-                            labels=["BigUpper","BigLower","Quiet"], digits=3,
-                            zero_division=0))
-print("Confusion matrix (rows=true, cols=pred):")
-print(confusion_matrix(te["label"], pred, labels=["BigUpper","BigLower","Quiet"]))
+DEPLOY_MODE = len(te) == 0
+if not DEPLOY_MODE:
+    pred = gbm.predict(te[FEATS])
+    acc  = accuracy_score(te["label"], pred) * 100
+    bacc = balanced_accuracy_score(te["label"], pred) * 100
+    print(f"\nTEST accuracy = {acc:.2f}%   balanced = {bacc:.2f}%")
+    print(classification_report(te["label"], pred,
+                                labels=["BigUpper","BigLower","Quiet"], digits=3,
+                                zero_division=0))
+    print("Confusion matrix (rows=true, cols=pred):")
+    print(confusion_matrix(te["label"], pred, labels=["BigUpper","BigLower","Quiet"]))
 
-# ── Selective accuracy by max-class probability ─────────────────────────
-proba = gbm.predict_proba(te[FEATS]); cls = list(gbm.classes_)
-top_p = proba.max(axis=1); pred_g = np.array(cls)[proba.argmax(axis=1)]
-selective = []
-for thr in [0.45, 0.50, 0.55, 0.60, 0.65]:
-    mask = top_p >= thr
-    if mask.sum() == 0: continue
-    sacc = (pred_g[mask] == te["label"].values[mask]).mean() * 100
-    selective.append(dict(thr=thr, coverage_pct=float(mask.mean()*100),
-                          accuracy_pct=float(sacc), n=int(mask.sum())))
-    print(f"  p ≥ {thr:.2f}   coverage = {mask.mean()*100:5.1f}%  "
-          f"accuracy = {sacc:5.1f}%   (n={mask.sum()})")
+    # ── Selective accuracy by max-class probability ─────────────────────────
+    proba = gbm.predict_proba(te[FEATS]); cls = list(gbm.classes_)
+    top_p = proba.max(axis=1); pred_g = np.array(cls)[proba.argmax(axis=1)]
+    selective = []
+    for thr in [0.45, 0.50, 0.55, 0.60, 0.65]:
+        mask = top_p >= thr
+        if mask.sum() == 0: continue
+        sacc = (pred_g[mask] == te["label"].values[mask]).mean() * 100
+        selective.append(dict(thr=thr, coverage_pct=float(mask.mean()*100),
+                              accuracy_pct=float(sacc), n=int(mask.sum())))
+        print(f"  p ≥ {thr:.2f}   coverage = {mask.mean()*100:5.1f}%  "
+              f"accuracy = {sacc:5.1f}%   (n={mask.sum()})")
+else:
+    print(f"\nDEPLOY MODE — no test holdout; skipping TEST evaluation.")
+    acc = float("nan"); bacc = float("nan"); selective = []
 
 # ── Save artefact ───────────────────────────────────────────────────────
 art = dict(
@@ -238,8 +243,8 @@ art = dict(
     calibration_meta = dict(
         train_start = str(tr.index.min().date()),
         train_end   = str(tr.index.max().date()),
-        test_start  = str(te.index.min().date()),
-        test_end    = str(te.index.max().date()),
+        test_start  = str(test_start.date()),
+        test_end    = str(te.index.max().date()) if not DEPLOY_MODE else str(test_start.date()),
         train_n     = int(len(tr)),
         test_n      = int(len(te)),
         embargo_days = int(EMBARGO_DAYS),
