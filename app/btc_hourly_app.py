@@ -3614,10 +3614,14 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             _odd  = float(((_onav-_opk)/_opk*100).min())
             _bpk  = _obh.cummax()
             _bdd  = float(((_obh-_bpk)/_bpk*100).min())
+            # _norm rescales all dollar amounts from the full-run capital base to
+            # the $100k OOS baseline.  Must be applied to pnl_abs before computing
+            # tax so that tax and final_nav are in the same (normalised) scale.
+            _norm = ic / _osn
             _oys: dict = {}
             for t in _otr:
                 yr = pd.Timestamp(t["exit_date"]).year
-                _oys[yr] = _oys.get(yr, 0.0) + t["pnl_abs"]
+                _oys[yr] = _oys.get(yr, 0.0) + t["pnl_abs"] * _norm
             _otax = sum(0.35*max(0.0, v) for v in _oys.values())
             _oat  = _of - _otax
             _oday = (int(_onav.index[-1].value) - int(OOS_START.value))//86_400_000_000_000
@@ -3636,9 +3640,6 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 n_wins          = len(_ow),   n_losses    = len(_ol),
                 start_date      = OOS_START,  end_date    = _onav.index[-1],
             )
-            # Scale trade exit_nav values to OOS-normalised capital so chart
-            # markers and "NAV After" column align with the $100k OOS baseline.
-            _norm = ic / _osn
             _otr_scaled = [dict(t, exit_nav=t["exit_nav"] * _norm) for t in _otr]
             # Open position in OOS window (if any)
             _oos_open = False
@@ -4279,10 +4280,14 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             _odd  = float(((_onav-_opk)/_opk*100).min())
             _bpk  = _obh.cummax()
             _bdd  = float(((_obh-_bpk)/_bpk*100).min())
+            # _norm rescales all dollar amounts from the full-run capital base to
+            # the $100k OOS baseline.  Must be applied to pnl_abs before computing
+            # tax so that tax and final_nav are in the same (normalised) scale.
+            _norm = ic / _osn
             _oys: dict = {}
             for t in _otr:
                 yr = pd.Timestamp(t["exit_date"]).year
-                _oys[yr] = _oys.get(yr, 0.0) + t["pnl_abs"]
+                _oys[yr] = _oys.get(yr, 0.0) + t["pnl_abs"] * _norm
             _otax = sum(0.35*max(0.0, v) for v in _oys.values())
             _oat  = _of - _otax
             _oday = (int(_onav.index[-1].value) - int(OOS_START.value))//86_400_000_000_000
@@ -4301,7 +4306,6 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 n_wins=len(_ow), n_losses=len(_ol),
                 start_date=OOS_START, end_date=_onav.index[-1],
             )
-            _norm = ic / _osn
             _otr_scaled = [dict(t, exit_nav=t["exit_nav"]*_norm) for t in _otr]
             _oos_open = False; _oos_oe = None
             if bt_full_oos.get("open_pos") and bt_full_oos.get("open_entry"):
