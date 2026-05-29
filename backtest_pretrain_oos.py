@@ -1,14 +1,16 @@
 """
-Pre-Training OOS Backtest  —  TF2 + V-Gate
-===========================================
+Pre-Training OOS Backtest  —  TF2 + V-Gate  (4-year window)
+=============================================================
 Tests the CURRENT live model on data from BEFORE its training window.
 
 Model training window : 2019-12-22 → 2026-02-27
-This backtest         : 2018-01-01 → 2019-12-21   (fully OOS — model never saw this data)
+This backtest         : 2016-01-01 → 2019-12-21   (fully OOS — model never saw this data)
 
-Why this matters: the model was fit entirely on 2019-2026 data.
-Running signals on 2018-2019 gives a genuine out-of-sample stress test,
-covering the 2018 bear market (-84%) and the 2019 recovery / consolidation.
+4-year window covers four very distinct BTC regimes:
+  2016        — early bull (+123%,  $430  → $960)
+  2017        — mania      (+1900%, $960  → $19,700 peak)
+  2018        — crash      (-84%,   $14k  → $3.2k)
+  2019        — recovery   (+93%,   $3.5k → $7.2k)
 
 Variants tested
 ───────────────
@@ -27,9 +29,9 @@ import pandas as pd
 import yfinance as yf
 
 TRAIN_START     = pd.Timestamp("2019-12-22")   # first day in model training data
-BACKTEST_START  = "2018-01-01"
+BACKTEST_START  = "2016-01-01"
 BACKTEST_END    = "2019-12-21"                 # last day before training starts
-FETCH_START     = "2017-06-01"                 # enough for 90-bar lookbacks + 35-bar warmup
+FETCH_START     = "2015-06-01"                 # enough for 90-bar lookbacks + 35-bar warmup
 INITIAL_CAP     = 100_000.0
 
 print(f"Model training starts : {TRAIN_START.date()}")
@@ -517,8 +519,50 @@ if __name__ == "__main__":
     m_b = summarise(res_b, "[B] TF2+V-Gate")
     print_summary([m_a, m_b])
 
+    # ── Year-by-year breakdown ─────────────────────────────────────────────────
+    W2 = 16
+    years = sorted(set(pd.Timestamp(t["entry_date"]).year for t in res_b["trades"]))
+    all_years = list(range(pd.Timestamp(BACKTEST_START).year,
+                           pd.Timestamp(BACKTEST_END).year + 1))
+    print(f"\n{'═'*(30+W2*4)}")
+    print(f"{'YEAR-BY-YEAR BREAKDOWN  [B] TF2+V-Gate':^{30+W2*4}}")
+    print(f"{'─'*(30+W2*4)}")
+    print(f"  {'Year':<8}{'BTC Move':>{W2}}{'Strategy':>{W2}}{'Alpha':>{W2}}{'Win Rate':>{W2}}")
+    print(f"{'─'*(30+W2*4)}")
+
+    btc_closes = df_raw["btc_close"]
+    for yr in all_years:
+        yr_trades = [t for t in res_b["trades"]
+                     if pd.Timestamp(t["entry_date"]).year == yr]
+        nav_yr    = res_b["nav"]
+        bh_yr     = res_b["bh"]
+        yr_nav    = nav_yr[nav_yr.index.year == yr]
+        yr_bh     = bh_yr[bh_yr.index.year == yr]
+        if yr_nav.empty or yr_bh.empty:
+            strat_ret = bh_ret = 0.0
+        else:
+            strat_ret = (yr_nav.iloc[-1] / yr_nav.iloc[0] - 1) * 100
+            bh_ret    = (yr_bh.iloc[-1]  / yr_bh.iloc[0]  - 1) * 100
+        yr_wins  = [t for t in yr_trades if t["pnl_pct"] > 0]
+        wr_str   = (f"{len(yr_wins)}/{len(yr_trades)} "
+                    f"({100*len(yr_wins)/len(yr_trades):.0f}%)"
+                    if yr_trades else "—")
+        alpha    = strat_ret - bh_ret
+        # BTC annual return from price series
+        btc_yr   = btc_closes[btc_closes.index.year == yr]
+        if len(btc_yr) > 1:
+            btc_ann = (btc_yr.iloc[-1] / btc_yr.iloc[0] - 1) * 100
+        else:
+            btc_ann = float("nan")
+        print(f"  {yr:<8}"
+              f"  {btc_ann:>+.1f}%{'':{W2-8}}"
+              f"  {strat_ret:>+.1f}%{'':{W2-8}}"
+              f"  {alpha:>+.1f}pp{'':{W2-8}}"
+              f"  {wr_str:>{W2}}")
+    print(f"{'═'*(30+W2*4)}")
+
     # Buy & Hold reference
-    bh_final = res_a["bh"].iloc[-1]
+    bh_final = res_b["bh"].iloc[-1]
     print(f"\n  Buy & Hold reference: ${bh_final:,.0f}  "
           f"({(bh_final/INITIAL_CAP-1)*100:+.1f}%)")
 
