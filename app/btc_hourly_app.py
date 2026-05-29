@@ -534,15 +534,22 @@ def _fetch_daily_raw():
 
 
 @st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
-def compute_daily_forecast(target_date_iso):
+def compute_daily_forecast(target_date_iso, data_end=None):
     """Apply the 12:00-UTC (7am-CT) daily model as it was trained.
 
     `target_date_iso` = ISO date of the bar BEING PREDICTED. That bar covers
     [target 12:00 UTC, target+1 12:00 UTC) = [target 7am CT, target+1 7am CT).
     Only data completed before the target bar starts is used — i.e. bars with
     start date ≤ target − 1 day (the latest such bar closes at target 7am CT,
-    which is the target bar's open). The cache key is the target date, so the
-    prediction recomputes once per 12:00-UTC rollover automatically."""
+    which is the target bar's open).
+
+    `data_end` = ISO date of the latest bar in _fetch_daily_raw() at call time.
+    It is NOT used inside the function body — it exists solely to bust the cache
+    when _fetch_daily_raw() gains a new bar.  Without this, a prediction made
+    while the as-of bar was missing from the 6-hour _fetch_daily_raw() cache
+    would remain stale for the full 24-hour TTL even after the raw data refreshed,
+    causing today's and yesterday's predictions to share the same as-of bar and
+    produce identical (flat) output."""
     path = str(DAILY_MODEL_CT)
     if not os.path.exists(path):
         return None
@@ -745,10 +752,11 @@ def compute_daily_series(end_target_date_iso, days_back=7):
     6 hours of bar close, matching how quickly _fetch_daily_raw picks it up."""
     end_target = pd.Timestamp(end_target_date_iso)
     daily_df = _fetch_daily_raw()
+    _data_end = daily_df.index.max().strftime("%Y-%m-%d") if not daily_df.empty else None
     rows = []
     for i in range(days_back, -1, -1):
         target_date = end_target - pd.Timedelta(days=i)
-        pred = compute_daily_forecast(target_date.strftime("%Y-%m-%d"))
+        pred = compute_daily_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
         if pred is None:
             continue
         ts = pd.Timestamp(target_date)
@@ -1467,7 +1475,7 @@ def _load_day_type():
 
 
 @st.cache_data(ttl=86400, show_spinner="Classifying day-type …")
-def compute_day_type_forecast(target_date_iso):
+def compute_day_type_forecast(target_date_iso, data_end=None):
     """Classify the next 12:00-UTC bar as BigUpper / BigLower / Quiet.
 
     Uses the H/L model's predictions + the cone regime + a handful of
@@ -1480,6 +1488,9 @@ def compute_day_type_forecast(target_date_iso):
       band_realized      – the test-set selective-accuracy table from the
                            artefact (for the caption)
     Returns None if the artefact is missing or the model can't load.
+
+    `data_end` busts the cache when _fetch_daily_raw() gains a new bar.
+    See compute_daily_forecast() for details on why this matters.
     """
     art = _load_day_type()
     if art is None:
@@ -1532,7 +1543,7 @@ def compute_day_type_forecast(target_date_iso):
     # H/L model predictions and direction-head probability (use only the
     # as-of row to keep this cheap)
     fc = A["feat_cols"]
-    daily_forecast = compute_daily_forecast(target_date_iso)
+    daily_forecast = compute_daily_forecast(target_date_iso, data_end=data_end)
     if daily_forecast is None:
         return None
     close_asof = daily_forecast["close_asof"]
@@ -1685,6 +1696,7 @@ def compute_30d_daytype_metrics(end_date_iso):
     qthr  = float(art.get("quiet_threshold", 0.03))
     end   = pd.Timestamp(end_date_iso)
     daily = _fetch_daily_raw().copy()
+    _data_end = daily.index.max().strftime("%Y-%m-%d") if not daily.empty else None
     rows  = []
     for i in range(30, 0, -1):
         target     = end - pd.Timedelta(days=i)
@@ -1706,7 +1718,7 @@ def compute_30d_daytype_metrics(end_date_iso):
         rng  = y_hi + y_lo
         actual = ("Quiet" if rng < qthr
                   else ("BigUpper" if y_hi > y_lo else "BigLower"))
-        pred_r = compute_day_type_forecast(target_iso)
+        pred_r = compute_day_type_forecast(target_iso, data_end=_data_end)
         if pred_r is None:
             continue
         rows.append(dict(
@@ -1794,6 +1806,7 @@ def compute_alltime_daytype_metrics(end_date_iso):
     end_ts = pd.Timestamp(end_date_iso)
     qthr  = float(art.get("quiet_threshold", 0.03))
     daily = _fetch_daily_raw().copy()
+    _data_end = daily.index.max().strftime("%Y-%m-%d") if not daily.empty else None
     rows  = []
     cur   = test_start_ts
     while cur <= end_ts:
@@ -1809,7 +1822,8 @@ def compute_alltime_daytype_metrics(end_date_iso):
                     y_lo = (close_asof - float(al))  / close_asof
                     actual = ("Quiet" if (y_hi + y_lo) < qthr
                               else ("BigUpper" if y_hi > y_lo else "BigLower"))
-                    pred_r = compute_day_type_forecast(cur.strftime("%Y-%m-%d"))
+                    pred_r = compute_day_type_forecast(cur.strftime("%Y-%m-%d"),
+                                                       data_end=_data_end)
                     if pred_r is not None:
                         rows.append(dict(
                             predicted=pred_r["predicted_class"],
@@ -5354,7 +5368,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             target_date = pd.Timestamp(picked_date_ct)
         # Warn if the picked date is in any model's training window.
         render_replay_in_sample_warning(target_date)
-    daily = compute_daily_forecast(target_date.strftime("%Y-%m-%d"))
+    _raw_latest = _fetch_daily_raw()
+    _data_end   = _raw_latest.index.max().strftime("%Y-%m-%d") if not _raw_latest.empty else None
+    daily = compute_daily_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
 
     # Pre-compute cached results (no latency hit) for display at top of page.
     _bt_end      = target_date.strftime("%Y-%m-%d")
@@ -5477,7 +5493,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             )
 
     # ────── 3-class day-type classifier (Big Upper / Big Lower / Quiet) ──
-    day_type = compute_day_type_forecast(target_date.strftime("%Y-%m-%d"))
+    day_type = compute_day_type_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
     if day_type is not None:
         DT_COLORS  = {"BigUpper": "#16a34a", "BigLower": "#dc2626", "Quiet": "#475569"}
         DT_EMOJI   = {"BigUpper": "🔼",      "BigLower": "🔽",      "Quiet": "▫️"}
