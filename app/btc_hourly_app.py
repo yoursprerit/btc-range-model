@@ -3541,40 +3541,52 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     fmt_tax   = lambda v: f"${v:,.0f}"
 
     def _period_cells(s):
-        """Generate 3-cell group (TF2+V-Gate pre-tax | TF2+V-Gate after-tax | B&H) for one stats dict."""
+        """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
         if s is None:
-            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 3)
+            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
         tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
         r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
         dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
         sh2  = s["sharpe"];          shb = s["bh_sharpe"]
         tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
         wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        ic   = s["initial_capital"]
+        bh_ltcg_tax = 0.15 * max(0.0, bh - ic)
+        bh_ltcg     = bh - bh_ltcg_tax
+        bh_ltcg_ret = (bh_ltcg / ic - 1) * 100
         return {
             "nav":  (_cell(tf2, bh, fmt_nav) +
-                     _cell(tax, bh, fmt_nav) +
-                     _plain(bh,  fmt_nav)),
+                     _cell(tax, bh_ltcg, fmt_nav) +
+                     _plain(bh,  fmt_nav) +
+                     _plain(bh_ltcg, fmt_nav)),
             "ret":  (_cell(r2, rb, fmt_pct) +
-                     _cell(rt, rb, fmt_pct) +
-                     _plain(rb, fmt_pct)),
+                     _cell(rt, bh_ltcg_ret, fmt_pct) +
+                     _plain(rb, fmt_pct) +
+                     _plain(bh_ltcg_ret, fmt_pct)),
             "dd":   (_cell(dd2, ddb, fmt_dd, higher_is_better=False) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd) +
-                     _plain(ddb, fmt_dd)),
+                     _plain(ddb, fmt_dd) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd)),
             "sh":   (_cell(sh2, shb, fmt_ratio) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio) +
-                     _plain(shb, fmt_ratio)),
+                     _plain(shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio)),
             "tim":  (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
                      f"{fmt_time(tim)}</td>" +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_time) +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>" +
                      "<td style='text-align:center; padding:7px 10px;'>100%</td>"),
             "tax":  (_tag("0% pre-tax", "#f1f5f9") +
-                     _tag("35% on gains", "#fef3c7") +
-                     _tag("0% unrealised", "#dcfce7")),
+                     _tag("35% STCG/yr", "#fef3c7") +
+                     _tag("0% unrealised", "#dcfce7") +
+                     _tag("15% LTCG exit", "#ecfdf5", fg="#065f46")),
             "taxpd": (_cell(na=True, val=0, ref=0, fmt_fn=fmt_tax) +
                       _tag(f"${txp:,.0f}", "#fef3c7") +
-                      _tag("$0", "#dcfce7")),
+                      _tag("$0", "#dcfce7") +
+                      _tag(f"${bh_ltcg_tax:,.0f}", "#ecfdf5", fg="#065f46")),
             "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
                      f"{wr:.0f}% ({nw}W/{nl}L)</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
         }
@@ -3707,19 +3719,20 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     else:
         lbl_full = "🌐 Full Market Performance"
 
-    _sub3 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% tax)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% tax)</th>")
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% unrealised)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H (15% LTCG)</th>")
     sub_hdr = (
         "<tr style='background:#334155; color:white; font-size:11px;'>"
         "<th style='padding:5px 12px;'></th>"
-        + _sub3 +
+        + _sub4 +
         "<th style='width:6px; padding:0;'></th>"
-        + _sub3 +
+        + _sub4 +
         "<th style='width:6px; padding:0;'></th>"
-        + _sub3 +
+        + _sub4 +
         "<th style='width:6px; padding:0;'></th>"
-        + _sub3 +
+        + _sub4 +
         "</tr>"
     )
 
@@ -3755,19 +3768,19 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <tr style="background:#1e3a8a; color:white;">
               <th style="padding:10px 12px; text-align:left; font-weight:600; min-width:160px;">
                 Metric</th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   border-right:3px solid #4c72b5;">
                 {lbl_r}</th>
               <th style="width:6px; padding:0; background:#1e3a8a;"></th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   border-right:3px solid #4c72b5;">
                 {lbl_f}</th>
               <th style="width:6px; padding:0; background:#1e3a8a;"></th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   background:#14532d; border-right:3px solid #166534;">
                 {lbl_oos}</th>
               <th style="width:6px; padding:0; background:#1e3a8a;"></th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   background:#581c87;">
                 {lbl_full}</th>
             </tr>
@@ -3779,14 +3792,14 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         </table>
         </div>
         <p style="font-size:11px; color:#64748b; margin:2px 0 14px 0;">
-        🟢 Green = better for investor vs B&amp;H &nbsp;|&nbsp;
+        🟢 Green = better for investor vs B&amp;H benchmark &nbsp;|&nbsp;
         🔴 Red = worse &nbsp;|&nbsp;
-        💡 TF2 triggers 35% short-term CGT on each winning trade;
-        B&amp;H holds unrealised → <b>$0 tax until eventual exit</b>.
+        💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
+        💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
         ⚠️ Pre-Sep 2025 dates are <b>in-sample</b>.
-        🔬 OOS column: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
-        only trades entered on/after that date counted; CT model last trained {ct_str}.
-        🌐 Full Market: entire Jun 2024–today window (mixed IS + OOS).
+        🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
+        CT model last trained {ct_str}.
+        🌐 Full Market: Jun 2024–today (mixed IS + OOS).
         </p>
         """,
         unsafe_allow_html=True,
@@ -4209,39 +4222,52 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     fmt_tax   = lambda v: f"${v:,.0f}"
 
     def _period_cells(s):
+        """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
         if s is None:
-            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 3)
+            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
         tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
         r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
         dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
         sh2  = s["sharpe"];          shb = s["bh_sharpe"]
         tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
         wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        ic   = s["initial_capital"]
+        bh_ltcg_tax = 0.15 * max(0.0, bh - ic)
+        bh_ltcg     = bh - bh_ltcg_tax
+        bh_ltcg_ret = (bh_ltcg / ic - 1) * 100
         return {
             "nav":  (_cell(tf2, bh, fmt_nav) +
-                     _cell(tax, bh, fmt_nav) +
-                     _plain(bh,  fmt_nav)),
+                     _cell(tax, bh_ltcg, fmt_nav) +
+                     _plain(bh,  fmt_nav) +
+                     _plain(bh_ltcg, fmt_nav)),
             "ret":  (_cell(r2, rb, fmt_pct) +
-                     _cell(rt, rb, fmt_pct) +
-                     _plain(rb, fmt_pct)),
+                     _cell(rt, bh_ltcg_ret, fmt_pct) +
+                     _plain(rb, fmt_pct) +
+                     _plain(bh_ltcg_ret, fmt_pct)),
             "dd":   (_cell(dd2, ddb, fmt_dd, higher_is_better=False) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd) +
-                     _plain(ddb, fmt_dd)),
+                     _plain(ddb, fmt_dd) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd)),
             "sh":   (_cell(sh2, shb, fmt_ratio) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio) +
-                     _plain(shb, fmt_ratio)),
+                     _plain(shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio)),
             "tim":  (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
                      f"{fmt_time(tim)}</td>" +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_time) +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>" +
                      "<td style='text-align:center; padding:7px 10px;'>100%</td>"),
             "tax":  (_tag("0% pre-tax", "#f1f5f9") +
-                     _tag("35% on gains", "#fef3c7") +
-                     _tag("0% unrealised", "#dcfce7")),
+                     _tag("35% STCG/yr", "#fef3c7") +
+                     _tag("0% unrealised", "#dcfce7") +
+                     _tag("15% LTCG exit", "#ecfdf5", fg="#065f46")),
             "taxpd": (_cell(na=True, val=0, ref=0, fmt_fn=fmt_tax) +
                       _tag(f"${txp:,.0f}", "#fef3c7") +
-                      _tag("$0", "#dcfce7")),
+                      _tag("$0", "#dcfce7") +
+                      _tag(f"${bh_ltcg_tax:,.0f}", "#ecfdf5", fg="#065f46")),
             "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
                      f"{wr:.0f}% ({nw}W/{nl}L)</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
         }
@@ -4366,19 +4392,20 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     else:
         lbl_full = "🌐 Full Market"
 
-    _sub3 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (MSTR)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% tax)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTR (0% tax)</th>")
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (MSTR)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTR (0% unrealised)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H MSTR (15% LTCG)</th>")
     sub_hdr = (
         "<tr style='background:#334155; color:white; font-size:11px;'>"
         "<th style='padding:5px 12px;'></th>"
-        + _sub3
+        + _sub4
         + "<th style='width:6px; padding:0;'></th>"
-        + _sub3
+        + _sub4
         + "<th style='width:6px; padding:0;'></th>"
-        + _sub3
+        + _sub4
         + "<th style='width:6px; padding:0;'></th>"
-        + _sub3
+        + _sub4
         + "</tr>"
     )
 
@@ -4414,19 +4441,19 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <tr style="background:#4c1d95; color:white;">
               <th style="padding:10px 12px; text-align:left; font-weight:600; min-width:160px;">
                 Metric</th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   border-right:3px solid #7c3aed;">
                 {lbl_r}</th>
               <th style="width:6px; padding:0; background:#4c1d95;"></th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   border-right:3px solid #7c3aed;">
                 {lbl_f}</th>
               <th style="width:6px; padding:0; background:#4c1d95;"></th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   background:#14532d; border-right:3px solid #166534;">
                 {lbl_oos}</th>
               <th style="width:6px; padding:0; background:#4c1d95;"></th>
-              <th colspan="3" style="padding:10px 8px; text-align:center; font-weight:600;
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   background:#581c87;">
                 {lbl_full}</th>
             </tr>
@@ -4438,13 +4465,13 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         </table>
         </div>
         <p style="font-size:11px; color:#64748b; margin:2px 0 14px 0;">
-        🟢 Green = better for investor vs B&amp;H MSTR &nbsp;|&nbsp;
+        🟢 Green = better for investor vs B&amp;H benchmark &nbsp;|&nbsp;
         🔴 Red = worse &nbsp;|&nbsp;
-        💡 Strategy triggers 35% short-term CGT on each winning trade;
-        B&amp;H MSTR holds unrealised → <b>$0 tax until eventual exit</b>.
+        💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
+        💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
         ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
-        🔬 OOS column: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
-        only trades entered on/after that date counted; CT model last trained {ct_str}.
+        🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
+        CT model last trained {ct_str}.
         </p>
         """,
         unsafe_allow_html=True,
