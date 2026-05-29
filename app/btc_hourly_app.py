@@ -8260,12 +8260,29 @@ def render_explainability_dashboard():
         ma_vals  = expl.get("ma_hist_vals", [])
         if btc_idx and len(btc_idx) >= 24:
             fig_reg = go.Figure()
-            # Shaded area between price and MA (green if above, red if below)
+            # Conditionally coloured fill: green where price > MA, red where below.
+            # Strategy: two zero-height-when-inactive traces using clamped arrays —
+            # no need to find exact crossover points.
+            _btc_arr = np.array(btc_vals, dtype=float)
+            _ma_arr  = np.array(ma_vals,  dtype=float)
+            # Where MA is NaN (rolling warm-up), treat as equal to price → zero fill
+            _ma_safe = np.where(np.isnan(_ma_arr), _btc_arr, _ma_arr)
+            _top_grn = np.where(_btc_arr > _ma_safe, _btc_arr, _ma_safe)
+            _bot_red = np.where(_btc_arr < _ma_safe, _btc_arr, _ma_safe)
+            _x_rev   = btc_idx[::-1]
+            # Green fill (above MA)
             fig_reg.add_trace(go.Scatter(
-                x=btc_idx + btc_idx[::-1],
-                y=btc_vals + ma_vals[::-1],
-                fill="toself",
-                fillcolor="rgba(22,163,74,0.10)",
+                x=btc_idx + _x_rev,
+                y=list(_top_grn) + list(reversed(_ma_safe)),
+                fill="toself", fillcolor="rgba(22,163,74,0.15)",
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+            # Red fill (below MA)
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx + _x_rev,
+                y=list(_ma_safe) + list(reversed(_bot_red)),
+                fill="toself", fillcolor="rgba(220,38,38,0.15)",
                 line=dict(color="rgba(0,0,0,0)"),
                 showlegend=False, hoverinfo="skip",
             ))
