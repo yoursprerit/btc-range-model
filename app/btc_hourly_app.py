@@ -7825,13 +7825,611 @@ def render_retrain_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical | Retrain Status | MSTR Backtesting
+# EXPLAINABILITY DASHBOARD
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_retrain, tab_mstr = st.tabs([
+
+# Feature metadata: (category, sub-category, display label)
+_EXPL_FEAT_META: "dict[str, tuple[str, str, str]]" = {
+    # Price momentum / returns
+    "ret_1h":   ("Price Momentum", "Returns", "1h BTC return"),
+    "ret_2h":   ("Price Momentum", "Returns", "2h BTC return"),
+    "ret_4h":   ("Price Momentum", "Returns", "4h BTC return"),
+    "ret_8h":   ("Price Momentum", "Returns", "8h BTC return"),
+    "ret_12h":  ("Price Momentum", "Returns", "12h BTC return"),
+    "ret_24h":  ("Price Momentum", "Returns", "24h BTC return"),
+    "ret_48h":  ("Price Momentum", "Returns", "48h BTC return"),
+    "ret_72h":  ("Price Momentum", "Returns", "72h BTC return"),
+    # Volatility
+    "vol_4h":      ("Technical", "Volatility", "Realized vol 4h"),
+    "vol_8h":      ("Technical", "Volatility", "Realized vol 8h"),
+    "vol_24h":     ("Technical", "Volatility", "Realized vol 24h"),
+    "vol_48h":     ("Technical", "Volatility", "Realized vol 48h"),
+    "atr_4h":      ("Technical", "Volatility", "ATR 4h"),
+    "atr_12h":     ("Technical", "Volatility", "ATR 12h"),
+    "atr_24h":     ("Technical", "Volatility", "ATR 24h"),
+    "bb24_width":  ("Technical", "Volatility", "Bollinger width 24h"),
+    # Price level / range
+    "range_now":   ("Technical", "Price Level", "Current bar range"),
+    "range_ma24":  ("Technical", "Price Level", "Range MA 24h"),
+    "range_ma72":  ("Technical", "Price Level", "Range MA 72h"),
+    "dist_hi_24":  ("Technical", "Price Level", "Dist from 24h high"),
+    "dist_lo_24":  ("Technical", "Price Level", "Dist from 24h low"),
+    "dist_hi_168": ("Technical", "Price Level", "Dist from 7d high"),
+    # Volume
+    "vol_chg_1": ("Technical", "Volume", "Volume change 1h"),
+    "vol_z_24":  ("Technical", "Volume", "Volume z-score 24h"),
+    # Oscillators
+    "rsi_14":    ("Technical", "Oscillators", "RSI(14)"),
+    "macd":      ("Technical", "Oscillators", "MACD"),
+    "macd_hist": ("Technical", "Oscillators", "MACD histogram"),
+    # ETH / crypto ecosystem
+    "eth_ret_1h":      ("Crypto Market", "Ethereum", "ETH 1h return"),
+    "eth_ret_24h":     ("Crypto Market", "Ethereum", "ETH 24h return"),
+    "eth_vol_24h":     ("Crypto Market", "Ethereum", "ETH vol 24h"),
+    "btc_eth_corr_24": ("Crypto Market", "Ethereum", "BTC-ETH corr 24h"),
+    # Equities
+    "spx_ret_1h":  ("Macro/Market", "Equities", "S&P 500 1h return"),
+    "spx_ret_24h": ("Macro/Market", "Equities", "S&P 500 24h return"),
+    "spx_vol_24h": ("Macro/Market", "Equities", "S&P 500 vol 24h"),
+    "ndx_ret_1h":  ("Macro/Market", "Equities", "Nasdaq 1h return"),
+    "ndx_ret_24h": ("Macro/Market", "Equities", "Nasdaq 24h return"),
+    "ndx_vol_24h": ("Macro/Market", "Equities", "Nasdaq vol 24h"),
+    # Risk sentiment / VIX
+    "vix_ret_1h":  ("Macro/Market", "Risk Sentiment", "VIX 1h change"),
+    "vix_ret_24h": ("Macro/Market", "Risk Sentiment", "VIX 24h change"),
+    "vix_vol_24h": ("Macro/Market", "Risk Sentiment", "VIX vol 24h"),
+    # Commodities / safe havens
+    "gold_ret_1h":  ("Macro/Market", "Commodities", "Gold 1h return"),
+    "gold_ret_24h": ("Macro/Market", "Commodities", "Gold 24h return"),
+    "gold_vol_24h": ("Macro/Market", "Commodities", "Gold vol 24h"),
+    # USD / dollar index
+    "dxy_ret_1h":  ("Macro/Market", "USD Index", "DXY 1h change"),
+    "dxy_ret_24h": ("Macro/Market", "USD Index", "DXY 24h change"),
+    "dxy_vol_24h": ("Macro/Market", "USD Index", "DXY vol 24h"),
+    # Interest rates
+    "tnx_ret_1h":  ("Macro/Market", "Rates", "10Y yield 1h change"),
+    "tnx_ret_24h": ("Macro/Market", "Rates", "10Y yield 24h change"),
+    "tnx_vol_24h": ("Macro/Market", "Rates", "10Y yield vol 24h"),
+    # Sentiment
+    "fng":     ("Sentiment", "Fear & Greed", "F&G index level"),
+    "fng_d1":  ("Sentiment", "Fear & Greed", "F&G 1d change"),
+    "fng_d7":  ("Sentiment", "Fear & Greed", "F&G 7d change"),
+    "fng_d24": ("Sentiment", "Fear & Greed", "F&G 24h change"),
+    # Calendar / seasonality
+    "hr_sin":  ("Seasonality", "Time", "Hour-of-day (sin)"),
+    "hr_cos":  ("Seasonality", "Time", "Hour-of-day (cos)"),
+    "dow_sin": ("Seasonality", "Time", "Day-of-week (sin)"),
+    "dow_cos": ("Seasonality", "Time", "Day-of-week (cos)"),
+    "weekend": ("Seasonality", "Time", "Weekend flag"),
+    "us_open": ("Seasonality", "Time", "US market hours"),
+}
+
+# Category display config: color, emoji, description
+_EXPL_CAT_META = {
+    "Price Momentum": {
+        "color": "#3b82f6", "emoji": "📈",
+        "desc": "BTC log-returns across multiple timeframes (1h → 72h)",
+    },
+    "Technical": {
+        "color": "#8b5cf6", "emoji": "📐",
+        "desc": "Realized volatility, ATR, range, volume, RSI, MACD, Bollinger",
+    },
+    "Crypto Market": {
+        "color": "#f59e0b", "emoji": "⚡",
+        "desc": "Ethereum price action and BTC-ETH correlation",
+    },
+    "Macro/Market": {
+        "color": "#ef4444", "emoji": "🌍",
+        "desc": "Equities (SPX/NDX), fear index (VIX), gold, USD (DXY), 10Y rates",
+    },
+    "Sentiment": {
+        "color": "#10b981", "emoji": "😨",
+        "desc": "Crypto Fear & Greed index — level and short-term changes",
+    },
+    "Seasonality": {
+        "color": "#6b7280", "emoji": "🕐",
+        "desc": "Hour-of-day and day-of-week cyclical patterns",
+    },
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _compute_expl_data(latest_t_iso: str) -> "dict | None":
+    """Compute signed feature contributions for the current bar.
+
+    For Ridge: contribution_i = coef_i * z_i  (exact linear decomposition)
+    For GBM:  contribution_i = pred(x) − pred(x | x_i = μ_i)  (perturbation)
+
+    Both methods use the StandardScaler's training-time mean as the 'neutral'
+    baseline so contributions represent deviation from historical norms.
+    """
+    t = pd.Timestamp(latest_t_iso)
+    if t not in F_filled.index:
+        return None
+    x_row = F_filled.loc[t, feat_cols]
+    if x_row.isna().any():
+        return None
+    x_arr = x_row.values.reshape(1, -1)
+
+    scaler = model.named_steps["sc"]
+    inner  = model.named_steps["m"]
+    mu_train    = pd.Series(scaler.mean_,  index=feat_cols)
+    sigma_train = pd.Series(scaler.scale_, index=feat_cols)
+    z_scores = (x_row - mu_train) / sigma_train.replace(0, 1e-10)
+
+    pred_now = float(model.predict(x_arr)[0])
+
+    if best_name == "ridge":
+        coef = pd.Series(inner.coef_, index=feat_cols)
+        contributions = coef * z_scores
+    else:
+        # Perturbation: zero out each feature's deviation from training mean
+        x_flat = x_row.values.copy().astype(float)
+        contribs_dict: "dict[str, float]" = {}
+        for i, feat in enumerate(feat_cols):
+            x_pert = x_flat.copy()
+            x_pert[i] = float(mu_train.iloc[i])
+            pred_pert = float(model.predict(x_pert.reshape(1, -1))[0])
+            contribs_dict[feat] = pred_now - pred_pert
+        contributions = pd.Series(contribs_dict)
+
+    # Regime context: last 30 days of BTC prices
+    recent_idx = F_filled.index[
+        valid_mask & (F_filled.index <= t) &
+        (F_filled.index >= t - pd.Timedelta(days=30))
+    ]
+    if len(recent_idx) >= 24:
+        btc_recent = df["btc_close"].reindex(recent_idx).dropna()
+        cur_price  = float(btc_recent.iloc[-1])
+        ma30_price = float(btc_recent.mean())
+        pct_vs_ma  = (cur_price - ma30_price) / ma30_price * 100
+        ret_30d    = float((btc_recent.iloc[-1] / btc_recent.iloc[0] - 1) * 100)
+        n7 = min(7 * 24, len(btc_recent))
+        ret_7d = float((btc_recent.iloc[-1] / btc_recent.iloc[-n7] - 1) * 100)
+        btc_hist_idx = list(btc_recent.index)
+        btc_hist_vals = list(btc_recent.values)
+        ma_hist_vals = list(
+            btc_recent.rolling(min(len(btc_recent), 168), min_periods=24).mean().values
+        )
+    else:
+        cur_price = ma30_price = pct_vs_ma = ret_30d = ret_7d = None
+        btc_hist_idx = btc_hist_vals = ma_hist_vals = []
+
+    fng_now = float(x_row["fng"]) if "fng" in feat_cols else 50.0
+
+    # Regime score
+    score = 0
+    if pct_vs_ma is not None:
+        if   pct_vs_ma >  10: score += 3
+        elif pct_vs_ma >   5: score += 2
+        elif pct_vs_ma >   0: score += 1
+        elif pct_vs_ma >  -5: score -= 1
+        elif pct_vs_ma > -10: score -= 2
+        else:                  score -= 3
+    if ret_7d is not None:
+        if   ret_7d >  15: score += 2
+        elif ret_7d >   5: score += 1
+        elif ret_7d <  -5: score -= 1
+        elif ret_7d < -15: score -= 2
+    if fng_now >= 75: score += 1
+    elif fng_now <= 25: score -= 1
+
+    if   score >= 3: regime = "Strong Bull"
+    elif score >= 1: regime = "Bull"
+    elif score == 0: regime = "Neutral"
+    elif score >= -2: regime = "Bear"
+    else:             regime = "Strong Bear"
+
+    return dict(
+        contributions  = contributions,
+        z_scores       = z_scores,
+        pred_return    = pred_now,
+        regime         = regime,
+        regime_score   = score,
+        cur_price      = cur_price,
+        ma30_price     = ma30_price,
+        pct_vs_ma      = pct_vs_ma,
+        ret_30d        = ret_30d,
+        ret_7d         = ret_7d,
+        fng_now        = fng_now,
+        btc_hist_idx   = btc_hist_idx,
+        btc_hist_vals  = btc_hist_vals,
+        ma_hist_vals   = ma_hist_vals,
+        as_of          = t,
+    )
+
+
+def render_explainability_dashboard():
+    """Render the Explainability tab.
+
+    Shows what macro, on-chain, technical, and sentiment factors are currently
+    driving Bitcoin up or down, how strongly, and in what regime context.
+    """
+    st.markdown("## 🧠 What's Driving Bitcoin Right Now?")
+    st.caption(
+        "Feature contributions decompose the model's next-hour forecast into "
+        "per-factor shares. **Green** = pushing the forecast higher · "
+        "**Red** = pushing the forecast lower. "
+        f"Model in use: **{best_name.upper()}** (hourly close predictor). "
+        "Contributions are exact for Ridge (coeff × z-score); perturbation-based for GBM."
+    )
+
+    expl = _compute_expl_data(str(latest_t_global))
+    if expl is None:
+        st.warning("Insufficient data to compute feature contributions. "
+                   "Click **Refresh now** in the sidebar to retry.")
+        return
+
+    contributions: pd.Series = expl["contributions"]
+    z_scores: pd.Series      = expl["z_scores"]
+    pred_ret: float          = expl["pred_return"]
+    regime: str              = expl["regime"]
+
+    # ── Regime banner ────────────────────────────────────────────────────
+    _REGIME_STYLES = {
+        "Strong Bull": ("#14532d", "#dcfce7", "#166534"),
+        "Bull":        ("#14532d", "#f0fdf4", "#16a34a"),
+        "Neutral":     ("#713f12", "#fefce8", "#ca8a04"),
+        "Bear":        ("#7f1d1d", "#fef2f2", "#dc2626"),
+        "Strong Bear": ("#450a0a", "#fee2e2", "#991b1b"),
+    }
+    _REGIME_EMOJI = {
+        "Strong Bull": "🐂🐂", "Bull": "🐂",
+        "Neutral": "〰️",
+        "Bear": "🐻", "Strong Bear": "🐻🐻",
+    }
+    text_col, bg_col, border_col = _REGIME_STYLES.get(regime, ("#111", "#f9fafb", "#6b7280"))
+    r_emoji = _REGIME_EMOJI.get(regime, "")
+    fc_color = "#16a34a" if pred_ret > 0 else "#dc2626"
+    fc_arrow = "▲" if pred_ret > 0 else "▼"
+
+    st.markdown(
+        f"""<div style="background:{bg_col};border-radius:10px;padding:14px 22px;
+            border-left:5px solid {border_col};margin-bottom:12px;">
+          <span style="font-size:20px;font-weight:700;color:{text_col};">
+            {r_emoji}&nbsp;{regime} Regime
+          </span>
+          <span style="font-size:13px;color:{text_col};margin-left:18px;">
+            1-hour model forecast:&nbsp;
+            <b style="color:{fc_color};">{fc_arrow} {pred_ret*100:+.3f}%</b>
+            &nbsp;log-return
+          </span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    # ── KPI metrics row ──────────────────────────────────────────────────
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    with mc1:
+        cp = expl.get("cur_price")
+        r7 = expl.get("ret_7d")
+        st.metric("BTC Price",
+                  f"${cp:,.0f}" if cp else "—",
+                  delta=f"{r7:+.1f}% 7d" if r7 is not None else None)
+    with mc2:
+        pvm = expl.get("pct_vs_ma")
+        r30 = expl.get("ret_30d")
+        st.metric("vs 30-day MA",
+                  f"{pvm:+.1f}%" if pvm is not None else "—",
+                  delta=f"{r30:+.1f}% 30d" if r30 is not None else None)
+    with mc3:
+        fng = expl.get("fng_now", 50)
+        fng_label = (
+            "Extreme Greed" if fng >= 75 else "Greed"    if fng >= 55 else
+            "Neutral"       if fng >= 45 else "Fear"     if fng >= 25 else "Extreme Fear"
+        )
+        st.metric("Fear & Greed", f"{fng:.0f}", delta=fng_label,
+                  delta_color="off")
+    with mc4:
+        st.metric("Hourly Forecast",
+                  f"{fc_arrow} {abs(pred_ret*100):.3f}%",
+                  delta="bullish" if pred_ret > 0 else "bearish",
+                  delta_color="normal" if pred_ret > 0 else "inverse")
+    with mc5:
+        bull_c = contributions[contributions > 0]
+        bear_c = contributions[contributions < 0]
+        top_b  = bull_c.idxmax() if len(bull_c) else None
+        top_be = bear_c.idxmin() if len(bear_c) else None
+        top_b_label  = _EXPL_FEAT_META.get(top_b,  ("", "", str(top_b)))[2]  if top_b  else "—"
+        top_be_label = _EXPL_FEAT_META.get(top_be, ("", "", str(top_be)))[2] if top_be else "—"
+        st.markdown(
+            f"<div style='font-size:12px;line-height:1.8'>"
+            f"🟢 <b>Top bull:</b> {top_b_label}<br>"
+            f"🔴 <b>Top bear:</b> {top_be_label}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # ── Main feature contribution chart ──────────────────────────────────
+    st.markdown("### 📊 Feature Drivers — Current Bar")
+    st.caption(
+        "Top features sorted by absolute contribution.  "
+        "Width = strength of influence.  "
+        "Hover for current value, z-score and exact contribution."
+    )
+
+    N_SHOW = min(30, len(contributions))
+    top_idx = contributions.abs().nlargest(N_SHOW).index
+    c_show  = contributions[top_idx].sort_values()
+
+    bar_colors, hover_texts, y_labels = [], [], []
+    for feat in c_show.index:
+        meta     = _EXPL_FEAT_META.get(feat, ("Other", feat, feat))
+        cat_meta = _EXPL_CAT_META.get(meta[0], {"color": "#6b7280"})
+        bar_colors.append("#16a34a" if c_show[feat] >= 0 else "#dc2626")
+        z_val  = float(z_scores.get(feat, 0))
+        raw_val = (float(F_filled.loc[latest_t_global, feat])
+                   if feat in F_filled.columns else float("nan"))
+        contrib_bps = c_show[feat] * 100
+        hover_texts.append(
+            f"<b>{meta[2]}</b><br>"
+            f"Category: {meta[0]} › {meta[1]}<br>"
+            f"Current value: {raw_val:.5g}<br>"
+            f"Z-score vs training mean: {z_val:+.2f}σ<br>"
+            f"Contribution: {contrib_bps:+.5f} bps"
+        )
+        y_labels.append(meta[2])
+
+    fig_main = go.Figure(go.Bar(
+        y=y_labels,
+        x=list(c_show.values * 100),
+        orientation="h",
+        marker_color=bar_colors,
+        hovertemplate="%{customdata}<extra></extra>",
+        customdata=hover_texts,
+        text=[f"{v*100:+.4f}" for v in c_show.values],
+        textposition="outside",
+    ))
+    fig_main.add_vline(x=0, line=dict(color="#111827", width=1.5))
+    fig_main.update_layout(
+        height=max(420, N_SHOW * 22 + 100),
+        template="plotly_white",
+        title=dict(
+            text=(
+                f"<b>Top {N_SHOW} drivers  ·  {latest_t_global.strftime('%Y-%m-%d %H:%M')} UTC</b>"
+                "<br><span style='font-size:11px;color:#555'>"
+                "Green = bullish contribution  ·  Red = bearish contribution  ·  "
+                f"Total predicted log-return: <b>{pred_ret*100:+.4f}%</b>"
+                "</span>"
+            ),
+            x=0.0, xanchor="left",
+        ),
+        xaxis_title="Contribution (predicted log-return ×100, basis-point scale)",
+        yaxis_title=None,
+        margin=dict(t=80, r=130, b=50, l=210),
+        yaxis=dict(tickfont=dict(size=11)),
+        xaxis=dict(zeroline=False),
+    )
+    st.plotly_chart(fig_main, use_container_width=True, key="expl_main_chart")
+
+    # ── Category breakdown + regime context ──────────────────────────────
+    st.markdown("### 📂 Factor Category Breakdown")
+    col_cats, col_regime = st.columns([3, 2])
+
+    # Aggregate by top-level category
+    cat_pos: "dict[str, float]" = {}
+    cat_neg: "dict[str, float]" = {}
+    cat_net: "dict[str, float]" = {}
+    for feat, val in contributions.items():
+        cat = _EXPL_FEAT_META.get(str(feat), ("Other", feat, feat))[0]
+        bps = float(val) * 100
+        cat_pos[cat] = cat_pos.get(cat, 0.0) + max(0.0, bps)
+        cat_neg[cat] = cat_neg.get(cat, 0.0) + min(0.0, bps)
+        cat_net[cat] = cat_net.get(cat, 0.0) + bps
+
+    cats_sorted = sorted(cat_net, key=lambda c: abs(cat_net[c]), reverse=True)
+
+    with col_cats:
+        c_emojis  = [f"{_EXPL_CAT_META.get(c, {}).get('emoji', '')} {c}" for c in cats_sorted]
+        pos_vals  = [cat_pos.get(c, 0.0) for c in cats_sorted]
+        neg_vals  = [cat_neg.get(c, 0.0) for c in cats_sorted]
+
+        fig_cats = go.Figure()
+        fig_cats.add_trace(go.Bar(
+            name="Bullish", y=c_emojis, x=pos_vals, orientation="h",
+            marker_color="#16a34a",
+            hovertemplate="%{y}: +%{x:.4f} bps<extra>Bullish</extra>",
+        ))
+        fig_cats.add_trace(go.Bar(
+            name="Bearish", y=c_emojis, x=neg_vals, orientation="h",
+            marker_color="#dc2626",
+            hovertemplate="%{y}: %{x:.4f} bps<extra>Bearish</extra>",
+        ))
+        fig_cats.add_vline(x=0, line=dict(color="#111827", width=1))
+        fig_cats.update_layout(
+            barmode="relative",
+            height=320,
+            template="plotly_white",
+            title=dict(
+                text="<b>Net bullish vs bearish by category</b>",
+                x=0, xanchor="left",
+            ),
+            xaxis_title="Contribution (bps)",
+            yaxis_title=None,
+            margin=dict(t=50, r=40, b=50, l=170),
+            legend=dict(orientation="h", y=-0.18),
+            yaxis=dict(tickfont=dict(size=11)),
+        )
+        st.plotly_chart(fig_cats, use_container_width=True, key="expl_cats_chart")
+
+    with col_regime:
+        btc_idx  = expl.get("btc_hist_idx", [])
+        btc_vals = expl.get("btc_hist_vals", [])
+        ma_vals  = expl.get("ma_hist_vals", [])
+        if btc_idx and len(btc_idx) >= 24:
+            fig_reg = go.Figure()
+            # Shaded area between price and MA (green if above, red if below)
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx + btc_idx[::-1],
+                y=btc_vals + ma_vals[::-1],
+                fill="toself",
+                fillcolor="rgba(22,163,74,0.10)",
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx, y=ma_vals,
+                name="30d MA", line=dict(color="#6b7280", width=1.5, dash="dash"),
+                hovertemplate="MA: $%{y:,.0f}<extra></extra>",
+            ))
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx, y=btc_vals,
+                name="BTC Price", line=dict(color="#F7931A", width=2),
+                hovertemplate="BTC: $%{y:,.0f}<extra></extra>",
+            ))
+            fig_reg.update_layout(
+                height=320,
+                template="plotly_white",
+                title=dict(
+                    text="<b>BTC vs 30-day MA (regime context)</b>",
+                    x=0, xanchor="left",
+                ),
+                xaxis_title=None,
+                yaxis_title="Price (USD)",
+                yaxis_tickformat="$,.0f",
+                margin=dict(t=50, r=20, b=40, l=90),
+                legend=dict(orientation="h", y=-0.18),
+            )
+            st.plotly_chart(fig_reg, use_container_width=True, key="expl_regime_chart")
+        else:
+            st.info("Insufficient price history for regime chart.")
+
+    # ── Category narrative ────────────────────────────────────────────────
+    st.markdown("### 🗒️ Category Narratives")
+    ncols = 3
+    cat_chunks = [cats_sorted[i:i+ncols] for i in range(0, len(cats_sorted), ncols)]
+    for chunk in cat_chunks:
+        row_cols = st.columns(ncols)
+        for col, cat in zip(row_cols, chunk):
+            cm = _EXPL_CAT_META.get(cat, {"emoji": "", "color": "#6b7280", "desc": ""})
+            net = cat_net.get(cat, 0.0)
+            direction = "🟢 Bullish" if net > 0.001 else ("🔴 Bearish" if net < -0.001 else "⚪ Neutral")
+            cat_feats = sorted(
+                [(f, float(contributions[f])) for f in contributions.index
+                 if _EXPL_FEAT_META.get(str(f), ("",))[0] == cat],
+                key=lambda x: abs(x[1]), reverse=True,
+            )[:3]
+            top_lines = "  \n".join(
+                f"{'▲' if v > 0 else '▼'} {_EXPL_FEAT_META.get(f, ('','',f))[2]}: "
+                f"{v*100:+.4f} bps"
+                for f, v in cat_feats
+            ) or "_No features_"
+            with col:
+                st.markdown(
+                    f"**{cm['emoji']} {cat}**  \n"
+                    f"{direction} · **{net:+.4f} bps**  \n"
+                    f"_{cm['desc']}_  \n\n"
+                    f"{top_lines}"
+                )
+
+    st.markdown("---")
+
+    # ── Z-score heatmap (current feature deviations from training norms) ─
+    with st.expander("📡 Feature Z-Scores vs Training Baseline", expanded=False):
+        st.caption(
+            "How far each feature's current value is from its training-time mean.  "
+            "🔴 |z| > 2 = unusual · 🟡 |z| > 1 = elevated · 🟢 |z| ≤ 1 = normal."
+        )
+        z_top = z_scores.abs().nlargest(min(30, len(z_scores))).index
+        z_show = z_scores[z_top].sort_values()
+        z_labels = [_EXPL_FEAT_META.get(f, ("","",f))[2] for f in z_show.index]
+        z_colors = [
+            "#dc2626" if abs(v) > 2 else "#f59e0b" if abs(v) > 1 else "#16a34a"
+            for v in z_show.values
+        ]
+        fig_z = go.Figure(go.Bar(
+            y=z_labels, x=list(z_show.values),
+            orientation="h",
+            marker_color=z_colors,
+            text=[f"{v:+.2f}σ" for v in z_show.values],
+            textposition="outside",
+            hovertemplate="%{y}: %{x:+.3f}σ<extra></extra>",
+        ))
+        fig_z.add_vline(x=0,  line=dict(color="#111827", width=1))
+        fig_z.add_vline(x= 2, line=dict(color="#dc2626", width=1.2, dash="dash"))
+        fig_z.add_vline(x=-2, line=dict(color="#dc2626", width=1.2, dash="dash"))
+        fig_z.add_vline(x= 1, line=dict(color="#f59e0b", width=1,   dash="dot"))
+        fig_z.add_vline(x=-1, line=dict(color="#f59e0b", width=1,   dash="dot"))
+        fig_z.update_layout(
+            height=max(380, len(z_show) * 22 + 100),
+            template="plotly_white",
+            title=dict(
+                text=(
+                    "<b>Feature z-scores vs training-time baseline</b>"
+                    "<br><span style='font-size:11px;color:#555'>"
+                    "z = (current − training mean) / training std  ·  "
+                    "🔴 |z|>2 unusual · 🟡 |z|>1 elevated · 🟢 normal"
+                    "</span>"
+                ),
+                x=0, xanchor="left",
+            ),
+            xaxis_title="z-score (standard deviations from training mean)",
+            yaxis_title=None,
+            margin=dict(t=80, r=100, b=50, l=210),
+            yaxis=dict(tickfont=dict(size=11)),
+        )
+        n_red = int((z_scores.abs() > 2).sum())
+        n_yel = int(((z_scores.abs() > 1) & (z_scores.abs() <= 2)).sum())
+        n_grn = int((z_scores.abs() <= 1).sum())
+        st.plotly_chart(fig_z, use_container_width=True, key="expl_z_chart")
+        st.caption(
+            f"🔴 {n_red} features unusually deviated (|z|>2)  ·  "
+            f"🟡 {n_yel} elevated (1<|z|≤2)  ·  "
+            f"🟢 {n_grn} within normal range (|z|≤1)"
+        )
+
+    # ── Full feature table ───────────────────────────────────────────────
+    with st.expander("🔍 Full feature contribution table", expanded=False):
+        rows = []
+        for feat in feat_cols:
+            meta     = _EXPL_FEAT_META.get(feat, ("Other", feat, feat))
+            cat_meta = _EXPL_CAT_META.get(meta[0], {"emoji": ""})
+            contrib  = float(contributions.get(feat, 0.0))
+            z_val    = float(z_scores.get(feat, 0.0))
+            raw_val  = (float(F_filled.loc[latest_t_global, feat])
+                        if feat in F_filled.columns else float("nan"))
+            rows.append({
+                "Category":            f"{cat_meta.get('emoji','')} {meta[0]}",
+                "Sub-category":        meta[1],
+                "Feature":             meta[2],
+                "Current Value":       round(raw_val, 6),
+                "Z-Score (σ)":         round(z_val, 3),
+                "Contribution (bps)":  round(contrib * 100, 6),
+                "Direction":           "▲ Bull" if contrib > 1e-9 else ("▼ Bear" if contrib < -1e-9 else "—"),
+            })
+        df_expl_table = pd.DataFrame(rows)
+        df_expl_table = df_expl_table.sort_values(
+            "Contribution (bps)", key=abs, ascending=False
+        ).reset_index(drop=True)
+        st.dataframe(
+            df_expl_table,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Current Value":      st.column_config.NumberColumn(format="%.6g"),
+                "Z-Score (σ)":        st.column_config.NumberColumn(format="%.3f"),
+                "Contribution (bps)": st.column_config.NumberColumn(format="%.6f"),
+            },
+        )
+        st.caption(
+            f"Model: **{best_name.upper()}** · "
+            f"As of: **{latest_t_global.strftime('%Y-%m-%d %H:%M')} UTC** · "
+            f"Total forecast: **{pred_ret*100:+.5f}%** log-return · "
+            f"{len(feat_cols)} features in model"
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tabs: Live | Historical | Retrain Status | MSTR Backtesting | Explainability
+# ════════════════════════════════════════════════════════════════════════
+tab_live, tab_hist, tab_retrain, tab_mstr, tab_explain = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
     "🔄 Retrain Status",
     "📊 MSTR Backtesting",
+    "🧠 Explainability",
 ])
 
 with tab_live:
@@ -8057,6 +8655,9 @@ with tab_mstr:
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
     )
+
+with tab_explain:
+    render_explainability_dashboard()
 
 # ─────────────────────── timer-driven re-run ──────────────────────────
 time.sleep(REFRESH_SECONDS)
