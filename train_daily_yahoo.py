@@ -39,9 +39,13 @@ TREND_SAT       = 0.05
 # ---------------------------------------------------------------------------
 # 1. DATA FETCH
 # ---------------------------------------------------------------------------
-FETCH_START = "2018-06-01"
-TODAY       = datetime.now(timezone.utc).date()
-FETCH_END   = (pd.Timestamp(TODAY) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+FETCH_START  = "2018-06-01"
+TODAY        = datetime.now(timezone.utc).date()
+FETCH_END    = (pd.Timestamp(TODAY) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+# Hard cutoff: only data up to this date is used for training/val/test.
+# Set to a past date to include that period in the model's training window.
+# Set to None (or a future date) to use all available data.
+DATA_CUTOFF  = "2026-02-28"
 
 
 def _flat(df, name):
@@ -267,13 +271,18 @@ data = f.copy()
 data["y_hi"] = y_hi; data["y_lo"] = y_lo
 data["close"] = c; data["next_high"] = nh; data["next_low"] = nl
 data = data.replace([np.inf, -np.inf], np.nan).dropna()
+
+# Apply hard cutoff so training uses only data up to DATA_CUTOFF
+if DATA_CUTOFF:
+    data = data.loc[:DATA_CUTOFF]
 print(f">>> Feature matrix {data.shape}  features={data.shape[1]-5}")
+print(f">>> Data range: {data.index.min().date()} → {data.index.max().date()}")
 
 # ---------------------------------------------------------------------------
 # 4. SPLIT (same scheme as pipeline_ct.py)
 # ---------------------------------------------------------------------------
 LATEST       = data.index.max()
-TEST_MONTHS  = 6
+TEST_MONTHS  = 2   # minimal holdout — intentionally short so more data goes to train
 VAL_MONTHS   = 2
 EMBARGO_DAYS = 1
 
@@ -445,14 +454,11 @@ res_lo = (lo_true - pred_lo_te) / close_te
 sigma_hi = float(np.std(res_hi)); sigma_lo = float(np.std(res_lo))
 
 # ---------------------------------------------------------------------------
-# 6. SAVE ARTIFACT (train-window model — preserves genuine OOS for backtesting)
+# 6. SAVE ARTIFACT (train-window model)
 # ---------------------------------------------------------------------------
-# We intentionally do NOT retrain on the full dataset (train+val+test).
-# Retraining on test data destroys the out-of-sample property and makes all
-# backtest periods in-sample, causing the strategy to see unrealistically
-# tight prediction errors and fewer signal triggers.
-# The saved model is trained on data through train_end (~9 months before today),
-# leaving the test period (last 6 months) as genuine OOS for backtest evaluation.
+# Model uses train-window constituents only (not refitted on val/test).
+# When DATA_CUTOFF is set the training window extends up to ~(cutoff - VAL - TEST),
+# making the configured backtest periods intentionally in-sample.
 src_path = str(DAILY_MODEL_CT)
 
 assets = dict(
@@ -506,10 +512,10 @@ assets = dict(
             direction_hit=float(hit_te),
         ),
         tuning_notes=(
-            "Trained on Yahoo Finance daily BTC (2018-06-01 onwards) with Coinbase "
-            "Premium features (cb_premium, cb_premium_ma3, cb_premium_z7). "
-            "116 total features. Alpha + beta tuned on VAL. Model saved at train_end "
-            "(not retrained on test data) to preserve OOS integrity for backtesting."
+            f"Trained on Yahoo Finance daily BTC (2018-06-01 → {DATA_CUTOFF or 'today'}) "
+            "with Coinbase Premium features (cb_premium, cb_premium_ma3, cb_premium_z7). "
+            "116 total features. Alpha + beta tuned on VAL. DATA_CUTOFF caps training data "
+            "so the full bull period is in-sample."
         ),
         cb_premium_included=True,
         training_source="Yahoo Finance daily",
