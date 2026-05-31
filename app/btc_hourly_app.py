@@ -527,8 +527,37 @@ def _fetch_daily_raw():
             pass
     oc = pd.concat(oc_parts, axis=1) if oc_parts else pd.DataFrame()
 
-    # 4. Join — bar D's aux data comes from calendar date D
+    # 5. Coinbase Premium (public Coinbase Exchange API, no auth)
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    cb_rows: list = []
+    cb_cur = pd.Timestamp(START)
+    cb_end = pd.Timestamp(END)
+    while cb_cur <= cb_end:
+        cb_chunk = min(cb_cur + pd.Timedelta(days=299), cb_end)
+        try:
+            r_cb = requests.get(CB_URL, params={
+                "granularity": 86400,
+                "start": cb_cur.isoformat() + "Z",
+                "end":   (cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
+            }, timeout=30)
+            if r_cb.status_code == 200:
+                cb_rows.extend(r_cb.json())
+        except Exception:
+            pass
+        cb_cur = cb_chunk + pd.Timedelta(days=1)
+        time.sleep(0.2)
+    if cb_rows:
+        _cb = pd.DataFrame(cb_rows, columns=["ts", "low", "high", "open", "close", "volume"])
+        _cb["date"] = pd.to_datetime(_cb["ts"], unit="s").dt.normalize()
+        _cb = _cb.drop_duplicates("date").set_index("date").sort_index()
+        coinbase_close = _cb["close"].rename("coinbase_close")
+    else:
+        coinbase_close = pd.Series(dtype=float, name="coinbase_close")
+
+    # 6. Join — bar D's aux data comes from calendar date D
     df = btc_daily.join(mkt, how="left").join(oc, how="left").sort_index()
+    if coinbase_close.notna().any():
+        df = df.join(coinbase_close.to_frame("coinbase_close"), how="left")
     df = df.loc[df["btc_close"].notna()].ffill(limit=5)
     return df
 
@@ -643,6 +672,13 @@ def compute_daily_forecast(target_date_iso, data_end=None):
     sma50 = c.rolling(50).mean()
     f["below_sma50"] = (c < sma50).astype(float)
     f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
+    # Coinbase Premium
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _cb = df["coinbase_close"]; _ref = df["btc_close"]
+        _prem = (_cb - _ref) / _ref * 100
+        f["cb_premium"]     = _prem
+        f["cb_premium_ma3"] = _prem.rolling(3).mean()
+        f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     f = f.replace([np.inf,-np.inf], np.nan)
     F = f[fc].dropna()
@@ -2351,6 +2387,13 @@ def _build_ct_batch_predictions():
     sma50 = c.rolling(50).mean()
     f["below_sma50"]    = (c < sma50).astype(float)
     f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
+    # Coinbase Premium
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _cb = df["coinbase_close"]; _ref = df["btc_close"]
+        _prem = (_cb - _ref) / _ref * 100
+        f["cb_premium"]     = _prem
+        f["cb_premium_ma3"] = _prem.rolling(3).mean()
+        f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     fc = AD["feat_cols"]
     f  = f.replace([np.inf, -np.inf], np.nan)
@@ -2567,6 +2610,34 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     sma50 = c.rolling(50).mean()
     feat["below_sma50"]    = (c < sma50).astype(float)
     feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
+    # Coinbase Premium (fetch directly via public API)
+    _cb_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    _cb_rows: list = []
+    _cb_cur = pd.Timestamp(FETCH_START)
+    _cb_end = pd.Timestamp(FETCH_END)
+    while _cb_cur <= _cb_end:
+        _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
+        try:
+            _r = requests.get(_cb_url, params={
+                "granularity": 86400,
+                "start": _cb_cur.isoformat() + "Z",
+                "end":   (_cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
+            }, timeout=30)
+            if _r.status_code == 200:
+                _cb_rows.extend(_r.json())
+        except Exception:
+            pass
+        _cb_cur = _cb_chunk + pd.Timedelta(days=1)
+        time.sleep(0.2)
+    if _cb_rows:
+        _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
+        _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
+        _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
+        _cb_close = _cb_df["close"].reindex(df.index)
+        _prem = (_cb_close - df["btc_close"]) / df["btc_close"] * 100
+        feat["cb_premium"]     = _prem
+        feat["cb_premium_ma3"] = _prem.rolling(3).mean()
+        feat["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     fc = AD["feat_cols"]
     feat = feat.replace([np.inf, -np.inf], np.nan)
