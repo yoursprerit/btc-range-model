@@ -458,31 +458,54 @@ res_lo = (lo_true - pred_lo_te) / close_te
 sigma_hi = float(np.std(res_hi)); sigma_lo = float(np.std(res_lo))
 
 # ---------------------------------------------------------------------------
-# 6. SAVE ARTIFACT (train-window model)
+# 6. DEPLOY RETRAIN — refit on full dataset through DATA_CUTOFF
 # ---------------------------------------------------------------------------
-# Model uses train-window constituents only (not refitted on val/test).
-# When DATA_CUTOFF is set the training window extends up to ~(cutoff - VAL - TEST),
-# making the configured backtest periods intentionally in-sample.
+# Alpha and beta were tuned on VAL above; now refit all components on ALL
+# data (train+val+test combined) so the saved model reflects the full
+# training window (train_end = DATA_CUTOFF).  Test metrics above are still
+# the legitimate OOS evaluation from the held-out test split.
+print("\n>>> Deploy retrain: refitting on full dataset through DATA_CUTOFF …")
+X_all    = data[feat_cols]
+yhi_all  = data["y_hi"];  ylo_all = data["y_lo"]
+d_all    = (yhi_all - ylo_all) / 2
+label_all = (d_all > 0).astype(int)
+mu_hi_all = float(yhi_all.mean()); mu_lo_all = float(ylo_all.mean())
+
+deploy_preds = {}
+for name, ctor in [("huber", M_HUBER), ("quant_lin", M_QUANTLR), ("gbm_quant", M_GBQUANT)]:
+    t0 = time.time()
+    mh_d = clone(ctor); mh_d.fit(X_all, yhi_all)
+    ml_d = clone(ctor); ml_d.fit(X_all, ylo_all)
+    deploy_preds[name] = dict(m_hi=mh_d, m_lo=ml_d)
+    print(f"  {name}: {time.time()-t0:.1f}s")
+
+dir_clf_deploy = clone(dir_clf)
+dir_clf_deploy.fit(X_all, label_all)
+print(f"  deploy train_end = {data.index.max().date()}  n = {len(data)}")
+
+# ---------------------------------------------------------------------------
+# 7. SAVE ARTIFACT (deploy model — trained on all data through DATA_CUTOFF)
+# ---------------------------------------------------------------------------
 src_path = str(DAILY_MODEL_CT)
 
 assets = dict(
     ensemble=True, blended=True, alpha=float(alpha_use),
-    mu_hi=mu_hi, mu_lo=mu_lo,
+    mu_hi=mu_hi_all, mu_lo=mu_lo_all,
     anchor_hour_utc=ANCHOR_HOUR_UTC,
     constituents=[
-        dict(name="huber",     m_hi=preds["huber"]["m_hi"],
-             m_lo=preds["huber"]["m_lo"]),
-        dict(name="quant_lin", m_hi=preds["quant_lin"]["m_hi"],
-             m_lo=preds["quant_lin"]["m_lo"]),
-        dict(name="gbm_quant", m_hi=preds["gbm_quant"]["m_hi"],
-             m_lo=preds["gbm_quant"]["m_lo"]),
+        dict(name="huber",     m_hi=deploy_preds["huber"]["m_hi"],
+             m_lo=deploy_preds["huber"]["m_lo"]),
+        dict(name="quant_lin", m_hi=deploy_preds["quant_lin"]["m_hi"],
+             m_lo=deploy_preds["quant_lin"]["m_lo"]),
+        dict(name="gbm_quant", m_hi=deploy_preds["gbm_quant"]["m_hi"],
+             m_lo=deploy_preds["gbm_quant"]["m_lo"]),
     ],
-    hi_model=preds["huber"]["m_hi"],
-    lo_model=preds["huber"]["m_lo"],
+    hi_model=deploy_preds["huber"]["m_hi"],
+    lo_model=deploy_preds["huber"]["m_lo"],
     sigma_hi=sigma_hi, sigma_lo=sigma_lo,
     feat_cols=feat_cols,
     direction_head=dict(
-        classifier=dir_clf,
+        classifier=dir_clf_deploy,
         beta=float(best_beta),
         beta_trend_reduction=float(best_red),
         trend_saturation=float(TREND_SAT),
@@ -498,16 +521,20 @@ assets = dict(
     calibration_meta=dict(
         anchor_hour_utc=ANCHOR_HOUR_UTC,
         anchor_label="Yahoo Finance daily (00:00 UTC)",
-        train_start=str(train.index.min().date()),
-        train_end=str(train.index.max().date()),
+        train_start=str(data.index.min().date()),
+        train_end=str(data.index.max().date()),
         val_start=str(val.index.min().date()),
         val_end=str(val.index.max().date()),
-        test_start=str(test.index.min().date()),
-        test_end=str(test.index.max().date()),
-        train_n=int(len(train)),
+        test_start=str((data.index.max() + pd.Timedelta(days=1)).date()),
+        test_end=str((data.index.max() + pd.Timedelta(days=1)).date()),
+        train_n=int(len(data)),
         val_n=int(len(val)),
-        test_n=int(len(test)),
+        test_n=0,
         embargo_days=EMBARGO_DAYS,
+        deploy_mode=True,
+        eval_train_end=str(train.index.max().date()),
+        eval_test_start=str(test.index.min().date()),
+        eval_test_n=int(len(test)),
         winner="gbm_quant",
         metrics=dict(
             mape_h=float(mape_h), mape_l=float(mape_l),
@@ -536,6 +563,9 @@ if Path(src_path).exists():
 
 joblib.dump(assets, src_path)
 print(f"\n>>> Saved: {src_path}")
+print(f">>> train_end = {assets['calibration_meta']['train_end']}  "
+      f"(deploy retrain on full dataset)")
+print(f">>> test_start (OOS) = {assets['calibration_meta']['test_start']}")
 print(f">>> feat_cols: {len(feat_cols)}  sigma_hi={sigma_hi:.4f}  sigma_lo={sigma_lo:.4f}")
-print(f">>> MAPE_H={mape_h:.4f}%  MAPE_L={mape_l:.4f}%")
+print(f">>> MAPE_H={mape_h:.4f}%  MAPE_L={mape_l:.4f}%  (from held-out test split)")
 print(f">>> cb_premium in feat_cols: {'cb_premium' in feat_cols}")
