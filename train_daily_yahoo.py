@@ -438,33 +438,21 @@ print(f"   hit2_H = {hit2_h:.2f}%   hit2_L = {hit2_l:.2f}%")
 print(f"   hit1_H = {hit1_h:.2f}%   hit1_L = {hit1_l:.2f}%")
 print(f"   direction_hit = {hit_te:.1f}%")
 
-# Residuals for sigma (CI)
-res_hi = hi_true - pred_hi_te
-res_lo = lo_true - pred_lo_te
+# Residuals for sigma (CI) — must be fractional (not dollar) so CI bands
+# are scale-independent: std((actual - predicted) / close)
+res_hi = (hi_true - pred_hi_te) / close_te
+res_lo = (lo_true - pred_lo_te) / close_te
 sigma_hi = float(np.std(res_hi)); sigma_lo = float(np.std(res_lo))
 
 # ---------------------------------------------------------------------------
-# 6. DEPLOY MODE — retrain on full dataset
+# 6. SAVE ARTIFACT (train-window model — preserves genuine OOS for backtesting)
 # ---------------------------------------------------------------------------
-print("\n>>> Deploy mode: retraining on full dataset (train + val + test) …")
-X_all = data[feat_cols]; y_hi_all = data["y_hi"]; y_lo_all = data["y_lo"]
-label_all = ((y_hi_all - y_lo_all) / 2 > 0).astype(int)
-
-final_preds = {}
-for name, ctor in [("huber", M_HUBER), ("quant_lin", M_QUANTLR), ("gbm_quant", M_GBQUANT)]:
-    t0 = time.time()
-    mh = clone(ctor); mh.fit(X_all, y_hi_all)
-    ml = clone(ctor); ml.fit(X_all, y_lo_all)
-    final_preds[name] = dict(m_hi=mh, m_lo=ml)
-    print(f"  {name}: {time.time()-t0:.1f}s")
-
-dir_clf_final = clone(dir_clf)
-dir_clf_final.fit(X_all, label_all)
-print("  direction head: fitted on full dataset")
-
-# ---------------------------------------------------------------------------
-# 7. SAVE ARTIFACT
-# ---------------------------------------------------------------------------
+# We intentionally do NOT retrain on the full dataset (train+val+test).
+# Retraining on test data destroys the out-of-sample property and makes all
+# backtest periods in-sample, causing the strategy to see unrealistically
+# tight prediction errors and fewer signal triggers.
+# The saved model is trained on data through train_end (~9 months before today),
+# leaving the test period (last 6 months) as genuine OOS for backtest evaluation.
 src_path = str(DAILY_MODEL_CT)
 
 assets = dict(
@@ -472,19 +460,19 @@ assets = dict(
     mu_hi=mu_hi, mu_lo=mu_lo,
     anchor_hour_utc=ANCHOR_HOUR_UTC,
     constituents=[
-        dict(name="huber",     m_hi=final_preds["huber"]["m_hi"],
-             m_lo=final_preds["huber"]["m_lo"]),
-        dict(name="quant_lin", m_hi=final_preds["quant_lin"]["m_hi"],
-             m_lo=final_preds["quant_lin"]["m_lo"]),
-        dict(name="gbm_quant", m_hi=final_preds["gbm_quant"]["m_hi"],
-             m_lo=final_preds["gbm_quant"]["m_lo"]),
+        dict(name="huber",     m_hi=preds["huber"]["m_hi"],
+             m_lo=preds["huber"]["m_lo"]),
+        dict(name="quant_lin", m_hi=preds["quant_lin"]["m_hi"],
+             m_lo=preds["quant_lin"]["m_lo"]),
+        dict(name="gbm_quant", m_hi=preds["gbm_quant"]["m_hi"],
+             m_lo=preds["gbm_quant"]["m_lo"]),
     ],
-    hi_model=final_preds["huber"]["m_hi"],
-    lo_model=final_preds["huber"]["m_lo"],
+    hi_model=preds["huber"]["m_hi"],
+    lo_model=preds["huber"]["m_lo"],
     sigma_hi=sigma_hi, sigma_lo=sigma_lo,
     feat_cols=feat_cols,
     direction_head=dict(
-        classifier=dir_clf_final,
+        classifier=dir_clf,
         beta=float(best_beta),
         beta_trend_reduction=float(best_red),
         trend_saturation=float(TREND_SAT),
@@ -501,12 +489,12 @@ assets = dict(
         anchor_hour_utc=ANCHOR_HOUR_UTC,
         anchor_label="Yahoo Finance daily (00:00 UTC)",
         train_start=str(train.index.min().date()),
-        train_end=str(data.index.max().date()),
+        train_end=str(train.index.max().date()),
         val_start=str(val.index.min().date()),
         val_end=str(val.index.max().date()),
         test_start=str(test.index.min().date()),
         test_end=str(test.index.max().date()),
-        train_n=int(len(data)),
+        train_n=int(len(train)),
         val_n=int(len(val)),
         test_n=int(len(test)),
         embargo_days=EMBARGO_DAYS,
@@ -520,7 +508,8 @@ assets = dict(
         tuning_notes=(
             "Trained on Yahoo Finance daily BTC (2018-06-01 onwards) with Coinbase "
             "Premium features (cb_premium, cb_premium_ma3, cb_premium_z7). "
-            "116 total features. Alpha + beta tuned on VAL; deployed on full dataset."
+            "116 total features. Alpha + beta tuned on VAL. Model saved at train_end "
+            "(not retrained on test data) to preserve OOS integrity for backtesting."
         ),
         cb_premium_included=True,
         training_source="Yahoo Finance daily",
