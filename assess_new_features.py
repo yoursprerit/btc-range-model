@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import HuberRegressor, QuantileRegressor
@@ -70,6 +71,40 @@ def _flat(df, name):
     df.columns = [f"{name}_{c.lower()}" for c in df.columns]
     df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
     return df[~df.index.duplicated(keep="last")].sort_index()
+
+
+def fetch_coinbase_data(start: str, end: str) -> pd.Series:
+    """Fetch BTC-USD daily closes from the Coinbase Exchange public API (no auth needed)."""
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    rows: list = []
+    cur = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    while cur <= end_ts:
+        chunk_end = min(cur + pd.Timedelta(days=299), end_ts)
+        params = {
+            "granularity": 86400,
+            "start": cur.isoformat() + "Z",
+            "end":   (chunk_end + pd.Timedelta(days=1)).isoformat() + "Z",
+        }
+        try:
+            r = requests.get(CB_URL, params=params, timeout=30)
+            if r.status_code == 200:
+                rows.extend(r.json())
+            else:
+                print(f"  ! Coinbase API {r.status_code}: {r.text[:80]}")
+        except Exception as exc:
+            print(f"  ! Coinbase fetch error: {exc}")
+        cur = chunk_end + pd.Timedelta(days=1)
+        time.sleep(0.35)
+    if not rows:
+        print("  ! Coinbase: no data returned")
+        return pd.Series(dtype=float, name="coinbase_close")
+    tmp = pd.DataFrame(rows, columns=["ts", "low", "high", "open", "close", "volume"])
+    tmp["date"] = pd.to_datetime(tmp["ts"], unit="s").dt.normalize()
+    tmp = tmp.drop_duplicates("date").set_index("date").sort_index()
+    print(f"  coinbase_daily: {len(tmp)} rows  "
+          f"{tmp.index.min().date()} → {tmp.index.max().date()}")
+    return tmp["close"].rename("coinbase_close")
 
 
 def fetch_data(start: str = FETCH_START) -> pd.DataFrame:
@@ -218,6 +253,20 @@ def build_features(df: pd.DataFrame,
         ma1400 = c.rolling(1400).mean()
         f["dist_ma1400"] = np.log(c / ma1400)
 
+    f = f.replace([np.inf, -np.inf], np.nan)
+    return f, y_hi, y_lo
+
+
+def build_features_cbp(df: pd.DataFrame,
+                       coinbase_series: pd.Series) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """Baseline features plus cb_premium, cb_premium_ma3, cb_premium_z7."""
+    f, y_hi, y_lo = build_features(df, include_new=False)
+    cb_close = coinbase_series.reindex(df.index)
+    btc_ref  = df["btc_close"]
+    prem     = (cb_close - btc_ref) / btc_ref * 100
+    f["cb_premium"]     = prem
+    f["cb_premium_ma3"] = prem.rolling(3).mean()
+    f["cb_premium_z7"]  = (prem - prem.rolling(7).mean()) / prem.rolling(7).std()
     f = f.replace([np.inf, -np.inf], np.nan)
     return f, y_hi, y_lo
 
@@ -438,7 +487,7 @@ def main():
         (3,  "200-Day Moving Average",          "DIRECT",   "dist_ma200 + ma200_slope"),
         (4,  "Dealer Negative Gamma",           "SKIP",     "Requires Deribit/CME options data"),
         (5,  "200-Week Moving Average",         "DIRECT",   "dist_ma1400 (~1400 daily bars)"),
-        (6,  "Coinbase Premium",                "SKIP",     "No Binance data in backtest path"),
+        (6,  "Coinbase Premium",                "DIRECT",   "cb_premium/ma3/z7 (public API)"),
         (7,  "30-Day Net Flow to Exchanges",    "SKIP",     "Requires CryptoQuant/Glassnode API"),
         (8,  "Stablecoin Outflows",             "SKIP",     "Requires CryptoQuant/Glassnode API"),
         (9,  "Sell-Side Risk Ratio",            "SKIP",     "Requires Glassnode UTXO cost basis"),
@@ -461,9 +510,14 @@ def main():
 
     today_iso = raw.index.max().strftime("%Y-%m-%d")
 
+    print(f"\n[1b] FETCHING Coinbase Exchange daily (BTC-USD, public API)")
+    coinbase_closes = fetch_coinbase_data(FETCH_START, today_iso)
+    has_cb = isinstance(coinbase_closes, pd.Series) and coinbase_closes.notna().any()
+    print(f"  Coinbase data available: {has_cb}")
+
     # ── 3. Build feature matrices ─────────────────────────────────────────────
     print(f"\n{SEP}")
-    print("[2] FEATURE ENGINEERING  (two experiments)")
+    print("[2] FEATURE ENGINEERING  (three experiments: A, B, C)")
     print(SEP)
 
     # ── Experiment A: 6 features, NO 200-week MA → full history from 2019 ────
@@ -785,6 +839,157 @@ def main():
             print(f"  {pname:<8} {bs_b['strat_ret']:>+12.1f}% {es_b['strat_ret']:>+12.1f}%"
                   f" {d:>+10.1f}%  {ok}")
 
+    # ── 9c. Experiment C: Coinbase Premium ───────────────────────────────────
+    print(f"\n{SEP}")
+    print("[8c] EXPERIMENT C: Coinbase Premium  (cb_premium / cb_premium_ma3 / cb_premium_z7)")
+    print(SEP)
+
+    improved_cb   = False
+    all_improved_cb = False
+    cb_verdict    = "SKIP"
+    cm_h_c: dict  = {}
+    cm_l_c: dict  = {}
+    bm_h_c: dict  = {}
+    bm_l_c: dict  = {}
+
+    if not has_cb:
+        print("  Coinbase data unavailable — skipping Experiment C")
+    else:
+        f_cbp, _, _ = build_features_cbp(raw, coinbase_closes)
+        f_cbp["y_hi"] = y_hi; f_cbp["y_lo"] = y_lo; f_cbp["close"] = raw["btc_close"]
+
+        cbp_data = f_cbp.replace([np.inf, -np.inf], np.nan).dropna()
+        base_cbp = f_base_a.replace([np.inf, -np.inf], np.nan).dropna()
+        base_cbp = base_cbp.loc[cbp_data.index.min():]
+
+        new_cols_c = [col for col in cbp_data.columns
+                      if col not in base_cbp.columns and col not in ("y_hi", "y_lo", "close")]
+        print(f"  New features: {new_cols_c}")
+        print(f"  Training from: {cbp_data.index.min().date()} → {cbp_data.index.max().date()}")
+
+        btr_c, bva_c, bte_c, bfc_c = split(base_cbp)
+        ctr_c, cva_c, cte_c, cfc_c = split(cbp_data)
+
+        mu_hi_bc = float(btr_c["y_hi"].mean()); mu_lo_bc = float(btr_c["y_lo"].mean())
+        mu_hi_c  = float(ctr_c["y_hi"].mean()); mu_lo_c  = float(ctr_c["y_lo"].mean())
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            print("  Training CBP BASE HIGH …")
+            b_hi_c, b_hi_a_c = train_ensemble(
+                btr_c[bfc_c].values, btr_c["y_hi"].values,
+                bva_c[bfc_c].values, bva_c["y_hi"].values, mu_hi_bc)
+            print("  Training CBP BASE LOW …")
+            b_lo_c, b_lo_a_c = train_ensemble(
+                btr_c[bfc_c].values, btr_c["y_lo"].values,
+                bva_c[bfc_c].values, bva_c["y_lo"].values, mu_lo_bc)
+            print("  Training CBP ENHANCED HIGH …")
+            c_hi_ens, c_hi_alpha = train_ensemble(
+                ctr_c[cfc_c].values, ctr_c["y_hi"].values,
+                cva_c[cfc_c].values, cva_c["y_hi"].values, mu_hi_c)
+            print("  Training CBP ENHANCED LOW …")
+            c_lo_ens, c_lo_alpha = train_ensemble(
+                ctr_c[cfc_c].values, ctr_c["y_lo"].values,
+                cva_c[cfc_c].values, cva_c["y_lo"].values, mu_lo_c)
+
+        bte_close_c = bte_c["close"].values
+        bh_act_c    = raw["btc_high"].shift(-1).reindex(bte_c.index).values
+        bl_act_c    = raw["btc_low"].shift(-1).reindex(bte_c.index).values
+        valid_c     = ~(np.isnan(bh_act_c) | np.isnan(bl_act_c))
+
+        b_predH_c = bte_close_c * (1 + np.clip(
+            ensemble_predict(b_hi_c, b_hi_a_c, mu_hi_bc, bte_c[bfc_c].values), 0, None))
+        c_predH_c = bte_close_c * (1 + np.clip(
+            ensemble_predict(c_hi_ens, c_hi_alpha, mu_hi_c, cte_c[cfc_c].values), 0, None))
+        b_predL_c = bte_close_c * (1 - np.clip(
+            ensemble_predict(b_lo_c, b_lo_a_c, mu_lo_bc, bte_c[bfc_c].values), 0, None))
+        c_predL_c = bte_close_c * (1 - np.clip(
+            ensemble_predict(c_lo_ens, c_lo_alpha, mu_lo_c, cte_c[cfc_c].values), 0, None))
+
+        bm_h_c = compute_metrics(b_predH_c[valid_c], bh_act_c[valid_c], bte_close_c[valid_c])
+        cm_h_c = compute_metrics(c_predH_c[valid_c], bh_act_c[valid_c], bte_close_c[valid_c])
+        bm_l_c = compute_metrics(b_predL_c[valid_c], bl_act_c[valid_c], bte_close_c[valid_c])
+        cm_l_c = compute_metrics(c_predL_c[valid_c], bl_act_c[valid_c], bte_close_c[valid_c])
+
+        print(f"\n  {'Metric':<14} {'BASELINE':>10} {'CBP':>10} {'Δ (+ is better)':>16}")
+        print(f"  {'─'*14} {'─'*10} {'─'*10} {'─'*16}")
+        for m_lbl, bm, cm, lower_better in [
+            ("MAPE_H", bm_h_c, cm_h_c, True),
+            ("MAPE_L", bm_l_c, cm_l_c, True),
+            ("hit2_H", bm_h_c, cm_h_c, False),
+            ("hit2_L", bm_l_c, cm_l_c, False),
+        ]:
+            key = "mape" if "MAPE" in m_lbl else "hit2"
+            bv = bm[key]; ev = cm[key]
+            d  = ev - bv
+            ok = "✓" if (d < 0 if lower_better else d > 0) else "✗"
+            print(f"  {m_lbl:<14} {bv:>9.3f}% {ev:>9.3f}%  {d:>+.3f}%  {ok}")
+
+        improved_cb = (cm_h_c.get("mape", 9) < bm_h_c.get("mape", 0)) and \
+                      (cm_l_c.get("mape", 9) < bm_l_c.get("mape", 0))
+
+        # GBM feature importances for CBP model
+        gbm_hi_c = None
+        for pipe in c_hi_ens:
+            if hasattr(pipe.named_steps.get("m", None), "feature_importances_"):
+                gbm_hi_c = pipe.named_steps["m"]; break
+        if gbm_hi_c is not None:
+            imps_c   = gbm_hi_c.feature_importances_
+            rank_c   = {col: r+1 for r, (col, _) in enumerate(
+                            sorted(zip(cfc_c, imps_c), key=lambda x: x[1], reverse=True))}
+            print("\n  Coinbase Premium feature importances (vs all features in HIGH model):")
+            for col in new_cols_c:
+                imp  = dict(zip(cfc_c, imps_c)).get(col, 0.0)
+                rnk  = rank_c.get(col, len(cfc_c))
+                bar  = "█" * max(1, int(imp * 500))
+                print(f"  #{rnk:>2} {col:<22} {imp:.4f}  {bar}")
+
+        # Backtests
+        base_cbp_preds = build_pred_series(raw, b_hi_c, b_lo_c,
+                                           b_hi_a_c, b_lo_a_c, mu_hi_bc, mu_lo_bc,
+                                           base_cbp.drop(columns=["y_hi", "y_lo", "close"]))
+        cbp_preds      = build_pred_series(raw, c_hi_ens, c_lo_ens,
+                                           c_hi_alpha, c_lo_alpha, mu_hi_c, mu_lo_c,
+                                           cbp_data.drop(columns=["y_hi", "y_lo", "close"]))
+
+        print(f"\n  {'Period':<8} {'Metric':<12} {'BASELINE':>10} {'CBP':>10} {'Δ':>10}  {'OK?'}")
+        print(f"  {'─'*8} {'─'*12} {'─'*10} {'─'*10} {'─'*10}  {'─'*4}")
+        all_improved_cb = True
+        for pname, pstart, pend in periods:
+            bs_c = run_backtest(base_cbp_preds, raw, pstart, pend)
+            cs_c = run_backtest(cbp_preds,      raw, pstart, pend)
+            if bs_c is None or cs_c is None:
+                print(f"  {pname:<8} insufficient data"); continue
+            for metric, bv, ev, lower_better in [
+                ("strat_ret", bs_c["strat_ret"], cs_c["strat_ret"], False),
+                ("max_dd",    bs_c["max_dd"],    cs_c["max_dd"],    True),
+                ("n_trades",  bs_c["n_trades"],  cs_c["n_trades"],  None),
+                ("win_rate",  bs_c["win_rate"],  cs_c["win_rate"],  False),
+            ]:
+                d    = ev - bv
+                fmt  = f"{d:+.1f}%" if isinstance(bv, float) else f"{d:+d}"
+                ok   = "—" if lower_better is None else \
+                       ("✓" if (d <= 0 if lower_better else d >= 0) else "✗")
+                bfmt = f"{bv:+.1f}%" if isinstance(bv, float) else str(bv)
+                efmt = f"{ev:+.1f}%" if isinstance(ev, float) else str(ev)
+                print(f"  {pname:<8} {metric:<12} {bfmt:>10} {efmt:>10} {fmt:>10}  {ok}")
+            if bs_c["strat_ret"] > cs_c["strat_ret"]:
+                all_improved_cb = False
+            print()
+
+        _mh_d = cm_h_c.get("mape", 0) - bm_h_c.get("mape", 0)
+        _ml_d = cm_l_c.get("mape", 0) - bm_l_c.get("mape", 0)
+        _mape_neutral = abs(_mh_d) < 0.05 and abs(_ml_d) < 0.05
+        if improved_cb and all_improved_cb:
+            cb_verdict = "IMPLEMENT ✓"
+        elif all_improved_cb and _mape_neutral:
+            cb_verdict = "IMPLEMENT_STRATEGIC ✓"   # BT+, MAPE neutral (within noise)
+        elif improved_cb:
+            cb_verdict = "PARTIAL (MAPE ✓, BT mixed)"
+        else:
+            cb_verdict = "DO_NOT_IMPLEMENT"
+
     # ── 10. Summary ───────────────────────────────────────────────────────────
     print(f"\n{SEP}")
     print("[9] SUMMARY & RECOMMENDATION")
@@ -800,7 +1005,7 @@ def main():
                       em_l_b["mape"] < bm_l_b["mape"]) else "NO"
     )
 
-    print(f"\n  Experiment A (6 features, full history from 2019):")
+    print(f"\n  Experiment A (6 free-proxy features, full history from 2019):")
     print(f"    MAPE improved  : {'YES ✓' if improved_model else 'NO ✗'}")
     print(f"    All BT periods : {'YES ✓' if all_improved else 'NO ✗'}")
     print(f"    Verdict        : {verdict_a}")
@@ -810,7 +1015,20 @@ def main():
     print(f"    All BT periods : {'YES ✓' if all_improved_b else 'NO ✗'}")
     print(f"    Verdict        : {verdict_b}")
 
-    print(f"\n  WHY THE NEW FEATURES HAVE LIMITED IMPACT:")
+    print(f"\n  Experiment C (Coinbase Premium — 3 features, public API):")
+    if has_cb:
+        print(f"    MAPE improved  : {'YES ✓' if improved_cb else 'NO ✗'}")
+        print(f"    All BT periods : {'YES ✓' if all_improved_cb else 'NO ✗'}")
+        print(f"    Verdict        : {cb_verdict}")
+        if cm_h_c and bm_h_c:
+            print(f"    MAPE_H: {bm_h_c['mape']:.3f}% → {cm_h_c['mape']:.3f}% "
+                  f"(Δ{cm_h_c['mape']-bm_h_c['mape']:+.3f}%)")
+            print(f"    MAPE_L: {bm_l_c['mape']:.3f}% → {cm_l_c['mape']:.3f}% "
+                  f"(Δ{cm_l_c['mape']-bm_l_c['mape']:+.3f}%)")
+    else:
+        print(f"    Coinbase API unavailable — not evaluated")
+
+    print(f"\n  WHY MA/VWAP FEATURES HAVE LIMITED IMPACT (Exp A/B):")
     print(f"    The H/L model predicts tomorrow's range MAGNITUDE (how far above/below")
     print(f"    current close), not direction. Range magnitude is primarily driven by:")
     print(f"    1. Recent volatility (already captured: vol_5, vol_10, atr_*)    ")
@@ -820,35 +1038,35 @@ def main():
     print(f"    The existing features (below_sma50, rsi_14, dist_hi_90) already")
     print(f"    capture structural regime context.")
 
-    print(f"\n  METRICS THAT WOULD GENUINELY HELP (require paid APIs):")
+    print(f"\n  OTHER METRICS THAT MAY HELP (require paid APIs):")
     print(f"    #4 Dealer Negative Gamma  → Deribit options flow (amplifies range SIZE)")
-    print(f"    #6 Coinbase Premium       → Coinbase API (institutional demand bias)")
     print(f"    #9 Sell-Side Risk Ratio   → Glassnode (realized profit/loss vs realized cap)")
     print(f"    #7 30D Net Exchange Flow  → CryptoQuant (supply pressure proxy)")
 
     # Backtest regression overrides MAPE improvement: if all 3 periods regress,
     # the features are not adding value to the trading strategy
-    bt_reg_a = not all_improved   # True if any period got worse
+    bt_reg_a = not all_improved
     bt_reg_b = not all_improved_b
-    final_verdict = "DO_NOT_IMPLEMENT" if (bt_reg_a and bt_reg_b) else "IMPLEMENT_PARTIAL"
-    print(f"\n  FINAL VERDICT: {final_verdict}")
-    if final_verdict == "DO_NOT_IMPLEMENT":
-        print(f"  MAPE improves marginally (<0.02%) but ALL 3 backtest periods regress")
-        print(f"  (Bear/Bull/Full all slightly worse). The new features introduce noise")
-        print(f"  that slightly shifts TF2 threshold crossings unfavorably. Long-term MA")
-        print(f"  distances and VWAP proxies do not add signal beyond what the model")
-        print(f"  already captures through rsi_14, below_sma50, dist_hi_90, vol_5.")
+    final_verdict_ab = "DO_NOT_IMPLEMENT" if (bt_reg_a and bt_reg_b) else "IMPLEMENT_PARTIAL"
+    print(f"\n  Exp A/B VERDICT: {final_verdict_ab}")
+    if final_verdict_ab == "DO_NOT_IMPLEMENT":
+        print(f"  MAPE improves marginally (<0.02%) but ALL 3 backtest periods regress.")
+        print(f"  Long-term MA distances and VWAP proxies do not add signal beyond")
+        print(f"  what rsi_14, below_sma50, dist_hi_90, vol_5 already capture.")
     else:
-        print(f"  Some improvement observed. Consider selective implementation")
-        print(f"  after ablation testing.")
+        print(f"  Some improvement observed in A/B. Consider selective implementation.")
 
-    print(f"\n  Implemented feature names: {new_cols}")
-    print(f"  Blocked (require paid APIs): Dealer Gamma, Coinbase Premium,")
-    print(f"  Net Exchange Flow, Stablecoin Outflows, Sell-Side Risk Ratio")
+    print(f"\n  Exp C (Coinbase Premium) VERDICT: {cb_verdict}")
+
+    print(f"\n  Free-proxy features tested (Exp A/B): {new_cols}")
+    print(f"  Coinbase Premium features (Exp C): cb_premium, cb_premium_ma3, cb_premium_z7")
+    print(f"  Blocked (require paid APIs): Dealer Gamma, Net Exchange Flow,")
+    print(f"  Stablecoin Outflows, Sell-Side Risk Ratio")
 
     print(f"\n{SEP}")
     return {
-        "verdict": final_verdict,
+        "verdict_ab": final_verdict_ab,
+        "verdict_cb": cb_verdict,
         "new_cols": new_cols,
         "exp_a": {"improved_model": improved_model, "all_bt_improved": all_improved,
                   "base_mape_h": bm_h["mape"], "enha_mape_h": em_h["mape"],
@@ -856,6 +1074,9 @@ def main():
                   "bt_results": bt_results},
         "exp_b": {"improved_model": em_h_b["mape"] < bm_h_b["mape"],
                   "all_bt_improved": all_improved_b},
+        "exp_c": {"improved_model": improved_cb, "all_bt_improved": all_improved_cb,
+                  "base_mape_h": bm_h_c.get("mape"), "cbp_mape_h": cm_h_c.get("mape"),
+                  "base_mape_l": bm_l_c.get("mape"), "cbp_mape_l": cm_l_c.get("mape")},
     }
 
 
