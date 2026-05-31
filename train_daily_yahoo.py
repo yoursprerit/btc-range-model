@@ -283,17 +283,20 @@ data = data.replace([np.inf, -np.inf], np.nan).dropna()
 if DATA_CUTOFF:
     data = data.loc[:DATA_CUTOFF]
 
-# Exclude anomalous date ranges (crash events that introduce extreme noise)
+# Save features_ct.csv with FULL data (before crash exclusion) so downstream
+# models (3-class day type, cone scripts) train on the complete dataset.
+data.to_csv(FEATURES_CT_CSV)
+print(f">>> Saved {FEATURES_CT_CSV}  ({len(data)} rows, crash included)")
+
+# Exclude crash periods from H/L model training only.
 for excl_start, excl_end in EXCLUDE_RANGES:
     mask = (data.index >= pd.Timestamp(excl_start)) & (data.index <= pd.Timestamp(excl_end))
     n_drop = int(mask.sum())
     data = data.loc[~mask]
-    print(f">>> Excluded {n_drop} rows ({excl_start} → {excl_end})")
+    print(f">>> H/L training: excluded {n_drop} rows ({excl_start} → {excl_end})")
 
-print(f">>> Feature matrix {data.shape}  features={data.shape[1]-5}")
+print(f">>> Feature matrix (H/L training) {data.shape}  features={data.shape[1]-5}")
 print(f">>> Data range: {data.index.min().date()} → {data.index.max().date()}")
-data.to_csv(FEATURES_CT_CSV)
-print(f">>> Saved {FEATURES_CT_CSV}")
 
 # ---------------------------------------------------------------------------
 # 4. SPLIT (same scheme as pipeline_ct.py)
