@@ -46,6 +46,11 @@ FETCH_END    = (pd.Timestamp(TODAY) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 # Set to a past date to include that period in the model's training window.
 # Set to None (or a future date) to use all available data.
 DATA_CUTOFF  = "2026-02-28"
+# Date ranges excluded from training (anomalous crash events that bias the model).
+# Each tuple is (start_date, end_date) inclusive; applied after feature engineering.
+EXCLUDE_RANGES = [
+    ("2026-01-28", "2026-02-07"),  # Jan/Feb 2026 flash crash: BTC ~$89k→$60k
+]
 
 
 def _flat(df, name):
@@ -277,6 +282,14 @@ data = data.replace([np.inf, -np.inf], np.nan).dropna()
 # Apply hard cutoff so training uses only data up to DATA_CUTOFF
 if DATA_CUTOFF:
     data = data.loc[:DATA_CUTOFF]
+
+# Exclude anomalous date ranges (crash events that introduce extreme noise)
+for excl_start, excl_end in EXCLUDE_RANGES:
+    mask = (data.index >= pd.Timestamp(excl_start)) & (data.index <= pd.Timestamp(excl_end))
+    n_drop = int(mask.sum())
+    data = data.loc[~mask]
+    print(f">>> Excluded {n_drop} rows ({excl_start} → {excl_end})")
+
 print(f">>> Feature matrix {data.shape}  features={data.shape[1]-5}")
 print(f">>> Data range: {data.index.min().date()} → {data.index.max().date()}")
 data.to_csv(FEATURES_CT_CSV)

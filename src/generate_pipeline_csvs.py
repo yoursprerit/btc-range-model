@@ -26,6 +26,9 @@ from paths import RAW_CT_CSV, FEATURES_CT_CSV
 FETCH_START = "2018-06-01"
 FETCH_END   = (pd.Timestamp("today") + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 DATA_CUTOFF = "2026-02-28"
+EXCLUDE_RANGES = [
+    ("2026-01-28", "2026-02-07"),  # Jan/Feb 2026 flash crash
+]
 
 
 def _flat(df, name):
@@ -253,6 +256,13 @@ data = data.replace([np.inf, -np.inf], np.nan).dropna()
 
 if DATA_CUTOFF:
     data = data.loc[:DATA_CUTOFF]
+
+for excl_start, excl_end in EXCLUDE_RANGES:
+    mask = (data.index >= pd.Timestamp(excl_start)) & (data.index <= pd.Timestamp(excl_end))
+    n_drop = int(mask.sum())
+    data = data.loc[~mask]
+    print(f">>> Excluded {n_drop} rows ({excl_start} → {excl_end})")
+
 print(f">>> Feature matrix {data.shape}  features={data.shape[1]-5}")
 print(f">>> Feature range: {data.index.min().date()} → {data.index.max().date()}")
 
