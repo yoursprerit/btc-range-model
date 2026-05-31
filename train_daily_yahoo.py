@@ -30,7 +30,7 @@ from sklearn.preprocessing import StandardScaler
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from paths import DAILY_MODEL_CT, MODELS_DIR, LEGACY_DIR
+from paths import DAILY_MODEL_CT, MODELS_DIR, LEGACY_DIR, RAW_CT_CSV, FEATURES_CT_CSV
 
 ANCHOR_HOUR_UTC = 12
 ALPHA_QUANT     = 0.70
@@ -157,6 +157,8 @@ df = df.loc[df["btc_close"].notna()]
 df = df.ffill(limit=5)
 df = df.loc["2019-01-01":]
 print(f">>> Raw shape {df.shape}  range {df.index.min().date()} → {df.index.max().date()}")
+df.to_csv(RAW_CT_CSV)
+print(f">>> Saved {RAW_CT_CSV}")
 
 # ---------------------------------------------------------------------------
 # 3. FEATURE ENGINEERING (matches pipeline_ct.py exactly)
@@ -277,6 +279,8 @@ if DATA_CUTOFF:
     data = data.loc[:DATA_CUTOFF]
 print(f">>> Feature matrix {data.shape}  features={data.shape[1]-5}")
 print(f">>> Data range: {data.index.min().date()} → {data.index.max().date()}")
+data.to_csv(FEATURES_CT_CSV)
+print(f">>> Saved {FEATURES_CT_CSV}")
 
 # ---------------------------------------------------------------------------
 # 4. SPLIT (same scheme as pipeline_ct.py)
