@@ -83,6 +83,7 @@ def _training_cutoffs():
     Used by the historical-replay banner to warn the user when their
     picked date falls inside any model's training window — predictions
     for those dates are in-sample fit, not honest out-of-sample forecasts.
+    Also returns "daily H/L test_start" for the OOS window boundary.
     """
     out = {}
     # Hourly: stored as ISO datetime on newer artefacts; fall back to test_start.
@@ -93,8 +94,11 @@ def _training_cutoffs():
         try:
             meta = joblib.load(DAILY_MODEL_CT).get("calibration_meta", {})
             out["daily H/L"] = pd.Timestamp(meta.get("train_end")) if meta.get("train_end") else None
+            out["daily H/L test_start"] = (pd.Timestamp(meta.get("test_start"))
+                                           if meta.get("test_start") else None)
         except Exception:
             out["daily H/L"] = None
+            out["daily H/L test_start"] = None
     # 7-day cone
     if os.path.exists(str(CONE_7D_MODEL)):
         try:
@@ -3680,10 +3684,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_f = bt_bull["stats"] if bt_bull else None
 
     # ── OOS stats dict (same shape as s_r / s_f so _period_cells reuses it) ──
-    OOS_START  = pd.Timestamp("2026-03-01")   # H/L test_start (after val embargo)
     cutoffs    = _training_cutoffs()
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
+    # Use the model's actual test_start so the OOS column covers all genuine OOS bars.
+    _oos_ts    = cutoffs.get("daily H/L test_start")
+    OOS_START  = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
     s_oos      = None
     bt_oos     = None
     if bt_full_oos is not None:
@@ -4360,10 +4366,11 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_r = bt_bear["stats"] if bt_bear else None
     s_f = bt_bull["stats"] if bt_bull else None
 
-    OOS_START = pd.Timestamp("2026-03-01")
     cutoffs   = _training_cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
+    _oos_ts   = cutoffs.get("daily H/L test_start")
+    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
     s_oos = None; bt_oos = None
 
     if bt_full_oos is not None:
