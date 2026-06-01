@@ -572,13 +572,13 @@ def _dual_axis_chart(
         line=dict(color=BTC_ORANGE, width=1.5, dash="dot"),
         yaxis="y2",
     ))
-    fig.update_layout(
-        **_base_layout(title=title),
+    layout = _base_layout(title=title)
+    layout.update(
         yaxis=dict(title=f"{ind_label} ({ind_unit})", showgrid=True, gridcolor=GRID_CLR),
-        yaxis2=dict(title="BTC Price ($)", overlaying="y", side="right",
-                    showgrid=False),
+        yaxis2=dict(title="BTC Price ($)", overlaying="y", side="right", showgrid=False),
         legend=dict(orientation="h", y=1.05, x=0),
     )
+    fig.update_layout(**layout)
     return fig
 
 
@@ -600,11 +600,9 @@ def _correlation_heatmap(corr_df: pd.DataFrame) -> go.Figure:
         hovertemplate="%{y} → %{x}: %{z:.3f}<extra></extra>",
         colorbar=dict(title="r"),
     ))
-    fig.update_layout(
-        **_base_layout(title="Pearson Correlation: Indicator → Forward BTC Return"),
-        margin=dict(l=180, r=20, t=50, b=80),
-        xaxis=dict(tickangle=-30),
-    )
+    layout = _base_layout(title="Pearson Correlation: Indicator → Forward BTC Return")
+    layout.update(margin=dict(l=180, r=20, t=50, b=80), xaxis=dict(tickangle=-30))
+    fig.update_layout(**layout)
     return fig
 
 
@@ -651,11 +649,9 @@ def _feature_importance_chart(model, feat_cols: list[str]) -> go.Figure:
         x=imp.values, y=imp.index, orientation="h",
         marker_color=[BTC_ORANGE if v > 0 else NEUTRAL for v in imp.values],
     ))
-    fig.update_layout(
-        **_base_layout(title="Feature Importance — 1-Day Model"),
-        margin=dict(l=160, r=20, t=40, b=30),
-        xaxis_title="Importance",
-    )
+    layout = _base_layout(title="Feature Importance — 1-Day Model")
+    layout.update(margin=dict(l=160, r=20, t=40, b=30), xaxis_title="Importance")
+    fig.update_layout(**layout)
     return fig
 
 
