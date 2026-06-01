@@ -2162,7 +2162,7 @@ def compute_trend_signatures(target_date_iso: str):
             exhaustion_active = True
 
     # ── V-reversal capitulation: lo_err spike today ────────────────────
-    # Last bar's single-day lo error > 5% (massive undershoot = capitulation)
+    # Last bar's single-day lo error > 3% (massive undershoot = capitulation)
     last_lo_err = float(err_lo[-1])
     last_hi_err = float(err_hi[-1])
     # Downtrend composite score — first term normalised by rolling 30-bar mean
@@ -2220,7 +2220,7 @@ def compute_trend_signatures(target_date_iso: str):
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
-    # V-gate: V-reversal (dn_score>0.8 & err_lo>5%) within last 3 bars also satisfies trend gate.
+    # V-gate: V-reversal (dn_score>0.8 & err_lo>3%) within last 3 bars also satisfies trend gate.
     v_gate_ok     = v_reversal_likely or capitulation_signal
     tf1_triggered = u1_triggered and (above_ma30 or clean_10d or v_gate_ok)
 
@@ -4243,7 +4243,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
-            <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 5%)</span>
+            <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
           </div>
         </td>
       </tr>
@@ -5287,7 +5287,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
-                "V-gate fires 1–3 bars after capitulation (dn_score &gt; 0.8, err_lo &gt; 5%) "
+                "V-gate fires 1–3 bars after capitulation (dn_score &gt; 0.8, err_lo &gt; 3%) "
                 "— bridges the gap before U1 co-fires on the recovery bounce. "
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
@@ -5330,7 +5330,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         v_body  = (
             f"No capitulation signal today (dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
             f"err_lo = <b>{sigs.get('last_lo_err', 0):+.2f}%</b>). "
-            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 5.0% on the same bar. "
+            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on the same bar. "
             f"<br><br>"
             f"<b>What the V-gate does:</b> When a capitulation spike fires, the strategy can enter "
             f"on U1 within the next 3 bars even if BTC is below MA30 and clean_10d fails — "
