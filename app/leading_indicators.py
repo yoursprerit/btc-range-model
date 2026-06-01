@@ -299,6 +299,28 @@ def _fetch_blockchain_tx_volume() -> pd.Series:
         return pd.Series(dtype=float, name="btc_tx_vol_usd")
 
 
+@st.cache_data(ttl=3600 * 24, show_spinner=False)
+def _fetch_btc_long_history() -> pd.Series:
+    """Daily BTC-USD close prices from 2010 onwards (Yahoo Finance daily feed).
+
+    Used for the 200-week MA, which needs ~1400 days of warmup history that
+    the 2-year hourly feed cannot provide.  TTL: 24 h — long-run history is
+    stable so there's no need to refresh more than once a day.
+    """
+    import yfinance as yf
+    try:
+        raw = yf.download("BTC-USD", start="2010-07-01", interval="1d",
+                          progress=False, auto_adjust=True)
+        if raw.empty:
+            return pd.Series(dtype=float, name="btc_close_long")
+        c = raw["Close"].squeeze() if "Close" in raw.columns else raw.iloc[:, 0].squeeze()
+        c = c.dropna()
+        c.index = pd.to_datetime(c.index).normalize()
+        return c.sort_index().rename("btc_close_long")
+    except Exception:
+        return pd.Series(dtype=float, name="btc_close_long")
+
+
 def compute_price_indicators(daily_df: pd.DataFrame) -> pd.DataFrame:
     """Compute all price-derived leading indicators from daily OHLCV data.
 
@@ -328,7 +350,8 @@ def compute_price_indicators(daily_df: pd.DataFrame) -> pd.DataFrame:
     # 3. 200-Day Moving Average
     df["ma_200d"] = close.rolling(200, min_periods=100).mean()
 
-    # 4. 200-Week Moving Average (200 weeks ≈ 1400 calendar days)
+    # 4. 200-Week Moving Average — placeholder; overwritten in
+    #    fetch_all_leading_indicators using the full long-history BTC feed.
     df["ma_200w"] = close.rolling(1400, min_periods=400).mean()
 
     # 5. Coinbase Premium (USD)
@@ -391,6 +414,19 @@ def fetch_all_leading_indicators(daily_df_json: str) -> pd.DataFrame:
     if not sc_mcap.empty:
         sc_aligned = sc_mcap.reindex(ind.index).ffill(limit=7)
         ind["stablecoin_flow_30d"] = sc_aligned.diff(30)
+
+    # ── 200-Week MA: recompute on full BTC history ────────────────────────
+    # rolling(1400) on the 2-year daily feed gives only a 2-year mean, not
+    # a true 200-week MA.  Standard definition: 200 weekly (W-MON) closes.
+    _long = _fetch_btc_long_history()
+    if not _long.empty:
+        _wkly   = _long.resample("W-MON").last()
+        _ma200w = _wkly.rolling(200, min_periods=100).mean()
+        # Forward-fill the weekly value into every calendar day, then align
+        # to ind.index (the recent 2-year window).
+        _alldays = pd.date_range(_long.index[0], _long.index[-1], freq="D")
+        _ma200w_d = _ma200w.reindex(_alldays, method="ffill")
+        ind["ma_200w"] = _ma200w_d.reindex(ind.index)
 
     return ind
 
@@ -552,10 +588,16 @@ def _base_layout(**kw) -> dict:
 
 
 def _dual_axis_chart(
-    dates, price, indicator, ind_label: str, ind_unit: str, title: str
+    dates, price, indicator, ind_label: str, ind_unit: str, title: str,
+    start_date=None,
 ) -> go.Figure:
-    """Price (right axis) vs indicator (left axis), last 2 years."""
-    cutoff = pd.Timestamp.now() - pd.Timedelta(days=730)
+    """Price (right axis) vs indicator (left axis).
+
+    start_date : if given (string or Timestamp), show from that date onward.
+                 Defaults to last 2 years when None.
+    """
+    cutoff = (pd.Timestamp(start_date) if start_date is not None
+              else pd.Timestamp.now() - pd.Timedelta(days=730))
     mask = pd.Series(dates) >= cutoff
     d = pd.Series(dates)[mask]
     p = pd.Series(price)[mask]
@@ -779,7 +821,7 @@ def render_leading_indicators(daily_df: pd.DataFrame) -> None:
     # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### Indicator Time-Series vs BTC Price")
-    st.caption("All charts show the last 2 years. Dotted orange line = BTC price (right axis).")
+    st.caption("All charts show the last 2 years except 200w MA (full history). Dotted orange line = BTC price (right axis).")
 
     chart_keys = [k for k in keys if k != "dealer_gex"]  # GEX is live-only
     chart_tabs = st.tabs([INDICATORS[k]["short"] for k in chart_keys])
@@ -787,17 +829,35 @@ def render_leading_indicators(daily_df: pd.DataFrame) -> None:
     dates = ind.index
     price_arr = close.reindex(ind.index).values
 
+    # Full-history data for the 200w MA chart
+    _long_hist = _fetch_btc_long_history()
+
     for tab, key in zip(chart_tabs, chart_keys):
         with tab:
             meta = INDICATORS[key]
             if key not in ind.columns or ind[key].isna().all():
                 st.info(f"No historical data available for {meta['label']}.")
                 continue
-            fig = _dual_axis_chart(
-                dates, price_arr, ind[key].values,
-                ind_label=meta["label"], ind_unit=meta["unit"],
-                title=f"{meta['label']} vs BTC Price",
-            )
+
+            if key == "ma_200w" and not _long_hist.empty:
+                # Recompute on full history so Feb 2016 and earlier are visible
+                _wkly   = _long_hist.resample("W-MON").last()
+                _ma200w = _wkly.rolling(200, min_periods=100).mean()
+                _alldays = pd.date_range(_long_hist.index[0], _long_hist.index[-1], freq="D")
+                _ma200w_d = _ma200w.reindex(_alldays, method="ffill")
+                _price_d  = _long_hist.reindex(_alldays, method="ffill")
+                fig = _dual_axis_chart(
+                    _ma200w_d.index, _price_d.values, _ma200w_d.values,
+                    ind_label=meta["label"], ind_unit=meta["unit"],
+                    title=f"{meta['label']} vs BTC Price (Full History)",
+                    start_date="2012-01-01",
+                )
+            else:
+                fig = _dual_axis_chart(
+                    dates, price_arr, ind[key].values,
+                    ind_label=meta["label"], ind_unit=meta["unit"],
+                    title=f"{meta['label']} vs BTC Price",
+                )
             st.plotly_chart(fig, use_container_width=True)
 
             with st.expander("ℹ️ About this indicator"):
