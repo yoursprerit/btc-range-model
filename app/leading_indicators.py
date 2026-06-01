@@ -894,6 +894,14 @@ def render_leading_indicators(daily_df: pd.DataFrame) -> None:
                     title=f"{meta['label']} vs BTC Price — Log Scale (Full History)",
                     start_date="2012-01-01",
                 )
+            elif key == "ma_200d":
+                # Log scale, single axis — same rationale as 200w MA.
+                # 2-year feed is sufficient (needs only 200 days of warmup).
+                fig = _log_price_ma_chart(
+                    dates, price_arr, ind[key].values,
+                    ma_label=meta["label"],
+                    title=f"{meta['label']} vs BTC Price — Log Scale",
+                )
             else:
                 fig = _dual_axis_chart(
                     dates, price_arr, ind[key].values,
