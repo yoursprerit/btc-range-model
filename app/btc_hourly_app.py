@@ -2076,19 +2076,19 @@ def compute_trend_signatures(target_date_iso: str):
 
     DOWNTREND signals (statistically significant, p < 0.001):
       D1  lo_breaks_3d  — actual low broke predicted low ≥ 2 of last 3 days
-      D2  err_hi_ma3    — 3d avg (actual_high − pred_high)/close < −1%
+      D2  err_hi_ma3    — 3d avg (actual_high − pred_high)/close < −0.75%
       D3  exhaustion    — first lo_break after streak of ≥ 3 hi_breaks (reversal canary)
 
     UPTREND signals (p = 0.022):
-      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.5%
+      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.7%
 
     V-Reversal special signal:
-      V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 5% today
+      V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 3% today
 
     Returns a dict with all computed values and trigger flags.
     Returns None if fewer than 5 completed bars are available.
     """
-    # Pull last 45 completed daily bars — 30 needed for MA30, 10 for clean_10d,
+    # Pull last 45 completed daily bars — 30 needed for MA30, 7 for clean_10d,
     # plus buffer; core rolling metrics still use only last 3/5 bars.
     series = compute_daily_series(target_date_iso, days_back=45)
     if series is None or series.empty:
@@ -2166,12 +2166,12 @@ def compute_trend_signatures(target_date_iso: str):
         float(err_lo_ma3)   / max(abs(err_lo_ma3), 0.1) * 0.20 +
         float(lo_break[-1]) * 0.20
     )
-    capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 5.0)
-    v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 5.0)
+    capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 3.0)
+    v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 3.0)
 
     # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
     # Re-compute D1/D2 signal for every historical bar so we can check
-    # whether any fired in the 10 bars preceding the current bar (clean_10d).
+    # whether any fired in the 7 bars preceding the current bar (clean_10d).
     _d1_hist = np.zeros(n, dtype=bool)
     _d2_hist = np.zeros(n, dtype=bool)
     for _i in range(n):
@@ -2181,7 +2181,7 @@ def compute_trend_signatures(target_date_iso: str):
         _hb3_i  = int(np.sum(hi_break[_s: _i + 1]))
         _lb3_i  = int(np.sum(lo_break[_s: _i + 1]))
         _d1_hist[_i] = (_lb3_i >= 2) and (_elma_i > 0.5)
-        _d2_hist[_i] = (_ehma_i < -1.0)
+        _d2_hist[_i] = (_ehma_i < -0.75)
     # 30-bar rolling mean of close prices (close_asof = the daily close proxy)
     ma30_window = min(30, n)
     ma30_value  = float(np.mean(c[-ma30_window:]))
@@ -2195,9 +2195,9 @@ def compute_trend_signatures(target_date_iso: str):
         ma30_5d_ago = ma30_value                   # insufficient data → assume flat
     ma30_slope_pos = ma30_value > ma30_5d_ago
     bull_regime = above_ma30 and ma30_slope_pos
-    # clean_10d: zero D1 or D2 fires in the 10 bars *before* the current bar
-    if n >= 11:
-        clean_10d = not bool(np.any(_d1_hist[-11:-1] | _d2_hist[-11:-1]))
+    # clean_10d: zero D1 or D2 fires in the 7 bars *before* the current bar
+    if n >= 8:
+        clean_10d = not bool(np.any(_d1_hist[-8:-1] | _d2_hist[-8:-1]))
     elif n >= 2:
         clean_10d = not bool(np.any(_d1_hist[:-1] | _d2_hist[:-1]))
     else:
@@ -2205,9 +2205,9 @@ def compute_trend_signatures(target_date_iso: str):
 
     # ── Signature trigger flags ─────────────────────────────────────────
     d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
-    d2_triggered  = (err_hi_ma3 < -1.0)
+    d2_triggered  = (err_hi_ma3 < -0.75)
     d3_triggered  = exhaustion_active
-    u1_triggered  = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
+    u1_triggered  = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
@@ -2768,9 +2768,9 @@ def run_full_period_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -2793,12 +2793,12 @@ def run_full_period_backtest(end_date_iso: str,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
     # dn_score replicates the live signal formula; v_rev_bar fires when a
-    # single bar shows capitulation (dn_score > 0.8 AND err_lo > 5%).
+    # single bar shows capitulation (dn_score > 0.8 AND err_lo > 3%).
     # v_recent[i] = True if v_rev_bar fired within the last 3 bars — bridges
     # the 1-2 bar lag before U1 co-fires after the bounce starts.
     # 30-bar rolling mean keeps the normaliser stable across regimes.
@@ -2816,7 +2816,7 @@ def run_full_period_backtest(end_date_iso: str,
             (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
             float(lo_brk[i])                                 * 0.20
         )
-    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
@@ -3035,9 +3035,9 @@ def run_mstr_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -3060,7 +3060,7 @@ def run_mstr_backtest(end_date_iso: str,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     _DN_NORM_W    = 30
@@ -3076,7 +3076,7 @@ def run_mstr_backtest(end_date_iso: str,
             (elma3[i]  / max(abs(elma3[i]), 0.10))       * 0.20 +
             float(lo_brk[i])                             * 0.20
         )
-    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
@@ -3213,11 +3213,11 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     """Run a trading strategy backtest on a configurable window.
 
     Entry (both TF1 and TF2):
-        U1 active (err_hi_ma3 > +0.5% AND hi_breaks_3d ≥ 2)
-        AND (BTC > MA30  OR  clean_10d)
+        U1 active (err_hi_ma3 > +0.7% AND hi_breaks_3d ≥ 2)
+        AND (BTC > MA30  OR  clean_7d  OR  V-gate)
 
     Exit — TF1 (conservative, bear-optimised):
-        D2 (err_hi_ma3 < −1%)  OR  D3 (exhaustion canary)
+        D2 (err_hi_ma3 < −0.75%)  OR  D3 (exhaustion canary)
 
     Exit — TF2 (regime-adaptive, default):
         BULL regime (above_ma30 AND MA30 slope > 0) → exit D3 only (patient)
@@ -3283,9 +3283,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -3311,7 +3311,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
@@ -3330,7 +3330,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
             (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
             float(lo_brk[i])                                 * 0.20
         )
-    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
@@ -3528,7 +3528,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active</b> — model's predicted highs are being beaten consistently<br>
           <span style='color:#3b82f6; font-size:11px;'>
-            err_hi_ma3 &gt; +0.5% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -3541,13 +3541,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
             <br>
-            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 10d</span>
-            &nbsp; No D1 or D2 signal in the prior 10 bars (no recent bearish fingerprint)
+            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 signal in the prior 7 bars (no recent bearish fingerprint)
             <br>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; Capitulation spike detected within the last 3 bars
             <span style='color:#7c3aed; font-size:11px;'>
-              (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 5%)
+              (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
           </div>
         </td>
@@ -4218,7 +4218,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.5% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -4231,8 +4231,8 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
             <br>
-            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>Clean 10d</span>
-            &nbsp; No D1 or D2 on BTC in prior 10 bars
+            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
@@ -4919,7 +4919,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3      = sigs.get("exhaustion_active", False)
-    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -1.0) and not _bull_regime
+    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
     _exit_signal  = _exit_d3 or _exit_d2
 
     if _exit_signal and _entry_signal:
@@ -4942,7 +4942,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         _action_label = "ENTRY SIGNAL ACTIVE"
         _entry_gates  = []
         if sigs["above_ma30"]: _entry_gates.append("↑MA30")
-        if sigs["clean_10d"]:  _entry_gates.append("Clean 10d")
+        if sigs["clean_10d"]:  _entry_gates.append("Clean 7d")
         if _v_gate_ok:         _entry_gates.append("⚡V-reversal")
         _action_sub   = (
             f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
@@ -4992,7 +4992,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     # Intraday V-gate watch note — advisory only, no premature action possible
     if (intraday is not None
             and intraday.get("lo_break_intra", False)
-            and intraday.get("err_lo_intra", 0) > 5.0
+            and intraday.get("err_lo_intra", 0) > 3.0
             and intraday.get("pct_through", 0) >= 0.40
             and not sigs.get("v_reversal_likely", False)
             and not sigs.get("capitulation_signal", False)):
@@ -5119,7 +5119,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card D2
     d2_rows = [
-        ("err_hi 3d avg",     f"{sigs['err_hi_ma3']:+.2f}%", "< −1.0%", sigs['err_hi_ma3'] < -1.0),
+        ("err_hi 3d avg",     f"{sigs['err_hi_ma3']:+.2f}%", "< −0.75%", sigs['err_hi_ma3'] < -0.75),
         ("Hi-band breaks (3d)",f"{sigs['hi_breaks_3d']}/3",  "< 1",     sigs['hi_breaks_3d'] < 1),
     ]
     with col2:
@@ -5187,7 +5187,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card U1
     u1_rows = [
-        ("err_hi 3d avg",      f"{sigs['err_hi_ma3']:+.2f}%","  > +0.5%", sigs['err_hi_ma3'] > 0.5),
+        ("err_hi 3d avg",      f"{sigs['err_hi_ma3']:+.2f}%","  > +0.7%", sigs['err_hi_ma3'] > 0.7),
         ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3", "≥ 2",       sigs['hi_breaks_3d'] >= 2),
         ("Current streak",      d3_streak_str,                "> 0",       sigs['streak'] > 0),
     ]
@@ -5242,18 +5242,18 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
          f"{_regime_label}  →  Exit mode: {_exit_mode}",
          "≠ BEAR",
          _bull_regime),
-        ("Clean 10d (no D1/D2)",
-         "YES — zero D1/D2 fires in prior 10 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
+        ("Clean 7d (no D1/D2)",
+         "YES — zero D1/D2 fires in prior 7 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
          "= YES",
          sigs["clean_10d"]),
         ("⚡ V-reversal (3-bar gate)",
          ("ACTIVE — capitulation within 3 bars, dn_score={:.2f}, err_lo={:+.1f}%"
           .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
          if sigs.get("v_reversal_likely") or sigs.get("capitulation_signal")
-         else "○ not active — no recent capitulation spike (err_lo < 5% or dn_score < 0.8)",
+         else "○ not active — no recent capitulation spike (err_lo < 3% or dn_score < 0.8)",
          "= ACTIVE",
          sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)),
-        ("Entry filter (↑MA30 OR clean10d OR V-rev)",
+        ("Entry filter (↑MA30 OR clean7d OR V-rev)",
          "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]
                        or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal"))
          else "FAIL ✗",
@@ -5312,7 +5312,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             f"Today's actual low <b>massively overshot</b> the predicted low "
             f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
             f"This is the <b>V-reversal capitulation pattern</b>. "
-            f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.5% AND "
+            f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.7% AND "
             f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
             f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
         )
@@ -5388,7 +5388,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 | `hi_breaks_3d` | Count of days in last 3 where actual H > pred H | Repeated upside breakouts → momentum building |
 | `lo_breaks_3d` | Count of days in last 3 where actual L < pred L | Repeated downside breaks → trend deteriorating |
 | `MA30` | Rolling 30-bar mean of daily close prices | Trend direction proxy (above = bullish context) |
-| `clean_10d` | True if zero D1 or D2 fires in prior 10 bars | No recent bearish regime fingerprint |
+| `clean_10d` | True if zero D1 or D2 fires in prior 7 bars | No recent bearish regime fingerprint |
 
 **Alert levels:**
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
@@ -5399,9 +5399,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
 **TF2 + V-Gate — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
-- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 10 days **OR** ⚡ V-reversal within 3 bars)
+- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 7 days **OR** ⚡ V-reversal within 3 bars)
 - **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
-- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −1%) or D3 (defensive — cut quickly)
+- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −0.75%) or D3 (defensive — cut quickly)
 - **2-year backtest** (May 24–May 26): +87.9% return · Sharpe 0.90 · Max DD −23.6% · Alpha +$64,594 vs B&H
 - **Bear period OOS** (Sep 25–May 26): +$30k alpha vs B&H · V-gate adds post-crash entries before MA30 cross
 
@@ -7595,8 +7595,8 @@ def render_retrain_dashboard():
                 help=(
                     "**Primary signal driver.**  "
                     "`err_hi = (actual_high − pred_high) / close × 100`.  "
-                    "**U1** fires when `err_hi_ma3 > +0.5%`.  "
-                    "**D2** fires when `err_hi_ma3 < −1.0%`.  "
+                    "**U1** fires when `err_hi_ma3 > +0.7%`.  "
+                    "**D2** fires when `err_hi_ma3 < −0.75%`.  "
                     "Higher MAPE → more noise in these error terms → false signals."
                 ),
             )
@@ -7755,11 +7755,11 @@ def render_retrain_dashboard():
         "🟢 U1 — Entry",
         "🔥 ACTIVE" if sigs.get("u1_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}  |  {_hb3}/3 hi-breaks"
-               if _ehi is not None else "threshold: err_hi_ma3 > +0.5%"),
+               if _ehi is not None else "threshold: err_hi_ma3 > +0.7%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 > +0.5%` AND `hi_breaks_3d ≥ 2`.  "
-            "**Entry gate:** U1 confirmed by above-MA30, clean 10d, or V-reversal.  "
+            "**Threshold:** `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2`.  "
+            "**Entry gate:** U1 confirmed by above-MA30, clean 7d, or V-reversal.  "
             "Statistical lift: 1.68× over base rate."
         ),
     )
@@ -7767,10 +7767,10 @@ def render_retrain_dashboard():
         "🔴 D2 — Exit (strongest)",
         "🔥 ACTIVE" if sigs.get("d2_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}"
-               if _ehi is not None else "threshold: err_hi_ma3 < −1.0%"),
+               if _ehi is not None else "threshold: err_hi_ma3 < −0.75%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 < −1.0%`.  "
+            "**Threshold:** `err_hi_ma3 < −0.75%`.  "
             "2.24× lift — strongest exit signal.  "
             "Active in BEAR/NEUTRAL regime; in BULL regime only D3 triggers exit."
         ),
