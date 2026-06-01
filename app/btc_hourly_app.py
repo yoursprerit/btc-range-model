@@ -188,6 +188,37 @@ def _flat(df, name):
     df.index = idx
     return df[~df.index.duplicated(keep="last")].sort_index()
 
+@st.cache_data(ttl=3600*6, show_spinner=False)
+def _fetch_coinbase_hourly():
+    """Fetch up to 365 days of hourly Coinbase BTC-USD close prices (paginated).
+    Cached 6 h so the 30-request pagination doesn't run on every data refresh."""
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    end_ts   = pd.Timestamp.utcnow().floor("h")
+    start_ts = end_ts - pd.Timedelta(days=365)
+    rows: list = []
+    cur = start_ts
+    while cur < end_ts:
+        chunk_end = min(cur + pd.Timedelta(hours=299), end_ts)
+        try:
+            r = requests.get(CB_URL, params={
+                "granularity": 3600,
+                "start": cur.isoformat() + "Z",
+                "end":   (chunk_end + pd.Timedelta(hours=1)).isoformat() + "Z",
+            }, timeout=20)
+            if r.status_code == 200:
+                rows.extend(r.json())
+        except Exception:
+            pass
+        cur = chunk_end + pd.Timedelta(hours=1)
+        time.sleep(0.12)
+    if not rows:
+        return pd.Series(dtype=float, name="coinbase_close")
+    cb = pd.DataFrame(rows, columns=["ts", "low", "high", "open", "close", "volume"])
+    cb.index = pd.to_datetime(cb["ts"], unit="s").dt.floor("h")
+    cb = cb[~cb.index.duplicated(keep="last")].sort_index()
+    return cb["close"].astype(float).rename("coinbase_close")
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_data():
     SYMS = {"btc":"BTC-USD","eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
@@ -247,6 +278,11 @@ def fetch_data():
         df["fng"] = 50  # neutral fallback
     df["fng_d24"] = pd.Series(df["fng"].values, index=df.index).diff(24).values
     df["fng_d7"]  = pd.Series(df["fng"].values, index=df.index).diff(24*7).values
+
+    # Coinbase hourly premium
+    cb_close = _fetch_coinbase_hourly()
+    if cb_close.notna().any():
+        df = df.join(cb_close.reindex(df.index), how="left")
     return df
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -1665,6 +1701,11 @@ def build_features(df):
     f["dow_sin"]=np.sin(2*np.pi*dow/7); f["dow_cos"]=np.cos(2*np.pi*dow/7)
     f["weekend"]=(dow>=5).astype(int)
     f["us_open"]=((hr>=13)&(hr<=20)&(dow<5)).astype(int)
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _prem = (df["coinbase_close"] - df["btc_close"]) / df["btc_close"] * 100
+        f["cb_premium"]     = _prem
+        f["cb_premium_ma3"] = _prem.rolling(3).mean()
+        f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
     return f
 
 # ═══════════════════ 30-day look-back metric helpers ════════════════════
@@ -7987,6 +8028,10 @@ _EXPL_FEAT_META: "dict[str, tuple[str, str, str]]" = {
     "dow_cos": ("Seasonality", "Time", "Day-of-week (cos)"),
     "weekend": ("Seasonality", "Time", "Weekend flag"),
     "us_open": ("Seasonality", "Time", "US market hours"),
+    # Coinbase Premium (exchange demand signal)
+    "cb_premium":     ("Coinbase Premium", "Exchange Signal", "CB premium (current %)"),
+    "cb_premium_ma3": ("Coinbase Premium", "Exchange Signal", "CB premium 3h MA"),
+    "cb_premium_z7":  ("Coinbase Premium", "Exchange Signal", "CB premium z-score 7h"),
 }
 
 # Category display config: color, emoji, description
@@ -8015,6 +8060,50 @@ _EXPL_CAT_META = {
         "color": "#6b7280", "emoji": "🕐",
         "desc": "Hour-of-day and day-of-week cyclical patterns",
     },
+    "Coinbase Premium": {
+        "color": "#06b6d4", "emoji": "🏦",
+        "desc": "Coinbase exchange demand vs reference price — premium signals retail buying pressure",
+    },
+}
+
+# Maps each feature to its primary time horizon for the horizon-based view
+_EXPL_FEAT_TIMEFRAME: "dict[str, str]" = {
+    # ── Hour (≤4h lookback) ──────────────────────────────────────────
+    "ret_1h": "Hour", "ret_2h": "Hour", "ret_4h": "Hour",
+    "vol_4h": "Hour", "atr_4h": "Hour",
+    "range_now": "Hour", "vol_chg_1": "Hour",
+    "eth_ret_1h": "Hour",
+    "spx_ret_1h": "Hour", "ndx_ret_1h": "Hour", "vix_ret_1h": "Hour",
+    "gold_ret_1h": "Hour", "dxy_ret_1h": "Hour", "tnx_ret_1h": "Hour",
+    "cb_premium": "Hour", "cb_premium_ma3": "Hour",
+    # ── Day (8–24h lookback) ─────────────────────────────────────────
+    "ret_8h": "Day", "ret_12h": "Day", "ret_24h": "Day",
+    "vol_8h": "Day", "vol_24h": "Day",
+    "atr_12h": "Day", "atr_24h": "Day",
+    "range_ma24": "Day",
+    "vol_z_24": "Day",
+    "rsi_14": "Day", "macd": "Day", "macd_hist": "Day",
+    "bb24_width": "Day",
+    "dist_hi_24": "Day", "dist_lo_24": "Day",
+    "eth_ret_24h": "Day", "eth_vol_24h": "Day", "btc_eth_corr_24": "Day",
+    "spx_ret_24h": "Day", "spx_vol_24h": "Day",
+    "ndx_ret_24h": "Day", "ndx_vol_24h": "Day",
+    "vix_ret_24h": "Day", "vix_vol_24h": "Day",
+    "gold_ret_24h": "Day", "gold_vol_24h": "Day",
+    "dxy_ret_24h": "Day", "dxy_vol_24h": "Day",
+    "tnx_ret_24h": "Day", "tnx_vol_24h": "Day",
+    "fng_d24": "Day",
+    "cb_premium_z7": "Day",
+    # ── Week (48h+ lookback) ─────────────────────────────────────────
+    "ret_48h": "Week", "ret_72h": "Week",
+    "vol_48h": "Week",
+    "range_ma72": "Week",
+    "dist_hi_168": "Week",
+    "fng": "Week", "fng_d1": "Week", "fng_d7": "Week",
+    # ── Structural (calendar / seasonality) ─────────────────────────
+    "hr_sin": "Structural", "hr_cos": "Structural",
+    "dow_sin": "Structural", "dow_cos": "Structural",
+    "weekend": "Structural", "us_open": "Structural",
 }
 
 
@@ -8227,7 +8316,65 @@ def render_explainability_dashboard():
 
     st.markdown("---")
 
-    # ── Main feature contribution chart ──────────────────────────────────
+    # ── Timeframe summary bar ─────────────────────────────────────────────
+    st.markdown("### ⏱️ Trend Horizon Breakdown")
+    st.caption(
+        "Net model contribution split by how far back each feature looks. "
+        "'Hour' = intraday momentum (≤4 h); 'Day' = 8–24 h dynamics; "
+        "'Week' = 48 h–7 d structure; 'Structural' = time-of-day / calendar patterns."
+    )
+    _TF_ORDER  = ["Hour", "Day", "Week", "Structural"]
+    _TF_COLORS = {"Hour": "#3b82f6", "Day": "#8b5cf6", "Week": "#f59e0b", "Structural": "#6b7280"}
+    tf_net: "dict[str, float]" = {tf: 0.0 for tf in _TF_ORDER}
+    tf_pos: "dict[str, float]" = {tf: 0.0 for tf in _TF_ORDER}
+    tf_neg: "dict[str, float]" = {tf: 0.0 for tf in _TF_ORDER}
+    for feat, val in contributions.items():
+        tf = _EXPL_FEAT_TIMEFRAME.get(str(feat), "Day")
+        bps = float(val) * 100
+        tf_net[tf] = tf_net.get(tf, 0.0) + bps
+        tf_pos[tf] = tf_pos.get(tf, 0.0) + max(0.0, bps)
+        tf_neg[tf] = tf_neg.get(tf, 0.0) + min(0.0, bps)
+
+    fig_tf = go.Figure()
+    fig_tf.add_trace(go.Bar(
+        name="Bullish", x=_TF_ORDER,
+        y=[tf_pos[tf] for tf in _TF_ORDER],
+        marker_color=[_TF_COLORS[tf] for tf in _TF_ORDER],
+        opacity=0.85,
+        hovertemplate="%{x}: +%{y:.4f} bps<extra>Bullish</extra>",
+    ))
+    fig_tf.add_trace(go.Bar(
+        name="Bearish", x=_TF_ORDER,
+        y=[tf_neg[tf] for tf in _TF_ORDER],
+        marker_color=[_TF_COLORS[tf] for tf in _TF_ORDER],
+        opacity=0.5,
+        hovertemplate="%{x}: %{y:.4f} bps<extra>Bearish</extra>",
+    ))
+    for tf in _TF_ORDER:
+        net = tf_net[tf]
+        fig_tf.add_annotation(
+            x=tf, y=tf_pos[tf] + abs(tf_neg[tf]) * 0.1 + 0.001,
+            text=f"<b>{net:+.4f}</b>",
+            showarrow=False, font=dict(size=11, color="#111827"),
+            yanchor="bottom",
+        )
+    fig_tf.add_hline(y=0, line=dict(color="#111827", width=1.5))
+    fig_tf.update_layout(
+        barmode="relative",
+        height=280,
+        template="plotly_white",
+        title=dict(text="<b>Net contribution by time horizon</b>", x=0, xanchor="left"),
+        xaxis_title=None,
+        yaxis_title="Contribution (bps)",
+        margin=dict(t=50, r=30, b=40, l=80),
+        legend=dict(orientation="h", y=-0.25),
+        xaxis=dict(tickfont=dict(size=13, color="#111827")),
+    )
+    st.plotly_chart(fig_tf, use_container_width=True, key="expl_tf_chart")
+
+    st.markdown("---")
+
+    # ── Main feature contribution chart (with timeframe filter) ──────────
     st.markdown("### 📊 Feature Drivers — Current Bar")
     st.caption(
         "Top features sorted by absolute contribution.  "
@@ -8235,9 +8382,33 @@ def render_explainability_dashboard():
         "Hover for current value, z-score and exact contribution."
     )
 
-    N_SHOW = min(30, len(contributions))
-    top_idx = contributions.abs().nlargest(N_SHOW).index
-    c_show  = contributions[top_idx].sort_values()
+    _TF_LABELS = {
+        "All":          "All",
+        "Hour":         "Hour (≤4h)",
+        "Day":          "Day (8–24h)",
+        "Week":         "Week (48h+)",
+        "Structural":   "Structural",
+    }
+    sel_tf = st.radio(
+        "Filter by time horizon:",
+        options=list(_TF_LABELS.keys()),
+        format_func=lambda k: _TF_LABELS[k],
+        horizontal=True,
+        index=0,
+        key="expl_tf_filter",
+    )
+
+    if sel_tf == "All":
+        filt_contribs = contributions
+    else:
+        filt_contribs = contributions[
+            [f for f in contributions.index
+             if _EXPL_FEAT_TIMEFRAME.get(str(f), "Day") == sel_tf]
+        ]
+
+    N_SHOW = min(30, len(filt_contribs))
+    top_idx = filt_contribs.abs().nlargest(N_SHOW).index
+    c_show  = filt_contribs[top_idx].sort_values()
 
     bar_colors, hover_texts, y_labels = [], [], []
     for feat in c_show.index:
@@ -8248,9 +8419,11 @@ def render_explainability_dashboard():
         raw_val = (float(F_filled.loc[latest_t_global, feat])
                    if feat in F_filled.columns else float("nan"))
         contrib_bps = c_show[feat] * 100
+        tf_label = _EXPL_FEAT_TIMEFRAME.get(str(feat), "Day")
         hover_texts.append(
             f"<b>{meta[2]}</b><br>"
             f"Category: {meta[0]} › {meta[1]}<br>"
+            f"Time horizon: {tf_label}<br>"
             f"Current value: {raw_val:.5g}<br>"
             f"Z-score vs training mean: {z_val:+.2f}σ<br>"
             f"Contribution: {contrib_bps:+.5f} bps"
@@ -8273,7 +8446,8 @@ def render_explainability_dashboard():
         template="plotly_white",
         title=dict(
             text=(
-                f"<b>Top {N_SHOW} drivers  ·  {latest_t_global.strftime('%Y-%m-%d %H:%M')} UTC</b>"
+                f"<b>Top {N_SHOW} drivers [{_TF_LABELS[sel_tf]}]  ·  "
+                f"{latest_t_global.strftime('%Y-%m-%d %H:%M')} UTC</b>"
                 "<br><span style='font-size:11px;color:#555'>"
                 "Green = bullish contribution  ·  Red = bearish contribution  ·  "
                 f"Total predicted log-return: <b>{pred_ret*100:+.4f}%</b>"

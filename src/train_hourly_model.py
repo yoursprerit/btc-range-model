@@ -99,6 +99,34 @@ df["fng_d24"] = pd.Series(df["fng"].values, index=grid).diff(24).values
 print(f"  FNG joined (lagged 1d). Latest={df['fng'].iloc[-1]}  "
       f"range=[{df['fng'].min()}, {df['fng'].max()}]")
 
+print("\nFetching Coinbase hourly premium ...")
+CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+cb_rows = []
+cb_cur  = grid.min()
+cb_end  = grid.max()
+while cb_cur < cb_end:
+    chunk_end = min(cb_cur + pd.Timedelta(hours=299), cb_end)
+    try:
+        r_cb = requests.get(CB_URL, params={
+            "granularity": 3600,
+            "start": cb_cur.isoformat() + "Z",
+            "end":   (chunk_end + pd.Timedelta(hours=1)).isoformat() + "Z",
+        }, timeout=20)
+        if r_cb.status_code == 200:
+            cb_rows.extend(r_cb.json())
+    except Exception:
+        pass
+    cb_cur = chunk_end + pd.Timedelta(hours=1)
+    time.sleep(0.12)
+if cb_rows:
+    _cb = pd.DataFrame(cb_rows, columns=["ts","low","high","open","close","volume"])
+    _cb.index = pd.to_datetime(_cb["ts"], unit="s").dt.floor("h")
+    _cb = _cb[~_cb.index.duplicated(keep="last")].sort_index()
+    df["coinbase_close"] = _cb["close"].astype(float).reindex(grid).ffill(limit=4)
+    print(f"  Coinbase hourly joined: {df['coinbase_close'].notna().sum()} / {len(df)} bars have data")
+else:
+    print("  Coinbase hourly fetch failed — cb_premium features will be absent")
+
 # Drop rows where BTC is missing (rare)
 df = df.dropna(subset=["btc_close"])
 print(f"After drop NA BTC: {df.shape}")
@@ -173,6 +201,13 @@ f["hr_sin"]  = np.sin(2*np.pi*hr/24);  f["hr_cos"]  = np.cos(2*np.pi*hr/24)
 f["dow_sin"] = np.sin(2*np.pi*dow/7);  f["dow_cos"] = np.cos(2*np.pi*dow/7)
 f["weekend"] = (dow >= 5).astype(int)
 f["us_open"] = ((hr >= 13) & (hr <= 20) & (dow < 5)).astype(int)  # 13-20 UTC
+
+# Coinbase Premium (exchange demand vs reference price)
+if "coinbase_close" in df.columns:
+    _prem = (df["coinbase_close"] - c) / c * 100
+    f["cb_premium"]     = _prem
+    f["cb_premium_ma3"] = _prem.rolling(3).mean()
+    f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
 # Target: next-hour log return
 y = rt.shift(-1)
