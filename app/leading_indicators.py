@@ -895,13 +895,11 @@ def render_leading_indicators(daily_df: pd.DataFrame) -> None:
                     line=dict(color="#6366f1", width=1.5),
                     name="90d rolling corr",
                 ))
-                fig_rc.update_layout(
-                    **_base_layout(
-                        title=f"Rolling 90d Correlation: {INDICATORS[selected_ind]['label']} → 7d BTC Return"
-                    ),
-                    yaxis_title="Pearson r",
-                    yaxis=dict(range=[-1, 1], showgrid=True, gridcolor=GRID_CLR),
+                _rc_layout = _base_layout(
+                    title=f"Rolling 90d Correlation: {INDICATORS[selected_ind]['label']} → 7d BTC Return"
                 )
+                _rc_layout.update(yaxis=dict(range=[-1, 1], showgrid=True, gridcolor=GRID_CLR))
+                fig_rc.update_layout(**_rc_layout)
                 st.plotly_chart(fig_rc, use_container_width=True)
 
     # ═══════════════════════════════════════════════════════════════════════
