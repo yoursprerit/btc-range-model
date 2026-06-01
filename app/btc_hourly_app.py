@@ -521,15 +521,22 @@ def _fetch_binance_hourly(days_back=None):
 
 
 @st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
-def _fetch_daily_raw():
-    """Build the daily-bar DataFrame anchored at 12:00 UTC.
+def _fetch_daily_raw_inner(_bar_start_iso: str):
+    """Implementation of the daily-bar fetch.  The `_bar_start_iso` parameter is
+    NOT used inside the function body — it is a cache-busting key that equals the
+    ISO date of the 12:00-UTC bar currently open (i.e. floor((now_utc − 12h).date())).
+    It changes at exactly 12:00 UTC (7am CT) each day, so the cache is invalidated
+    on the very first page-load after each bar closes rather than waiting up to 6
+    arbitrary hours for the TTL to expire.
+
+    Build the daily-bar DataFrame anchored at 12:00 UTC.
 
       - BTC OHLCV: rebucketed from Binance hourly into 12:00→12:00 UTC bars.
       - Macro (Yahoo daily, indexed by calendar date): SPX/NDX/VIX/Gold/DXY/TNX/ETH.
         Joined to bar D using calendar date D — macro closes for D are
         published by ~21:00 UTC on day D, well before bar D ends (D+1 12:00).
       - On-chain (blockchain.info, daily UTC): same calendar-date join.
-    Cached 6 h."""
+    Cached 6 h (per bar-start key)."""
     # 1. BTC 12:00-UTC daily bars (full history → any picked date is fully featured)
     btc_hourly = _fetch_binance_hourly()
     if btc_hourly.empty:
@@ -618,6 +625,17 @@ def _fetch_daily_raw():
         df = df.join(coinbase_close.to_frame("coinbase_close"), how="left")
     df = df.loc[df["btc_close"].notna()].ffill(limit=5)
     return df
+
+
+def _fetch_daily_raw():
+    """Public wrapper — calls _fetch_daily_raw_inner with the current bar-start ISO
+    date so the cache invalidates automatically at each 12:00 UTC (7am CT) boundary.
+    All call sites use this function unchanged; only the inner cache key changes."""
+    _bar_start_iso = (
+        (datetime.now(timezone.utc) - timedelta(hours=ANCHOR_HOUR_UTC))
+        .date().isoformat()
+    )
+    return _fetch_daily_raw_inner(_bar_start_iso)
 
 
 @st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
