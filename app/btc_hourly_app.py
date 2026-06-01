@@ -5601,6 +5601,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     else:
         c5.metric("Market Regime", "—")
 
+    # ── Historical picker: date strip, calendar, hour slider ──────────────
+    # Rendered at the top right of the tab (below BTC price/forecast, above
+    # Active Signal panel) so users can navigate dates without scrolling down.
+    if hist_picker is not None:
+        hist_picker()
+
     # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
     if sigs is not None:
         _intra_raw = _fetch_current_bar_intraday() if is_live else None
@@ -5719,12 +5725,6 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             f"(majority baseline ≈ 33% on three balanced classes)."
             + sel_note
         )
-
-    # ────── Historical picker (date strip, calendar, hour slider,
-    # bookmarks) rendered RIGHT ABOVE the plots so the user can navigate
-    # to a different day without scrolling back up.
-    if hist_picker is not None:
-        hist_picker()
 
     # ─────────────────────────── walk-forward look-back ───────────────────
     # Live mode  → last LOOKBACK_HOURS hours up to now.
