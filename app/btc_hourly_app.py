@@ -5546,10 +5546,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # Bear/Full end dates roll daily with _bt_end so results always include today.
     # Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
     # OOS is a slice of _bt_full_oos starting at the model's test_start.
-    _bt_bear     = _run_fixed_period_backtest(_bt_end, "2025-06-01",  _model_mtime)
+    # In historical mode, always run backtests up to today so the table/plots/trade-logs
+    # match the live tab exactly (the picked date only affects signals and daily forecasts).
+    if is_live:
+        _bt_end_backtest = _bt_end
+    else:
+        _bt_end_backtest = pd.Timestamp(datetime.now(timezone.utc)).normalize().strftime("%Y-%m-%d")
+    _bt_bear     = _run_fixed_period_backtest(_bt_end_backtest, "2025-06-01",  _model_mtime)
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime)
-    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # OOS slice
-    _bt_full     = _run_fixed_period_backtest(_bt_end,              "2024-06-05", _model_mtime)
+    _bt_full_oos = run_full_period_backtest(_bt_end_backtest, model_mtime=_model_mtime)  # OOS slice
+    _bt_full     = _run_fixed_period_backtest(_bt_end_backtest,              "2024-06-05", _model_mtime)
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end, data_end=_data_end)
 
