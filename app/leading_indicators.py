@@ -587,6 +587,47 @@ def _base_layout(**kw) -> dict:
     )
 
 
+def _log_price_ma_chart(
+    dates, price, ma, ma_label: str, title: str,
+    start_date=None,
+) -> go.Figure:
+    """Single log-scale y-axis chart with BTC price and a price-level MA.
+
+    Used for the 200-week MA: both series are in USD so they share one axis,
+    and log scale keeps historical cycles (e.g. Feb 2016) proportionally
+    visible instead of being crushed by recent $70 K+ prices.
+    """
+    cutoff = (pd.Timestamp(start_date) if start_date is not None
+              else pd.Timestamp.now() - pd.Timedelta(days=730))
+    mask = pd.Series(dates) >= cutoff
+    d = pd.Series(dates)[mask]
+    p = pd.Series(price)[mask]
+    m = pd.Series(ma)[mask]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=d, y=p, name="BTC Price",
+        line=dict(color=BTC_ORANGE, width=1.5),
+    ))
+    fig.add_trace(go.Scatter(
+        x=d, y=m, name=ma_label,
+        line=dict(color="#6366f1", width=2.5),
+    ))
+    layout = _base_layout(title=title)
+    layout.update(
+        yaxis=dict(
+            title="Price (USD — log scale)",
+            type="log",
+            showgrid=True,
+            gridcolor=GRID_CLR,
+            tickformat="$,.0f",
+        ),
+        legend=dict(orientation="h", y=1.05, x=0),
+    )
+    fig.update_layout(**layout)
+    return fig
+
+
 def _dual_axis_chart(
     dates, price, indicator, ind_label: str, ind_unit: str, title: str,
     start_date=None,
@@ -840,16 +881,17 @@ def render_leading_indicators(daily_df: pd.DataFrame) -> None:
                 continue
 
             if key == "ma_200w" and not _long_hist.empty:
-                # Recompute on full history so Feb 2016 and earlier are visible
-                _wkly   = _long_hist.resample("W-MON").last()
-                _ma200w = _wkly.rolling(200, min_periods=100).mean()
+                # Full-history log-scale chart so cycle bottoms are visible.
+                # 200w MA = 200 weekly (W-MON) closes — standard definition.
+                _wkly    = _long_hist.resample("W-MON").last()
+                _ma200w  = _wkly.rolling(200, min_periods=100).mean()
                 _alldays = pd.date_range(_long_hist.index[0], _long_hist.index[-1], freq="D")
                 _ma200w_d = _ma200w.reindex(_alldays, method="ffill")
                 _price_d  = _long_hist.reindex(_alldays, method="ffill")
-                fig = _dual_axis_chart(
+                fig = _log_price_ma_chart(
                     _ma200w_d.index, _price_d.values, _ma200w_d.values,
-                    ind_label=meta["label"], ind_unit=meta["unit"],
-                    title=f"{meta['label']} vs BTC Price (Full History)",
+                    ma_label=meta["label"],
+                    title=f"{meta['label']} vs BTC Price — Log Scale (Full History)",
                     start_date="2012-01-01",
                 )
             else:
