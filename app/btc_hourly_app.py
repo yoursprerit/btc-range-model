@@ -3718,8 +3718,9 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
     def _period_cells(s):
         """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
+        _na4 = "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
         if s is None:
-            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
+            return {k: _na4 for k in ("nav", "ret", "dd", "sh", "tim", "tax", "taxpd", "wr")}
         tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
         r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
         dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
@@ -4401,8 +4402,9 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
     def _period_cells(s):
         """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
+        _na4 = "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
         if s is None:
-            return "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
+            return {k: _na4 for k in ("nav", "ret", "dd", "sh", "tim", "tax", "taxpd", "wr")}
         tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
         r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
         dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
