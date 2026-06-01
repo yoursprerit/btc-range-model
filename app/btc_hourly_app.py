@@ -2697,10 +2697,8 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     return preds_df, raw_df
 
 
-# Fixed backtest period end dates — locked to the dates established on 2026-05-28.
-# Only the OOS period rolls daily; these never change until the model is retrained.
-_BT_BEAR_END_LOCKED = "2026-05-28"
-_BT_FULL_END_LOCKED = "2026-05-28"
+# Bear and Full end dates are derived from today at render time (_bt_end).
+# Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
 
 
 def run_full_period_backtest(end_date_iso: str,
@@ -5454,13 +5452,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_end      = target_date.strftime("%Y-%m-%d")
     # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
-    # Bear / Bull / Full Market use locked end dates (established 2026-05-28) and a
-    # no-TTL cache so results are computed once per model version, not on every load.
-    # Only the OOS period rolls daily; it calls run_full_period_backtest directly.
-    _bt_bear     = _run_fixed_period_backtest(_BT_BEAR_END_LOCKED, "2025-06-01",  _model_mtime)
+    # Bear/Full end dates roll daily with _bt_end so results always include today.
+    # Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
+    # OOS is a slice of _bt_full_oos starting at the model's test_start.
+    _bt_bear     = _run_fixed_period_backtest(_bt_end, "2025-06-01",  _model_mtime)
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime)
-    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # rolls daily
-    _bt_full     = _run_fixed_period_backtest(_BT_FULL_END_LOCKED,  "2024-06-05", _model_mtime)
+    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # OOS slice
+    _bt_full     = _run_fixed_period_backtest(_bt_end,              "2024-06-05", _model_mtime)
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end)
 
@@ -8737,13 +8735,13 @@ with tab_mstr:
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstr_today_iso   = pd.Timestamp.now(tz="UTC").normalize().strftime("%Y-%m-%d")
     _mstr_bear     = _run_fixed_period_mstr_backtest(
-        _BT_BEAR_END_LOCKED, "2025-06-01", _mstr_model_mtime)
+        _mstr_today_iso, "2025-06-01", _mstr_model_mtime)
     _mstr_bull     = _run_fixed_period_mstr_backtest(
         "2025-06-14", "2024-06-05", _mstr_model_mtime)
     _mstr_full_oos = run_mstr_backtest(
-        _mstr_today_iso, model_mtime=_mstr_model_mtime)   # rolls daily
+        _mstr_today_iso, model_mtime=_mstr_model_mtime)   # OOS slice
     _mstr_full     = _run_fixed_period_mstr_backtest(
-        _BT_FULL_END_LOCKED, "2024-06-05", _mstr_model_mtime)
+        _mstr_today_iso, "2024-06-05", _mstr_model_mtime)
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
