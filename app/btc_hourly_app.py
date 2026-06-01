@@ -917,7 +917,7 @@ def _load_cone_14d():
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
-def _build_cone_feature_matrix():
+def _build_cone_feature_matrix(data_end=None):
     """Build the shared daily feature matrix for the 7-day and 14-day GBM cone models.
 
     Mirrors the feature engineering in ``src/train_7d_close_cone.py`` and
@@ -1120,7 +1120,7 @@ def _cone_predict_batch(art, feat_df, anchor_dates):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_7d_close_cone_forecast(asof_date_iso):
+def compute_7d_close_cone_forecast(asof_date_iso, data_end=None):
     """Forecast BTC close 7 days after `asof_date_iso` using the regime cone.
 
     The cone is parameter-free at inference: classify the as-of bar's
@@ -1174,7 +1174,7 @@ def compute_7d_close_cone_forecast(asof_date_iso):
     asof_close = float(c.loc[asof_t])
     band_pct = float(cone.get("band_pct", 0.097))
     # GBM point prediction (v2 artefact) when available
-    gbm_preds = _cone_predict_batch(cone, _build_cone_feature_matrix(), [asof_t])
+    gbm_preds = _cone_predict_batch(cone, _build_cone_feature_matrix(data_end=data_end), [asof_t])
     if asof_t in gbm_preds:
         pred_logret = gbm_preds[asof_t]
     else:
@@ -1256,7 +1256,7 @@ def compute_7d_close_cone_forecast(asof_date_iso):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_rolling_7d_series(end_date_iso, days_back=21):
+def compute_rolling_7d_series(end_date_iso, days_back=21, data_end=None):
     """Generate rolling daily 7-day forward close predictions.
 
     For each anchor day D from (end_date - days_back) to end_date,
@@ -1303,7 +1303,7 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
             candidate_anchors.append(a)
 
     # Batch GBM predictions (empty dict → fall back to regime median per anchor)
-    gbm_preds_7d = _cone_predict_batch(cone, _build_cone_feature_matrix(),
+    gbm_preds_7d = _cone_predict_batch(cone, _build_cone_feature_matrix(data_end=data_end),
                                        candidate_anchors)
 
     rows = []
@@ -1349,7 +1349,7 @@ def compute_rolling_7d_series(end_date_iso, days_back=21):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_14d_close_cone_forecast(asof_date_iso):
+def compute_14d_close_cone_forecast(asof_date_iso, data_end=None):
     """Forecast BTC close 14 days after ``asof_date_iso`` using the GBM+cone model.
 
     Mirrors ``compute_7d_close_cone_forecast`` but with a 14-day horizon.
@@ -1393,7 +1393,7 @@ def compute_14d_close_cone_forecast(asof_date_iso):
     band_pct = float(cone.get("band_pct", 0.16))   # ≈±16 % for 14-day horizon
 
     # GBM point prediction when available
-    gbm_preds = _cone_predict_batch(cone, _build_cone_feature_matrix(), [asof_t])
+    gbm_preds = _cone_predict_batch(cone, _build_cone_feature_matrix(data_end=data_end), [asof_t])
     pred_logret = gbm_preds.get(asof_t, med_logret)
     pred_close = asof_close * float(np.exp(pred_logret))
     lower = pred_close * (1 - band_pct)
@@ -1433,7 +1433,7 @@ def compute_14d_close_cone_forecast(asof_date_iso):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_rolling_14d_series(end_date_iso, days_back=30):
+def compute_rolling_14d_series(end_date_iso, days_back=30, data_end=None):
     """Generate rolling daily 14-day forward close predictions.
 
     For each anchor day D from (end_date − days_back) to end_date, predicts
@@ -1471,7 +1471,7 @@ def compute_rolling_14d_series(end_date_iso, days_back=30):
         if a is not None and a in range_ma30.index and np.isfinite(range_ma30.loc[a]):
             candidate_anchors.append(a)
 
-    gbm_preds_14d = _cone_predict_batch(cone, _build_cone_feature_matrix(),
+    gbm_preds_14d = _cone_predict_batch(cone, _build_cone_feature_matrix(data_end=data_end),
                                         candidate_anchors)
 
     rows = []
@@ -1509,14 +1509,14 @@ def compute_rolling_14d_series(end_date_iso, days_back=30):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_30d_cone_14d_metrics(end_date_iso):
+def compute_30d_cone_14d_metrics(end_date_iso, data_end=None):
     """30-day look-back metrics for the 14-day close-cone model.
 
     Requests 44 days of rolling anchors so the resolved subset
     (target_date already in the past) covers roughly 30 observations.
     Returns None if fewer than 5 resolved predictions are available.
     """
-    rolling = compute_rolling_14d_series(end_date_iso, days_back=44)
+    rolling = compute_rolling_14d_series(end_date_iso, days_back=44, data_end=data_end)
     if rolling is None or rolling.empty:
         return None
     resolved = rolling[rolling["actual_close"].notna()].copy()
@@ -1536,7 +1536,7 @@ def compute_30d_cone_14d_metrics(end_date_iso):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_alltime_cone_14d_metrics(end_date_iso):
+def compute_alltime_cone_14d_metrics(end_date_iso, data_end=None):
     """MAPE + band coverage over the full held-out test period for the 14-day cone.
 
     Anchors ``compute_rolling_14d_series`` at ``test_start`` so only genuinely
@@ -1551,7 +1551,7 @@ def compute_alltime_cone_14d_metrics(end_date_iso):
     test_start_ts  = pd.Timestamp(test_start_str)
     end_ts = pd.Timestamp(end_date_iso)
     days_back = int((end_ts - test_start_ts).days) + 28  # +14d lag + buffer
-    rolling = compute_rolling_14d_series(end_date_iso, days_back=days_back)
+    rolling = compute_rolling_14d_series(end_date_iso, days_back=days_back, data_end=data_end)
     if rolling is None or rolling.empty:
         return None
     rolling  = rolling[rolling["anchor_date"] >= test_start_ts].copy()
@@ -1778,14 +1778,14 @@ def compute_30d_daily_hl_metrics(end_date_iso, data_end=None):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_30d_cone_metrics(end_date_iso):
+def compute_30d_cone_metrics(end_date_iso, data_end=None):
     """30-day look-back metrics for the 7-day close-cone model.
 
     Requests 37 days of rolling anchors so that the resolved subset
     (target_date already in the past) covers roughly 30 observations.
     Returns None if fewer than 5 resolved predictions are available.
     """
-    rolling = compute_rolling_7d_series(end_date_iso, days_back=37)
+    rolling = compute_rolling_7d_series(end_date_iso, days_back=37, data_end=data_end)
     if rolling is None or rolling.empty:
         return None
     resolved = rolling[rolling["actual_close"].notna()].copy()
@@ -1806,7 +1806,7 @@ def compute_30d_cone_metrics(end_date_iso):
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Computing 30-day day-type metrics …")
-def compute_30d_daytype_metrics(end_date_iso):
+def compute_30d_daytype_metrics(end_date_iso, data_end=None):
     """30-day accuracy for the 3-class day-type (BigUpper / BigLower / Quiet) model.
 
     For each of the 30 completed target-days ending at ``end_date_iso``:
@@ -1873,7 +1873,7 @@ def compute_30d_daytype_metrics(end_date_iso):
 
 
 @st.cache_data(ttl=3600 * 4, show_spinner=False)
-def compute_alltime_cone_metrics(end_date_iso):
+def compute_alltime_cone_metrics(end_date_iso, data_end=None):
     """MAPE + band coverage over the full held-out test period for the 7-day cone.
 
     Anchors ``compute_rolling_7d_series`` at ``test_start`` so only
@@ -1888,7 +1888,7 @@ def compute_alltime_cone_metrics(end_date_iso):
     test_start_ts  = pd.Timestamp(test_start_str)
     end_ts = pd.Timestamp(end_date_iso)
     days_back = int((end_ts - test_start_ts).days) + 14  # +7d lag + buffer
-    rolling = compute_rolling_7d_series(end_date_iso, days_back=days_back)
+    rolling = compute_rolling_7d_series(end_date_iso, days_back=days_back, data_end=data_end)
     if rolling is None or rolling.empty:
         return None
     rolling = rolling[rolling["anchor_date"] >= test_start_ts].copy()
@@ -1914,7 +1914,7 @@ def compute_alltime_cone_metrics(end_date_iso):
 
 
 @st.cache_data(ttl=3600 * 12, show_spinner=False)
-def compute_alltime_daytype_metrics(end_date_iso):
+def compute_alltime_daytype_metrics(end_date_iso, data_end=None):
     """Per-class precision / recall over the full test period for the day-type model.
 
     Iterates every calendar day from ``test_start`` to ``end_date_iso``,
@@ -2382,7 +2382,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
 # ════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
-def _build_ct_batch_predictions():
+def _build_ct_batch_predictions(data_end=None):
     """Build CT daily H/L predictions for ALL available bars in one pass.
 
     Mirrors compute_daily_forecast() but builds the feature matrix ONCE on the
@@ -3322,11 +3322,11 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     """
     WARMUP = 35  # bars before backtest begins (MA30 needs 30 + 5 buffer)
 
-    preds = _build_ct_batch_predictions()
+    raw    = _fetch_daily_raw()
+    _bt_data_end = raw.index.max().strftime("%Y-%m-%d") if not raw.empty else None
+    preds = _build_ct_batch_predictions(data_end=_bt_data_end)
     if preds is None or preds.empty:
         return None
-
-    raw    = _fetch_daily_raw()
     closes = raw["btc_close"]
     highs  = raw["btc_high"]
     lows   = raw["btc_low"]
@@ -6331,7 +6331,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # coloured green (within ±9.7 % band) or red (outside).
     # The headline KPI line below still uses compute_7d_close_cone_forecast
     # for the current-anchor regime/return metadata.
-    cone7 = compute_7d_close_cone_forecast(target_date.strftime("%Y-%m-%d"))
+    cone7 = compute_7d_close_cone_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
     if cone7 is not None:
         ret_pct = (np.exp(cone7["regime_median_logret"]) - 1) * 100
         st.markdown(
@@ -6349,7 +6349,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # For each anchor day in the last 21 days, predict the close 7 days
         # out and compare against the realized close once that date passes.
         rolling7 = compute_rolling_7d_series(
-            target_date.strftime("%Y-%m-%d"), days_back=21
+            target_date.strftime("%Y-%m-%d"), days_back=21, data_end=_data_end
         )
 
         if len(rolling7) > 0:
@@ -6590,7 +6590,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             )
 
     # ─────────── 14-day close cone — rolling daily predictions chart ─────────
-    cone14 = compute_14d_close_cone_forecast(target_date.strftime("%Y-%m-%d"))
+    cone14 = compute_14d_close_cone_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
     if cone14 is not None:
         ret_pct_14 = (np.exp(cone14["regime_median_logret"]) - 1) * 100
         ml_tag = " · GBM" if cone14.get("use_ml") else " · regime median"
@@ -6606,7 +6606,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         )
         band_pct_14 = cone14["band_pct"]
         rolling14 = compute_rolling_14d_series(
-            target_date.strftime("%Y-%m-%d"), days_back=30
+            target_date.strftime("%Y-%m-%d"), days_back=30, data_end=_data_end
         )
 
         if len(rolling14) > 0:
@@ -6905,12 +6905,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # Pre-fetch other model results (cached, so instant on subsequent renders)
     _end_iso   = target_date.strftime("%Y-%m-%d")
     hl30       = compute_30d_daily_hl_metrics(_end_iso, data_end=_data_end)
-    cone30     = compute_30d_cone_metrics(_end_iso)
-    cone14_30  = compute_30d_cone_14d_metrics(_end_iso)
-    dt30       = compute_30d_daytype_metrics(_end_iso)
-    cone_at    = compute_alltime_cone_metrics(_end_iso)
-    cone14_at  = compute_alltime_cone_14d_metrics(_end_iso)
-    dt_at      = compute_alltime_daytype_metrics(_end_iso)
+    cone30     = compute_30d_cone_metrics(_end_iso, data_end=_data_end)
+    cone14_30  = compute_30d_cone_14d_metrics(_end_iso, data_end=_data_end)
+    dt30       = compute_30d_daytype_metrics(_end_iso, data_end=_data_end)
+    cone_at    = compute_alltime_cone_metrics(_end_iso, data_end=_data_end)
+    cone14_at  = compute_alltime_cone_14d_metrics(_end_iso, data_end=_data_end)
+    dt_at      = compute_alltime_daytype_metrics(_end_iso, data_end=_data_end)
     _hl_art    = _load_daily_hl()
     _hl_meta   = _hl_art.get("calibration_meta", {})
     _hl_mtest  = _hl_meta.get("metrics", {})
@@ -7405,7 +7405,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # ── 7-day cone: regime distribution drift ────────────────────────────
     with st.expander("📐 7-day cone regime distribution drift", expanded=False):
         if cone_at and cone30:
-            _rolling30_r = compute_rolling_7d_series(_end_iso, days_back=30)
+            _rolling30_r = compute_rolling_7d_series(_end_iso, days_back=30, data_end=_data_end)
             if _rolling30_r is not None and not _rolling30_r.empty:
                 _rl = {0: "low vol", 1: "mid vol", 2: "high vol"}
                 _reg30_pct = _rolling30_r["regime"].value_counts(normalize=True).mul(100)
@@ -7484,10 +7484,10 @@ def render_retrain_dashboard():
     _rrd_raw    = _fetch_daily_raw()
     _rrd_de     = _rrd_raw.index.max().strftime("%Y-%m-%d") if not _rrd_raw.empty else None
     hl30    = compute_30d_daily_hl_metrics(_end_iso, data_end=_rrd_de)
-    cone30  = compute_30d_cone_metrics(_end_iso)
-    cone_at = compute_alltime_cone_metrics(_end_iso)
-    dt30    = compute_30d_daytype_metrics(_end_iso)
-    dt_at   = compute_alltime_daytype_metrics(_end_iso)
+    cone30  = compute_30d_cone_metrics(_end_iso, data_end=_rrd_de)
+    cone_at = compute_alltime_cone_metrics(_end_iso, data_end=_rrd_de)
+    dt30    = compute_30d_daytype_metrics(_end_iso, data_end=_rrd_de)
+    dt_at   = compute_alltime_daytype_metrics(_end_iso, data_end=_rrd_de)
     sigs    = compute_trend_signatures(_end_iso, data_end=_rrd_de) or {}
 
     # ── Age thresholds (days since train_end) ─────────────────────────────────
