@@ -369,7 +369,8 @@ def fetch_all_leading_indicators(daily_df_json: str) -> pd.DataFrame:
     frame (from _fetch_daily_raw) — used as cache key so the cache busts
     whenever new daily data arrives.
     """
-    daily_df = pd.read_json(daily_df_json, orient="split")
+    import io
+    daily_df = pd.read_json(io.StringIO(daily_df_json), orient="split")
     daily_df.index = pd.to_datetime(daily_df.index)
 
     ind = compute_price_indicators(daily_df)
