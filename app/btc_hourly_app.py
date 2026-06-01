@@ -15,6 +15,15 @@ warnings.filterwarnings("ignore")
 from datetime import datetime, timezone, timedelta, date as _date
 from pathlib import Path
 
+# Leading indicators module (same app/ directory)
+_APP_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_APP_DIR))
+try:
+    from leading_indicators import render_leading_indicators
+    _HAS_LEADING_INDICATORS = True
+except ImportError:
+    _HAS_LEADING_INDICATORS = False
+
 # Make the repo root importable so `from paths import …` works regardless
 # of the cwd from which Streamlit is launched.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -8698,14 +8707,15 @@ def render_explainability_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical | Retrain Status | MSTR Backtesting | Explainability
+# Tabs: Live | Historical | Retrain Status | MSTR Backtesting | Explainability | Leading Indicators
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_retrain, tab_mstr, tab_explain = st.tabs([
+tab_live, tab_hist, tab_retrain, tab_mstr, tab_explain, tab_leading = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
     "🔄 Retrain Status",
     "📊 MSTR Backtesting",
     "🧠 Explainability",
+    "📡 Leading Indicators",
 ])
 
 with tab_live:
@@ -8934,6 +8944,17 @@ with tab_mstr:
 
 with tab_explain:
     render_explainability_dashboard()
+
+with tab_leading:
+    if _HAS_LEADING_INDICATORS:
+        _li_daily_df = _fetch_daily_raw()
+        render_leading_indicators(_li_daily_df)
+    else:
+        st.error(
+            "Leading indicators module could not be loaded. "
+            "Ensure `app/leading_indicators.py` is present and dependencies "
+            "(scikit-learn, requests) are installed."
+        )
 
 # ─────────────────────── timer-driven re-run ──────────────────────────
 time.sleep(REFRESH_SECONDS)
