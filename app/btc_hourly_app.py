@@ -886,6 +886,9 @@ def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
         actual_l = (float(daily_df.loc[ts, "btc_low"])
                     if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_low"])
                     else np.nan)
+        actual_c = (float(daily_df.loc[ts, "btc_close"])
+                    if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_close"])
+                    else np.nan)
         rows.append(dict(
             target_date=ts,
             as_of_date=pred["as_of_date"],
@@ -894,6 +897,7 @@ def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
             pred_low =float(pred["pred_low"]),
             actual_high=actual_h,
             actual_low =actual_l,
+            actual_close=actual_c,
         ))
     return pd.DataFrame(rows)
 
@@ -2214,8 +2218,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     hi_breaks_5d = int(np.sum(hi_break[-window5:]))
     lo_breaks_5d = int(np.sum(lo_break[-window5:]))
 
-    # ── Consecutive return streak (using close_asof as daily close proxy) ─
-    closes = completed["close_asof"].values.astype(float)
+    # ── Consecutive return streak (actual close of each completed target bar) ─
+    # actual_close = btc_close of the target bar itself, NOT close_asof which is
+    # the preceding bar's close. Using close_asof lagged the streak by one bar.
+    closes = completed["actual_close"].dropna().values.astype(float)
     streak = 0
     if len(closes) >= 2:
         for k in range(len(closes) - 1, 0, -1):
