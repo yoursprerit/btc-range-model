@@ -76,14 +76,17 @@ feat_cols = A["feat_cols"]
 best_name = A.get("best_name","ridge")
 
 
-@st.cache_resource
-def _training_cutoffs():
+@st.cache_data(show_spinner=False)
+def _training_cutoffs(model_mtime: float = 0.0):
     """Return {model_label: train_end_date_or_None} for the 4 artefacts.
 
     Used by the historical-replay banner to warn the user when their
     picked date falls inside any model's training window — predictions
     for those dates are in-sample fit, not honest out-of-sample forecasts.
     Also returns "daily H/L test_start" for the OOS window boundary.
+
+    model_mtime is included as a cache key so the result invalidates
+    automatically whenever inference_assets_ct.joblib is updated.
     """
     out = {}
     # Hourly: stored as ISO datetime on newer artefacts; fall back to test_start.
@@ -123,6 +126,12 @@ def _training_cutoffs():
     return out
 
 
+def _cutoffs():
+    """Thin wrapper that passes current model mtime so cache auto-invalidates on retrain."""
+    mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
+    return _training_cutoffs(mtime)
+
+
 def render_replay_in_sample_warning(target_date):
     """If `target_date` falls inside any model's training window, show a
     yellow warning explaining the predictions on this date are in-sample
@@ -131,7 +140,7 @@ def render_replay_in_sample_warning(target_date):
         return
     td = pd.Timestamp(target_date).normalize()
     affected = []
-    for name, end in _training_cutoffs().items():
+    for name, end in _cutoffs().items():
         if end is not None and td <= end:
             affected.append(f"**{name}** (train ≤ {end.date()})")
     if affected:
@@ -164,7 +173,7 @@ with st.sidebar:
     # glance which version of each model is live in the UI.
     st.markdown("---")
     st.caption("**Model freshness** (`train_end`)")
-    for label, end in _training_cutoffs().items():
+    for label, end in _cutoffs().items():
         end_str = f"`{end.date()}`" if end is not None else "_unknown_"
         st.caption(f"&bull; {label}: {end_str}", unsafe_allow_html=True)
 
@@ -3682,7 +3691,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_f = bt_bull["stats"] if bt_bull else None
 
     # ── OOS stats dict (same shape as s_r / s_f so _period_cells reuses it) ──
-    cutoffs    = _training_cutoffs()
+    cutoffs    = _cutoffs()
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
     # Use the model's actual test_start so the OOS column covers all genuine OOS bars.
@@ -4364,7 +4373,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_r = bt_bear["stats"] if bt_bear else None
     s_f = bt_bull["stats"] if bt_bull else None
 
-    cutoffs   = _training_cutoffs()
+    cutoffs   = _cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
     _oos_ts   = cutoffs.get("daily H/L test_start")
@@ -7388,7 +7397,7 @@ def render_retrain_dashboard():
     _cone_meta = _cone_art.get("calibration_meta", {}) if _cone_art else {}
     _dt_art   = _load_day_type()
     _dt_meta  = _dt_art.get("calibration_meta", {}) if _dt_art else {}
-    cutoffs   = _training_cutoffs()
+    cutoffs   = _cutoffs()
 
     # ── 30-day & all-time performance (cache_data — shared with Live tab) ─────
     hl30    = compute_30d_daily_hl_metrics(_end_iso)
