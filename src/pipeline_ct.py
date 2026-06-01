@@ -110,7 +110,7 @@ def _flat(df, name):
 
 
 def fetch_yahoo_macro():
-    syms = {"eth": "ETH-USD", "spx": "^GSPC", "ndx": "^IXIC",
+    syms = {"btc_yf": "BTC-USD", "eth": "ETH-USD", "spx": "^GSPC", "ndx": "^IXIC",
             "vix": "^VIX", "gold": "GC=F", "dxy": "DX-Y.NYB", "tnx": "^TNX"}
     parts = []
     for name, sym in syms.items():
@@ -168,12 +168,54 @@ def fetch_fng():
         return pd.Series(dtype=float, name="fng")
 
 
+def fetch_coinbase_daily(start_str: str, end_str: str) -> pd.Series:
+    """Fetch BTC-USD daily closes from the Coinbase Exchange public API.
+
+    Uses the legacy exchange endpoint which requires no authentication.
+    Paginates in 299-day chunks (300-candle API limit).
+    Returns a Series indexed by UTC calendar date, named 'coinbase_close'.
+    """
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    rows: list = []
+    cur = pd.Timestamp(start_str)
+    end = pd.Timestamp(end_str)
+    while cur <= end:
+        chunk_end = min(cur + pd.Timedelta(days=299), end)
+        params = {
+            "granularity": 86400,
+            "start": cur.isoformat() + "Z",
+            "end":   (chunk_end + pd.Timedelta(days=1)).isoformat() + "Z",
+        }
+        try:
+            r = requests.get(CB_URL, params=params, timeout=30)
+            if r.status_code == 200:
+                rows.extend(r.json())
+            else:
+                print(f"   ! Coinbase API {r.status_code}: {r.text[:80]}")
+        except Exception as exc:
+            print(f"   ! Coinbase fetch error: {exc}")
+        cur = chunk_end + pd.Timedelta(days=1)
+        time.sleep(0.35)
+    if not rows:
+        print("   ! Coinbase: no data — cb_premium features will be NaN")
+        return pd.Series(dtype=float, name="coinbase_close")
+    # API returns [unix_time, low, high, open, close, volume]
+    tmp = pd.DataFrame(rows, columns=["ts", "low", "high", "open", "close", "volume"])
+    tmp["date"] = pd.to_datetime(tmp["ts"], unit="s").dt.normalize()
+    tmp = tmp.drop_duplicates("date").set_index("date").sort_index()
+    print(f"   coinbase_daily: {len(tmp)} rows  "
+          f"{tmp.index.min().date()} → {tmp.index.max().date()}")
+    return tmp["close"].rename("coinbase_close")
+
+
 print("\n>>> Fetching Yahoo macro …")
 macro = fetch_yahoo_macro()
 print("\n>>> Fetching blockchain.info on-chain …")
 oc = fetch_blockchain_info()
 print("\n>>> Fetching Fear & Greed …")
 fng = fetch_fng()
+print("\n>>> Fetching Coinbase daily …")
+coinbase_daily = fetch_coinbase_daily(START, END)
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -188,6 +230,7 @@ df = btc_daily.copy()
 df = df.join(macro, how="left")
 df = df.join(oc, how="left")
 df = df.join(fng.to_frame(), how="left")
+df = df.join(coinbase_daily.to_frame("coinbase_close"), how="left")
 df = df.sort_index()
 df = df.loc[df["btc_close"].notna()]
 df = df.ffill(limit=5)
@@ -279,6 +322,15 @@ for col in oc_cols:
     f[f"{col}_d1"] = sl.diff(1)
     f[f"{col}_d7"] = sl.diff(7)
     f[f"{col}_z30"] = (sl - sl.rolling(30).mean()) / sl.rolling(30).std()
+
+# Coinbase premium vs Yahoo BTC-USD reference (institutional demand signal)
+_cb_close  = df.get("coinbase_close")
+_yahoo_ref = df.get("btc_yf_close")
+if _cb_close is not None and _yahoo_ref is not None and _cb_close.notna().any():
+    _prem = (_cb_close - _yahoo_ref) / _yahoo_ref * 100
+    f["cb_premium"]     = _prem
+    f["cb_premium_ma3"] = _prem.rolling(3).mean()
+    f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
 # Smoothed past-target features (3- and 7-day EMAs of realised y_hi/y_lo).
 # Replaces the previous noisy single-day lag (`y_hi_lag1` etc.) which over-

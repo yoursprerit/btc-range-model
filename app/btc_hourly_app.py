@@ -15,6 +15,15 @@ warnings.filterwarnings("ignore")
 from datetime import datetime, timezone, timedelta, date as _date
 from pathlib import Path
 
+# Leading indicators module (same app/ directory)
+_APP_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_APP_DIR))
+try:
+    from leading_indicators import render_leading_indicators
+    _HAS_LEADING_INDICATORS = True
+except ImportError:
+    _HAS_LEADING_INDICATORS = False
+
 # Make the repo root importable so `from paths import …` works regardless
 # of the cwd from which Streamlit is launched.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -76,13 +85,17 @@ feat_cols = A["feat_cols"]
 best_name = A.get("best_name","ridge")
 
 
-@st.cache_resource
-def _training_cutoffs():
+@st.cache_data(show_spinner=False)
+def _training_cutoffs(model_mtime: float = 0.0):
     """Return {model_label: train_end_date_or_None} for the 4 artefacts.
 
     Used by the historical-replay banner to warn the user when their
     picked date falls inside any model's training window — predictions
     for those dates are in-sample fit, not honest out-of-sample forecasts.
+    Also returns "daily H/L test_start" for the OOS window boundary.
+
+    model_mtime is included as a cache key so the result invalidates
+    automatically whenever inference_assets_ct.joblib is updated.
     """
     out = {}
     # Hourly: stored as ISO datetime on newer artefacts; fall back to test_start.
@@ -93,8 +106,11 @@ def _training_cutoffs():
         try:
             meta = joblib.load(DAILY_MODEL_CT).get("calibration_meta", {})
             out["daily H/L"] = pd.Timestamp(meta.get("train_end")) if meta.get("train_end") else None
+            out["daily H/L test_start"] = (pd.Timestamp(meta.get("test_start"))
+                                           if meta.get("test_start") else None)
         except Exception:
             out["daily H/L"] = None
+            out["daily H/L test_start"] = None
     # 7-day cone
     if os.path.exists(str(CONE_7D_MODEL)):
         try:
@@ -119,6 +135,12 @@ def _training_cutoffs():
     return out
 
 
+def _cutoffs():
+    """Thin wrapper that passes current model mtime so cache auto-invalidates on retrain."""
+    mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
+    return _training_cutoffs(mtime)
+
+
 def render_replay_in_sample_warning(target_date):
     """If `target_date` falls inside any model's training window, show a
     yellow warning explaining the predictions on this date are in-sample
@@ -127,7 +149,7 @@ def render_replay_in_sample_warning(target_date):
         return
     td = pd.Timestamp(target_date).normalize()
     affected = []
-    for name, end in _training_cutoffs().items():
+    for name, end in _cutoffs().items():
         if end is not None and td <= end:
             affected.append(f"**{name}** (train ≤ {end.date()})")
     if affected:
@@ -160,7 +182,7 @@ with st.sidebar:
     # glance which version of each model is live in the UI.
     st.markdown("---")
     st.caption("**Model freshness** (`train_end`)")
-    for label, end in _training_cutoffs().items():
+    for label, end in _cutoffs().items():
         end_str = f"`{end.date()}`" if end is not None else "_unknown_"
         st.caption(f"&bull; {label}: {end_str}", unsafe_allow_html=True)
 
@@ -174,6 +196,37 @@ def _flat(df, name):
     if idx.tz is not None: idx = idx.tz_convert("UTC").tz_localize(None)
     df.index = idx
     return df[~df.index.duplicated(keep="last")].sort_index()
+
+@st.cache_data(ttl=3600*6, show_spinner=False)
+def _fetch_coinbase_hourly():
+    """Fetch up to 365 days of hourly Coinbase BTC-USD close prices (paginated).
+    Cached 6 h so the 30-request pagination doesn't run on every data refresh."""
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    end_ts   = pd.Timestamp.utcnow().floor("h")
+    start_ts = end_ts - pd.Timedelta(days=365)
+    rows: list = []
+    cur = start_ts
+    while cur < end_ts:
+        chunk_end = min(cur + pd.Timedelta(hours=299), end_ts)
+        try:
+            r = requests.get(CB_URL, params={
+                "granularity": 3600,
+                "start": cur.isoformat() + "Z",
+                "end":   (chunk_end + pd.Timedelta(hours=1)).isoformat() + "Z",
+            }, timeout=20)
+            if r.status_code == 200:
+                rows.extend(r.json())
+        except Exception:
+            pass
+        cur = chunk_end + pd.Timedelta(hours=1)
+        time.sleep(0.12)
+    if not rows:
+        return pd.Series(dtype=float, name="coinbase_close")
+    cb = pd.DataFrame(rows, columns=["ts", "low", "high", "open", "close", "volume"])
+    cb.index = pd.to_datetime(cb["ts"], unit="s").dt.floor("h")
+    cb = cb[~cb.index.duplicated(keep="last")].sort_index()
+    return cb["close"].astype(float).rename("coinbase_close")
+
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_data():
@@ -234,6 +287,11 @@ def fetch_data():
         df["fng"] = 50  # neutral fallback
     df["fng_d24"] = pd.Series(df["fng"].values, index=df.index).diff(24).values
     df["fng_d7"]  = pd.Series(df["fng"].values, index=df.index).diff(24*7).values
+
+    # Coinbase hourly premium
+    cb_close = _fetch_coinbase_hourly()
+    if cb_close.notna().any():
+        df = df.join(cb_close.reindex(df.index), how="left")
     return df
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -463,15 +521,22 @@ def _fetch_binance_hourly(days_back=None):
 
 
 @st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
-def _fetch_daily_raw():
-    """Build the daily-bar DataFrame anchored at 12:00 UTC.
+def _fetch_daily_raw_inner(_bar_start_iso: str):
+    """Implementation of the daily-bar fetch.  The `_bar_start_iso` parameter is
+    NOT used inside the function body — it is a cache-busting key that equals the
+    ISO date of the 12:00-UTC bar currently open (i.e. floor((now_utc − 12h).date())).
+    It changes at exactly 12:00 UTC (7am CT) each day, so the cache is invalidated
+    on the very first page-load after each bar closes rather than waiting up to 6
+    arbitrary hours for the TTL to expire.
+
+    Build the daily-bar DataFrame anchored at 12:00 UTC.
 
       - BTC OHLCV: rebucketed from Binance hourly into 12:00→12:00 UTC bars.
       - Macro (Yahoo daily, indexed by calendar date): SPX/NDX/VIX/Gold/DXY/TNX/ETH.
         Joined to bar D using calendar date D — macro closes for D are
         published by ~21:00 UTC on day D, well before bar D ends (D+1 12:00).
       - On-chain (blockchain.info, daily UTC): same calendar-date join.
-    Cached 6 h."""
+    Cached 6 h (per bar-start key)."""
     # 1. BTC 12:00-UTC daily bars (full history → any picked date is fully featured)
     btc_hourly = _fetch_binance_hourly()
     if btc_hourly.empty:
@@ -527,10 +592,50 @@ def _fetch_daily_raw():
             pass
     oc = pd.concat(oc_parts, axis=1) if oc_parts else pd.DataFrame()
 
-    # 4. Join — bar D's aux data comes from calendar date D
+    # 5. Coinbase Premium (public Coinbase Exchange API, no auth)
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    cb_rows: list = []
+    cb_cur = pd.Timestamp(START)
+    cb_end = pd.Timestamp(END)
+    while cb_cur <= cb_end:
+        cb_chunk = min(cb_cur + pd.Timedelta(days=299), cb_end)
+        try:
+            r_cb = requests.get(CB_URL, params={
+                "granularity": 86400,
+                "start": cb_cur.isoformat() + "Z",
+                "end":   (cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
+            }, timeout=30)
+            if r_cb.status_code == 200:
+                cb_rows.extend(r_cb.json())
+        except Exception:
+            pass
+        cb_cur = cb_chunk + pd.Timedelta(days=1)
+        time.sleep(0.2)
+    if cb_rows:
+        _cb = pd.DataFrame(cb_rows, columns=["ts", "low", "high", "open", "close", "volume"])
+        _cb["date"] = pd.to_datetime(_cb["ts"], unit="s").dt.normalize()
+        _cb = _cb.drop_duplicates("date").set_index("date").sort_index()
+        coinbase_close = _cb["close"].rename("coinbase_close")
+    else:
+        coinbase_close = pd.Series(dtype=float, name="coinbase_close")
+
+    # 6. Join — bar D's aux data comes from calendar date D
     df = btc_daily.join(mkt, how="left").join(oc, how="left").sort_index()
+    if coinbase_close.notna().any():
+        df = df.join(coinbase_close.to_frame("coinbase_close"), how="left")
     df = df.loc[df["btc_close"].notna()].ffill(limit=5)
     return df
+
+
+def _fetch_daily_raw():
+    """Public wrapper — calls _fetch_daily_raw_inner with the current bar-start ISO
+    date so the cache invalidates automatically at each 12:00 UTC (7am CT) boundary.
+    All call sites use this function unchanged; only the inner cache key changes."""
+    _bar_start_iso = (
+        (datetime.now(timezone.utc) - timedelta(hours=ANCHOR_HOUR_UTC))
+        .date().isoformat()
+    )
+    return _fetch_daily_raw_inner(_bar_start_iso)
 
 
 @st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
@@ -643,6 +748,13 @@ def compute_daily_forecast(target_date_iso, data_end=None):
     sma50 = c.rolling(50).mean()
     f["below_sma50"] = (c < sma50).astype(float)
     f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
+    # Coinbase Premium
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _cb = df["coinbase_close"]; _ref = df["btc_close"]
+        _prem = (_cb - _ref) / _ref * 100
+        f["cb_premium"]     = _prem
+        f["cb_premium_ma3"] = _prem.rolling(3).mean()
+        f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     f = f.replace([np.inf,-np.inf], np.nan)
     F = f[fc].dropna()
@@ -740,11 +852,19 @@ def compute_daily_forecast(target_date_iso, data_end=None):
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
-def compute_daily_series(end_target_date_iso, days_back=7):
+def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
     """Build a series of (pred_high, pred_low, actual_high, actual_low) for the
     last `days_back`+1 target days ending at `end_target_date`. Each prediction
     is generated by `compute_daily_forecast(target_date)`, which internally
     uses data through target − 1 day (i.e. through target 7am CT).
+
+    `data_end` is NOT used in the function body — it is a cache-busting key,
+    exactly like the same parameter on `compute_daily_forecast`.  Without it,
+    this function's own 6-hour TTL runs independently of `_fetch_daily_raw()`'s
+    TTL: when `_fetch_daily_raw()` gains a new bar the stale result here would
+    persist for up to another 6 hours, causing flat predictions and missing
+    actual H/L for the just-completed bar.  Callers must pass
+    ``_fetch_daily_raw().index.max()`` so the two caches stay in sync.
 
     Cache TTL: 6 hours — matches _fetch_daily_raw() so actual H/L values
     (which come from that layer) are never staler than the raw data itself.
@@ -1616,19 +1736,26 @@ def build_features(df):
     f["dow_sin"]=np.sin(2*np.pi*dow/7); f["dow_cos"]=np.cos(2*np.pi*dow/7)
     f["weekend"]=(dow>=5).astype(int)
     f["us_open"]=((hr>=13)&(hr<=20)&(dow<5)).astype(int)
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _prem = (df["coinbase_close"] - df["btc_close"]) / df["btc_close"] * 100
+        f["cb_premium"]     = _prem
+        f["cb_premium_ma3"] = _prem.rolling(3).mean()
+        f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
     return f
 
 # ═══════════════════ 30-day look-back metric helpers ════════════════════
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def compute_30d_daily_hl_metrics(end_date_iso):
+def compute_30d_daily_hl_metrics(end_date_iso, data_end=None):
     """30-day look-back MAPE, hit-rate and direction accuracy for the daily H/L model.
 
     Uses ``compute_daily_series`` (already cached) to pull the last 30 target
     bars with realised actuals, then computes per-level metrics.
     Returns None if fewer than 5 bars are available.
+
+    `data_end` is a cache-busting key passed through to ``compute_daily_series``.
     """
-    series = compute_daily_series(end_date_iso, days_back=30)
+    series = compute_daily_series(end_date_iso, days_back=30, data_end=data_end)
     if series is None or series.empty:
         return None
     have = series["actual_high"].notna() & series["actual_low"].notna()
@@ -2022,7 +2149,7 @@ def _compute_intraday_signal(intraday: dict, daily_fc: dict) -> dict:
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
-def compute_trend_signatures(target_date_iso: str):
+def compute_trend_signatures(target_date_iso: str, data_end=None):
     """Compute trend signature signals for the dashboard alert card.
 
     Cache TTL: 6 hours — matches _fetch_daily_raw() so signals refresh as
@@ -2031,26 +2158,28 @@ def compute_trend_signatures(target_date_iso: str):
     (the daily bar boundary), so a new bar's data is picked up within 6 hours
     of bar close rather than being held for up to 24 hours.
 
+    `data_end` is a cache-busting key passed through to ``compute_daily_series``.
+
     Uses the last 10 completed daily bars (bars with realized actual H/L)
     to compute four prediction-vs-actual divergence signals:
 
     DOWNTREND signals (statistically significant, p < 0.001):
       D1  lo_breaks_3d  — actual low broke predicted low ≥ 2 of last 3 days
-      D2  err_hi_ma3    — 3d avg (actual_high − pred_high)/close < −1%
+      D2  err_hi_ma3    — 3d avg (actual_high − pred_high)/close < −0.75%
       D3  exhaustion    — first lo_break after streak of ≥ 3 hi_breaks (reversal canary)
 
     UPTREND signals (p = 0.022):
-      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.5%
+      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.7%
 
     V-Reversal special signal:
-      V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 5% today
+      V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 3% today
 
     Returns a dict with all computed values and trigger flags.
     Returns None if fewer than 5 completed bars are available.
     """
-    # Pull last 45 completed daily bars — 30 needed for MA30, 10 for clean_10d,
+    # Pull last 45 completed daily bars — 30 needed for MA30, 7 for clean_10d,
     # plus buffer; core rolling metrics still use only last 3/5 bars.
-    series = compute_daily_series(target_date_iso, days_back=45)
+    series = compute_daily_series(target_date_iso, days_back=45, data_end=data_end)
     if series is None or series.empty:
         return None
     completed = series[series["actual_high"].notna() & series["actual_low"].notna()].copy()
@@ -2113,7 +2242,7 @@ def compute_trend_signatures(target_date_iso: str):
             exhaustion_active = True
 
     # ── V-reversal capitulation: lo_err spike today ────────────────────
-    # Last bar's single-day lo error > 5% (massive undershoot = capitulation)
+    # Last bar's single-day lo error > 3% (massive undershoot = capitulation)
     last_lo_err = float(err_lo[-1])
     last_hi_err = float(err_hi[-1])
     # Downtrend composite score — first term normalised by rolling 30-bar mean
@@ -2126,12 +2255,12 @@ def compute_trend_signatures(target_date_iso: str):
         float(err_lo_ma3)   / max(abs(err_lo_ma3), 0.1) * 0.20 +
         float(lo_break[-1]) * 0.20
     )
-    capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 5.0)
-    v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 5.0)
+    capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 3.0)
+    v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 3.0)
 
     # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
     # Re-compute D1/D2 signal for every historical bar so we can check
-    # whether any fired in the 10 bars preceding the current bar (clean_10d).
+    # whether any fired in the 7 bars preceding the current bar (clean_10d).
     _d1_hist = np.zeros(n, dtype=bool)
     _d2_hist = np.zeros(n, dtype=bool)
     for _i in range(n):
@@ -2141,7 +2270,7 @@ def compute_trend_signatures(target_date_iso: str):
         _hb3_i  = int(np.sum(hi_break[_s: _i + 1]))
         _lb3_i  = int(np.sum(lo_break[_s: _i + 1]))
         _d1_hist[_i] = (_lb3_i >= 2) and (_elma_i > 0.5)
-        _d2_hist[_i] = (_ehma_i < -1.0)
+        _d2_hist[_i] = (_ehma_i < -0.75)
     # 30-bar rolling mean of close prices (close_asof = the daily close proxy)
     ma30_window = min(30, n)
     ma30_value  = float(np.mean(c[-ma30_window:]))
@@ -2155,9 +2284,9 @@ def compute_trend_signatures(target_date_iso: str):
         ma30_5d_ago = ma30_value                   # insufficient data → assume flat
     ma30_slope_pos = ma30_value > ma30_5d_ago
     bull_regime = above_ma30 and ma30_slope_pos
-    # clean_10d: zero D1 or D2 fires in the 10 bars *before* the current bar
-    if n >= 11:
-        clean_10d = not bool(np.any(_d1_hist[-11:-1] | _d2_hist[-11:-1]))
+    # clean_10d: zero D1 or D2 fires in the 7 bars *before* the current bar
+    if n >= 8:
+        clean_10d = not bool(np.any(_d1_hist[-8:-1] | _d2_hist[-8:-1]))
     elif n >= 2:
         clean_10d = not bool(np.any(_d1_hist[:-1] | _d2_hist[:-1]))
     else:
@@ -2165,13 +2294,13 @@ def compute_trend_signatures(target_date_iso: str):
 
     # ── Signature trigger flags ─────────────────────────────────────────
     d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
-    d2_triggered  = (err_hi_ma3 < -1.0)
+    d2_triggered  = (err_hi_ma3 < -0.75)
     d3_triggered  = exhaustion_active
-    u1_triggered  = (err_hi_ma3 > 0.5) and (hi_breaks_3d >= 2)
+    u1_triggered  = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
-    # V-gate: V-reversal (dn_score>0.8 & err_lo>5%) within last 3 bars also satisfies trend gate.
+    # V-gate: V-reversal (dn_score>0.8 & err_lo>3%) within last 3 bars also satisfies trend gate.
     v_gate_ok     = v_reversal_likely or capitulation_signal
     tf1_triggered = u1_triggered and (above_ma30 or clean_10d or v_gate_ok)
 
@@ -2351,6 +2480,13 @@ def _build_ct_batch_predictions():
     sma50 = c.rolling(50).mean()
     f["below_sma50"]    = (c < sma50).astype(float)
     f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
+    # Coinbase Premium
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _cb = df["coinbase_close"]; _ref = df["btc_close"]
+        _prem = (_cb - _ref) / _ref * 100
+        f["cb_premium"]     = _prem
+        f["cb_premium_ma3"] = _prem.rolling(3).mean()
+        f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     fc = AD["feat_cols"]
     f  = f.replace([np.inf, -np.inf], np.nan)
@@ -2567,6 +2703,34 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     sma50 = c.rolling(50).mean()
     feat["below_sma50"]    = (c < sma50).astype(float)
     feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
+    # Coinbase Premium (fetch directly via public API)
+    _cb_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    _cb_rows: list = []
+    _cb_cur = pd.Timestamp(FETCH_START)
+    _cb_end = pd.Timestamp(FETCH_END)
+    while _cb_cur <= _cb_end:
+        _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
+        try:
+            _r = requests.get(_cb_url, params={
+                "granularity": 86400,
+                "start": _cb_cur.isoformat() + "Z",
+                "end":   (_cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
+            }, timeout=30)
+            if _r.status_code == 200:
+                _cb_rows.extend(_r.json())
+        except Exception:
+            pass
+        _cb_cur = _cb_chunk + pd.Timedelta(days=1)
+        time.sleep(0.2)
+    if _cb_rows:
+        _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
+        _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
+        _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
+        _cb_close = _cb_df["close"].reindex(df.index)
+        _prem = (_cb_close - df["btc_close"]) / df["btc_close"] * 100
+        feat["cb_premium"]     = _prem
+        feat["cb_premium_ma3"] = _prem.rolling(3).mean()
+        feat["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     fc = AD["feat_cols"]
     feat = feat.replace([np.inf, -np.inf], np.nan)
@@ -2622,10 +2786,8 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     return preds_df, raw_df
 
 
-# Fixed backtest period end dates — locked to the dates established on 2026-05-28.
-# Only the OOS period rolls daily; these never change until the model is retrained.
-_BT_BEAR_END_LOCKED = "2026-05-28"
-_BT_FULL_END_LOCKED = "2026-05-28"
+# Bear and Full end dates are derived from today at render time (_bt_end).
+# Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
 
 
 def run_full_period_backtest(end_date_iso: str,
@@ -2693,9 +2855,9 @@ def run_full_period_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -2718,12 +2880,12 @@ def run_full_period_backtest(end_date_iso: str,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
     # dn_score replicates the live signal formula; v_rev_bar fires when a
-    # single bar shows capitulation (dn_score > 0.8 AND err_lo > 5%).
+    # single bar shows capitulation (dn_score > 0.8 AND err_lo > 3%).
     # v_recent[i] = True if v_rev_bar fired within the last 3 bars — bridges
     # the 1-2 bar lag before U1 co-fires after the bounce starts.
     # 30-bar rolling mean keeps the normaliser stable across regimes.
@@ -2741,7 +2903,7 @@ def run_full_period_backtest(end_date_iso: str,
             (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
             float(lo_brk[i])                                 * 0.20
         )
-    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
@@ -2960,9 +3122,9 @@ def run_mstr_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -2985,7 +3147,7 @@ def run_mstr_backtest(end_date_iso: str,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     _DN_NORM_W    = 30
@@ -3001,7 +3163,7 @@ def run_mstr_backtest(end_date_iso: str,
             (elma3[i]  / max(abs(elma3[i]), 0.10))       * 0.20 +
             float(lo_brk[i])                             * 0.20
         )
-    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
@@ -3138,11 +3300,11 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     """Run a trading strategy backtest on a configurable window.
 
     Entry (both TF1 and TF2):
-        U1 active (err_hi_ma3 > +0.5% AND hi_breaks_3d ≥ 2)
-        AND (BTC > MA30  OR  clean_10d)
+        U1 active (err_hi_ma3 > +0.7% AND hi_breaks_3d ≥ 2)
+        AND (BTC > MA30  OR  clean_7d  OR  V-gate)
 
     Exit — TF1 (conservative, bear-optimised):
-        D2 (err_hi_ma3 < −1%)  OR  D3 (exhaustion canary)
+        D2 (err_hi_ma3 < −0.75%)  OR  D3 (exhaustion canary)
 
     Exit — TF2 (regime-adaptive, default):
         BULL regime (above_ma30 AND MA30 slope > 0) → exit D3 only (patient)
@@ -3208,9 +3370,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -3236,7 +3398,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
@@ -3255,7 +3417,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
             (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
             float(lo_brk[i])                                 * 0.20
         )
-    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 5.0)
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
@@ -3453,7 +3615,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active</b> — model's predicted highs are being beaten consistently<br>
           <span style='color:#3b82f6; font-size:11px;'>
-            err_hi_ma3 &gt; +0.5% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -3466,13 +3628,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
             <br>
-            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 10d</span>
-            &nbsp; No D1 or D2 signal in the prior 10 bars (no recent bearish fingerprint)
+            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 signal in the prior 7 bars (no recent bearish fingerprint)
             <br>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; Capitulation spike detected within the last 3 bars
             <span style='color:#7c3aed; font-size:11px;'>
-              (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 5%)
+              (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
           </div>
         </td>
@@ -3609,10 +3771,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_f = bt_bull["stats"] if bt_bull else None
 
     # ── OOS stats dict (same shape as s_r / s_f so _period_cells reuses it) ──
-    OOS_START  = pd.Timestamp("2026-03-01")   # H/L test_start (after val embargo)
-    cutoffs    = _training_cutoffs()
+    cutoffs    = _cutoffs()
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
+    # Use the model's actual test_start so the OOS column covers all genuine OOS bars.
+    _oos_ts    = cutoffs.get("daily H/L test_start")
+    OOS_START  = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
     s_oos      = None
     bt_oos     = None
     if bt_full_oos is not None:
@@ -4141,7 +4305,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.5% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -4154,12 +4318,12 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
             <br>
-            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>Clean 10d</span>
-            &nbsp; No D1 or D2 on BTC in prior 10 bars
+            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
-            <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 5%)</span>
+            <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
           </div>
         </td>
       </tr>
@@ -4289,10 +4453,11 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_r = bt_bear["stats"] if bt_bear else None
     s_f = bt_bull["stats"] if bt_bull else None
 
-    OOS_START = pd.Timestamp("2026-03-01")
-    cutoffs   = _training_cutoffs()
+    cutoffs   = _cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
+    _oos_ts   = cutoffs.get("daily H/L test_start")
+    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
     s_oos = None; bt_oos = None
 
     if bt_full_oos is not None:
@@ -4841,7 +5006,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3      = sigs.get("exhaustion_active", False)
-    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -1.0) and not _bull_regime
+    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
     _exit_signal  = _exit_d3 or _exit_d2
 
     if _exit_signal and _entry_signal:
@@ -4864,7 +5029,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         _action_label = "ENTRY SIGNAL ACTIVE"
         _entry_gates  = []
         if sigs["above_ma30"]: _entry_gates.append("↑MA30")
-        if sigs["clean_10d"]:  _entry_gates.append("Clean 10d")
+        if sigs["clean_10d"]:  _entry_gates.append("Clean 7d")
         if _v_gate_ok:         _entry_gates.append("⚡V-reversal")
         _action_sub   = (
             f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
@@ -4914,7 +5079,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     # Intraday V-gate watch note — advisory only, no premature action possible
     if (intraday is not None
             and intraday.get("lo_break_intra", False)
-            and intraday.get("err_lo_intra", 0) > 5.0
+            and intraday.get("err_lo_intra", 0) > 3.0
             and intraday.get("pct_through", 0) >= 0.40
             and not sigs.get("v_reversal_likely", False)
             and not sigs.get("capitulation_signal", False)):
@@ -5041,7 +5206,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card D2
     d2_rows = [
-        ("err_hi 3d avg",     f"{sigs['err_hi_ma3']:+.2f}%", "< −1.0%", sigs['err_hi_ma3'] < -1.0),
+        ("err_hi 3d avg",     f"{sigs['err_hi_ma3']:+.2f}%", "< −0.75%", sigs['err_hi_ma3'] < -0.75),
         ("Hi-band breaks (3d)",f"{sigs['hi_breaks_3d']}/3",  "< 1",     sigs['hi_breaks_3d'] < 1),
     ]
     with col2:
@@ -5109,7 +5274,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card U1
     u1_rows = [
-        ("err_hi 3d avg",      f"{sigs['err_hi_ma3']:+.2f}%","  > +0.5%", sigs['err_hi_ma3'] > 0.5),
+        ("err_hi 3d avg",      f"{sigs['err_hi_ma3']:+.2f}%","  > +0.7%", sigs['err_hi_ma3'] > 0.7),
         ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3", "≥ 2",       sigs['hi_breaks_3d'] >= 2),
         ("Current streak",      d3_streak_str,                "> 0",       sigs['streak'] > 0),
     ]
@@ -5164,18 +5329,18 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
          f"{_regime_label}  →  Exit mode: {_exit_mode}",
          "≠ BEAR",
          _bull_regime),
-        ("Clean 10d (no D1/D2)",
-         "YES — zero D1/D2 fires in prior 10 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
+        ("Clean 7d (no D1/D2)",
+         "YES — zero D1/D2 fires in prior 7 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
          "= YES",
          sigs["clean_10d"]),
         ("⚡ V-reversal (3-bar gate)",
          ("ACTIVE — capitulation within 3 bars, dn_score={:.2f}, err_lo={:+.1f}%"
           .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
          if sigs.get("v_reversal_likely") or sigs.get("capitulation_signal")
-         else "○ not active — no recent capitulation spike (err_lo < 5% or dn_score < 0.8)",
+         else "○ not active — no recent capitulation spike (err_lo < 3% or dn_score < 0.8)",
          "= ACTIVE",
          sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)),
-        ("Entry filter (↑MA30 OR clean10d OR V-rev)",
+        ("Entry filter (↑MA30 OR clean7d OR V-rev)",
          "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]
                        or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal"))
          else "FAIL ✗",
@@ -5202,7 +5367,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
-                "V-gate fires 1–3 bars after capitulation (dn_score &gt; 0.8, err_lo &gt; 5%) "
+                "V-gate fires 1–3 bars after capitulation (dn_score &gt; 0.8, err_lo &gt; 3%) "
                 "— bridges the gap before U1 co-fires on the recovery bounce. "
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
@@ -5234,7 +5399,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             f"Today's actual low <b>massively overshot</b> the predicted low "
             f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
             f"This is the <b>V-reversal capitulation pattern</b>. "
-            f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.5% AND "
+            f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.7% AND "
             f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
             f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
         )
@@ -5245,7 +5410,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         v_body  = (
             f"No capitulation signal today (dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
             f"err_lo = <b>{sigs.get('last_lo_err', 0):+.2f}%</b>). "
-            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 5.0% on the same bar. "
+            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on the same bar. "
             f"<br><br>"
             f"<b>What the V-gate does:</b> When a capitulation spike fires, the strategy can enter "
             f"on U1 within the next 3 bars even if BTC is below MA30 and clean_10d fails — "
@@ -5310,7 +5475,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 | `hi_breaks_3d` | Count of days in last 3 where actual H > pred H | Repeated upside breakouts → momentum building |
 | `lo_breaks_3d` | Count of days in last 3 where actual L < pred L | Repeated downside breaks → trend deteriorating |
 | `MA30` | Rolling 30-bar mean of daily close prices | Trend direction proxy (above = bullish context) |
-| `clean_10d` | True if zero D1 or D2 fires in prior 10 bars | No recent bearish regime fingerprint |
+| `clean_10d` | True if zero D1 or D2 fires in prior 7 bars | No recent bearish regime fingerprint |
 
 **Alert levels:**
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
@@ -5321,9 +5486,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
 **TF2 + V-Gate — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
-- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 10 days **OR** ⚡ V-reversal within 3 bars)
+- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 7 days **OR** ⚡ V-reversal within 3 bars)
 - **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
-- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −1%) or D3 (defensive — cut quickly)
+- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −0.75%) or D3 (defensive — cut quickly)
 - **2-year backtest** (May 24–May 26): +87.9% return · Sharpe 0.90 · Max DD −23.6% · Alpha +$64,594 vs B&H
 - **Bear period OOS** (Sep 25–May 26): +$30k alpha vs B&H · V-gate adds post-crash entries before MA30 cross
 
@@ -5376,15 +5541,15 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_end      = target_date.strftime("%Y-%m-%d")
     # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
-    # Bear / Bull / Full Market use locked end dates (established 2026-05-28) and a
-    # no-TTL cache so results are computed once per model version, not on every load.
-    # Only the OOS period rolls daily; it calls run_full_period_backtest directly.
-    _bt_bear     = _run_fixed_period_backtest(_BT_BEAR_END_LOCKED, "2025-06-01",  _model_mtime)
+    # Bear/Full end dates roll daily with _bt_end so results always include today.
+    # Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
+    # OOS is a slice of _bt_full_oos starting at the model's test_start.
+    _bt_bear     = _run_fixed_period_backtest(_bt_end, "2025-06-01",  _model_mtime)
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime)
-    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # rolls daily
-    _bt_full     = _run_fixed_period_backtest(_BT_FULL_END_LOCKED,  "2024-06-05", _model_mtime)
+    _bt_full_oos = run_full_period_backtest(_bt_end, model_mtime=_model_mtime)  # OOS slice
+    _bt_full     = _run_fixed_period_backtest(_bt_end,              "2024-06-05", _model_mtime)
     _chart_key   = "live" if is_live else "hist"
-    sigs         = compute_trend_signatures(_bt_end)
+    sigs         = compute_trend_signatures(_bt_end, data_end=_data_end)
 
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
@@ -5969,7 +6134,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         else:
             ref = as_of_t.replace(tzinfo=timezone.utc) if as_of_t.tzinfo is None else as_of_t
             end_target = pd.Timestamp((ref - timedelta(hours=ANCHOR_HOUR_UTC)).date())
-    series = compute_daily_series(end_target.strftime("%Y-%m-%d"), days_back=7)
+    series = compute_daily_series(end_target.strftime("%Y-%m-%d"), days_back=7,
+                                  data_end=_data_end)
 
     if len(series) > 0:
         st.markdown(
@@ -6738,7 +6904,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     # Pre-fetch other model results (cached, so instant on subsequent renders)
     _end_iso   = target_date.strftime("%Y-%m-%d")
-    hl30       = compute_30d_daily_hl_metrics(_end_iso)
+    hl30       = compute_30d_daily_hl_metrics(_end_iso, data_end=_data_end)
     cone30     = compute_30d_cone_metrics(_end_iso)
     cone14_30  = compute_30d_cone_14d_metrics(_end_iso)
     dt30       = compute_30d_daytype_metrics(_end_iso)
@@ -7203,7 +7369,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _mu_hi_ref = float(_hl_art.get("mu_hi", 0))
         _mu_lo_ref = float(_hl_art.get("mu_lo", 0))
         if hl30 and _mu_hi_ref and _mu_lo_ref:
-            _ds30 = compute_daily_series(_end_iso, days_back=30)
+            _ds30 = compute_daily_series(_end_iso, days_back=30, data_end=_data_end)
             if not _ds30.empty and "close_asof" in _ds30.columns:
                 _have_ds = _ds30["actual_high"].notna()
                 _s30_hl  = _ds30[_have_ds]
@@ -7312,15 +7478,17 @@ def render_retrain_dashboard():
     _cone_meta = _cone_art.get("calibration_meta", {}) if _cone_art else {}
     _dt_art   = _load_day_type()
     _dt_meta  = _dt_art.get("calibration_meta", {}) if _dt_art else {}
-    cutoffs   = _training_cutoffs()
+    cutoffs   = _cutoffs()
 
     # ── 30-day & all-time performance (cache_data — shared with Live tab) ─────
-    hl30    = compute_30d_daily_hl_metrics(_end_iso)
+    _rrd_raw    = _fetch_daily_raw()
+    _rrd_de     = _rrd_raw.index.max().strftime("%Y-%m-%d") if not _rrd_raw.empty else None
+    hl30    = compute_30d_daily_hl_metrics(_end_iso, data_end=_rrd_de)
     cone30  = compute_30d_cone_metrics(_end_iso)
     cone_at = compute_alltime_cone_metrics(_end_iso)
     dt30    = compute_30d_daytype_metrics(_end_iso)
     dt_at   = compute_alltime_daytype_metrics(_end_iso)
-    sigs    = compute_trend_signatures(_end_iso) or {}
+    sigs    = compute_trend_signatures(_end_iso, data_end=_rrd_de) or {}
 
     # ── Age thresholds (days since train_end) ─────────────────────────────────
     WARN_D    = {"daily H/L": 42, "7-day cone": 84, "3-class day type": 42}
@@ -7517,8 +7685,8 @@ def render_retrain_dashboard():
                 help=(
                     "**Primary signal driver.**  "
                     "`err_hi = (actual_high − pred_high) / close × 100`.  "
-                    "**U1** fires when `err_hi_ma3 > +0.5%`.  "
-                    "**D2** fires when `err_hi_ma3 < −1.0%`.  "
+                    "**U1** fires when `err_hi_ma3 > +0.7%`.  "
+                    "**D2** fires when `err_hi_ma3 < −0.75%`.  "
                     "Higher MAPE → more noise in these error terms → false signals."
                 ),
             )
@@ -7677,11 +7845,11 @@ def render_retrain_dashboard():
         "🟢 U1 — Entry",
         "🔥 ACTIVE" if sigs.get("u1_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}  |  {_hb3}/3 hi-breaks"
-               if _ehi is not None else "threshold: err_hi_ma3 > +0.5%"),
+               if _ehi is not None else "threshold: err_hi_ma3 > +0.7%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 > +0.5%` AND `hi_breaks_3d ≥ 2`.  "
-            "**Entry gate:** U1 confirmed by above-MA30, clean 10d, or V-reversal.  "
+            "**Threshold:** `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2`.  "
+            "**Entry gate:** U1 confirmed by above-MA30, clean 7d, or V-reversal.  "
             "Statistical lift: 1.68× over base rate."
         ),
     )
@@ -7689,10 +7857,10 @@ def render_retrain_dashboard():
         "🔴 D2 — Exit (strongest)",
         "🔥 ACTIVE" if sigs.get("d2_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}"
-               if _ehi is not None else "threshold: err_hi_ma3 < −1.0%"),
+               if _ehi is not None else "threshold: err_hi_ma3 < −0.75%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 < −1.0%`.  "
+            "**Threshold:** `err_hi_ma3 < −0.75%`.  "
             "2.24× lift — strongest exit signal.  "
             "Active in BEAR/NEUTRAL regime; in BULL regime only D3 triggers exit."
         ),
@@ -7825,13 +7993,762 @@ def render_retrain_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical | Retrain Status | MSTR Backtesting
+# EXPLAINABILITY DASHBOARD
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_retrain, tab_mstr = st.tabs([
+
+# Feature metadata: (category, sub-category, display label)
+_EXPL_FEAT_META: "dict[str, tuple[str, str, str]]" = {
+    # Price momentum / returns
+    "ret_1h":   ("Price Momentum", "Returns", "1h BTC return"),
+    "ret_2h":   ("Price Momentum", "Returns", "2h BTC return"),
+    "ret_4h":   ("Price Momentum", "Returns", "4h BTC return"),
+    "ret_8h":   ("Price Momentum", "Returns", "8h BTC return"),
+    "ret_12h":  ("Price Momentum", "Returns", "12h BTC return"),
+    "ret_24h":  ("Price Momentum", "Returns", "24h BTC return"),
+    "ret_48h":  ("Price Momentum", "Returns", "48h BTC return"),
+    "ret_72h":  ("Price Momentum", "Returns", "72h BTC return"),
+    # Volatility
+    "vol_4h":      ("Technical", "Volatility", "Realized vol 4h"),
+    "vol_8h":      ("Technical", "Volatility", "Realized vol 8h"),
+    "vol_24h":     ("Technical", "Volatility", "Realized vol 24h"),
+    "vol_48h":     ("Technical", "Volatility", "Realized vol 48h"),
+    "atr_4h":      ("Technical", "Volatility", "ATR 4h"),
+    "atr_12h":     ("Technical", "Volatility", "ATR 12h"),
+    "atr_24h":     ("Technical", "Volatility", "ATR 24h"),
+    "bb24_width":  ("Technical", "Volatility", "Bollinger width 24h"),
+    # Price level / range
+    "range_now":   ("Technical", "Price Level", "Current bar range"),
+    "range_ma24":  ("Technical", "Price Level", "Range MA 24h"),
+    "range_ma72":  ("Technical", "Price Level", "Range MA 72h"),
+    "dist_hi_24":  ("Technical", "Price Level", "Dist from 24h high"),
+    "dist_lo_24":  ("Technical", "Price Level", "Dist from 24h low"),
+    "dist_hi_168": ("Technical", "Price Level", "Dist from 7d high"),
+    # Volume
+    "vol_chg_1": ("Technical", "Volume", "Volume change 1h"),
+    "vol_z_24":  ("Technical", "Volume", "Volume z-score 24h"),
+    # Oscillators
+    "rsi_14":    ("Technical", "Oscillators", "RSI(14)"),
+    "macd":      ("Technical", "Oscillators", "MACD"),
+    "macd_hist": ("Technical", "Oscillators", "MACD histogram"),
+    # ETH / crypto ecosystem
+    "eth_ret_1h":      ("Crypto Market", "Ethereum", "ETH 1h return"),
+    "eth_ret_24h":     ("Crypto Market", "Ethereum", "ETH 24h return"),
+    "eth_vol_24h":     ("Crypto Market", "Ethereum", "ETH vol 24h"),
+    "btc_eth_corr_24": ("Crypto Market", "Ethereum", "BTC-ETH corr 24h"),
+    # Equities
+    "spx_ret_1h":  ("Macro/Market", "Equities", "S&P 500 1h return"),
+    "spx_ret_24h": ("Macro/Market", "Equities", "S&P 500 24h return"),
+    "spx_vol_24h": ("Macro/Market", "Equities", "S&P 500 vol 24h"),
+    "ndx_ret_1h":  ("Macro/Market", "Equities", "Nasdaq 1h return"),
+    "ndx_ret_24h": ("Macro/Market", "Equities", "Nasdaq 24h return"),
+    "ndx_vol_24h": ("Macro/Market", "Equities", "Nasdaq vol 24h"),
+    # Risk sentiment / VIX
+    "vix_ret_1h":  ("Macro/Market", "Risk Sentiment", "VIX 1h change"),
+    "vix_ret_24h": ("Macro/Market", "Risk Sentiment", "VIX 24h change"),
+    "vix_vol_24h": ("Macro/Market", "Risk Sentiment", "VIX vol 24h"),
+    # Commodities / safe havens
+    "gold_ret_1h":  ("Macro/Market", "Commodities", "Gold 1h return"),
+    "gold_ret_24h": ("Macro/Market", "Commodities", "Gold 24h return"),
+    "gold_vol_24h": ("Macro/Market", "Commodities", "Gold vol 24h"),
+    # USD / dollar index
+    "dxy_ret_1h":  ("Macro/Market", "USD Index", "DXY 1h change"),
+    "dxy_ret_24h": ("Macro/Market", "USD Index", "DXY 24h change"),
+    "dxy_vol_24h": ("Macro/Market", "USD Index", "DXY vol 24h"),
+    # Interest rates
+    "tnx_ret_1h":  ("Macro/Market", "Rates", "10Y yield 1h change"),
+    "tnx_ret_24h": ("Macro/Market", "Rates", "10Y yield 24h change"),
+    "tnx_vol_24h": ("Macro/Market", "Rates", "10Y yield vol 24h"),
+    # Sentiment
+    "fng":     ("Sentiment", "Fear & Greed", "F&G index level"),
+    "fng_d1":  ("Sentiment", "Fear & Greed", "F&G 1d change"),
+    "fng_d7":  ("Sentiment", "Fear & Greed", "F&G 7d change"),
+    "fng_d24": ("Sentiment", "Fear & Greed", "F&G 24h change"),
+    # Calendar / seasonality
+    "hr_sin":  ("Seasonality", "Time", "Hour-of-day (sin)"),
+    "hr_cos":  ("Seasonality", "Time", "Hour-of-day (cos)"),
+    "dow_sin": ("Seasonality", "Time", "Day-of-week (sin)"),
+    "dow_cos": ("Seasonality", "Time", "Day-of-week (cos)"),
+    "weekend": ("Seasonality", "Time", "Weekend flag"),
+    "us_open": ("Seasonality", "Time", "US market hours"),
+    # Coinbase Premium (exchange demand signal)
+    "cb_premium":     ("Coinbase Premium", "Exchange Signal", "CB premium (current %)"),
+    "cb_premium_ma3": ("Coinbase Premium", "Exchange Signal", "CB premium 3h MA"),
+    "cb_premium_z7":  ("Coinbase Premium", "Exchange Signal", "CB premium z-score 7h"),
+}
+
+# Category display config: color, emoji, description
+_EXPL_CAT_META = {
+    "Price Momentum": {
+        "color": "#3b82f6", "emoji": "📈",
+        "desc": "BTC log-returns across multiple timeframes (1h → 72h)",
+    },
+    "Technical": {
+        "color": "#8b5cf6", "emoji": "📐",
+        "desc": "Realized volatility, ATR, range, volume, RSI, MACD, Bollinger",
+    },
+    "Crypto Market": {
+        "color": "#f59e0b", "emoji": "⚡",
+        "desc": "Ethereum price action and BTC-ETH correlation",
+    },
+    "Macro/Market": {
+        "color": "#ef4444", "emoji": "🌍",
+        "desc": "Equities (SPX/NDX), fear index (VIX), gold, USD (DXY), 10Y rates",
+    },
+    "Sentiment": {
+        "color": "#10b981", "emoji": "😨",
+        "desc": "Crypto Fear & Greed index — level and short-term changes",
+    },
+    "Seasonality": {
+        "color": "#6b7280", "emoji": "🕐",
+        "desc": "Hour-of-day and day-of-week cyclical patterns",
+    },
+    "Coinbase Premium": {
+        "color": "#06b6d4", "emoji": "🏦",
+        "desc": "Coinbase exchange demand vs reference price — premium signals retail buying pressure",
+    },
+}
+
+# Maps each feature to its primary time horizon for the horizon-based view
+_EXPL_FEAT_TIMEFRAME: "dict[str, str]" = {
+    # ── Hour (≤4h lookback) ──────────────────────────────────────────
+    "ret_1h": "Hour", "ret_2h": "Hour", "ret_4h": "Hour",
+    "vol_4h": "Hour", "atr_4h": "Hour",
+    "range_now": "Hour", "vol_chg_1": "Hour",
+    "eth_ret_1h": "Hour",
+    "spx_ret_1h": "Hour", "ndx_ret_1h": "Hour", "vix_ret_1h": "Hour",
+    "gold_ret_1h": "Hour", "dxy_ret_1h": "Hour", "tnx_ret_1h": "Hour",
+    "cb_premium": "Hour", "cb_premium_ma3": "Hour",
+    # ── Day (8–24h lookback) ─────────────────────────────────────────
+    "ret_8h": "Day", "ret_12h": "Day", "ret_24h": "Day",
+    "vol_8h": "Day", "vol_24h": "Day",
+    "atr_12h": "Day", "atr_24h": "Day",
+    "range_ma24": "Day",
+    "vol_z_24": "Day",
+    "rsi_14": "Day", "macd": "Day", "macd_hist": "Day",
+    "bb24_width": "Day",
+    "dist_hi_24": "Day", "dist_lo_24": "Day",
+    "eth_ret_24h": "Day", "eth_vol_24h": "Day", "btc_eth_corr_24": "Day",
+    "spx_ret_24h": "Day", "spx_vol_24h": "Day",
+    "ndx_ret_24h": "Day", "ndx_vol_24h": "Day",
+    "vix_ret_24h": "Day", "vix_vol_24h": "Day",
+    "gold_ret_24h": "Day", "gold_vol_24h": "Day",
+    "dxy_ret_24h": "Day", "dxy_vol_24h": "Day",
+    "tnx_ret_24h": "Day", "tnx_vol_24h": "Day",
+    "fng_d24": "Day",
+    "cb_premium_z7": "Day",
+    # ── Week (48h+ lookback) ─────────────────────────────────────────
+    "ret_48h": "Week", "ret_72h": "Week",
+    "vol_48h": "Week",
+    "range_ma72": "Week",
+    "dist_hi_168": "Week",
+    "fng": "Week", "fng_d1": "Week", "fng_d7": "Week",
+    # ── Structural (calendar / seasonality) ─────────────────────────
+    "hr_sin": "Structural", "hr_cos": "Structural",
+    "dow_sin": "Structural", "dow_cos": "Structural",
+    "weekend": "Structural", "us_open": "Structural",
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _compute_expl_data(latest_t_iso: str) -> "dict | None":
+    """Compute signed feature contributions for the current bar.
+
+    For Ridge: contribution_i = coef_i * z_i  (exact linear decomposition)
+    For GBM:  contribution_i = pred(x) − pred(x | x_i = μ_i)  (perturbation)
+
+    Both methods use the StandardScaler's training-time mean as the 'neutral'
+    baseline so contributions represent deviation from historical norms.
+    """
+    t = pd.Timestamp(latest_t_iso)
+    if t not in F_filled.index:
+        return None
+    x_row = F_filled.loc[t, feat_cols]
+    if x_row.isna().any():
+        return None
+    x_arr = x_row.values.reshape(1, -1)
+
+    scaler = model.named_steps["sc"]
+    inner  = model.named_steps["m"]
+    mu_train    = pd.Series(scaler.mean_,  index=feat_cols)
+    sigma_train = pd.Series(scaler.scale_, index=feat_cols)
+    z_scores = (x_row - mu_train) / sigma_train.replace(0, 1e-10)
+
+    pred_now = float(model.predict(x_arr)[0])
+
+    if best_name == "ridge":
+        coef = pd.Series(inner.coef_, index=feat_cols)
+        contributions = coef * z_scores
+    else:
+        # Perturbation: zero out each feature's deviation from training mean
+        x_flat = x_row.values.copy().astype(float)
+        contribs_dict: "dict[str, float]" = {}
+        for i, feat in enumerate(feat_cols):
+            x_pert = x_flat.copy()
+            x_pert[i] = float(mu_train.iloc[i])
+            pred_pert = float(model.predict(x_pert.reshape(1, -1))[0])
+            contribs_dict[feat] = pred_now - pred_pert
+        contributions = pd.Series(contribs_dict)
+
+    # Regime context: last 30 days of BTC prices
+    recent_idx = F_filled.index[
+        valid_mask & (F_filled.index <= t) &
+        (F_filled.index >= t - pd.Timedelta(days=30))
+    ]
+    if len(recent_idx) >= 24:
+        btc_recent = df["btc_close"].reindex(recent_idx).dropna()
+        cur_price  = float(btc_recent.iloc[-1])
+        ma30_price = float(btc_recent.mean())
+        pct_vs_ma  = (cur_price - ma30_price) / ma30_price * 100
+        ret_30d    = float((btc_recent.iloc[-1] / btc_recent.iloc[0] - 1) * 100)
+        n7 = min(7 * 24, len(btc_recent))
+        ret_7d = float((btc_recent.iloc[-1] / btc_recent.iloc[-n7] - 1) * 100)
+        btc_hist_idx = list(btc_recent.index)
+        btc_hist_vals = list(btc_recent.values)
+        ma_hist_vals = list(
+            btc_recent.rolling(min(len(btc_recent), 168), min_periods=24).mean().values
+        )
+    else:
+        cur_price = ma30_price = pct_vs_ma = ret_30d = ret_7d = None
+        btc_hist_idx = btc_hist_vals = ma_hist_vals = []
+
+    fng_now = float(x_row["fng"]) if "fng" in feat_cols else 50.0
+
+    # Regime score
+    score = 0
+    if pct_vs_ma is not None:
+        if   pct_vs_ma >  10: score += 3
+        elif pct_vs_ma >   5: score += 2
+        elif pct_vs_ma >   0: score += 1
+        elif pct_vs_ma >  -5: score -= 1
+        elif pct_vs_ma > -10: score -= 2
+        else:                  score -= 3
+    if ret_7d is not None:
+        if   ret_7d >  15: score += 2
+        elif ret_7d >   5: score += 1
+        elif ret_7d <  -5: score -= 1
+        elif ret_7d < -15: score -= 2
+    if fng_now >= 75: score += 1
+    elif fng_now <= 25: score -= 1
+
+    if   score >= 3: regime = "Strong Bull"
+    elif score >= 1: regime = "Bull"
+    elif score == 0: regime = "Neutral"
+    elif score >= -2: regime = "Bear"
+    else:             regime = "Strong Bear"
+
+    return dict(
+        contributions  = contributions,
+        z_scores       = z_scores,
+        pred_return    = pred_now,
+        regime         = regime,
+        regime_score   = score,
+        cur_price      = cur_price,
+        ma30_price     = ma30_price,
+        pct_vs_ma      = pct_vs_ma,
+        ret_30d        = ret_30d,
+        ret_7d         = ret_7d,
+        fng_now        = fng_now,
+        btc_hist_idx   = btc_hist_idx,
+        btc_hist_vals  = btc_hist_vals,
+        ma_hist_vals   = ma_hist_vals,
+        as_of          = t,
+    )
+
+
+def render_explainability_dashboard():
+    """Render the Explainability tab.
+
+    Shows what macro, on-chain, technical, and sentiment factors are currently
+    driving Bitcoin up or down, how strongly, and in what regime context.
+    """
+    st.markdown("## 🧠 What's Driving Bitcoin Right Now?")
+    st.caption(
+        "Feature contributions decompose the model's next-hour forecast into "
+        "per-factor shares. **Green** = pushing the forecast higher · "
+        "**Red** = pushing the forecast lower. "
+        f"Model in use: **{best_name.upper()}** (hourly close predictor). "
+        "Contributions are exact for Ridge (coeff × z-score); perturbation-based for GBM."
+    )
+
+    expl = _compute_expl_data(str(latest_t_global))
+    if expl is None:
+        st.warning("Insufficient data to compute feature contributions. "
+                   "Click **Refresh now** in the sidebar to retry.")
+        return
+
+    contributions: pd.Series = expl["contributions"]
+    z_scores: pd.Series      = expl["z_scores"]
+    pred_ret: float          = expl["pred_return"]
+    regime: str              = expl["regime"]
+
+    # ── Regime banner ────────────────────────────────────────────────────
+    _REGIME_STYLES = {
+        "Strong Bull": ("#14532d", "#dcfce7", "#166534"),
+        "Bull":        ("#14532d", "#f0fdf4", "#16a34a"),
+        "Neutral":     ("#713f12", "#fefce8", "#ca8a04"),
+        "Bear":        ("#7f1d1d", "#fef2f2", "#dc2626"),
+        "Strong Bear": ("#450a0a", "#fee2e2", "#991b1b"),
+    }
+    _REGIME_EMOJI = {
+        "Strong Bull": "🐂🐂", "Bull": "🐂",
+        "Neutral": "〰️",
+        "Bear": "🐻", "Strong Bear": "🐻🐻",
+    }
+    text_col, bg_col, border_col = _REGIME_STYLES.get(regime, ("#111", "#f9fafb", "#6b7280"))
+    r_emoji = _REGIME_EMOJI.get(regime, "")
+    fc_color = "#16a34a" if pred_ret > 0 else "#dc2626"
+    fc_arrow = "▲" if pred_ret > 0 else "▼"
+
+    st.markdown(
+        f"""<div style="background:{bg_col};border-radius:10px;padding:14px 22px;
+            border-left:5px solid {border_col};margin-bottom:12px;">
+          <span style="font-size:20px;font-weight:700;color:{text_col};">
+            {r_emoji}&nbsp;{regime} Regime
+          </span>
+          <span style="font-size:13px;color:{text_col};margin-left:18px;">
+            1-hour model forecast:&nbsp;
+            <b style="color:{fc_color};">{fc_arrow} {pred_ret*100:+.3f}%</b>
+            &nbsp;log-return
+          </span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    # ── KPI metrics row ──────────────────────────────────────────────────
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    with mc1:
+        cp = expl.get("cur_price")
+        r7 = expl.get("ret_7d")
+        st.metric("BTC Price",
+                  f"${cp:,.0f}" if cp else "—",
+                  delta=f"{r7:+.1f}% 7d" if r7 is not None else None)
+    with mc2:
+        pvm = expl.get("pct_vs_ma")
+        r30 = expl.get("ret_30d")
+        st.metric("vs 30-day MA",
+                  f"{pvm:+.1f}%" if pvm is not None else "—",
+                  delta=f"{r30:+.1f}% 30d" if r30 is not None else None)
+    with mc3:
+        fng = expl.get("fng_now", 50)
+        fng_label = (
+            "Extreme Greed" if fng >= 75 else "Greed"    if fng >= 55 else
+            "Neutral"       if fng >= 45 else "Fear"     if fng >= 25 else "Extreme Fear"
+        )
+        st.metric("Fear & Greed", f"{fng:.0f}", delta=fng_label,
+                  delta_color="off")
+    with mc4:
+        st.metric("Hourly Forecast",
+                  f"{fc_arrow} {abs(pred_ret*100):.3f}%",
+                  delta="bullish" if pred_ret > 0 else "bearish",
+                  delta_color="normal" if pred_ret > 0 else "inverse")
+    with mc5:
+        bull_c = contributions[contributions > 0]
+        bear_c = contributions[contributions < 0]
+        top_b  = bull_c.idxmax() if len(bull_c) else None
+        top_be = bear_c.idxmin() if len(bear_c) else None
+        top_b_label  = _EXPL_FEAT_META.get(top_b,  ("", "", str(top_b)))[2]  if top_b  else "—"
+        top_be_label = _EXPL_FEAT_META.get(top_be, ("", "", str(top_be)))[2] if top_be else "—"
+        st.markdown(
+            f"<div style='font-size:12px;line-height:1.8'>"
+            f"🟢 <b>Top bull:</b> {top_b_label}<br>"
+            f"🔴 <b>Top bear:</b> {top_be_label}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # ── Timeframe summary bar ─────────────────────────────────────────────
+    st.markdown("### ⏱️ Trend Horizon Breakdown")
+    st.caption(
+        "Net model contribution split by how far back each feature looks. "
+        "'Hour' = intraday momentum (≤4 h); 'Day' = 8–24 h dynamics; "
+        "'Week' = 48 h–7 d structure; 'Structural' = time-of-day / calendar patterns."
+    )
+    _TF_ORDER  = ["Hour", "Day", "Week", "Structural"]
+    _TF_COLORS = {"Hour": "#3b82f6", "Day": "#8b5cf6", "Week": "#f59e0b", "Structural": "#6b7280"}
+    tf_net: "dict[str, float]" = {tf: 0.0 for tf in _TF_ORDER}
+    tf_pos: "dict[str, float]" = {tf: 0.0 for tf in _TF_ORDER}
+    tf_neg: "dict[str, float]" = {tf: 0.0 for tf in _TF_ORDER}
+    for feat, val in contributions.items():
+        tf = _EXPL_FEAT_TIMEFRAME.get(str(feat), "Day")
+        bps = float(val) * 100
+        tf_net[tf] = tf_net.get(tf, 0.0) + bps
+        tf_pos[tf] = tf_pos.get(tf, 0.0) + max(0.0, bps)
+        tf_neg[tf] = tf_neg.get(tf, 0.0) + min(0.0, bps)
+
+    fig_tf = go.Figure()
+    fig_tf.add_trace(go.Bar(
+        name="Bullish", x=_TF_ORDER,
+        y=[tf_pos[tf] for tf in _TF_ORDER],
+        marker_color=[_TF_COLORS[tf] for tf in _TF_ORDER],
+        opacity=0.85,
+        hovertemplate="%{x}: +%{y:.4f} bps<extra>Bullish</extra>",
+    ))
+    fig_tf.add_trace(go.Bar(
+        name="Bearish", x=_TF_ORDER,
+        y=[tf_neg[tf] for tf in _TF_ORDER],
+        marker_color=[_TF_COLORS[tf] for tf in _TF_ORDER],
+        opacity=0.5,
+        hovertemplate="%{x}: %{y:.4f} bps<extra>Bearish</extra>",
+    ))
+    for tf in _TF_ORDER:
+        net = tf_net[tf]
+        fig_tf.add_annotation(
+            x=tf, y=tf_pos[tf] + abs(tf_neg[tf]) * 0.1 + 0.001,
+            text=f"<b>{net:+.4f}</b>",
+            showarrow=False, font=dict(size=11, color="#111827"),
+            yanchor="bottom",
+        )
+    fig_tf.add_hline(y=0, line=dict(color="#111827", width=1.5))
+    fig_tf.update_layout(
+        barmode="relative",
+        height=280,
+        template="plotly_white",
+        title=dict(text="<b>Net contribution by time horizon</b>", x=0, xanchor="left"),
+        xaxis_title=None,
+        yaxis_title="Contribution (bps)",
+        margin=dict(t=50, r=30, b=40, l=80),
+        legend=dict(orientation="h", y=-0.25),
+        xaxis=dict(tickfont=dict(size=13, color="#111827")),
+    )
+    st.plotly_chart(fig_tf, use_container_width=True, key="expl_tf_chart")
+
+    st.markdown("---")
+
+    # ── Main feature contribution chart (with timeframe filter) ──────────
+    st.markdown("### 📊 Feature Drivers — Current Bar")
+    st.caption(
+        "Top features sorted by absolute contribution.  "
+        "Width = strength of influence.  "
+        "Hover for current value, z-score and exact contribution."
+    )
+
+    _TF_LABELS = {
+        "All":          "All",
+        "Hour":         "Hour (≤4h)",
+        "Day":          "Day (8–24h)",
+        "Week":         "Week (48h+)",
+        "Structural":   "Structural",
+    }
+    sel_tf = st.radio(
+        "Filter by time horizon:",
+        options=list(_TF_LABELS.keys()),
+        format_func=lambda k: _TF_LABELS[k],
+        horizontal=True,
+        index=0,
+        key="expl_tf_filter",
+    )
+
+    if sel_tf == "All":
+        filt_contribs = contributions
+    else:
+        filt_contribs = contributions[
+            [f for f in contributions.index
+             if _EXPL_FEAT_TIMEFRAME.get(str(f), "Day") == sel_tf]
+        ]
+
+    N_SHOW = min(30, len(filt_contribs))
+    top_idx = filt_contribs.abs().nlargest(N_SHOW).index
+    c_show  = filt_contribs[top_idx].sort_values()
+
+    bar_colors, hover_texts, y_labels = [], [], []
+    for feat in c_show.index:
+        meta     = _EXPL_FEAT_META.get(feat, ("Other", feat, feat))
+        cat_meta = _EXPL_CAT_META.get(meta[0], {"color": "#6b7280"})
+        bar_colors.append("#16a34a" if c_show[feat] >= 0 else "#dc2626")
+        z_val  = float(z_scores.get(feat, 0))
+        raw_val = (float(F_filled.loc[latest_t_global, feat])
+                   if feat in F_filled.columns else float("nan"))
+        contrib_bps = c_show[feat] * 100
+        tf_label = _EXPL_FEAT_TIMEFRAME.get(str(feat), "Day")
+        hover_texts.append(
+            f"<b>{meta[2]}</b><br>"
+            f"Category: {meta[0]} › {meta[1]}<br>"
+            f"Time horizon: {tf_label}<br>"
+            f"Current value: {raw_val:.5g}<br>"
+            f"Z-score vs training mean: {z_val:+.2f}σ<br>"
+            f"Contribution: {contrib_bps:+.5f} bps"
+        )
+        y_labels.append(meta[2])
+
+    fig_main = go.Figure(go.Bar(
+        y=y_labels,
+        x=list(c_show.values * 100),
+        orientation="h",
+        marker_color=bar_colors,
+        hovertemplate="%{customdata}<extra></extra>",
+        customdata=hover_texts,
+        text=[f"{v*100:+.4f}" for v in c_show.values],
+        textposition="outside",
+    ))
+    fig_main.add_vline(x=0, line=dict(color="#111827", width=1.5))
+    fig_main.update_layout(
+        height=max(420, N_SHOW * 22 + 100),
+        template="plotly_white",
+        title=dict(
+            text=(
+                f"<b>Top {N_SHOW} drivers [{_TF_LABELS[sel_tf]}]  ·  "
+                f"{latest_t_global.strftime('%Y-%m-%d %H:%M')} UTC</b>"
+                "<br><span style='font-size:11px;color:#555'>"
+                "Green = bullish contribution  ·  Red = bearish contribution  ·  "
+                f"Total predicted log-return: <b>{pred_ret*100:+.4f}%</b>"
+                "</span>"
+            ),
+            x=0.0, xanchor="left",
+        ),
+        xaxis_title="Contribution (predicted log-return ×100, basis-point scale)",
+        yaxis_title=None,
+        margin=dict(t=80, r=130, b=50, l=210),
+        yaxis=dict(tickfont=dict(size=11)),
+        xaxis=dict(zeroline=False),
+    )
+    st.plotly_chart(fig_main, use_container_width=True, key="expl_main_chart")
+
+    # ── Category breakdown + regime context ──────────────────────────────
+    st.markdown("### 📂 Factor Category Breakdown")
+    col_cats, col_regime = st.columns([3, 2])
+
+    # Aggregate by top-level category
+    cat_pos: "dict[str, float]" = {}
+    cat_neg: "dict[str, float]" = {}
+    cat_net: "dict[str, float]" = {}
+    for feat, val in contributions.items():
+        cat = _EXPL_FEAT_META.get(str(feat), ("Other", feat, feat))[0]
+        bps = float(val) * 100
+        cat_pos[cat] = cat_pos.get(cat, 0.0) + max(0.0, bps)
+        cat_neg[cat] = cat_neg.get(cat, 0.0) + min(0.0, bps)
+        cat_net[cat] = cat_net.get(cat, 0.0) + bps
+
+    cats_sorted = sorted(cat_net, key=lambda c: abs(cat_net[c]), reverse=True)
+
+    with col_cats:
+        c_emojis  = [f"{_EXPL_CAT_META.get(c, {}).get('emoji', '')} {c}" for c in cats_sorted]
+        pos_vals  = [cat_pos.get(c, 0.0) for c in cats_sorted]
+        neg_vals  = [cat_neg.get(c, 0.0) for c in cats_sorted]
+
+        fig_cats = go.Figure()
+        fig_cats.add_trace(go.Bar(
+            name="Bullish", y=c_emojis, x=pos_vals, orientation="h",
+            marker_color="#16a34a",
+            hovertemplate="%{y}: +%{x:.4f} bps<extra>Bullish</extra>",
+        ))
+        fig_cats.add_trace(go.Bar(
+            name="Bearish", y=c_emojis, x=neg_vals, orientation="h",
+            marker_color="#dc2626",
+            hovertemplate="%{y}: %{x:.4f} bps<extra>Bearish</extra>",
+        ))
+        fig_cats.add_vline(x=0, line=dict(color="#111827", width=1))
+        fig_cats.update_layout(
+            barmode="relative",
+            height=320,
+            template="plotly_white",
+            title=dict(
+                text="<b>Net bullish vs bearish by category</b>",
+                x=0, xanchor="left",
+            ),
+            xaxis_title="Contribution (bps)",
+            yaxis_title=None,
+            margin=dict(t=50, r=40, b=50, l=170),
+            legend=dict(orientation="h", y=-0.18),
+            yaxis=dict(tickfont=dict(size=11)),
+        )
+        st.plotly_chart(fig_cats, use_container_width=True, key="expl_cats_chart")
+
+    with col_regime:
+        btc_idx  = expl.get("btc_hist_idx", [])
+        btc_vals = expl.get("btc_hist_vals", [])
+        ma_vals  = expl.get("ma_hist_vals", [])
+        if btc_idx and len(btc_idx) >= 24:
+            fig_reg = go.Figure()
+            # Conditionally coloured fill: green where price > MA, red where below.
+            # Strategy: two zero-height-when-inactive traces using clamped arrays —
+            # no need to find exact crossover points.
+            _btc_arr = np.array(btc_vals, dtype=float)
+            _ma_arr  = np.array(ma_vals,  dtype=float)
+            # Where MA is NaN (rolling warm-up), treat as equal to price → zero fill
+            _ma_safe = np.where(np.isnan(_ma_arr), _btc_arr, _ma_arr)
+            _top_grn = np.where(_btc_arr > _ma_safe, _btc_arr, _ma_safe)
+            _bot_red = np.where(_btc_arr < _ma_safe, _btc_arr, _ma_safe)
+            _x_rev   = btc_idx[::-1]
+            # Green fill (above MA)
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx + _x_rev,
+                y=list(_top_grn) + list(reversed(_ma_safe)),
+                fill="toself", fillcolor="rgba(22,163,74,0.15)",
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+            # Red fill (below MA)
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx + _x_rev,
+                y=list(_ma_safe) + list(reversed(_bot_red)),
+                fill="toself", fillcolor="rgba(220,38,38,0.15)",
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx, y=ma_vals,
+                name="30d MA", line=dict(color="#6b7280", width=1.5, dash="dash"),
+                hovertemplate="MA: $%{y:,.0f}<extra></extra>",
+            ))
+            fig_reg.add_trace(go.Scatter(
+                x=btc_idx, y=btc_vals,
+                name="BTC Price", line=dict(color="#F7931A", width=2),
+                hovertemplate="BTC: $%{y:,.0f}<extra></extra>",
+            ))
+            fig_reg.update_layout(
+                height=320,
+                template="plotly_white",
+                title=dict(
+                    text="<b>BTC vs 30-day MA (regime context)</b>",
+                    x=0, xanchor="left",
+                ),
+                xaxis_title=None,
+                yaxis_title="Price (USD)",
+                yaxis_tickformat="$,.0f",
+                margin=dict(t=50, r=20, b=40, l=90),
+                legend=dict(orientation="h", y=-0.18),
+            )
+            st.plotly_chart(fig_reg, use_container_width=True, key="expl_regime_chart")
+        else:
+            st.info("Insufficient price history for regime chart.")
+
+    # ── Category narrative ────────────────────────────────────────────────
+    st.markdown("### 🗒️ Category Narratives")
+    ncols = 3
+    cat_chunks = [cats_sorted[i:i+ncols] for i in range(0, len(cats_sorted), ncols)]
+    for chunk in cat_chunks:
+        row_cols = st.columns(ncols)
+        for col, cat in zip(row_cols, chunk):
+            cm = _EXPL_CAT_META.get(cat, {"emoji": "", "color": "#6b7280", "desc": ""})
+            net = cat_net.get(cat, 0.0)
+            direction = "🟢 Bullish" if net > 0.001 else ("🔴 Bearish" if net < -0.001 else "⚪ Neutral")
+            cat_feats = sorted(
+                [(f, float(contributions[f])) for f in contributions.index
+                 if _EXPL_FEAT_META.get(str(f), ("",))[0] == cat],
+                key=lambda x: abs(x[1]), reverse=True,
+            )[:3]
+            top_lines = "  \n".join(
+                f"{'▲' if v > 0 else '▼'} {_EXPL_FEAT_META.get(f, ('','',f))[2]}: "
+                f"{v*100:+.4f} bps"
+                for f, v in cat_feats
+            ) or "_No features_"
+            with col:
+                st.markdown(
+                    f"**{cm['emoji']} {cat}**  \n"
+                    f"{direction} · **{net:+.4f} bps**  \n"
+                    f"_{cm['desc']}_  \n\n"
+                    f"{top_lines}"
+                )
+
+    st.markdown("---")
+
+    # ── Z-score heatmap (current feature deviations from training norms) ─
+    with st.expander("📡 Feature Z-Scores vs Training Baseline", expanded=False):
+        st.caption(
+            "How far each feature's current value is from its training-time mean.  "
+            "🔴 |z| > 2 = unusual · 🟡 |z| > 1 = elevated · 🟢 |z| ≤ 1 = normal."
+        )
+        z_top = z_scores.abs().nlargest(min(30, len(z_scores))).index
+        z_show = z_scores[z_top].sort_values()
+        z_labels = [_EXPL_FEAT_META.get(f, ("","",f))[2] for f in z_show.index]
+        z_colors = [
+            "#dc2626" if abs(v) > 2 else "#f59e0b" if abs(v) > 1 else "#16a34a"
+            for v in z_show.values
+        ]
+        fig_z = go.Figure(go.Bar(
+            y=z_labels, x=list(z_show.values),
+            orientation="h",
+            marker_color=z_colors,
+            text=[f"{v:+.2f}σ" for v in z_show.values],
+            textposition="outside",
+            hovertemplate="%{y}: %{x:+.3f}σ<extra></extra>",
+        ))
+        fig_z.add_vline(x=0,  line=dict(color="#111827", width=1))
+        fig_z.add_vline(x= 2, line=dict(color="#dc2626", width=1.2, dash="dash"))
+        fig_z.add_vline(x=-2, line=dict(color="#dc2626", width=1.2, dash="dash"))
+        fig_z.add_vline(x= 1, line=dict(color="#f59e0b", width=1,   dash="dot"))
+        fig_z.add_vline(x=-1, line=dict(color="#f59e0b", width=1,   dash="dot"))
+        fig_z.update_layout(
+            height=max(380, len(z_show) * 22 + 100),
+            template="plotly_white",
+            title=dict(
+                text=(
+                    "<b>Feature z-scores vs training-time baseline</b>"
+                    "<br><span style='font-size:11px;color:#555'>"
+                    "z = (current − training mean) / training std  ·  "
+                    "🔴 |z|>2 unusual · 🟡 |z|>1 elevated · 🟢 normal"
+                    "</span>"
+                ),
+                x=0, xanchor="left",
+            ),
+            xaxis_title="z-score (standard deviations from training mean)",
+            yaxis_title=None,
+            margin=dict(t=80, r=100, b=50, l=210),
+            yaxis=dict(tickfont=dict(size=11)),
+        )
+        n_red = int((z_scores.abs() > 2).sum())
+        n_yel = int(((z_scores.abs() > 1) & (z_scores.abs() <= 2)).sum())
+        n_grn = int((z_scores.abs() <= 1).sum())
+        st.plotly_chart(fig_z, use_container_width=True, key="expl_z_chart")
+        st.caption(
+            f"🔴 {n_red} features unusually deviated (|z|>2)  ·  "
+            f"🟡 {n_yel} elevated (1<|z|≤2)  ·  "
+            f"🟢 {n_grn} within normal range (|z|≤1)"
+        )
+
+    # ── Full feature table ───────────────────────────────────────────────
+    with st.expander("🔍 Full feature contribution table", expanded=False):
+        rows = []
+        for feat in feat_cols:
+            meta     = _EXPL_FEAT_META.get(feat, ("Other", feat, feat))
+            cat_meta = _EXPL_CAT_META.get(meta[0], {"emoji": ""})
+            contrib  = float(contributions.get(feat, 0.0))
+            z_val    = float(z_scores.get(feat, 0.0))
+            raw_val  = (float(F_filled.loc[latest_t_global, feat])
+                        if feat in F_filled.columns else float("nan"))
+            rows.append({
+                "Category":            f"{cat_meta.get('emoji','')} {meta[0]}",
+                "Sub-category":        meta[1],
+                "Feature":             meta[2],
+                "Current Value":       round(raw_val, 6),
+                "Z-Score (σ)":         round(z_val, 3),
+                "Contribution (bps)":  round(contrib * 100, 6),
+                "Direction":           "▲ Bull" if contrib > 1e-9 else ("▼ Bear" if contrib < -1e-9 else "—"),
+            })
+        df_expl_table = pd.DataFrame(rows)
+        df_expl_table = df_expl_table.sort_values(
+            "Contribution (bps)", key=abs, ascending=False
+        ).reset_index(drop=True)
+        st.dataframe(
+            df_expl_table,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Current Value":      st.column_config.NumberColumn(format="%.6g"),
+                "Z-Score (σ)":        st.column_config.NumberColumn(format="%.3f"),
+                "Contribution (bps)": st.column_config.NumberColumn(format="%.6f"),
+            },
+        )
+        st.caption(
+            f"Model: **{best_name.upper()}** · "
+            f"As of: **{latest_t_global.strftime('%Y-%m-%d %H:%M')} UTC** · "
+            f"Total forecast: **{pred_ret*100:+.5f}%** log-return · "
+            f"{len(feat_cols)} features in model"
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tabs: Live | Historical | Retrain Status | MSTR Backtesting | Explainability | Leading Indicators
+# ════════════════════════════════════════════════════════════════════════
+tab_live, tab_hist, tab_retrain, tab_mstr, tab_explain, tab_leading = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
     "🔄 Retrain Status",
     "📊 MSTR Backtesting",
+    "🧠 Explainability",
+    "📡 Leading Indicators",
 ])
 
 with tab_live:
@@ -8044,19 +8961,33 @@ with tab_mstr:
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstr_today_iso   = pd.Timestamp.now(tz="UTC").normalize().strftime("%Y-%m-%d")
     _mstr_bear     = _run_fixed_period_mstr_backtest(
-        _BT_BEAR_END_LOCKED, "2025-06-01", _mstr_model_mtime)
+        _mstr_today_iso, "2025-06-01", _mstr_model_mtime)
     _mstr_bull     = _run_fixed_period_mstr_backtest(
         "2025-06-14", "2024-06-05", _mstr_model_mtime)
     _mstr_full_oos = run_mstr_backtest(
-        _mstr_today_iso, model_mtime=_mstr_model_mtime)   # rolls daily
+        _mstr_today_iso, model_mtime=_mstr_model_mtime)   # OOS slice
     _mstr_full     = _run_fixed_period_mstr_backtest(
-        _BT_FULL_END_LOCKED, "2024-06-05", _mstr_model_mtime)
+        _mstr_today_iso, "2024-06-05", _mstr_model_mtime)
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
     )
+
+with tab_explain:
+    render_explainability_dashboard()
+
+with tab_leading:
+    if _HAS_LEADING_INDICATORS:
+        _li_daily_df = _fetch_daily_raw()
+        render_leading_indicators(_li_daily_df)
+    else:
+        st.error(
+            "Leading indicators module could not be loaded. "
+            "Ensure `app/leading_indicators.py` is present and dependencies "
+            "(scikit-learn, requests) are installed."
+        )
 
 # ─────────────────────── timer-driven re-run ──────────────────────────
 time.sleep(REFRESH_SECONDS)
