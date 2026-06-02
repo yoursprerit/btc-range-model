@@ -4991,7 +4991,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
                     MA30={'↑' if sigs['above_ma30'] else '↓'}
                     slope={'↑' if sigs.get('ma30_slope_pos') else '↓'}
                     regime={'🐂BULL' if sigs.get('bull_regime') else '🐻BEAR'}
-                    clean10d={'✓' if sigs['clean_10d'] else '✗'})
+                    clean7d={'✓' if sigs['clean_10d'] else '✗'})
                     · as-of: <b>{as_of_str}</b>
                     · <b>{sigs['n_bars']}</b> bars
                 </span>
@@ -5359,7 +5359,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             signal_rows=tf1_rows,
             interpretation=(
                 "The <b>optimised regime-adaptive strategy</b> with V-reversal gate improvement. "
-                "Entry: U1 (hi-band persistence) AND at least one of: BTC &gt; MA30, clean 10-day window, "
+                "Entry: U1 (hi-band persistence) AND at least one of: BTC &gt; MA30, clean 7-day window, "
                 "<b>or ⚡ V-reversal capitulation within 3 bars</b> (catches post-crash recoveries "
                 "before price has crossed MA30). "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 &amp; MA30 rising) → D3 only "
