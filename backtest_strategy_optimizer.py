@@ -300,7 +300,7 @@ def compute_signals(comp: pd.DataFrame) -> dict:
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i-10)
+        lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     d2_confirmed = np.zeros(N, dtype=bool)

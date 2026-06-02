@@ -1061,10 +1061,10 @@ def _bt_run_strategy(preds: pd.DataFrame, raw: pd.DataFrame,
         slope5[i] = ma30[i] > ma30[i - 5]
     bull_regime = above_ma30 & slope5
 
-    # Clean-10d: no D1/D2 in the last 10 bars
+    # Clean-10d: no D1/D2 in the last 7 bars
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        li          = max(0, i - 10)
+        li          = max(0, i - 7)
         clean_10d[i] = not bool(np.any(d1[li:i] | d2[li:i]))
 
     # V-reversal: recent D1/D2 present and error recovering above U1 threshold

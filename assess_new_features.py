@@ -381,7 +381,7 @@ def run_backtest(preds_df: pd.DataFrame, raw: pd.DataFrame,
 
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        li           = max(0, i - 10)
+        li           = max(0, i - 7)
         clean_10d[i] = not bool(np.any(d1[li:i] | d2[li:i]))
 
     v_recent = np.zeros(N, dtype=bool)
