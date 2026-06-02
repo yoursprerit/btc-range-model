@@ -521,13 +521,18 @@ def _fetch_binance_hourly(days_back=None):
 
 
 @st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
-def _fetch_daily_raw_inner(_bar_start_iso: str):
-    """Implementation of the daily-bar fetch.  The `_bar_start_iso` parameter is
+def _fetch_daily_raw_inner(bar_start_iso: str):
+    """Implementation of the daily-bar fetch.  The `bar_start_iso` parameter is
     NOT used inside the function body — it is a cache-busting key that equals the
     ISO date of the 12:00-UTC bar currently open (i.e. floor((now_utc − 12h).date())).
     It changes at exactly 12:00 UTC (7am CT) each day, so the cache is invalidated
     on the very first page-load after each bar closes rather than waiting up to 6
     arbitrary hours for the TTL to expire.
+
+    IMPORTANT: the parameter name must NOT begin with an underscore.  Streamlit's
+    @st.cache_data silently excludes underscore-prefixed parameters from the cache
+    key, which would make every call share the same cache entry and completely break
+    the bar-boundary invalidation.
 
     Build the daily-bar DataFrame anchored at 12:00 UTC.
 
@@ -631,11 +636,11 @@ def _fetch_daily_raw():
     """Public wrapper — calls _fetch_daily_raw_inner with the current bar-start ISO
     date so the cache invalidates automatically at each 12:00 UTC (7am CT) boundary.
     All call sites use this function unchanged; only the inner cache key changes."""
-    _bar_start_iso = (
+    bar_start_iso = (
         (datetime.now(timezone.utc) - timedelta(hours=ANCHOR_HOUR_UTC))
         .date().isoformat()
     )
-    return _fetch_daily_raw_inner(_bar_start_iso)
+    return _fetch_daily_raw_inner(bar_start_iso)
 
 
 @st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
