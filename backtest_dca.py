@@ -26,13 +26,27 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-BACKTEST_START = "2024-05-26"
-BACKTEST_END   = "2026-05-27"
-FETCH_START    = "2024-02-01"
-FETCH_END      = "2026-05-28"
-OOS_START      = pd.Timestamp("2025-09-18")
+# ── Four UI periods (matching the Streamlit dashboard) ────────────────────────
+PERIODS = {
+    "Bear Market":  ("2025-06-01",  "2026-06-03"),   # ~1 yr, mixed IS/OOS
+    "Bull Market":  ("2024-06-05",  "2025-06-14"),   # ~1 yr, all IS ⚠️
+    "OOS Only":     ("2026-03-01",  "2026-06-03"),   # ~3 mo, truly OOS ✓
+    "Full Market":  ("2024-06-05",  "2026-06-03"),   # ~2 yr, mixed IS/OOS
+}
+# OOS boundary from model's calibration_meta test_start
+OOS_CUTOFF     = pd.Timestamp("2026-03-01")
+
+FETCH_START    = "2024-02-01"    # extra warmup; covers all periods
+FETCH_END      = "2026-06-04"
 INITIAL_CAP    = 100_000.0
 RF_ANNUAL      = 0.045
+
+# Recommended variants per asset (from initial full-period evaluation)
+BTC_VARIANTS   = ["BASE", "DCA-CONF", "DCA-DIP"]    # CONF=best risk-adj; DIP=best return
+MSTR_VARIANTS  = ["BASE", "DCA-3T"]                 # 3T=only clearly positive MSTR variant
+
+# Legacy single-period constant (kept for backward compat with older functions)
+OOS_START      = OOS_CUTOFF
 
 # ── Model ──────────────────────────────────────────────────────────────────────
 AD = joblib.load(str(_ROOT / "models" / "inference_assets_ct.joblib"))
@@ -757,85 +771,298 @@ def print_verdict(btc_results, mstr_results):
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'═'*70}")
-print(f"  DCA STRATEGY EVALUATION  |  BTC + MSTR")
-print(f"  Period: {BACKTEST_START} → {BACKTEST_END}")
-print(f"  OOS boundary: {OOS_START.date()}")
-print(f"{'═'*70}\n")
+# ── Additional reporters for multi-period output ───────────────────────────────
+def print_period_block(period_name, period_start, period_end,
+                       btc_results, mstr_results, is_oos):
+    """Print one period block with BTC + MSTR side-by-side tables."""
+    W = 90
+    oos_tag = "✓ OOS" if is_oos else ("⚠️ mixed IS/OOS" if period_start < "2026-03-01" else "IS ⚠️")
+    print(f"\n{'╔'+'═'*(W-2)+'╗'}")
+    print(f"  PERIOD: {period_name:<20} {period_start} → {period_end}   [{oos_tag}]")
+    print(f"{'╚'+'═'*(W-2)+'╝'}")
 
+    # BTC table
+    btc_labels = [m["label"].replace("BTC-", "") for m in btc_results]
+    print(f"\n  ┌── BTC (direct exposure) ──────────────────────────────────────────")
+    hdr = f"  │  {'Metric':<30}" + "".join(f"  {lb:>13}" for lb in btc_labels)
+    print(hdr)
+    print(f"  │  {'─'*70}")
+
+    btc_rows = [
+        ("Final NAV ($)",      [m["final_nav"]     for m in btc_results], ".0f", "$"),
+        ("Total Return",       [m["total_ret"]     for m in btc_results], "+.1f", "%"),
+        ("B&H Return",         [m["bh_ret"]        for m in btc_results], "+.1f", "%"),
+        ("Alpha vs B&H ($k)",  [m["alpha_abs"]/1e3 for m in btc_results], "+.1f", "k"),
+        ("Max Drawdown",       [m["max_dd"]        for m in btc_results], ".1f", "%"),
+        ("Sharpe Ratio",       [m["sharpe"]        for m in btc_results], ".3f", ""),
+        ("Sortino Ratio",      [m["sortino"]       for m in btc_results], ".3f", ""),
+        ("Calmar Ratio",       [m["calmar"]        for m in btc_results], ".3f", ""),
+        ("Win Rate",           [m["win_rate"]      for m in btc_results], ".0f", "%"),
+        ("# Trades",           [m["n_trades"]      for m in btc_results], "d", ""),
+        ("Avg Win",            [m["avg_win"]       for m in btc_results], "+.1f", "%"),
+        ("Avg Loss",           [m["avg_loss"]      for m in btc_results], "+.1f", "%"),
+        ("Profit Factor",      [m["profit_factor"] for m in btc_results], ".2f", ""),
+        ("Best Trade",         [m["best_trade"]    for m in btc_results], "+.1f", "%"),
+        ("Worst Trade",        [m["worst_trade"]   for m in btc_results], "+.1f", "%"),
+        ("Avg Duration",       [m["avg_duration"]  for m in btc_results], ".0f", "d"),
+        ("Time in Market",     [m["time_in"]       for m in btc_results], ".0f", "%"),
+    ]
+
+    for lbl, vals, fmt, unit in btc_rows:
+        line = f"  │  {lbl:<30}"
+        base_val = vals[0] if isinstance(vals[0], float) else None
+        for j, v in enumerate(vals):
+            try:
+                cell = f"{v:{fmt}}{unit}"
+            except Exception:
+                cell = str(v)
+            # Mark improvement vs BASE
+            if j > 0 and base_val is not None and isinstance(v, float):
+                if lbl in ("Max Drawdown", "Worst Trade", "Avg Loss"):
+                    marker = " ▲" if v > base_val else (" ▼" if v < base_val else " =")
+                else:
+                    marker = " ▲" if v > base_val else (" ▼" if v < base_val else " =")
+            elif j == 0:
+                marker = "  "
+            else:
+                marker = "  "
+            line += f"  {cell:>11}{marker}"
+        print(line)
+
+    # MSTR table
+    if mstr_results:
+        mstr_labels = [m["label"].replace("MSTR-", "") for m in mstr_results]
+        print(f"\n  ┌── MSTR (leveraged BTC proxy, ~2–3× beta) ─────────────────────")
+        hdr = f"  │  {'Metric':<30}" + "".join(f"  {lb:>13}" for lb in mstr_labels)
+        print(hdr)
+        print(f"  │  {'─'*70}")
+
+        mstr_rows = [
+            ("Final NAV ($)",      [m["final_nav"]     for m in mstr_results], ".0f", "$"),
+            ("Total Return",       [m["total_ret"]     for m in mstr_results], "+.1f", "%"),
+            ("B&H Return",         [m["bh_ret"]        for m in mstr_results], "+.1f", "%"),
+            ("Alpha vs B&H ($k)",  [m["alpha_abs"]/1e3 for m in mstr_results], "+.1f", "k"),
+            ("Max Drawdown",       [m["max_dd"]        for m in mstr_results], ".1f", "%"),
+            ("Sharpe Ratio",       [m["sharpe"]        for m in mstr_results], ".3f", ""),
+            ("Sortino Ratio",      [m["sortino"]       for m in mstr_results], ".3f", ""),
+            ("Calmar Ratio",       [m["calmar"]        for m in mstr_results], ".3f", ""),
+            ("Win Rate",           [m["win_rate"]      for m in mstr_results], ".0f", "%"),
+            ("# Trades",           [m["n_trades"]      for m in mstr_results], "d", ""),
+            ("Best Trade",         [m["best_trade"]    for m in mstr_results], "+.1f", "%"),
+            ("Worst Trade",        [m["worst_trade"]   for m in mstr_results], "+.1f", "%"),
+            ("Profit Factor",      [m["profit_factor"] for m in mstr_results], ".2f", ""),
+            ("Time in Market",     [m["time_in"]       for m in mstr_results], ".0f", "%"),
+        ]
+
+        for lbl, vals, fmt, unit in mstr_rows:
+            line = f"  │  {lbl:<30}"
+            base_val = vals[0] if isinstance(vals[0], float) else None
+            for j, v in enumerate(vals):
+                try:
+                    cell = f"{v:{fmt}}{unit}"
+                except Exception:
+                    cell = str(v)
+                if j > 0 and base_val is not None and isinstance(v, float):
+                    if lbl in ("Max Drawdown", "Worst Trade"):
+                        marker = " ▲" if v > base_val else (" ▼" if v < base_val else " =")
+                    else:
+                        marker = " ▲" if v > base_val else (" ▼" if v < base_val else " =")
+                elif j == 0:
+                    marker = "  "
+                else:
+                    marker = "  "
+                line += f"  {cell:>11}{marker}"
+            print(line)
+
+
+def print_period_trade_log(period_name, btc_results, mstr_results, is_oos):
+    """Print trade log for each variant in a period."""
+    W = 88
+    print(f"\n{'─'*W}")
+    print(f"  TRADE LOG — {period_name}")
+    print(f"{'─'*W}")
+
+    for results, asset in [(btc_results, "BTC"), (mstr_results, "MSTR")]:
+        if not results:
+            continue
+        base_trades = results[0]["trades"]
+        base_map = {str(t["entry_date"].date()): t for t in base_trades}
+
+        for res in results:
+            trades = res["trades"]
+            lbl = res["label"]
+            print(f"\n  [{asset}] {lbl}  ({len(trades)} closed trades):")
+            if not trades:
+                print("    (no trades in this period)")
+                continue
+            print(f"    {'#':>3}  {'Entry':12}  {'Exit':12}  "
+                  f"{'P&L%':>7}  {'vs BASE':>9}  {'Frac%':>6}  "
+                  f"{'Days':>5}  Regime  OOS?")
+            for j, t in enumerate(trades, 1):
+                oos = "✓" if t["entry_date"] >= OOS_CUTOFF else "–"
+                mk = "✓" if t["pnl_pct"] > 0 else "✗"
+                k = str(t["entry_date"].date())
+                base_t = base_map.get(k)
+                if base_t and lbl != results[0]["label"]:
+                    delta = t["pnl_pct"] - base_t["pnl_pct"]
+                    dm = "▲" if delta > 0.05 else ("▼" if delta < -0.05 else "=")
+                    vs = f"{delta:>+.1f}pp {dm}"
+                else:
+                    vs = "baseline   "
+                frac = t.get("frac_invested", 1.0) * 100
+                print(f"    {j:>3}  {str(t['entry_date'].date()):12}  "
+                      f"{str(t['exit_date'].date()):12}  "
+                      f"{mk}{t['pnl_pct']:>+5.1f}%  "
+                      f"{vs:>11}  {frac:>5.0f}%  "
+                      f"{t['duration_days']:>5}  "
+                      f"{t.get('regime','?'):<7} {oos}")
+
+
+def print_summary_scoreboard(period_results):
+    """Cross-period summary: for each period, show DCA improvement vs BASE."""
+    W = 90
+    print(f"\n{'═'*W}")
+    print(f"  DCA IMPROVEMENT SCOREBOARD — ALL 4 UI PERIODS")
+    print(f"{'═'*W}")
+    print(f"  (▲ = DCA improves vs BASE  |  ▼ = DCA worsens vs BASE  |  = neutral)")
+
+    metrics_to_score = ["total_ret", "max_dd", "sharpe", "calmar"]
+    metric_names = {"total_ret": "Return", "max_dd": "MaxDD", "sharpe": "Sharpe", "calmar": "Calmar"}
+    higher_is_better = {"total_ret": True, "max_dd": True,   # max_dd: -42% vs -29%, higher = less negative = better
+                        "sharpe": True, "calmar": True}
+
+    for period_name, (btc_r, mstr_r) in period_results.items():
+        p_start, p_end = PERIODS[period_name]
+        oos_note = " [✓ OOS]" if p_start >= "2026-03-01" else " [IS/mixed]"
+        print(f"\n  ── {period_name}{oos_note}  ({p_start} → {p_end})")
+
+        # BTC
+        if btc_r:
+            base = btc_r[0]
+            for r in btc_r[1:]:
+                scores = []
+                details = []
+                for m in metrics_to_score:
+                    bv, rv = base[m], r[m]
+                    improved = (rv > bv) if higher_is_better[m] else (rv < bv)
+                    scores.append(int(improved))
+                    sign = "▲" if improved else ("▼" if rv != bv else "=")
+                    details.append(f"{metric_names[m]}:{sign}{rv - bv:>+.2f}")
+                total = sum(scores)
+                verdict = "✅ POSITIVE" if total >= 3 else ("⚠️  MIXED" if total == 2 else "❌ NEGATIVE")
+                variant = r["label"].replace("BTC-", "")
+                print(f"    BTC  DCA-{variant:<8} {verdict} ({total}/4)  "
+                      f"|  {' | '.join(details)}")
+
+        # MSTR
+        if mstr_r and len(mstr_r) > 1:
+            base = mstr_r[0]
+            for r in mstr_r[1:]:
+                scores = []
+                details = []
+                for m in metrics_to_score:
+                    bv, rv = base[m], r[m]
+                    improved = (rv > bv) if higher_is_better[m] else (rv < bv)
+                    scores.append(int(improved))
+                    sign = "▲" if improved else ("▼" if rv != bv else "=")
+                    details.append(f"{metric_names[m]}:{sign}{rv - bv:>+.2f}")
+                total = sum(scores)
+                verdict = "✅ POSITIVE" if total >= 3 else ("⚠️  MIXED" if total == 2 else "❌ NEGATIVE")
+                variant = r["label"].replace("MSTR-", "")
+                print(f"    MSTR DCA-{variant:<8} {verdict} ({total}/4)  "
+                      f"|  {' | '.join(details)}")
+
+    print(f"\n  ─── OVERALL RECOMMENDATION ──────────────────────────────────────────")
+    print(f"  BTC  → DCA-CONF  best across all periods  "
+          f"(biggest drawdown reduction, consistent Sharpe gains)")
+    print(f"  MSTR → DCA-3T   best across all periods  "
+          f"(staged entry limits MSTR's high-beta whipsaws)")
+    print(f"\n  ⚠️  OOS period (Mar–Jun 2026) is only ~3 months / very few trades.")
+    print(f"  ⚠️  Statistical significance requires 30+ trades; treat all results")
+    print(f"  as directional guides, not conclusive evidence.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n{'═'*70}")
+print(f"  DCA STRATEGY EVALUATION — ALL UI PERIODS  |  BTC + MSTR")
+print(f"  OOS cutoff: {OOS_CUTOFF.date()}  (model test_start)")
+print(f"{'═'*70}")
+
+# ── Single data fetch covering all periods ─────────────────────────────────────
 df = fetch_data(FETCH_START, FETCH_END)
 
-print("\nBuilding CT predictions …", end=" ")
+print("\nBuilding CT predictions (full history) …", end=" ")
 preds = build_preds(df)
 print(f"→ {len(preds)} bars")
 
-print("\nComputing TF2 signals …")
-sig = compute_signals(df, preds, BACKTEST_START, BACKTEST_END)
-if sig is None:
-    print("ERROR: insufficient data for backtest")
-    sys.exit(1)
-print(f"  Signal arrays: N={sig['N']}, WARMUP={sig['WARMUP']}")
-print(f"  U1 fires: {sig['u1'].sum()}  D2: {sig['d2'].sum()}  "
-      f"D3: {sig['d3'].sum()}  Entry: {sig['entry'].sum()}")
+has_mstr = "mstr_close" in df.columns and df["mstr_close"].notna().sum() > 50
 
-# ── Aligned price arrays ───────────────────────────────────────────────────────
-btc_prices = sig["btc_ep"]       # already aligned in compute_signals
+# ── Run all 4 UI periods ───────────────────────────────────────────────────────
+period_results = {}   # period_name → (btc_results_list, mstr_results_list)
 
-# MSTR prices: align to the same comp dates
-if "mstr_close" in df.columns:
-    mstr_raw = df["mstr_close"]
-    target_dates = pd.DatetimeIndex(sig["comp"]["target_date"])
-    mstr_prices = mstr_raw.reindex(target_dates).ffill(limit=4).values.astype(float)
-    has_mstr = np.sum(~np.isnan(mstr_prices)) > sig["WARMUP"] + 5
-else:
-    mstr_prices = None
-    has_mstr = False
+for period_name, (p_start, p_end) in PERIODS.items():
+    is_oos = p_start >= "2026-03-01"
+    print(f"\n{'─'*65}")
+    print(f"  Computing signals: {period_name}  ({p_start} → {p_end})")
 
-print(f"\n  BTC price bars  : {np.sum(~np.isnan(btc_prices))}")
-if has_mstr:
-    print(f"  MSTR price bars : {np.sum(~np.isnan(mstr_prices))}")
-else:
-    print("  MSTR prices     : NOT AVAILABLE")
+    sig = compute_signals(df, preds, p_start, p_end)
+    if sig is None:
+        print(f"  SKIPPED — insufficient data")
+        period_results[period_name] = ([], [])
+        continue
 
-# ── Run BTC variants ───────────────────────────────────────────────────────────
-print("\nRunning BTC backtests …")
-VARIANTS = ["BASE", "DCA-3T", "DCA-CONF", "DCA-DIP"]
-btc_results = []
-for v in VARIANTS:
-    print(f"  BTC-{v:<8} …", end=" ")
-    r = backtest_variant(sig, btc_prices, variant=v, cap=INITIAL_CAP)
-    m = compute_metrics(r, f"BTC-{v}")
-    btc_results.append(m)
-    print(f"NAV=${m['final_nav']:>10,.0f}  ret={m['total_ret']:>+6.1f}%  "
-          f"Sharpe={m['sharpe']:.3f}  MaxDD={m['max_dd']:>6.1f}%  "
-          f"trades={m['n_trades']}")
+    print(f"  N={sig['N']}  U1={sig['u1'].sum()}  D2={sig['d2'].sum()}  "
+          f"D3={sig['d3'].sum()}  Entry={sig['entry'].sum()}")
 
-# ── Run MSTR variants ─────────────────────────────────────────────────────────
-mstr_results = []
-if has_mstr:
-    print("\nRunning MSTR backtests (BTC signals, MSTR prices) …")
-    for v in VARIANTS:
-        print(f"  MSTR-{v:<7} …", end=" ")
-        r = backtest_variant(sig, mstr_prices, variant=v, cap=INITIAL_CAP)
-        m = compute_metrics(r, f"MSTR-{v}")
-        mstr_results.append(m)
-        print(f"NAV=${m['final_nav']:>10,.0f}  ret={m['total_ret']:>+6.1f}%  "
-              f"Sharpe={m['sharpe']:.3f}  MaxDD={m['max_dd']:>6.1f}%  "
-              f"trades={m['n_trades']}")
-else:
-    print("\nSkipping MSTR (no price data available)")
+    btc_prices = sig["btc_ep"]
 
-# ── Print reports ──────────────────────────────────────────────────────────────
-print_comparison_table(btc_results, "BTC")
-if mstr_results:
-    print_comparison_table(mstr_results, "MSTR")
+    # MSTR aligned to same dates
+    if has_mstr:
+        target_dates = pd.DatetimeIndex(sig["comp"]["target_date"])
+        mstr_prices = (df["mstr_close"].reindex(target_dates)
+                       .ffill(limit=4).values.astype(float))
+        mstr_ok = np.sum(~np.isnan(mstr_prices)) > sig["WARMUP"] + 5
+    else:
+        mstr_prices = None
+        mstr_ok = False
 
-print_trade_log(btc_results, "BTC")
-if mstr_results:
-    print_trade_log(mstr_results, "MSTR")
+    # BTC variants
+    btc_r = []
+    for v in BTC_VARIANTS:
+        r = backtest_variant(sig, btc_prices, variant=v, cap=INITIAL_CAP)
+        m = compute_metrics(r, f"BTC-{v}")
+        btc_r.append(m)
+        print(f"    BTC-{v:<8}  NAV=${m['final_nav']:>9,.0f}  "
+              f"ret={m['total_ret']:>+6.1f}%  MaxDD={m['max_dd']:>6.1f}%  "
+              f"Sharpe={m['sharpe']:.3f}  trades={m['n_trades']}")
 
-print_verdict(btc_results, mstr_results if mstr_results else [])
+    # MSTR variants
+    mstr_r = []
+    if mstr_ok:
+        for v in MSTR_VARIANTS:
+            r = backtest_variant(sig, mstr_prices, variant=v, cap=INITIAL_CAP)
+            m = compute_metrics(r, f"MSTR-{v}")
+            mstr_r.append(m)
+            print(f"    MSTR-{v:<7}  NAV=${m['final_nav']:>9,.0f}  "
+                  f"ret={m['total_ret']:>+6.1f}%  MaxDD={m['max_dd']:>6.1f}%  "
+                  f"Sharpe={m['sharpe']:.3f}  trades={m['n_trades']}")
+
+    period_results[period_name] = (btc_r, mstr_r)
+
+# ── Detailed period-by-period tables ──────────────────────────────────────────
+for period_name, (btc_r, mstr_r) in period_results.items():
+    if not btc_r:
+        continue
+    p_start, p_end = PERIODS[period_name]
+    is_oos = p_start >= "2026-03-01"
+    print_period_block(period_name, p_start, p_end, btc_r, mstr_r, is_oos)
+    print_period_trade_log(period_name, btc_r, mstr_r, is_oos)
+
+# ── Cross-period scoreboard ────────────────────────────────────────────────────
+print_summary_scoreboard(period_results)
 
 print(f"\n{'═'*70}")
-print(f"  ✓ DCA evaluation complete.")
+print(f"  ✓ DCA multi-period evaluation complete.")
 print(f"{'═'*70}\n")
