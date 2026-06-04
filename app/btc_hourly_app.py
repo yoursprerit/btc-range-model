@@ -4280,11 +4280,14 @@ def _build_synthetic_mstu_prices(pre_dt_iso: str, end_dt_iso: str) -> pd.Series:
     end_dt = pd.Timestamp(end_dt_iso)
 
     # ── Fetch actual MSTU (inception → end) ──────────────────────────────────
+    # Always extend past inception to get enough data for OLS calibration,
+    # even when end_dt falls before inception (e.g. bull-only backtest window).
+    _mstu_fetch_end = max(end_dt, INCEPTION + pd.Timedelta(days=90)) + pd.Timedelta(days=2)
     try:
         d_mstu = yf.download(
             "MSTU",
             start=INCEPTION.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            end=_mstu_fetch_end.strftime("%Y-%m-%d"),
             progress=False, auto_adjust=True,
         )
         if isinstance(d_mstu.columns, pd.MultiIndex):
