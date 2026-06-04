@@ -3309,6 +3309,275 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                              model_mtime=model_mtime, data_end=data_end)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# MSTU Backtesting  (T-Rex 2× Long MSTR Daily Target ETF)
+# ═══════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner="Running MSTU backtest …")
+def run_mstu_backtest(end_date_iso: str,
+                      backtest_start_iso: str = "2025-06-04",
+                      initial_capital: float = 100_000.0,
+                      model_mtime: float = 0.0,
+                      data_end: str = ""):
+    """MSTU backtest driven by BTC TF2+V-Gate signals.
+
+    Identical signal logic to run_mstr_backtest but executes trades in MSTU
+    (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU inception
+    is ~Jun 2025 so the default start reflects that.  data_end is forwarded
+    to _build_ct_predictions_extended as a cache-bust key.
+    """
+    WARMUP = 35
+
+    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
+    if ext is None:
+        return None
+    preds, raw_df = ext
+
+    btc_closes = raw_df["btc_close"]
+    btc_highs  = raw_df["btc_high"]
+    btc_lows   = raw_df["btc_low"]
+
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=60)
+    preds    = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    if len(preds) < WARMUP + 3:
+        return None
+
+    preds["actual_high"]  = btc_highs.reindex(preds.index).values
+    preds["actual_low"]   = btc_lows.reindex(preds.index).values
+    preds["actual_close"] = btc_closes.reindex(preds.index).values
+
+    comp = preds.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
+    N = len(comp)
+    if N < WARMUP + 3:
+        return None
+
+    dates = pd.DatetimeIndex(comp["target_date"])
+    _bt0  = max(WARMUP, int(dates.searchsorted(start_dt)))
+    if N - _bt0 < 3:
+        return None
+
+    # ── Fetch MSTU prices ─────────────────────────────────────────────────────
+    try:
+        d_mstu = yf.download(
+            "MSTU",
+            start=pre_dt.strftime("%Y-%m-%d"),
+            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            progress=False, auto_adjust=True,
+        )
+        if isinstance(d_mstu.columns, pd.MultiIndex):
+            d_mstu.columns = [c[0] for c in d_mstu.columns]
+        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+    except Exception:
+        return None
+
+    if d_mstu.empty or "Close" not in d_mstu.columns:
+        return None
+
+    # Forward-fill MSTU to all calendar days (weekends use last trading close)
+    mstu_raw = d_mstu["Close"].sort_index()
+    mstu_all = mstu_raw.reindex(
+        pd.date_range(mstu_raw.index[0],
+                      max(mstu_raw.index[-1], end_dt), freq="D")
+    ).ffill()
+    mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
+
+    # ── BTC signal arrays (identical to run_full_period_backtest) ─────────────
+    c_asof  = comp["close_asof"].values.astype(float)
+    pred_hi = comp["pred_high"].values.astype(float)
+    pred_lo = comp["pred_low"].values.astype(float)
+    act_hi  = comp["actual_high"].values.astype(float)
+    act_lo  = comp["actual_low"].values.astype(float)
+
+    err_hi = (act_hi - pred_hi) / c_asof * 100
+    err_lo = (pred_lo - act_lo) / c_asof * 100
+    hi_brk = (act_hi > pred_hi).astype(int)
+    lo_brk = (act_lo < pred_lo).astype(int)
+
+    ehma3 = np.zeros(N); elma3 = np.zeros(N)
+    hb3   = np.zeros(N, dtype=int); lb3 = np.zeros(N, dtype=int)
+    for i in range(N):
+        s = max(0, i-2)
+        ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
+        hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
+
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    d1 = (lb3 >= 2)    & (elma3 > 0.5)
+    d2 = ehma3 < -0.75
+    d3 = np.zeros(N, dtype=bool)
+    for i in range(1, N):
+        consec = 0
+        for k in range(i-1, -1, -1):
+            if hi_brk[k]: consec += 1
+            else: break
+        if consec >= 3 and lo_brk[i]:
+            d3[i] = True
+
+    ma30 = np.full(N, np.nan)
+    for i in range(N):
+        w = min(30, i+1)
+        ma30[i] = np.mean(c_asof[max(0, i-w+1):i+1])
+    above_ma30     = c_asof > ma30
+    ma30_slope_pos = np.zeros(N, dtype=bool)
+    for i in range(N):
+        if i >= 5 and np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
+            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
+    bull_regime = above_ma30 & ma30_slope_pos
+
+    clean_10d = np.zeros(N, dtype=bool)
+    for i in range(N):
+        lo_i = max(0, i-7)
+        clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
+
+    _DN_NORM_W    = 30
+    roll_ehi_norm = np.array([
+        float(np.mean(err_hi[max(0, i-_DN_NORM_W+1):i+1])) for i in range(N)
+    ])
+    dn_score_arr = np.zeros(N)
+    for i in range(N):
+        norm = max(abs(roll_ehi_norm[i]), 0.01)
+        dn_score_arr[i] = (
+            (-ehma3[i] / norm)                           * 0.30 +
+            (lb3[i]    / 3.0)                            * 0.30 +
+            (elma3[i]  / max(abs(elma3[i]), 0.10))       * 0.20 +
+            float(lo_brk[i])                             * 0.20
+        )
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
+    v_recent  = np.zeros(N, dtype=bool)
+    for i in range(N):
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+
+    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+
+    # ── Backtest loop — execute in MSTU ───────────────────────────────────────
+    nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
+    e_price = e_nav = e_date = e_trigger = None
+    trades  = []; nav_arr = np.full(N, np.nan)
+
+    for i in range(N):
+        si    = i - 1
+        price = mstu_px[i]
+        if i < _bt0:
+            nav_arr[i] = initial_capital; continue
+        if not np.isfinite(price) or price <= 0:
+            nav_arr[i] = mstu_qty * mstu_px[i-1] if pos == "LONG" and i > 0 else nav
+            continue
+        if pos == "LONG":
+            cur = mstu_qty * price
+            if si >= 0:
+                should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
+                exit_lbl    = "D3" if d3[si] else "D2 (bear)"
+            else:
+                should_exit = False; exit_lbl = "?"
+            if should_exit:
+                nav = cur
+                trades.append(dict(
+                    entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
+                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
+                    duration_days=(dates[i]-e_date).days,
+                ))
+                pos = "CASH"; mstu_qty = 0.0
+            else:
+                nav = cur
+        else:
+            if si >= 0 and tf1_entry[si]:
+                mstu_qty = nav / price; e_price = price; e_date = dates[i]
+                e_nav = nav; pos = "LONG"
+                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                    e_trigger = "U1 + V-reversal"
+                elif above_ma30[si] and clean_10d[si]:
+                    e_trigger = "U1 + ↑MA30 + clean10d"
+                elif above_ma30[si]:
+                    e_trigger = "U1 + ↑MA30"
+                else:
+                    e_trigger = "U1 + clean10d"
+        nav_arr[i] = mstu_qty * price if pos == "LONG" else nav
+
+    if pos == "LONG" and np.isfinite(mstu_px[N-1]) and mstu_px[N-1] > 0:
+        nav_arr[N-1] = mstu_qty * mstu_px[N-1]
+
+    nav_series = pd.Series(nav_arr[_bt0:], index=dates[_bt0:]).ffill()
+    bh_px0     = mstu_px[_bt0]
+    bh_series  = pd.Series(
+        initial_capital * mstu_px[_bt0:] / bh_px0, index=dates[_bt0:])
+
+    # ── Statistics ────────────────────────────────────────────────────────────
+    final_nav = float(nav_series.iloc[-1]); final_bh = float(bh_series.iloc[-1])
+    strat_ret = (final_nav/initial_capital - 1)*100
+    bh_ret    = (final_bh/initial_capital  - 1)*100
+    wins      = [t for t in trades if t["pnl_pct"] > 0]
+    losses    = [t for t in trades if t["pnl_pct"] <= 0]
+    win_rate  = 100*len(wins)/len(trades) if trades else 0.0
+    avg_pnl   = float(np.mean([t["pnl_pct"] for t in trades])) if trades else 0.0
+    best_t    = float(max([t["pnl_pct"] for t in trades])) if trades else 0.0
+    worst_t   = float(min([t["pnl_pct"] for t in trades])) if trades else 0.0
+    rm        = nav_series.cummax()
+    max_dd    = float(((nav_series - rm)/rm*100).min())
+    rm_bh     = bh_series.cummax()
+    bh_max_dd = float(((bh_series - rm_bh)/rm_bh*100).min())
+    days_in   = sum(t["duration_days"] for t in trades)
+    tot_days  = max(1, (dates[N-1] - dates[_bt0]).days)
+    rf_daily  = (1.045)**(1/252) - 1
+    dr_s      = nav_series.pct_change().fillna(0)
+    dr_b      = bh_series.pct_change().fillna(0)
+    exc_s     = dr_s - rf_daily; exc_b = dr_b - rf_daily
+    sharpe    = float(exc_s.mean()/exc_s.std()*np.sqrt(252)) if exc_s.std()>0 else 0.0
+    bh_sharpe = float(exc_b.mean()/exc_b.std()*np.sqrt(252)) if exc_b.std()>0 else 0.0
+    TAX_RATE = 0.35
+    _annual_net: dict = {}
+    for t in trades:
+        yr = pd.Timestamp(t["exit_date"]).year
+        _annual_net[yr] = _annual_net.get(yr, 0.0) + t["pnl_abs"]
+    total_tax_paid = sum(TAX_RATE * max(0.0, net) for net in _annual_net.values())
+    after_tax_nav  = final_nav - total_tax_paid
+    after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
+
+    bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
+
+    return dict(
+        strategy   = "TF2+V-Gate (MSTU)",
+        trades     = trades,
+        nav_series = nav_series,
+        bh_series  = bh_series,
+        open_pos   = pos == "LONG",
+        open_entry = (dict(price=e_price, date=e_date, nav=e_nav) if pos == "LONG" else None),
+        bull_regime_series = bull_regime_series,
+        stats = dict(
+            strategy        = "TF2+V-Gate (MSTU)",
+            initial_capital = initial_capital,
+            final_nav       = final_nav,      final_bh      = final_bh,
+            strat_ret       = strat_ret,      bh_ret        = bh_ret,
+            alpha_abs       = final_nav - final_bh,
+            n_trades        = len(trades),
+            n_wins          = len(wins),      n_losses      = len(losses),
+            win_rate        = win_rate,       avg_pnl       = avg_pnl,
+            best_trade      = best_t,         worst_trade   = worst_t,
+            max_drawdown    = max_dd,         bh_max_dd     = bh_max_dd,
+            sharpe          = sharpe,         bh_sharpe     = bh_sharpe,
+            time_in_mkt     = 100*days_in/tot_days,
+            after_tax_nav   = after_tax_nav,  after_tax_ret = after_tax_ret,
+            total_tax_paid  = total_tax_paid,
+            start_date      = start_dt,
+            end_date        = dates[N-1],
+        ),
+    )
+
+
+@st.cache_data(show_spinner="Loading fixed-period MSTU backtest …")
+def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
+                                    model_mtime: float = 0.0,
+                                    data_end: str = ""):
+    """Cached wrapper for fixed-period MSTU backtests.
+
+    Invalidates on model change (model_mtime) or new daily price data (data_end).
+    """
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end)
+
+
 @st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
 def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
                      strategy: str = "TF2", start_date_iso: str = None):
@@ -4937,6 +5206,639 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 caption = (
                     "💡 P&L at MSTR execution prices (1-day lag from BTC signal). "
                     "Entry/exit triggered by BTC TF2+V-Gate. MSTR prices split-adjusted. "
+                )
+                if lbl == "oos":
+                    caption += "✅ Fully OOS — BTC CT model never saw this data."
+                elif lbl == "full":
+                    caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                else:
+                    caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
+                st.caption(caption)
+            lt_idx += 1
+
+
+def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
+                                           bt_full=None, key_suffix: str = "") -> None:
+    """Render the MSTU backtesting dashboard (BTC TF2+V-Gate signals → MSTU execution).
+
+    Three-period layout — no bull market period since MSTU only launched ~Jun 2025:
+      • Teal color scheme to distinguish from BTC (blue/orange) and MSTR (purple)
+      • MSTU ETF prices in trade log
+      • B&H comparison uses MSTU rather than BTC or MSTR
+    """
+    st.markdown("---")
+    st.subheader("📈 MSTU — BTC Signal-Driven Backtest (TF2 + V-Gate)")
+
+    if bt_bear is None:
+        st.info("⚙️ MSTU backtest computing … fetching MSTU data and building signals. "
+                "Refresh in a moment.")
+        return
+
+    # ── Strategy rules card ───────────────────────────────────────────────────
+    st.markdown("""
+<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+
+  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📈 TF2 + V-Gate on MSTU &nbsp;—&nbsp; BTC Signals · MSTU Execution
+  </div>
+
+  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>MSTU (T-Rex 2× Long MSTR Daily Target ETF)</b> instead of BTC.
+    MSTU provides <b>2× daily leveraged exposure</b> to MSTR stock — which itself holds
+    ~580,000 BTC — making it a doubly-leveraged Bitcoin proxy. Inception ~Jun 2025.
+  </div>
+
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTU buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0d9488; font-size:11px;'>
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>At least one BTC trend gate passes</b>:
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
+            &nbsp; BTC close above its 30-day moving average
+            <br>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
+
+  <!-- EXIT -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📤 Exit — BTC signals trigger MSTU sell</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL regime</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          BTC above MA30 AND MA30 rising → exit MSTU on <b>D3 only</b> (patient)
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR / Neutral</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          BTC below MA30 or MA30 flat → exit MSTU on <b>D2 or D3</b> (defensive)
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
+
+  <div style='font-size:11px; color:#0f766e; line-height:1.8;'>
+    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTU trade at bar <i>i+1</i> close
+    &nbsp;·&nbsp;
+    💰 <b>Capital:</b> $100,000 initial
+    &nbsp;·&nbsp;
+    📅 <b>MSTU:</b> T-Rex 2× Long MSTR Daily Target ETF · inception ~Jun 2025
+    &nbsp;·&nbsp;
+    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+  </div>
+
+</div>""", unsafe_allow_html=True)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
+        if na:
+            return "<td style='text-align:center; color:#94a3b8;'>—</td>"
+        fv = fmt_fn(val)
+        if higher_is_better:
+            bg = "#dcfce7" if val > ref else ("#fee2e2" if val < ref else "#f8fafc")
+        else:
+            bg = "#dcfce7" if val < ref else ("#fee2e2" if val > ref else "#f8fafc")
+        return (f"<td style='text-align:center; background:{bg}; "
+                f"font-weight:600; padding:7px 10px;'>{fv}</td>")
+
+    def _plain(val, fmt_fn):
+        return f"<td style='text-align:center; padding:7px 10px;'>{fmt_fn(val)}</td>"
+
+    def _tag(txt, bg, fg="#1e293b"):
+        return (f"<td style='text-align:center; background:{bg}; "
+                f"color:{fg}; font-weight:600; padding:7px 10px;'>{txt}</td>")
+
+    fmt_nav   = lambda v: f"${v:,.0f}"
+    fmt_pct   = lambda v: f"{v:+.1f}%"
+    fmt_dd    = lambda v: f"{v:.1f}%"
+    fmt_ratio = lambda v: f"{v:.2f}"
+    fmt_time  = lambda v: f"{v:.0f}%"
+    fmt_tax   = lambda v: f"${v:,.0f}"
+
+    def _period_cells(s):
+        """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
+        _na4 = "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
+        if s is None:
+            return {k: _na4 for k in ("nav", "ret", "dd", "sh", "tim", "tax", "taxpd", "wr")}
+        tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
+        r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
+        dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
+        sh2  = s["sharpe"];          shb = s["bh_sharpe"]
+        tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
+        wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        ic   = s["initial_capital"]
+        bh_ltcg_tax = 0.15 * max(0.0, bh - ic)
+        bh_ltcg     = bh - bh_ltcg_tax
+        bh_ltcg_ret = (bh_ltcg / ic - 1) * 100
+        return {
+            "nav":  (_cell(tf2, bh, fmt_nav) +
+                     _cell(tax, bh_ltcg, fmt_nav) +
+                     _plain(bh,  fmt_nav) +
+                     _plain(bh_ltcg, fmt_nav)),
+            "ret":  (_cell(r2, rb, fmt_pct) +
+                     _cell(rt, bh_ltcg_ret, fmt_pct) +
+                     _plain(rb, fmt_pct) +
+                     _plain(bh_ltcg_ret, fmt_pct)),
+            "dd":   (_cell(dd2, ddb, fmt_dd, higher_is_better=False) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd) +
+                     _plain(ddb, fmt_dd) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd)),
+            "sh":   (_cell(sh2, shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio) +
+                     _plain(shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio)),
+            "tim":  (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
+                     f"{fmt_time(tim)}</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_time) +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>" +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>"),
+            "tax":  (_tag("0% pre-tax", "#f1f5f9") +
+                     _tag("35% STCG/yr", "#fef3c7") +
+                     _tag("0% unrealised", "#dcfce7") +
+                     _tag("15% LTCG exit", "#ecfdf5", fg="#065f46")),
+            "taxpd": (_cell(na=True, val=0, ref=0, fmt_fn=fmt_tax) +
+                      _tag(f"${txp:,.0f}", "#fef3c7") +
+                      _tag("$0", "#dcfce7") +
+                      _tag(f"${bh_ltcg_tax:,.0f}", "#ecfdf5", fg="#065f46")),
+            "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
+                     f"{wr:.0f}% ({nw}W/{nl}L)</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
+        }
+
+    s_r = bt_bear["stats"] if bt_bear else None
+
+    cutoffs   = _cutoffs()
+    ct_cutoff = cutoffs.get("daily H/L")
+    ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
+    _oos_ts   = cutoffs.get("daily H/L test_start")
+    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    s_oos = None; bt_oos = None
+
+    if bt_full_oos is not None:
+        _fnav = bt_full_oos["nav_series"]; _fbh = bt_full_oos["bh_series"]
+        _ftr  = bt_full_oos["trades"];     ic   = bt_full_oos["stats"]["initial_capital"]
+        _onav_raw = _fnav[_fnav.index >= OOS_START]
+        _obh_raw  = _fbh[_fbh.index  >= OOS_START]
+        if len(_onav_raw) > 1:
+            _osn  = float(_fnav.asof(OOS_START)) or ic
+            _osb  = float(_fbh.asof(OOS_START))  or ic
+            _onav = _onav_raw / _osn * ic
+            _obh  = _obh_raw  / _osb  * ic
+            _of   = float(_onav.iloc[-1]);  _obf = float(_obh.iloc[-1])
+            _otr  = [t for t in _ftr if pd.Timestamp(t["entry_date"]) >= OOS_START]
+            _ow   = [t for t in _otr if t["pnl_pct"] > 0]
+            _ol   = [t for t in _otr if t["pnl_pct"] <= 0]
+            _rf   = (1.045)**(1/252) - 1
+            _odr  = _onav.pct_change().fillna(0)
+            _osh  = (float((_odr-_rf).mean()/(_odr-_rf).std()*np.sqrt(252))
+                     if (_odr-_rf).std() > 0 else 0.0)
+            _bdr  = _obh.pct_change().fillna(0)
+            _bsh  = (float((_bdr-_rf).mean()/(_bdr-_rf).std()*np.sqrt(252))
+                     if (_bdr-_rf).std() > 0 else 0.0)
+            _opk  = _onav.cummax()
+            _odd  = float(((_onav-_opk)/_opk*100).min())
+            _bpk  = _obh.cummax()
+            _bdd  = float(((_obh-_bpk)/_bpk*100).min())
+            _norm = ic / _osn
+            _oys: dict = {}
+            for t in _otr:
+                yr = pd.Timestamp(t["exit_date"]).year
+                _oys[yr] = _oys.get(yr, 0.0) + t["pnl_abs"] * _norm
+            _otax = sum(0.35*max(0.0, v) for v in _oys.values())
+            _oat  = _of - _otax
+            _oday = (int(_onav.index[-1].value) - int(OOS_START.value))//86_400_000_000_000
+            _odin = sum(t["duration_days"] for t in _otr)
+            s_oos = dict(
+                initial_capital = ic,
+                final_nav=_of,   final_bh=_obf,
+                strat_ret=(_of/ic-1)*100,   bh_ret=(_obf/ic-1)*100,
+                after_tax_nav=_oat, after_tax_ret=(_oat/ic-1)*100,
+                alpha_abs=_of - _obf,
+                max_drawdown=_odd, bh_max_dd=_bdd,
+                sharpe=_osh, bh_sharpe=_bsh,
+                time_in_mkt=100*_odin/max(_oday, 1),
+                total_tax_paid=_otax,
+                win_rate=100*len(_ow)/len(_otr) if _otr else 0.0,
+                n_wins=len(_ow), n_losses=len(_ol),
+                start_date=OOS_START, end_date=_onav.index[-1],
+            )
+            _otr_scaled = [dict(t, exit_nav=t["exit_nav"]*_norm) for t in _otr]
+            _oos_open = False; _oos_oe = None
+            if bt_full_oos.get("open_pos") and bt_full_oos.get("open_entry"):
+                _oe = bt_full_oos["open_entry"]
+                if pd.Timestamp(_oe["date"]) >= OOS_START:
+                    _oos_open = True
+                    _oos_oe   = dict(price=_oe["price"], date=_oe["date"],
+                                     nav=_oe["nav"] * _norm)
+            _full_reg = bt_full_oos.get("bull_regime_series")
+            _oos_reg  = (_full_reg[_full_reg.index >= OOS_START]
+                         if _full_reg is not None else None)
+            bt_oos = dict(
+                nav_series=_onav, bh_series=_obh,
+                open_pos=_oos_open, open_entry=_oos_oe,
+                trades=_otr_scaled, stats=s_oos,
+                bull_regime_series=_oos_reg,
+            )
+
+    s_full = bt_full["stats"] if bt_full else None
+
+    pr     = _period_cells(s_r)
+    p_oos  = _period_cells(s_oos)
+    p_full = _period_cells(s_full)
+
+    if s_r:
+        lbl_r = (f"🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS<br>"
+                 f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                 f"{pd.Timestamp(s_r['start_date']).strftime('%b %d, %Y')} → "
+                 f"{pd.Timestamp(s_r['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_r = "🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS"
+
+    if s_oos:
+        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+                   f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                   f"{OOS_START.strftime('%b %d, %Y')} → "
+                   f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
+                   f"</span><br>"
+                   f"<span style='font-size:9px; font-weight:400; opacity:0.75;'>"
+                   f"CT model trained to {ct_str}</span>")
+    else:
+        lbl_oos = "🔬 OOS Only"
+
+    if s_full:
+        lbl_full = (f"📈 Full (Since Inception) ⚠️ Mixed IS/OOS<br>"
+                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                    f"{pd.Timestamp(s_full['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(s_full['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_full = "📈 Full (Since Inception)"
+
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (MSTU)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTU (0% unrealised)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H MSTU (15% LTCG)</th>")
+    sub_hdr = (
+        "<tr style='background:#334155; color:white; font-size:11px;'>"
+        "<th style='padding:5px 12px;'></th>"
+        + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
+        + "</tr>"
+    )
+
+    metric_rows = [
+        ("Final NAV ($)",          "nav"),
+        ("Total Return",           "ret"),
+        ("Max Drawdown",           "dd"),
+        ("Sharpe Ratio (RF 4.5%)", "sh"),
+        ("Time in Market",         "tim"),
+        ("Tax Treatment",          "tax"),
+        ("Tax Paid",               "taxpd"),
+        ("Win Rate",               "wr"),
+    ]
+
+    tbody = ""
+    _sep = "<td style='width:6px; padding:0; border-left:3px solid #cbd5e1;'></td>"
+    for i, (lbl, key) in enumerate(metric_rows):
+        bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+        tbody += (
+            f"<tr style='background:{bg};'>"
+            f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
+            f"color:#334155;'>{lbl}</td>"
+            f"{pr[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
+            f"</tr>"
+        )
+
+    st.markdown(
+        f"""
+        <div style="overflow-x:auto; margin:10px 0 6px 0;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;
+                      border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+          <thead>
+            <tr style="background:#0f766e; color:white;">
+              <th style="padding:10px 12px; text-align:left; font-weight:600; min-width:160px;">
+                Metric</th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  border-right:3px solid #0d9488;">
+                {lbl_r}</th>
+              <th style="width:6px; padding:0; background:#0f766e;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#14532d; border-right:3px solid #166534;">
+                {lbl_oos}</th>
+              <th style="width:6px; padding:0; background:#0f766e;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#134e4a;">
+                {lbl_full}</th>
+            </tr>
+            {sub_hdr}
+          </thead>
+          <tbody>
+            {tbody}
+          </tbody>
+        </table>
+        </div>
+        <p style="font-size:11px; color:#64748b; margin:2px 0 14px 0;">
+        🟢 Green = better for investor vs B&amp;H benchmark &nbsp;|&nbsp;
+        🔴 Red = worse &nbsp;|&nbsp;
+        💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
+        💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
+        ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
+        🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
+        CT model last trained {ct_str}.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Open-position badge ───────────────────────────────────────────────────
+    if bt_bear and bt_bear["open_pos"] and bt_bear["open_entry"]:
+        oe  = bt_bear["open_entry"]
+        unr = (float(bt_bear["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+        oe_col = "#16a34a" if unr >= 0 else "#dc2626"
+        st.markdown(
+            f"<div style='background:#f0fdfa; border:1px solid #0d9488; border-radius:8px; "
+            f"padding:8px 14px; margin:0 0 10px 0; font-size:13px; color:#134e4a;'>"
+            f"📍 <b>Open MSTU position</b> — bought "
+            f"{pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
+            f"@ ${oe['price']:,.2f} · "
+            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>"
+            f"{unr:+.1f}%</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    def _make_mstu_chart(bt, title):
+        if bt is None:
+            return None
+        s     = bt["stats"]
+        nav_s = bt["nav_series"]
+        bh_s  = bt["bh_series"]
+        has_p = bt["open_pos"]
+
+        fig = go.Figure()
+
+        regime = bt.get("bull_regime_series")
+        if regime is not None and len(regime) > 0:
+            arr     = regime.values.astype(bool)
+            idx     = regime.index
+            changes = np.where(np.diff(arr.astype(int)) != 0)[0] + 1
+            starts  = np.concatenate([[0], changes])
+            ends    = np.concatenate([changes, [len(arr)]])
+            bull_leg = bear_leg = False
+            for s_i, e_i in zip(starts, ends):
+                is_bull  = bool(arr[s_i])
+                color    = "rgba(34,197,94,0.10)" if is_bull else "rgba(239,68,68,0.07)"
+                lname    = "🐂 Bull Regime (BTC)" if is_bull else "🐻 Bear/Neutral (BTC)"
+                show_leg = (is_bull and not bull_leg) or (not is_bull and not bear_leg)
+                e_idx    = min(e_i, len(idx) - 1)
+                fig.add_vrect(
+                    x0=idx[s_i], x1=idx[e_idx],
+                    fillcolor=color, line_width=0,
+                    name=lname, showlegend=show_leg,
+                )
+                if is_bull: bull_leg = True
+                else:       bear_leg = True
+
+        fig.add_trace(go.Scatter(
+            x=bh_s.index, y=bh_s.values, name="Buy & Hold MSTU",
+            line=dict(color="#94a3b8", width=1.5, dash="dot"),
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold MSTU</extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate (MSTU)",
+            line=dict(color="#0d9488", width=2.5),
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTU)</extra>",
+        ))
+        fig.add_hline(
+            y=s["initial_capital"], line_dash="dash",
+            line_color="#64748b", line_width=1, opacity=0.4,
+            annotation_text="  $100k start", annotation_position="bottom right",
+        )
+        for t in bt["trades"]:
+            entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
+            exit_y  = float(t["exit_nav"])
+            win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            fig.add_trace(go.Scatter(
+                x=[t["entry_date"]], y=[entry_y], mode="markers",
+                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>BUY MSTU</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
+                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}<extra></extra>"
+                ),
+            ))
+            fig.add_trace(go.Scatter(
+                x=[t["exit_date"]], y=[exit_y], mode="markers",
+                marker=dict(symbol="triangle-down", size=13, color=win_col,
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>SELL MSTU</b> {pd.Timestamp(t['exit_date']).strftime('%b %d')}"
+                    f" @ ${t['exit_price']:,.2f} "
+                    f"({t['pnl_pct']:+.1f}%) — {t['exit_signal']}<extra></extra>"
+                ),
+            ))
+        if has_p and bt["open_entry"]:
+            oe   = bt["open_entry"]
+            oe_y = float(nav_s.asof(oe["date"])) if oe["date"] >= nav_s.index[0] else s["initial_capital"]
+            fig.add_trace(go.Scatter(
+                x=[oe["date"]], y=[oe_y], mode="markers",
+                marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>BUY MSTU (OPEN)</b> {pd.Timestamp(oe['date']).strftime('%b %d')}"
+                    f" @ ${oe['price']:,.2f}<extra></extra>"
+                ),
+            ))
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
+            xaxis_title=None,
+            yaxis_title="Portfolio Value ($)",
+            yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+            height=360,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=0, r=0, t=36, b=0),
+            hovermode="x unified",
+            plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
+            xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+        )
+        return fig
+
+    tab_labels = []
+    if bt_bear:
+        sr = bt_bear["stats"]
+        tab_labels.append(
+            f"🐻 Bear Market  "
+            f"({pd.Timestamp(sr['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sr['end_date']).strftime('%b %Y')})"
+        )
+    if bt_oos:
+        so = bt_oos["stats"]
+        tab_labels.append(
+            f"🔬 OOS Only  "
+            f"({pd.Timestamp(so['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(so['end_date']).strftime('%b %Y')})"
+        )
+    if bt_full:
+        sfl = bt_full["stats"]
+        tab_labels.append(
+            f"📈 Full (Since Inception)  "
+            f"({pd.Timestamp(sfl['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sfl['end_date']).strftime('%b %Y')})"
+        )
+
+    if tab_labels:
+        tabs = st.tabs(tab_labels)
+        tab_idx = 0
+        if bt_bear:
+            with tabs[tab_idx]:
+                sr = bt_bear["stats"]
+                fig_r = _make_mstu_chart(
+                    bt_bear,
+                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Bear Market  "
+                    f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_r:
+                    st.plotly_chart(fig_r, use_container_width=True,
+                                    key=f"mstu_chart_bear_{key_suffix}")
+            tab_idx += 1
+        if bt_oos:
+            with tabs[tab_idx]:
+                so = bt_oos["stats"]
+                fig_o = _make_mstu_chart(
+                    bt_oos,
+                    f"TF2+V-Gate (MSTU) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_o:
+                    st.plotly_chart(fig_o, use_container_width=True,
+                                    key=f"mstu_chart_oos_{key_suffix}")
+            tab_idx += 1
+        if bt_full:
+            with tabs[tab_idx]:
+                sfl = bt_full["stats"]
+                fig_fl = _make_mstu_chart(
+                    bt_full,
+                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Full (Since Inception)  "
+                    f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_fl:
+                    st.plotly_chart(fig_fl, use_container_width=True,
+                                    key=f"mstu_chart_full_{key_suffix}")
+
+    # ── Trade log ─────────────────────────────────────────────────────────────
+    def _mstu_trade_log_rows(bt):
+        if bt is None:
+            return [], False, None
+        s     = bt["stats"]
+        has_p = bt["open_pos"]
+        rows  = []
+        for i, t in enumerate(bt["trades"], 1):
+            rows.append({
+                "#":           i,
+                "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
+                "Buy MSTU @":  f"${t['entry_price']:,.2f}",
+                "BTC Trigger": t["entry_trigger"],
+                "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
+                "Sell MSTU @": f"${t['exit_price']:,.2f}",
+                "P&L":         f"{t['pnl_pct']:+.1f}%",
+                "Result":      "✓ WIN" if t["pnl_pct"] > 0 else "✗ LOSS",
+                "Days":        t["duration_days"],
+                "BTC Signal":  t["exit_signal"],
+                "NAV After":   f"${t['exit_nav']:,.0f}",
+            })
+        if has_p and bt["open_entry"]:
+            oe = bt["open_entry"]
+            unr_pct = (float(bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+            rows.append({
+                "#":           len(bt["trades"]) + 1,
+                "Entry":       pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
+                "Buy MSTU @":  f"${oe['price']:,.2f}",
+                "BTC Trigger": "—",
+                "Exit":        "⏳ OPEN",
+                "Sell MSTU @": "—",
+                "P&L":         f"{unr_pct:+.1f}% (unrlzd)",
+                "Result":      "🟡 OPEN",
+                "Days":        (pd.Timestamp.now() - pd.Timestamp(oe["date"])).days,
+                "BTC Signal":  "—",
+                "NAV After":   "—",
+            })
+        return rows, has_p, s
+
+    log_tabs = []
+    if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
+    if bt_oos:  log_tabs.append("📋 OOS Trade Log")
+    if bt_full: log_tabs.append("📋 Full (Since Inception) Trade Log")
+
+    if log_tabs:
+        ltabs = st.tabs(log_tabs)
+        lt_idx = 0
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_oos, "oos"), (bt_full, "full")]:
+            if bt_src is None:
+                continue
+            rows, has_p, s = _mstu_trade_log_rows(bt_src)
+            with ltabs[lt_idx]:
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True,
+                                 use_container_width=True)
+                else:
+                    st.info("No trades in this period — strategy was in cash throughout.")
+                caption = (
+                    "💡 P&L at MSTU execution prices (1-day lag from BTC signal). "
+                    "Entry/exit triggered by BTC TF2+V-Gate. "
+                    "MSTU = T-Rex 2× Long MSTR Daily Target ETF. "
                 )
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
@@ -8759,13 +9661,14 @@ def render_explainability_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical | Retrain Status | MSTR Backtesting | Explainability | Leading Indicators
+# Tabs: Live | Historical | Retrain Status | MSTR Backtesting | MSTU Backtesting | Explainability | Leading Indicators
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_retrain, tab_mstr, tab_explain, tab_leading = st.tabs([
+tab_live, tab_hist, tab_retrain, tab_mstr, tab_mstu, tab_explain, tab_leading = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
     "🔄 Retrain Status",
     "📊 MSTR Backtesting",
+    "📈 MSTU Backtesting",
     "🧠 Explainability",
     "📡 Leading Indicators",
 ])
@@ -8994,6 +9897,33 @@ with tab_mstr:
         bt_full_oos=_mstr_full_oos,
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
+    )
+
+with tab_mstu:
+    st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
+    st.markdown(
+        "This tab runs the **same TF2 + V-Gate strategy** used for MSTR but executes "
+        "trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)** instead. "
+        "All entry/exit signals are computed from the BTC CT model predictions — only the "
+        "traded asset changes. MSTU provides **2× daily leveraged exposure** to MSTR stock, "
+        "which holds ~580,000 BTC. ⚠️ MSTU launched ~Jun 2025 — no bull market period is available."
+    )
+    _mstu_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
+                         if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
+    _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
+    _mstu_raw      = _fetch_daily_raw()
+    _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
+    _mstu_bear     = _run_fixed_period_mstu_backtest(
+        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
+    _mstu_full_oos = run_mstu_backtest(
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
+    _mstu_full     = _run_fixed_period_mstu_backtest(
+        _mstu_oos_end, "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # since inception, rolling end
+    render_mstu_trading_strategy_dashboard(
+        _mstu_bear,
+        bt_full_oos=_mstu_full_oos,
+        bt_full=_mstu_full,
+        key_suffix="mstu_tab",
     )
 
 with tab_explain:
