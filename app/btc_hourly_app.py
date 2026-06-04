@@ -12165,7 +12165,7 @@ with tab_mstu:
     _mstu_bear     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–May 2025 (synthetic)
+        "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
     _mstu_full     = _run_fixed_period_mstu_backtest(
@@ -12197,7 +12197,7 @@ with tab_mstu_opts:
     _mstu_opts_bear     = _run_fixed_period_mstu_options_backtest(
         "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
-        "2025-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
+        "2025-06-14", "2024-06-05", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)  # Bull: Jun 2024–Jun 2025 (matches MSTR)
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_full     = _run_fixed_period_mstu_options_backtest(
