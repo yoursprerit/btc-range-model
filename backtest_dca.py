@@ -918,6 +918,242 @@ def print_period_trade_log(period_name, btc_results, mstr_results, is_oos):
                       f"{t.get('regime','?'):<7} {oos}")
 
 
+def compute_tax_metrics(m, tax_rate=0.35):
+    """Compute 35% STCG and B&H 15% LTCG tax metrics from a compute_metrics() dict."""
+    trades = m.get("trades", [])
+    final_nav = m["final_nav"]
+    bh_final = m["bh_final"]
+
+    _annual_net = {}
+    for t in trades:
+        yr = t["exit_date"].year
+        _annual_net[yr] = _annual_net.get(yr, 0) + t["pnl_abs"]
+    total_tax_paid = sum(tax_rate * max(0.0, net) for net in _annual_net.values())
+    after_tax_nav  = final_nav - total_tax_paid
+    after_tax_ret  = (after_tax_nav / INITIAL_CAP - 1) * 100
+
+    bh_ltcg_tax = 0.15 * max(0.0, bh_final - INITIAL_CAP)
+    bh_ltcg     = bh_final - bh_ltcg_tax
+    bh_ltcg_ret = (bh_ltcg / INITIAL_CAP - 1) * 100
+
+    return dict(
+        total_tax_paid=total_tax_paid,
+        after_tax_nav=after_tax_nav,
+        after_tax_ret=after_tax_ret,
+        bh_ltcg_tax=bh_ltcg_tax,
+        bh_ltcg=bh_ltcg,
+        bh_ltcg_ret=bh_ltcg_ret,
+    )
+
+
+def generate_ui_tables(period_results):
+    """Print exact UI-style backtesting tables for BTC and MSTR with DCA comparison."""
+    IC = INITIAL_CAP
+    PERIODS_ORDER = ["Bear Market", "Bull Market", "OOS Only", "Full Market"]
+
+    def g(v, r, hi=True):
+        """Return ✅/❌ marker: green if strategy is better than reference."""
+        if hi:
+            return " ✅" if v > r else (" ❌" if v < r else "  ")
+        else:  # lower is better (drawdown, tax)
+            return " ✅" if v < r else (" ❌" if v > r else "  ")
+
+    for asset, dca_variant, asset_label in [
+        ("BTC",  "DCA-DIP", "BTC — Direct Exposure"),
+        ("MSTR", "DCA-3T",  "MSTR — Leveraged BTC Proxy (~2–3× beta)"),
+    ]:
+        W = 130
+        print(f"\n{'═'*W}")
+        print(f"  UI BACKTESTING TABLE — {asset_label}   |   DCA Variant: {dca_variant}")
+        print(f"{'═'*W}")
+
+        # Gather per-period data
+        pdata = {}
+        for pname in PERIODS_ORDER:
+            btc_r, mstr_r = period_results.get(pname, ([], []))
+            results = btc_r if asset == "BTC" else mstr_r
+            if not results:
+                continue
+            base_m = next((m for m in results if "BASE" in m["label"]), None)
+            dca_m  = next((m for m in results if dca_variant in m["label"]), None)
+            if base_m is None:
+                continue
+            base_tx = compute_tax_metrics(base_m)
+            dca_tx  = compute_tax_metrics(dca_m) if dca_m else None
+            pdata[pname] = dict(
+                base=base_m, dca=dca_m,
+                base_tx=base_tx, dca_tx=dca_tx,
+            )
+
+        # ── Column header ──────────────────────────────────────────────────────
+        mc = 22   # metric col width
+        fc = 14   # field col width
+        N_SUBCOLS = 5
+
+        print(f"\n  {'Metric':<{mc}}", end="")
+        for pname in PERIODS_ORDER:
+            ps, pe = PERIODS[pname]
+            lbl = f"{pname} ({ps}→{pe})"
+            span = fc * N_SUBCOLS + (N_SUBCOLS - 1) * 2
+            print(f"  {lbl:^{span}}", end="")
+        print()
+
+        sub_labels = ["TF2 (0% tax)", "TF2 (35%STCG)", dca_variant, "B&H (0%)", "B&H (15%LTCG)"]
+        print(f"  {'':<{mc}}", end="")
+        for pname in PERIODS_ORDER:
+            for sl in sub_labels:
+                print(f"  {sl:>{fc}}", end="")
+        print()
+        print(f"  {'─'*W}")
+
+        # ── Metric rows ────────────────────────────────────────────────────────
+        for row_label, row_key in [
+            ("Final NAV ($)",      "nav"),
+            ("Total Return",       "ret"),
+            ("Max Drawdown",       "dd"),
+            ("Sharpe (RF 4.5%)",   "sharpe"),
+            ("Time in Market",     "tim"),
+            ("Tax Treatment",      "taxlabel"),
+            ("Tax Paid",           "taxpd"),
+            ("Win Rate",           "wr"),
+        ]:
+            print(f"  {row_label:<{mc}}", end="")
+
+            for pname in PERIODS_ORDER:
+                d = pdata.get(pname)
+                if d is None:
+                    for _ in range(N_SUBCOLS):
+                        print(f"  {'—':>{fc}}", end="")
+                    continue
+
+                bm  = d["base"]
+                dm  = d["dca"]
+                bt  = d["base_tx"]
+                dt  = d["dca_tx"]
+                bh_f   = bm["bh_final"]
+                bh_r   = bm["bh_ret"]
+                bh_dd  = bm["bh_max_dd"]
+                bh_ltcg    = bt["bh_ltcg"]
+                bh_ltcg_r  = bt["bh_ltcg_ret"]
+                bh_ltcg_tx = bt["bh_ltcg_tax"]
+
+                btrades = bm["trades"]
+                b_wins  = len([t for t in btrades if t["pnl_pct"] > 0])
+                b_loss  = len([t for t in btrades if t["pnl_pct"] <= 0])
+
+                if dm:
+                    dtrades = dm["trades"]
+                    d_wins  = len([t for t in dtrades if t["pnl_pct"] > 0])
+                    d_loss  = len([t for t in dtrades if t["pnl_pct"] <= 0])
+
+                if row_key == "nav":
+                    tf2  = f"${bm['final_nav']:>9,.0f}"
+                    tf2t = f"${bt['after_tax_nav']:>9,.0f}"
+                    dca  = f"${dm['final_nav']:>9,.0f}" if dm else "—"
+                    bh0  = f"${bh_f:>9,.0f}"
+                    bh15 = f"${bh_ltcg:>9,.0f}"
+                    vals = [tf2, tf2t, dca, bh0, bh15]
+                    refs = [bh_f,  bh_ltcg, bh_f, None, None]
+
+                elif row_key == "ret":
+                    def fp(v): return f"{v:>+.1f}%"
+                    tf2  = fp(bm["total_ret"])
+                    tf2t = fp(bt["after_tax_ret"])
+                    dca  = fp(dm["total_ret"]) if dm else "—"
+                    bh0  = fp(bh_r)
+                    bh15 = fp(bh_ltcg_r)
+                    vals = [tf2, tf2t, dca, bh0, bh15]
+                    refs = [bh_r, bh_ltcg_r, bh_r, None, None]
+
+                elif row_key == "dd":
+                    def fd(v): return f"{v:>.1f}%"
+                    tf2  = fd(bm["max_dd"])
+                    tf2t = fd(bm["max_dd"])
+                    dca  = fd(dm["max_dd"]) if dm else "—"
+                    bh0  = fd(bh_dd)
+                    bh15 = fd(bh_dd)
+                    vals = [tf2, tf2t, dca, bh0, bh15]
+                    refs = [bh_dd, bh_dd, bh_dd, None, None]
+
+                elif row_key == "sharpe":
+                    def fs(v): return f"{v:.3f}"
+                    tf2  = fs(bm["sharpe"])
+                    tf2t = fs(bm["sharpe"])
+                    dca  = fs(dm["sharpe"]) if dm else "—"
+                    bh0  = "—"
+                    bh15 = "—"
+                    vals = [tf2, tf2t, dca, bh0, bh15]
+                    refs = [None, None, None, None, None]
+
+                elif row_key == "tim":
+                    def ft(v): return f"{v:.0f}%"
+                    tf2  = ft(bm["time_in"])
+                    tf2t = ft(bm["time_in"])
+                    dca  = ft(dm["time_in"]) if dm else "—"
+                    vals = [tf2, tf2t, dca, "100%", "100%"]
+                    refs = [None] * 5
+
+                elif row_key == "taxlabel":
+                    vals = ["0% pre-tax", "35% STCG/yr", "35% STCG/yr",
+                            "0% unrealised", "15% LTCG exit"]
+                    refs = [None] * 5
+
+                elif row_key == "taxpd":
+                    def fx(v): return f"${v:,.0f}"
+                    tf2  = "$0"
+                    tf2t = fx(bt["total_tax_paid"])
+                    dca  = fx(dt["total_tax_paid"]) if dt else "—"
+                    bh0  = "$0"
+                    bh15 = fx(bh_ltcg_tx)
+                    vals = [tf2, tf2t, dca, bh0, bh15]
+                    refs = [None] * 5
+
+                elif row_key == "wr":
+                    tf2  = f"{bm['win_rate']:.0f}% ({b_wins}W/{b_loss}L)"
+                    tf2t = f"{bm['win_rate']:.0f}% ({b_wins}W/{b_loss}L)"
+                    if dm:
+                        dca = f"{dm['win_rate']:.0f}% ({d_wins}W/{d_loss}L)"
+                    else:
+                        dca = "—"
+                    vals = [tf2, tf2t, dca, "B&H hold", "B&H hold"]
+                    refs = [None] * 5
+
+                else:
+                    vals = ["—"] * N_SUBCOLS
+                    refs = [None] * N_SUBCOLS
+
+                for vi, (vstr, ref) in enumerate(zip(vals, refs)):
+                    # Color markers vs B&H for strategy cols (cols 0,1,2)
+                    if ref is not None and isinstance(ref, (int, float)):
+                        raw_val = None
+                        if row_key == "nav" and vi < 3:
+                            raw_val = [bm["final_nav"], bt["after_tax_nav"],
+                                       dm["final_nav"] if dm else None][vi]
+                            marker = g(raw_val, ref) if raw_val is not None else "  "
+                        elif row_key == "ret" and vi < 3:
+                            raw_val = [bm["total_ret"], bt["after_tax_ret"],
+                                       dm["total_ret"] if dm else None][vi]
+                            marker = g(raw_val, ref) if raw_val is not None else "  "
+                        elif row_key == "dd" and vi < 3:
+                            raw_val = [bm["max_dd"], bm["max_dd"],
+                                       dm["max_dd"] if dm else None][vi]
+                            # higher (less negative) drawdown = better for strategy
+                            marker = g(raw_val, ref) if raw_val is not None else "  "
+                        else:
+                            marker = "  "
+                    else:
+                        marker = "  "
+                    print(f"  {str(vstr):>{fc}}{marker[:1]}", end="")
+            print()
+
+        print(f"  {'─'*W}")
+        # Legend
+        if asset == "BTC":
+            print(f"  ✅ = beats B&H reference  ❌ = underperforms B&H")
+            print(f"  Col 1 (TF2 0% tax) vs B&H (0%);  Col 2 (35% STCG/yr) vs B&H (15% LTCG);  Col 3 ({dca_variant}) vs B&H (0%)")
+        print()
+
+
 def print_summary_scoreboard(period_results):
     """Cross-period summary: for each period, show DCA improvement vs BASE."""
     W = 90
@@ -1066,3 +1302,6 @@ print_summary_scoreboard(period_results)
 print(f"\n{'═'*70}")
 print(f"  ✓ DCA multi-period evaluation complete.")
 print(f"{'═'*70}\n")
+
+# ── UI-style backtesting tables with DCA column ────────────────────────────────
+generate_ui_tables(period_results)
