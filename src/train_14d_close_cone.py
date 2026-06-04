@@ -27,7 +27,7 @@ Artefact keys (backward-compatible with v1, plus new ML keys):
   ml_point_model, ml_feature_cols,
   ml_metrics_oos, use_ml               ← new in v2
 """
-import sys, json, warnings
+import sys, json, warnings, argparse as _argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +46,11 @@ from paths import RAW_CT_CSV, FEATURES_CT_CSV, MODELS_DIR
 HORIZON    = 14
 N_REGIMES  = 3
 QUANTILES  = [0.10, 0.25, 0.50, 0.75, 0.90]
+
+_p = _argparse.ArgumentParser(add_help=False)
+_p.add_argument("--test-start", type=str, default=None,
+                help="ISO date for test_start (overrides TODAY-8mo default)")
+_ARGS, _ = _p.parse_known_args()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. LOAD BTC DATA (pipeline CSVs preferred → Yahoo fallback)
@@ -301,7 +306,10 @@ print(f"\n  Feature matrix: {feats_df.shape}  "
 # ─────────────────────────────────────────────────────────────────────────────
 TODAY        = pd.Timestamp(datetime.utcnow().date())
 EMBARGO_DAYS = HORIZON
-test_start   = TODAY      - pd.DateOffset(months=8)
+if _ARGS.test_start:
+    test_start = pd.Timestamp(_ARGS.test_start).normalize()
+else:
+    test_start = TODAY - pd.DateOffset(months=8)
 train_end    = test_start - pd.Timedelta(days=EMBARGO_DAYS)
 
 clean = feats_df.dropna(subset=["y_logret_14"])

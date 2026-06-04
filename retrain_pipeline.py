@@ -26,6 +26,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
 # ---------------------------------------------------------------------------
@@ -104,6 +105,44 @@ def _flat(df: pd.DataFrame, name: str) -> pd.DataFrame:
     return df[~df.index.duplicated(keep="last")].sort_index()
 
 
+def _fetch_coinbase_daily(start: str, end: str) -> pd.Series:
+    """Fetch BTC-USD daily closes from the Coinbase Exchange public API.
+
+    Paginates in 299-day chunks. Returns a Series indexed by date,
+    named 'coinbase_close'. Returns empty Series on failure.
+    """
+    CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    rows: list = []
+    cur = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    while cur <= end_ts:
+        chunk_end = min(cur + pd.Timedelta(days=299), end_ts)
+        params = {
+            "granularity": 86400,
+            "start": cur.isoformat() + "Z",
+            "end":   (chunk_end + pd.Timedelta(days=1)).isoformat() + "Z",
+        }
+        try:
+            r = requests.get(CB_URL, params=params, timeout=30)
+            if r.status_code == 200:
+                rows.extend(r.json())
+            else:
+                _warn(f"    Coinbase API {r.status_code}: {r.text[:80]}")
+        except Exception as exc:
+            _warn(f"    Coinbase fetch error: {exc}")
+        cur = chunk_end + pd.Timedelta(days=1)
+        time.sleep(0.35)
+    if not rows:
+        _warn("    Coinbase: no data — cb_premium features will be 0")
+        return pd.Series(dtype=float, name="coinbase_close")
+    tmp = pd.DataFrame(rows, columns=["ts", "low", "high", "open", "close", "volume"])
+    tmp["date"] = pd.to_datetime(tmp["ts"], unit="s").dt.normalize()
+    tmp = tmp.drop_duplicates("date").set_index("date").sort_index()
+    _info(f"    coinbase_daily: {len(tmp)} rows  "
+          f"{tmp.index.min().date()} → {tmp.index.max().date()}")
+    return tmp["close"].rename("coinbase_close")
+
+
 def fetch_recent_daily(days: int = 90) -> pd.DataFrame | None:
     """Fetch ~`days` of BTC + macro daily bars from Yahoo Finance.
 
@@ -132,7 +171,15 @@ def fetch_recent_daily(days: int = 90) -> pd.DataFrame | None:
     df = parts[0]
     for p in parts[1:]:
         df = df.join(p, how="outer")
-    return df.ffill(limit=5).tail(days)
+    df = df.ffill(limit=5)
+
+    # Coinbase premium (Coinbase BTC-USD close vs Yahoo BTC-USD reference)
+    _cb = _fetch_coinbase_daily(start, end)
+    if _cb.notna().any():
+        df = df.join(_cb.to_frame("coinbase_close"), how="left")
+        df["cb_premium"] = (df["coinbase_close"] - df["btc_close"]) / df["btc_close"] * 100
+
+    return df.tail(days)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +243,12 @@ def _build_hl_features(daily: pd.DataFrame, feat_cols: list[str]) -> pd.DataFram
             f[f"{name}_ret1d"]  = src.pct_change(1)
             f[f"{name}_ret5d"]  = src.pct_change(5)
             f[f"{name}_ret21d"] = src.pct_change(21)
+    # Coinbase premium features
+    prem_raw = d.get("cb_premium")
+    if prem_raw is not None and prem_raw.notna().any():
+        f["cb_premium"]     = prem_raw
+        f["cb_premium_ma3"] = prem_raw.rolling(3).mean()
+        f["cb_premium_z7"]  = (prem_raw - prem_raw.rolling(7).mean()) / prem_raw.rolling(7).std()
 
     # Build output aligned to feat_cols; missing features → 0
     out = pd.DataFrame(0.0, index=f.index, columns=feat_cols)
@@ -873,7 +926,16 @@ def _bt_fetch_raw(today_iso: str) -> pd.DataFrame | None:
     df = parts[0]
     for p in parts[1:]:
         df = df.join(p, how="outer")
-    return df.ffill(limit=5)
+    df = df.ffill(limit=5)
+
+    # Coinbase premium (Coinbase BTC-USD close vs Yahoo BTC-USD reference)
+    end_str = (pd.Timestamp(today_iso) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    _cb = _fetch_coinbase_daily(BT_FETCH_START, end_str)
+    if _cb.notna().any():
+        df = df.join(_cb.to_frame("coinbase_close"), how="left")
+        df["cb_premium"] = (df["coinbase_close"] - df["btc_close"]) / df["btc_close"] * 100
+
+    return df
 
 
 def _bt_build_preds(art: dict, raw: pd.DataFrame) -> pd.DataFrame | None:
@@ -999,10 +1061,10 @@ def _bt_run_strategy(preds: pd.DataFrame, raw: pd.DataFrame,
         slope5[i] = ma30[i] > ma30[i - 5]
     bull_regime = above_ma30 & slope5
 
-    # Clean-10d: no D1/D2 in the last 10 bars
+    # Clean-10d: no D1/D2 in the last 7 bars
     clean_10d = np.zeros(N, dtype=bool)
     for i in range(N):
-        li          = max(0, i - 10)
+        li          = max(0, i - 7)
         clean_10d[i] = not bool(np.any(d1[li:i] | d2[li:i]))
 
     # V-reversal: recent D1/D2 present and error recovering above U1 threshold
