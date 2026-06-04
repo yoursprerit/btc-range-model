@@ -2556,13 +2556,16 @@ def _build_ct_batch_predictions(data_end=None):
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Building extended 2-year predictions …")
-def _build_ct_predictions_extended(model_mtime: float = 0.0):
+def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = ""):
     """Build CT predictions using yfinance daily data fetched from 2024-02-01.
 
     Provides 115+ days of feature warmup before the May 26, 2024 backtest start
     so all 90-day rolling features (dist_hi_90, corr_30, etc.) are fully
     initialised.  Uses yfinance midnight-UTC daily closes — same source as
     backtest_2year.py — so results match the documented +83.5% two-year figure.
+
+    data_end is a cache-busting key (latest raw BTC date). When new daily data
+    arrives the cache key changes, forcing a fresh fetch even within the 6h TTL.
 
     Returns (preds_df, raw_df) or None on failure.
       preds_df : target_date index with close_asof / pred_high / pred_low
@@ -2795,16 +2798,18 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
 def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
                              initial_capital: float = 100_000.0,
-                             model_mtime: float = 0.0):
+                             model_mtime: float = 0.0,
+                             data_end: str = ""):
     """Full-period TF2 backtest using extended yfinance daily data.
 
     Fetches from 2024-02-01 to ensure 90-day feature warmup before the
     May 26, 2024 backtest start — reproduces the backtest_2year.py +83.5% figure.
     Returns the same dict structure as run_tf1_backtest.
+    data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
     """
     WARMUP = 35
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime)
+    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3035,24 +3040,26 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
     rolls daily.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
-                                    model_mtime=model_mtime)
+                                    model_mtime=model_mtime, data_end=data_end)
 
 
 @st.cache_data(show_spinner="Running MSTR backtest …")
 def run_mstr_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-05-26",
                       initial_capital: float = 100_000.0,
-                      model_mtime: float = 0.0):
+                      model_mtime: float = 0.0,
+                      data_end: str = ""):
     """MSTR backtest driven by BTC TF2+V-Gate signals.
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
     run_full_period_backtest) but executes trades in MSTR stock instead of BTC.
     MSTR daily closes (split-adjusted) are fetched from yfinance and forward-filled
     across weekends/holidays so each BTC signal date has a valid execution price.
+    data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
     """
     WARMUP = 35
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime)
+    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3299,7 +3306,7 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
     Invalidates on model change (model_mtime) or new daily price data (data_end).
     """
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
-                             model_mtime=model_mtime)
+                             model_mtime=model_mtime, data_end=data_end)
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
@@ -5558,7 +5565,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_oos_end  = (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime, data_end=_data_end or "")
-    _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime)  # OOS ends prior day (rolling)
+    _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end, data_end=_data_end)
@@ -8978,7 +8985,7 @@ with tab_mstr:
     _mstr_bull     = _run_fixed_period_mstr_backtest(
         "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
     _mstr_full_oos = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime)     # OOS ends prior day (rolling)
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end)  # OOS ends prior day (rolling)
     _mstr_full     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
     render_mstr_trading_strategy_dashboard(
