@@ -11907,18 +11907,18 @@ def render_explainability_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical | Retrain Status | MSTR | MSTU | MSTR Options | MSTU Options | Explainability | Leading Indicators
+# Tabs: Live | Historical | MSTR | MSTU | MSTR Options | MSTU Options | Explainability | Leading Indicators | Retrain Status
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_retrain, tab_mstr, tab_mstu, tab_mstr_opts, tab_mstu_opts, tab_explain, tab_leading = st.tabs([
+tab_live, tab_hist, tab_mstr, tab_mstu, tab_mstr_opts, tab_mstu_opts, tab_explain, tab_leading, tab_retrain = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
-    "🔄 Retrain Status",
     "📊 MSTR Backtesting",
     "📈 MSTU Backtesting",
     "📋 MSTR Options",
     "🔷 MSTU Options",
     "🧠 Explainability",
     "📡 Leading Indicators",
+    "🔄 Retrain Status",
 ])
 
 with tab_live:
