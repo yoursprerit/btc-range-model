@@ -3358,29 +3358,35 @@ def run_mstu_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices ─────────────────────────────────────────────────────
-    try:
-        d_mstu = yf.download(
-            "MSTU",
-            start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
+    # ── Fetch MSTU prices (synthetic pre-Jun 2025 + actual) ──────────────────
+    _MSTU_INCEPTION = pd.Timestamp("2025-06-04")
+    if start_dt < _MSTU_INCEPTION:
+        mstu_all = _build_synthetic_mstu_prices(
+            pre_dt.strftime("%Y-%m-%d"),
+            (end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
         )
-        if isinstance(d_mstu.columns, pd.MultiIndex):
-            d_mstu.columns = [c[0] for c in d_mstu.columns]
-        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
-    except Exception:
-        return None
-
-    if d_mstu.empty or "Close" not in d_mstu.columns:
-        return None
-
-    # Forward-fill MSTU to all calendar days (weekends use last trading close)
-    mstu_raw = d_mstu["Close"].sort_index()
-    mstu_all = mstu_raw.reindex(
-        pd.date_range(mstu_raw.index[0],
-                      max(mstu_raw.index[-1], end_dt), freq="D")
-    ).ffill()
+        if mstu_all is None or len(mstu_all) < 10:
+            return None
+    else:
+        try:
+            d_mstu = yf.download(
+                "MSTU",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstu.columns, pd.MultiIndex):
+                d_mstu.columns = [c[0] for c in d_mstu.columns]
+            d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_mstu.empty or "Close" not in d_mstu.columns:
+            return None
+        mstu_raw = d_mstu["Close"].sort_index()
+        mstu_all = mstu_raw.reindex(
+            pd.date_range(mstu_raw.index[0],
+                          max(mstu_raw.index[-1], end_dt), freq="D")
+        ).ffill()
     mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
 
     # ── BTC signal arrays (identical to run_full_period_backtest) ─────────────
@@ -4250,6 +4256,96 @@ def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_is
     """Cached wrapper for fixed-period MSTU Options backtests."""
     return run_mstu_options_backtest(end_date_iso, backtest_start_iso,
                                      model_mtime=model_mtime, data_end=data_end)
+
+
+@st.cache_data(ttl=3600 * 24, show_spinner="Building synthetic MSTU price history …")
+def _build_synthetic_mstu_prices(pre_dt_iso: str, end_dt_iso: str) -> pd.Series:
+    """Return calendar-day MSTU prices: synthetic (pre-Jun 4 2025) + actual (post-inception).
+
+    Calibrates log_r(MSTU) = beta*log_r(MSTR) + alpha via OLS on actual post-inception data,
+    then applies that model to historical MSTR returns.  The synthetic series is normalised so
+    the last synthetic bar equals MSTU's first actual trading price (Jun 4, 2025).
+    """
+    INCEPTION = pd.Timestamp("2025-06-04")
+    pre_dt = pd.Timestamp(pre_dt_iso)
+    end_dt = pd.Timestamp(end_dt_iso)
+
+    # ── Fetch actual MSTU (inception → end) ──────────────────────────────────
+    try:
+        d_mstu = yf.download(
+            "MSTU",
+            start=INCEPTION.strftime("%Y-%m-%d"),
+            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            progress=False, auto_adjust=True,
+        )
+        if isinstance(d_mstu.columns, pd.MultiIndex):
+            d_mstu.columns = [c[0] for c in d_mstu.columns]
+        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+    except Exception:
+        return pd.Series(dtype=float)
+    if d_mstu.empty or "Close" not in d_mstu.columns:
+        return pd.Series(dtype=float)
+    mstu_actual = d_mstu["Close"].sort_index()
+
+    # ── Fetch MSTR for the full period (pre_dt → end) ────────────────────────
+    try:
+        d_mstr = yf.download(
+            "MSTR",
+            start=pre_dt.strftime("%Y-%m-%d"),
+            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            progress=False, auto_adjust=True,
+        )
+        if isinstance(d_mstr.columns, pd.MultiIndex):
+            d_mstr.columns = [c[0] for c in d_mstr.columns]
+        d_mstr.index = pd.DatetimeIndex(d_mstr.index).tz_localize(None).normalize()
+    except Exception:
+        return pd.Series(dtype=float)
+    if d_mstr.empty or "Close" not in d_mstr.columns:
+        return pd.Series(dtype=float)
+    mstr_all = d_mstr["Close"].sort_index()
+
+    # ── OLS calibration on actual overlapping data ────────────────────────────
+    mstr_post = mstr_all[mstr_all.index >= INCEPTION]
+    common_idx = mstu_actual.index.intersection(mstr_post.index)
+    beta, alpha = 2.0, -0.0002  # sensible defaults if not enough data
+    if len(common_idx) >= 10:
+        mstu_lr_cal = np.log(mstu_actual.loc[common_idx] / mstu_actual.loc[common_idx].shift(1)).dropna()
+        mstr_lr_cal = np.log(mstr_post.loc[mstu_lr_cal.index] / mstr_post.loc[mstu_lr_cal.index].shift(1)).dropna()
+        cidx = mstu_lr_cal.index.intersection(mstr_lr_cal.index)
+        if len(cidx) >= 5:
+            x = mstr_lr_cal.loc[cidx].values
+            y = mstu_lr_cal.loc[cidx].values
+            xm = x - x.mean()
+            ym = y - y.mean()
+            denom = float(np.dot(xm, xm))
+            if denom > 1e-10:
+                beta  = float(np.dot(xm, ym) / denom)
+                alpha = float(y.mean() - beta * x.mean())
+
+    # ── Synthesise pre-inception MSTU prices from pre-inception MSTR returns ──
+    mstr_pre = mstr_all[mstr_all.index < INCEPTION].sort_index()
+    if len(mstr_pre) < 2:
+        mstu_full = mstu_actual.copy()
+    else:
+        mstr_lr_pre = np.log(mstr_pre / mstr_pre.shift(1)).fillna(0.0).values
+        syn_lr = beta * mstr_lr_pre + alpha
+        syn_lr[0] = 0.0  # no prior for first bar
+
+        # Anchor: last synthetic price = MSTU inception price
+        # price[i] = inception_price * exp(cum[i] - cum[-1])
+        mstu_inception_price = float(mstu_actual.iloc[0])
+        cum = np.cumsum(syn_lr)
+        synthetic_px = mstu_inception_price * np.exp(cum - cum[-1])
+        synthetic_series = pd.Series(synthetic_px, index=mstr_pre.index)
+
+        mstu_full = pd.concat([synthetic_series, mstu_actual]).sort_index()
+        mstu_full = mstu_full[~mstu_full.index.duplicated(keep="last")]
+
+    # ── Expand to calendar days ────────────────────────────────────────────────
+    if len(mstu_full) < 2:
+        return mstu_full
+    cal_idx = pd.date_range(mstu_full.index[0], max(mstu_full.index[-1], end_dt), freq="D")
+    return mstu_full.reindex(cal_idx).ffill().bfill()
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
