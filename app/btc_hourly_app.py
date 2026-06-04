@@ -8979,7 +8979,8 @@ with tab_mstr:
     _mstr_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
-    _mstr_data_end    = _data_end or ""   # cache-bust key: refreshes when new daily data lands
+    _mstr_raw      = _fetch_daily_raw()
+    _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
     _mstr_bear     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
