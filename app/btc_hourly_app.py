@@ -3322,9 +3322,10 @@ def run_mstu_backtest(end_date_iso: str,
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
-    (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU inception
-    is ~Jun 2025 so the default start reflects that.  data_end is forwarded
-    to _build_ct_predictions_extended as a cache-bust key.
+    (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  For start dates
+    before Jun 4 2025 (MSTU inception), synthetic MSTU prices are derived from
+    MSTR via OLS-calibrated log-return mapping.  data_end is forwarded to
+    _build_ct_predictions_extended as a cache-bust key.
     """
     WARMUP = 35
 
@@ -3578,6 +3579,7 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
                                     data_end: str = ""):
     """Cached wrapper for fixed-period MSTU backtests.
 
+    Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
     Invalidates on model change (model_mtime) or new daily price data (data_end).
     """
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
@@ -3946,7 +3948,8 @@ def run_mstu_options_backtest(end_date_iso: str,
     priced via Black-Scholes with 60-day rolling historical MSTU volatility.
     Strike = MSTU spot at entry (at-the-money).  Exit triggered by the same
     BTC D2/D3 regime-adaptive rules.  B&H benchmark tracks MSTU stock.
-    MSTU inception ~Jun 2025 so default start reflects that.
+    For start dates before Jun 4 2025 (MSTU inception), synthetic MSTU prices
+    are derived from MSTR via OLS-calibrated log-return mapping.
     data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
     """
     import math
@@ -4262,7 +4265,10 @@ def run_mstu_options_backtest(end_date_iso: str,
 def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
                                              data_end: str = ""):
-    """Cached wrapper for fixed-period MSTU Options backtests."""
+    """Cached wrapper for fixed-period MSTU Options backtests.
+
+    Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
+    """
     return run_mstu_options_backtest(end_date_iso, backtest_start_iso,
                                      model_mtime=model_mtime, data_end=data_end)
 
@@ -4299,12 +4305,14 @@ def _build_synthetic_mstu_prices(pre_dt_iso: str, end_dt_iso: str) -> pd.Series:
         return pd.Series(dtype=float)
     mstu_actual = d_mstu["Close"].sort_index()
 
-    # ── Fetch MSTR for the full period (pre_dt → end) ────────────────────────
+    # ── Fetch MSTR for the full period (pre_dt → same end as MSTU) ──────────
+    # Use the same extended end as MSTU so post-inception MSTR is available
+    # for OLS calibration even when end_dt falls before MSTU inception.
     try:
         d_mstr = yf.download(
             "MSTR",
             start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            end=_mstu_fetch_end.strftime("%Y-%m-%d"),
             progress=False, auto_adjust=True,
         )
         if isinstance(d_mstr.columns, pd.MultiIndex):
