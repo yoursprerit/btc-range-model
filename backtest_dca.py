@@ -318,9 +318,10 @@ def compute_signals(df_raw, preds, start_iso, end_iso):
         hb3[i] = int(np.sum(hb[s:i + 1]))
         lb3[i] = int(np.sum(lb[s:i + 1]))
 
-    u1 = (ehma3 > 0.5) & (hb3 >= 2)
+    # ── Signal definitions (exact match with btc_hourly_app.py UI) ──────────────
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)          # UI: 0.7 threshold (NOT 0.5)
     d1 = (lb3 >= 2) & (elma3 > 0.5)
-    d2 = ehma3 < -1.0
+    d2 = ehma3 < -0.75                         # UI: -0.75 threshold (NOT -1.0)
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         con = 0
@@ -343,12 +344,33 @@ def compute_signals(df_raw, preds, start_iso, end_iso):
             slp[i] = ma30[i] > ma30[i - 5]
     bull = abv & slp
 
+    # UI uses 7-bar lookback (variable is named clean_10d in UI but uses i-7)
     c10 = np.zeros(N, dtype=bool)
     for i in range(N):
-        li = max(0, i - 10)
+        li = max(0, i - 7)
         c10[i] = not bool(np.any(d1[li:i] | d2[li:i]))
 
-    entry = u1 & (abv | c10)
+    # ── V-Gate: capitulation/reversal third entry gate (from UI) ─────────────
+    _DN_NORM_W = 30
+    roll_ehi_norm = np.array([
+        float(np.mean(ehi[max(0, i - _DN_NORM_W + 1):i + 1]))
+        for i in range(N)
+    ])
+    dn_score = np.zeros(N)
+    for i in range(N):
+        norm = max(abs(roll_ehi_norm[i]), 0.01)
+        dn_score[i] = (
+            (-ehma3[i] / norm)                               * 0.30 +
+            (lb3[i]    / 3.0)                                * 0.30 +
+            (elma3[i]  / max(abs(elma3[i]), 0.10))           * 0.20 +
+            float(lb[i])                                     * 0.20
+        )
+    v_rev_bar = (dn_score > 0.8) & (elo > 3.0)
+    v_recent = np.zeros(N, dtype=bool)
+    for i in range(N):
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i - 2):i + 1]))
+
+    entry = u1 & (abv | c10 | v_recent)
 
     return dict(
         N=N, WARMUP=WARMUP, dates=dates, btc_ep=btc_ep,
@@ -568,6 +590,39 @@ def backtest_variant(sig, asset_prices, variant="BASE", cap=100_000.0):
 
     return dict(variant=variant, trades=trades, nav=navs, bh=bhs,
                 open=(pos in ("ENTERING", "LONG")))
+
+
+def slice_oos_from_full(res_full, label, oos_cutoff=OOS_CUTOFF):
+    """Compute OOS-only metrics by slicing a Full Market backtest result at oos_cutoff.
+
+    Matches the UI's approach: the OOS period is NOT a fresh run but a slice of the
+    full-period backtest, normalized to $100k at oos_cutoff. Trades that opened
+    before oos_cutoff are excluded; pnl_abs values are rescaled by the normalization
+    factor so tax computations stay in the same $100k capital base.
+    """
+    nav = res_full["nav"]
+    bh  = res_full["bh"]
+    trades = res_full["trades"]
+    cap = INITIAL_CAP
+
+    nav_oos = nav[nav.index >= oos_cutoff]
+    bh_oos  = bh[bh.index  >= oos_cutoff]
+    if len(nav_oos) < 2:
+        return None
+
+    nav_at_cut = float(nav.asof(oos_cutoff)) or cap
+    bh_at_cut  = float(bh.asof(oos_cutoff))  or cap
+    norm = cap / nav_at_cut          # rescale factor so OOS starts at $100k
+
+    scaled_nav = (nav_oos / nav_at_cut * cap).rename("nav")
+    scaled_bh  = (bh_oos  / bh_at_cut  * cap).rename("bh")
+
+    oos_trades = [t for t in trades if t["entry_date"] >= oos_cutoff]
+    scaled_trades = [dict(t, pnl_abs=t["pnl_abs"] * norm) for t in oos_trades]
+
+    oos_res = dict(variant=res_full["variant"], trades=scaled_trades,
+                   nav=scaled_nav, bh=scaled_bh, open=res_full["open"])
+    return compute_metrics(oos_res, label)
 
 
 # ── Metrics ────────────────────────────────────────────────────────────────────
@@ -1235,11 +1290,20 @@ print(f"→ {len(preds)} bars")
 
 has_mstr = "mstr_close" in df.columns and df["mstr_close"].notna().sum() > 50
 
-# ── Run all 4 UI periods ───────────────────────────────────────────────────────
+# ── Run Bear, Bull, Full Market; derive OOS from Full Market slice ─────────────
+# OOS Only is NOT a fresh backtest — it matches the UI exactly: slice the Full
+# Market result at OOS_CUTOFF and normalise NAV to $100k, capturing trades that
+# opened on or after OOS_CUTOFF (e.g. the 2026-03-11 entry is only 10 days into
+# OOS and would be missed by a fresh 35-bar warmup run).
 period_results = {}   # period_name → (btc_results_list, mstr_results_list)
 
-for period_name, (p_start, p_end) in PERIODS.items():
-    is_oos = p_start >= "2026-03-01"
+# Raw backtest_variant() results for Full Market (needed to slice OOS)
+_full_btc_raw  = {}   # variant → raw res dict
+_full_mstr_raw = {}
+
+RUN_PERIODS = {k: v for k, v in PERIODS.items() if k != "OOS Only"}
+
+for period_name, (p_start, p_end) in RUN_PERIODS.items():
     print(f"\n{'─'*65}")
     print(f"  Computing signals: {period_name}  ({p_start} → {p_end})")
 
@@ -1257,8 +1321,10 @@ for period_name, (p_start, p_end) in PERIODS.items():
     # MSTR aligned to same dates
     if has_mstr:
         target_dates = pd.DatetimeIndex(sig["comp"]["target_date"])
+        # UI uses unlimited ffill across all calendar days then reindexes;
+        # reindex + ffill(no limit) replicates that for the signal dates.
         mstr_prices = (df["mstr_close"].reindex(target_dates)
-                       .ffill(limit=4).values.astype(float))
+                       .ffill().values.astype(float))
         mstr_ok = np.sum(~np.isnan(mstr_prices)) > sig["WARMUP"] + 5
     else:
         mstr_prices = None
@@ -1270,6 +1336,8 @@ for period_name, (p_start, p_end) in PERIODS.items():
         r = backtest_variant(sig, btc_prices, variant=v, cap=INITIAL_CAP)
         m = compute_metrics(r, f"BTC-{v}")
         btc_r.append(m)
+        if period_name == "Full Market":
+            _full_btc_raw[v] = r
         print(f"    BTC-{v:<8}  NAV=${m['final_nav']:>9,.0f}  "
               f"ret={m['total_ret']:>+6.1f}%  MaxDD={m['max_dd']:>6.1f}%  "
               f"Sharpe={m['sharpe']:.3f}  trades={m['n_trades']}")
@@ -1281,11 +1349,41 @@ for period_name, (p_start, p_end) in PERIODS.items():
             r = backtest_variant(sig, mstr_prices, variant=v, cap=INITIAL_CAP)
             m = compute_metrics(r, f"MSTR-{v}")
             mstr_r.append(m)
+            if period_name == "Full Market":
+                _full_mstr_raw[v] = r
             print(f"    MSTR-{v:<7}  NAV=${m['final_nav']:>9,.0f}  "
                   f"ret={m['total_ret']:>+6.1f}%  MaxDD={m['max_dd']:>6.1f}%  "
                   f"Sharpe={m['sharpe']:.3f}  trades={m['n_trades']}")
 
     period_results[period_name] = (btc_r, mstr_r)
+
+# ── OOS Only: derived by slicing Full Market at OOS_CUTOFF (matches UI) ────────
+oos_p_start, oos_p_end = PERIODS["OOS Only"]
+print(f"\n{'─'*65}")
+print(f"  Computing signals: OOS Only  ({oos_p_start} → {oos_p_end})  [sliced from Full Market]")
+
+oos_btc_r  = []
+oos_mstr_r = []
+
+for v in BTC_VARIANTS:
+    if v in _full_btc_raw:
+        m = slice_oos_from_full(_full_btc_raw[v], f"BTC-{v}")
+        if m:
+            oos_btc_r.append(m)
+            print(f"    BTC-{v:<8}  NAV=${m['final_nav']:>9,.0f}  "
+                  f"ret={m['total_ret']:>+6.1f}%  MaxDD={m['max_dd']:>6.1f}%  "
+                  f"Sharpe={m['sharpe']:.3f}  trades={m['n_trades']}")
+
+for v in MSTR_VARIANTS:
+    if v in _full_mstr_raw:
+        m = slice_oos_from_full(_full_mstr_raw[v], f"MSTR-{v}")
+        if m:
+            oos_mstr_r.append(m)
+            print(f"    MSTR-{v:<7}  NAV=${m['final_nav']:>9,.0f}  "
+                  f"ret={m['total_ret']:>+6.1f}%  MaxDD={m['max_dd']:>6.1f}%  "
+                  f"Sharpe={m['sharpe']:.3f}  trades={m['n_trades']}")
+
+period_results["OOS Only"] = (oos_btc_r, oos_mstr_r)
 
 # ── Detailed period-by-period tables ──────────────────────────────────────────
 for period_name, (btc_r, mstr_r) in period_results.items():
