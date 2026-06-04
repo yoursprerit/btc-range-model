@@ -187,18 +187,13 @@ def fetch_data(fetch_start, fetch_end):
     print(f"\nFetching BTC + macro: {fetch_start} → {fetch_end}")
     frames = {}
 
-    # Use Binance 12:00→12:00 UTC daily bars — must match the model's training data.
-    # yfinance daily bars (midnight-UTC) give different H/L/Close → wrong predictions.
-    print("  Fetching BTC 12:00-UTC bars from Binance …", end=" ")
-    btc12 = fetch_btc_12utc_daily(fetch_start, fetch_end)
-    if not btc12.empty:
-        frames.update({k: btc12[k] for k in ["btc_close","btc_high","btc_low","btc_volume"]})
-        print(f"OK ({len(btc12)} bars, last={btc12.index.max().date()})")
-    else:
-        print("FAILED — falling back to yfinance daily")
-        d = _yf("BTC-USD", fetch_start, fetch_end)
-        frames.update({"btc_close": d["Close"], "btc_high": d["High"],
-                       "btc_low": d["Low"], "btc_volume": d["Volume"]})
+    # Use yfinance midnight-UTC daily bars — matches the UI's _build_ct_predictions_extended
+    # which explicitly uses yfinance for both features and execution prices.
+    print("  Fetching BTC (yfinance daily) …", end=" ")
+    d = _yf("BTC-USD", fetch_start, fetch_end)
+    frames.update({"btc_close": d["Close"], "btc_high": d["High"],
+                   "btc_low": d["Low"], "btc_volume": d["Volume"]})
+    print(f"OK ({len(d)} bars)")
     for name, sym in _MACRO_SYMS.items():
         try:
             frames[f"{name}_close"] = _yf(sym, fetch_start, fetch_end)["Close"]
@@ -368,11 +363,17 @@ def build_preds(df):
 
 # ── Signal computation (shared across all variants) ────────────────────────────
 def compute_signals(df_raw, preds, start_iso, end_iso):
-    """Compute all TF2 signals. Returns signal arrays + aligned date/price index."""
+    """Compute all TF2 signals. Returns signal arrays + aligned date/price index.
+
+    Matches UI's run_full_period_backtest exactly:
+      - Load 60 extra calendar days before start so MA30 / dn_score are fully warm.
+      - Compute all signals on the full pre+period data (NOT filtered to start_iso).
+      - bt0 = max(WARMUP, index_of_start_dt) so trades start at/after start_dt.
+    """
     WARMUP = 35
     sd, ed = pd.Timestamp(start_iso), pd.Timestamp(end_iso)
-    p = preds.loc[(preds.index >= sd - pd.Timedelta(days=45)) &
-                  (preds.index <= ed)].copy()
+    pre_dt = sd - pd.Timedelta(days=60)   # 60-day pre-period warmup, matching UI
+    p = preds.loc[(preds.index >= pre_dt) & (preds.index <= ed)].copy()
     c = df_raw["btc_close"]
     h = df_raw["btc_high"]
     lo = df_raw["btc_low"]
@@ -380,12 +381,15 @@ def compute_signals(df_raw, preds, start_iso, end_iso):
     p["al"] = lo.reindex(p.index).values
     p["ac"] = c.reindex(p.index).values
     comp = p.dropna(subset=["ah", "al", "ac"]).reset_index()
-    comp = comp[comp["target_date"] >= sd].reset_index(drop=True)
+    # Do NOT filter to >= sd here — keep pre-period rows for signal warmup.
+    comp = comp.reset_index(drop=True)
     N = len(comp)
     if N < WARMUP + 3:
         return None
 
     dates = pd.DatetimeIndex(comp["target_date"])
+    # bt0: first bar at/after start_dt (same as UI's _bt0 logic)
+    bt0 = max(WARMUP, int(dates.searchsorted(sd)))
     ca = comp["close_asof"].values.astype(float)
     btc_ep = comp["ac"].values.astype(float)
     ph = comp["pred_high"].values.astype(float)
@@ -464,7 +468,7 @@ def compute_signals(df_raw, preds, start_iso, end_iso):
     entry = u1 & (abv | c10 | v_recent)
 
     return dict(
-        N=N, WARMUP=WARMUP, dates=dates, btc_ep=btc_ep,
+        N=N, WARMUP=WARMUP, bt0=bt0, dates=dates, btc_ep=btc_ep,
         u1=u1, d1=d1, d2=d2, d3=d3, bull=bull, abv=abv, entry=entry,
         comp=comp,      # raw comparison frame (for MSTR price alignment)
     )
@@ -484,7 +488,7 @@ def backtest_variant(sig, asset_prices, variant="BASE", cap=100_000.0):
       DCA-DIP  — 67% entry, +33% if asset drops >1.5% from ref price (no exit yet)
     """
     N = sig["N"]
-    WARMUP = sig["WARMUP"]
+    BT0 = sig["bt0"]             # first bar where trading is allowed (≥ WARMUP, ≥ start_dt)
     dates = sig["dates"]
     u1 = sig["u1"]
     bull = sig["bull"]
@@ -517,7 +521,7 @@ def backtest_variant(sig, asset_prices, variant="BASE", cap=100_000.0):
         si = i - 1                   # bar whose signal we act on today
         price = ep[i]
 
-        if i < WARMUP:
+        if i < BT0:
             nav_arr[i] = cap
             continue
 
@@ -666,18 +670,18 @@ def backtest_variant(sig, asset_prices, variant="BASE", cap=100_000.0):
             last_valid = ep[~np.isnan(ep)][-1]
         nav_arr[N - 1] = qty * last_valid + cash
 
-    navs = pd.Series(nav_arr[WARMUP:], index=dates[WARMUP:]).replace(0, np.nan)
+    navs = pd.Series(nav_arr[BT0:], index=dates[BT0:]).replace(0, np.nan)
     # Forward-fill cash gaps, then backfill any leading NaN
     navs = navs.ffill().bfill().fillna(cap)
 
     # Buy & Hold on same asset
-    valid_ep = ep[WARMUP:]
+    valid_ep = ep[BT0:]
     first_valid = next((v for v in valid_ep if not np.isnan(v) and v > 0), None)
     if first_valid is not None:
-        bhs = pd.Series(cap * valid_ep / first_valid, index=dates[WARMUP:])
+        bhs = pd.Series(cap * valid_ep / first_valid, index=dates[BT0:])
         bhs = bhs.ffill().fillna(cap)
     else:
-        bhs = pd.Series(cap, index=dates[WARMUP:])
+        bhs = pd.Series(cap, index=dates[BT0:])
 
     return dict(variant=variant, trades=trades, nav=navs, bh=bhs,
                 open=(pos in ("ENTERING", "LONG")))
