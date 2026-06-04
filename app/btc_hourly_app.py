@@ -3025,12 +3025,14 @@ def run_full_period_backtest(end_date_iso: str,
 
 @st.cache_data(show_spinner="Loading fixed-period backtest …")
 def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
-                                model_mtime: float = 0.0):
+                                model_mtime: float = 0.0,
+                                data_end: str = ""):
     """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
 
-    No TTL — results persist for the app process lifetime and only invalidate
-    when the model file changes (via model_mtime).  The OOS period is NOT routed
-    through here; it calls run_full_period_backtest directly so it rolls daily.
+    No TTL — results persist until either the model file changes (model_mtime)
+    or new daily BTC price data arrives (data_end).  The OOS period is NOT
+    routed through here; it calls run_full_period_backtest directly so it
+    rolls daily.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
                                     model_mtime=model_mtime)
@@ -3290,8 +3292,12 @@ def run_mstr_backtest(end_date_iso: str,
 
 @st.cache_data(show_spinner="Loading fixed-period MSTR backtest …")
 def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
-                                    model_mtime: float = 0.0):
-    """Cached wrapper for fixed-period MSTR backtests (no TTL, invalidates on model change)."""
+                                    model_mtime: float = 0.0,
+                                    data_end: str = ""):
+    """Cached wrapper for fixed-period MSTR backtests.
+
+    Invalidates on model change (model_mtime) or new daily price data (data_end).
+    """
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime)
 
@@ -5547,11 +5553,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
     # Bear and Full periods are locked. OOS ends at yesterday (prior calendar day)
     # on a rolling basis so the window is consistent regardless of bar anchor time.
+    # data_end is passed as a cache-busting key so fixed-period results refresh
+    # whenever new daily BTC price data lands — without requiring a model retrain.
     _bt_oos_end  = (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
-    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime)  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime)
+    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
+    _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime, data_end=_data_end or "")
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime)  # OOS ends prior day (rolling)
-    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime)  # locked Jun 2024–May 2026
+    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end, data_end=_data_end)
 
@@ -8964,14 +8972,15 @@ with tab_mstr:
     _mstr_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
+    _mstr_data_end    = _data_end or ""   # cache-bust key: refreshes when new daily data lands
     _mstr_bear     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2025-06-01", _mstr_model_mtime)    # locked Jun 2025–May 2026
+        "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-06-14", "2024-06-05", _mstr_model_mtime)
+        "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
     _mstr_full_oos = run_mstr_backtest(
         _mstr_oos_end, model_mtime=_mstr_model_mtime)     # OOS ends prior day (rolling)
     _mstr_full     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2024-06-01", _mstr_model_mtime)    # locked Jun 2024–May 2026
+        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
