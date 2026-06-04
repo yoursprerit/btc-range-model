@@ -2786,7 +2786,8 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0):
     return preds_df, raw_df
 
 
-# Bear and Full periods are locked to Jun 2025 → May 2026 (not rolling).
+# Bear period locked to Jun 2025 → May 2026 (not rolling).
+# Full Market period locked to Jun 2024 → May 2026 (not rolling).
 # Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
 # OOS period continues to roll daily with today's date.
 
@@ -3580,7 +3581,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     bt_bear:     Fixed bear window  (Jun 2025 → May 2026, locked)
     bt_bull:     Fixed bull window  (Jun 2024 → Jun 2025)
     bt_full_oos: Full-period result used only for OOS stats extraction
-    bt_full:     Full market period  (Jun 2025 → May 2026, locked)
+    bt_full:     Full market period  (Jun 2024 → May 2026, locked)
     key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
     """
     st.markdown("---")
@@ -3892,12 +3893,12 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_oos = "🔬 OOS Only"
 
     if s_full:
-        lbl_full = (f"🌐 Full Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS<br>"
+        lbl_full = (f"🌐 Full Market (Jun 2024 – May 2026) ⚠️ Mixed IS/OOS<br>"
                     f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                     f"{pd.Timestamp(s_full['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(s_full['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_full = "🌐 Full Market (Jun 2025 – May 2026)"
+        lbl_full = "🌐 Full Market (Jun 2024 – May 2026)"
 
     _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate</th>"
              "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
@@ -3979,7 +3980,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         ⚠️ Jun–Sep 2025 dates are <b>in-sample</b>; Sep 2025–May 2026 are OOS.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
-        🌐 Bear / Full Market: locked to Jun 2025 – May 2026 (mixed IS + OOS).
+        🌐 Full Market: locked to Jun 2024 – May 2026 (mixed IS + OOS).
         </p>
         """,
         unsafe_allow_html=True,
@@ -4567,12 +4568,12 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_oos = "🔬 OOS Only"
 
     if s_full:
-        lbl_full = (f"🌐 Full Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS<br>"
+        lbl_full = (f"🌐 Full Market (Jun 2024 – May 2026) ⚠️ Mixed IS/OOS<br>"
                     f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                     f"{pd.Timestamp(s_full['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(s_full['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_full = "🌐 Full Market (Jun 2025 – May 2026)"
+        lbl_full = "🌐 Full Market (Jun 2024 – May 2026)"
 
     _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (MSTR)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
@@ -5556,7 +5557,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime)  # locked Jun 2025–May 2026
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime)
     _bt_full_oos = run_full_period_backtest(_bt_end_backtest, model_mtime=_model_mtime)  # OOS rolls daily
-    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2025-06-01", _model_mtime)  # locked Jun 2025–May 2026
+    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
     sigs         = compute_trend_signatures(_bt_end, data_end=_data_end)
 
@@ -8976,7 +8977,7 @@ with tab_mstr:
     _mstr_full_oos = run_mstr_backtest(
         _mstr_today_iso, model_mtime=_mstr_model_mtime)   # OOS rolls daily
     _mstr_full     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2025-06-01", _mstr_model_mtime)    # locked Jun 2025–May 2026
+        "2026-05-31", "2024-06-01", _mstr_model_mtime)    # locked Jun 2024–May 2026
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
