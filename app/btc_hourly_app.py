@@ -3984,35 +3984,44 @@ def run_mstu_options_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices ─────────────────────────────────────────────────────
-    try:
-        d_mstu = yf.download(
-            "MSTU",
-            start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
+    # ── Fetch MSTU prices (synthetic pre-Jun 2025 + actual) ──────────────────
+    _MSTU_INCEPTION = pd.Timestamp("2025-06-04")
+    if start_dt < _MSTU_INCEPTION:
+        mstu_all = _build_synthetic_mstu_prices(
+            pre_dt.strftime("%Y-%m-%d"),
+            (end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
         )
-        if isinstance(d_mstu.columns, pd.MultiIndex):
-            d_mstu.columns = [c[0] for c in d_mstu.columns]
-        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
-    except Exception:
-        return None
-
-    if d_mstu.empty or "Close" not in d_mstu.columns:
-        return None
-
-    mstu_raw = d_mstu["Close"].sort_index()
-    mstu_all = mstu_raw.reindex(
-        pd.date_range(mstu_raw.index[0],
-                      max(mstu_raw.index[-1], end_dt), freq="D")
-    ).ffill()
+        if mstu_all is None or len(mstu_all) < 10:
+            return None
+        mstu_trading = mstu_all.dropna()
+    else:
+        try:
+            d_mstu = yf.download(
+                "MSTU",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstu.columns, pd.MultiIndex):
+                d_mstu.columns = [c[0] for c in d_mstu.columns]
+            d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_mstu.empty or "Close" not in d_mstu.columns:
+            return None
+        mstu_raw = d_mstu["Close"].sort_index()
+        mstu_all = mstu_raw.reindex(
+            pd.date_range(mstu_raw.index[0],
+                          max(mstu_raw.index[-1], end_dt), freq="D")
+        ).ffill()
+        mstu_trading = mstu_raw
     mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
 
     # ── 60-day rolling historical volatility of MSTU (annualised) ────────────
-    mstu_log_ret = np.log(mstu_raw / mstu_raw.shift(1)).dropna()
+    mstu_log_ret = np.log(mstu_trading / mstu_trading.shift(1)).dropna()
     hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
     hv_all = hv_series.reindex(
-        pd.date_range(mstu_raw.index[0], max(mstu_raw.index[-1], end_dt), freq="D")
+        pd.date_range(mstu_trading.index[0], max(mstu_trading.index[-1], end_dt), freq="D")
     ).ffill().bfill()
     hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
     hv_arr = np.clip(hv_arr, 0.20, 5.00)  # MSTU is 2× leveraged — wider vol range
@@ -5987,11 +5996,12 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             lt_idx += 1
 
 
-def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
+def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=None,
                                            bt_full=None, key_suffix: str = "") -> None:
     """Render the MSTU backtesting dashboard (BTC TF2+V-Gate signals → MSTU execution).
 
-    Three-period layout — no bull market period since MSTU only launched ~Jun 2025:
+    Four-period layout: Bear (Jun 2025–May 2026) · Bull (Jun 2024–May 2025 synthetic) ·
+    OOS (rolling) · Full (Jun 2024–May 2026, synthetic+actual):
       • Teal color scheme to distinguish from BTC (blue/orange) and MSTR (purple)
       • MSTU ETF prices in trade log
       • B&H comparison uses MSTU rather than BTC or MSTR
@@ -5999,7 +6009,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
     st.markdown("---")
     st.subheader("📈 MSTU — BTC Signal-Driven Backtest (TF2 + V-Gate)")
 
-    if bt_bear is None:
+    if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTU backtest computing … fetching MSTU data and building signals. "
                 "Refresh in a moment.")
         return
@@ -6094,7 +6104,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
-    📅 <b>MSTU:</b> T-Rex 2× Long MSTR Daily Target ETF · inception ~Jun 2025
+    📅 <b>MSTU:</b> T-Rex 2× Long MSTR Daily Target ETF · inception ~Jun 2025 · pre-Jun 2025 = synthetic
     &nbsp;·&nbsp;
     ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
   </div>
@@ -6254,9 +6264,11 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
                 bull_regime_series=_oos_reg,
             )
 
+    s_bull = bt_bull["stats"] if bt_bull else None
     s_full = bt_full["stats"] if bt_full else None
 
     pr     = _period_cells(s_r)
+    p_bull = _period_cells(s_bull)
     p_oos  = _period_cells(s_oos)
     p_full = _period_cells(s_full)
 
@@ -6267,6 +6279,14 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
                  f"{pd.Timestamp(s_r['end_date']).strftime('%b %d, %Y')}</span>")
     else:
         lbl_r = "🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS"
+
+    if s_bull:
+        lbl_bull = (f"🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic<br>"
+                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                    f"{pd.Timestamp(s_bull['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(s_bull['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
 
     if s_oos:
         lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
@@ -6299,6 +6319,8 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
         + _sub4
         + "<th style='width:6px; padding:0;'></th>"
         + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
         + "</tr>"
     )
 
@@ -6321,7 +6343,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
             f"<tr style='background:{bg};'>"
             f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
             f"color:#334155;'>{lbl}</td>"
-            f"{pr[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
+            f"{pr[key]}{_sep}{p_bull[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
             f"</tr>"
         )
 
@@ -6337,6 +6359,10 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
               <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   border-right:3px solid #0d9488;">
                 {lbl_r}</th>
+              <th style="width:6px; padding:0; background:#0f766e;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#064e3b; border-right:3px solid #047857;">
+                {lbl_bull}</th>
               <th style="width:6px; padding:0; background:#0f766e;"></th>
               <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   background:#14532d; border-right:3px solid #166534;">
@@ -6361,6 +6387,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
         ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
+        🧪 Bull period uses <b>synthetic MSTU prices</b> calibrated from MSTR via OLS (β≈2).
         </p>
         """,
         unsafe_allow_html=True,
@@ -6491,6 +6518,13 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
             f"({pd.Timestamp(sr['start_date']).strftime('%b %Y')} → "
             f"{pd.Timestamp(sr['end_date']).strftime('%b %Y')})"
         )
+    if bt_bull:
+        sb = bt_bull["stats"]
+        tab_labels.append(
+            f"🐂 Bull Market 🧪  "
+            f"({pd.Timestamp(sb['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sb['end_date']).strftime('%b %Y')})"
+        )
     if bt_oos:
         so = bt_oos["stats"]
         tab_labels.append(
@@ -6521,6 +6555,19 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
                 if fig_r:
                     st.plotly_chart(fig_r, use_container_width=True,
                                     key=f"mstu_chart_bear_{key_suffix}")
+            tab_idx += 1
+        if bt_bull:
+            with tabs[tab_idx]:
+                sb = bt_bull["stats"]
+                fig_b = _make_mstu_chart(
+                    bt_bull,
+                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Bull Market 🧪 Synthetic  "
+                    f"({pd.Timestamp(sb['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sb['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_b:
+                    st.plotly_chart(fig_b, use_container_width=True,
+                                    key=f"mstu_chart_bull_{key_suffix}")
             tab_idx += 1
         if bt_oos:
             with tabs[tab_idx]:
@@ -6589,13 +6636,14 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
 
     log_tabs = []
     if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
+    if bt_bull: log_tabs.append("📋 Bull Market Trade Log 🧪")
     if bt_oos:  log_tabs.append("📋 OOS Trade Log")
     if bt_full: log_tabs.append("📋 Full (Since Inception) Trade Log")
 
     if log_tabs:
         ltabs = st.tabs(log_tabs)
         lt_idx = 0
-        for bt_src, lbl in [(bt_bear, "bear"), (bt_oos, "oos"), (bt_full, "full")]:
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull"), (bt_oos, "oos"), (bt_full, "full")]:
             if bt_src is None:
                 continue
             rows, has_p, s = _mstu_trade_log_rows(bt_src)
@@ -6614,6 +6662,8 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_full_oos=None,
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
                     caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                elif lbl == "bull":
+                    caption += "🧪 Synthetic MSTU prices (OLS from MSTR). In-sample for BTC CT model."
                 else:
                     caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
                 st.caption(caption)
@@ -7332,11 +7382,11 @@ def render_mstr_options_trading_strategy_dashboard(
 # ═══════════════════════════════════════════════════════════════════════════
 
 def render_mstu_options_trading_strategy_dashboard(
-        bt_bear, bt_full_oos=None,
+        bt_bear, bt_bull=None, bt_full_oos=None,
         bt_full=None, key_suffix: str = "") -> None:
     """Render MSTU Options backtesting dashboard (BTC signals → MSTU ATM call options).
 
-    Three-period layout (no bull — MSTU inception ~Jun 2025) with sky-blue theme.
+    Four-period layout: Bear · Bull (synthetic) · OOS · Full — sky-blue theme.
       • Strike = MSTU spot at entry (ATM), expiry = 596 days out
       • Black-Scholes pricing with 60-day rolling historical MSTU volatility
       • B&H benchmark: MSTU stock
@@ -7344,7 +7394,7 @@ def render_mstu_options_trading_strategy_dashboard(
     st.markdown("---")
     st.subheader("🔷 MSTU Options — BTC Signal-Driven Backtest (ATM Calls, 596d Expiry)")
 
-    if bt_bear is None:
+    if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTU Options backtest computing … fetching MSTU data and pricing options. "
                 "Refresh in a moment.")
         return
@@ -7365,7 +7415,7 @@ def render_mstu_options_trading_strategy_dashboard(
     engine, but buy and sell <b>MSTU ATM call options</b> instead of the ETF.
     Options are priced at <b>at-the-money (strike = MSTU spot at entry)</b> with
     <b>596 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
-    historical MSTU volatility. MSTU inception ~Jun 2025 — no bull market period.
+    historical MSTU volatility. MSTU inception ~Jun 2025 — pre-Jun 2025 uses synthetic prices.
   </div>
 
   <!-- ENTRY -->
@@ -7613,9 +7663,11 @@ def render_mstu_options_trading_strategy_dashboard(
                 bull_regime_series=_oos_reg,
             )
 
+    s_bull = bt_bull["stats"] if bt_bull else None
     s_full = bt_full["stats"] if bt_full else None
 
     pr     = _period_cells(s_r)
+    p_bull = _period_cells(s_bull)
     p_oos  = _period_cells(s_oos)
     p_full = _period_cells(s_full)
 
@@ -7626,6 +7678,14 @@ def render_mstu_options_trading_strategy_dashboard(
                  f"{pd.Timestamp(s_r['end_date']).strftime('%b %d, %Y')}</span>")
     else:
         lbl_r = "🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS"
+
+    if s_bull:
+        lbl_bull = (f"🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic<br>"
+                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                    f"{pd.Timestamp(s_bull['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(s_bull['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
 
     if s_oos:
         lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
@@ -7658,6 +7718,8 @@ def render_mstu_options_trading_strategy_dashboard(
         + _sub4
         + "<th style='width:6px; padding:0;'></th>"
         + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
         + "</tr>"
     )
 
@@ -7680,7 +7742,7 @@ def render_mstu_options_trading_strategy_dashboard(
             f"<tr style='background:{bg};'>"
             f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
             f"color:#334155;'>{lbl}</td>"
-            f"{pr[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
+            f"{pr[key]}{_sep}{p_bull[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
             f"</tr>"
         )
 
@@ -7696,6 +7758,10 @@ def render_mstu_options_trading_strategy_dashboard(
               <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   border-right:3px solid #0284c7;">
                 {lbl_r}</th>
+              <th style="width:6px; padding:0; background:#0369a1;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#064e3b; border-right:3px solid #047857;">
+                {lbl_bull}</th>
               <th style="width:6px; padding:0; background:#0369a1;"></th>
               <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
                   background:#14532d; border-right:3px solid #166534;">
@@ -7721,6 +7787,7 @@ def render_mstu_options_trading_strategy_dashboard(
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         📐 Black-Scholes pricing: σ = 60d rolling HV · r = 4.5% · No dividend.
+        🧪 Bull period uses <b>synthetic MSTU prices</b> calibrated from MSTR via OLS (β≈2).
         </p>
         """,
         unsafe_allow_html=True,
@@ -7857,6 +7924,13 @@ def render_mstu_options_trading_strategy_dashboard(
             f"({pd.Timestamp(sr['start_date']).strftime('%b %Y')} → "
             f"{pd.Timestamp(sr['end_date']).strftime('%b %Y')})"
         )
+    if bt_bull:
+        sb = bt_bull["stats"]
+        tab_labels.append(
+            f"🐂 Bull Market 🧪  "
+            f"({pd.Timestamp(sb['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sb['end_date']).strftime('%b %Y')})"
+        )
     if bt_oos:
         so = bt_oos["stats"]
         tab_labels.append(
@@ -7887,6 +7961,19 @@ def render_mstu_options_trading_strategy_dashboard(
                 if fig_r:
                     st.plotly_chart(fig_r, use_container_width=True,
                                     key=f"mstu_opts_chart_bear_{key_suffix}")
+            tab_idx += 1
+        if bt_bull:
+            with tabs[tab_idx]:
+                sb = bt_bull["stats"]
+                fig_b = _make_mstu_opts_chart(
+                    bt_bull,
+                    f"TF2+V-Gate (MSTU Calls) vs B&H MSTU — Bull Market 🧪 Synthetic  "
+                    f"({pd.Timestamp(sb['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sb['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_b:
+                    st.plotly_chart(fig_b, use_container_width=True,
+                                    key=f"mstu_opts_chart_bull_{key_suffix}")
             tab_idx += 1
         if bt_oos:
             with tabs[tab_idx]:
@@ -7964,13 +8051,14 @@ def render_mstu_options_trading_strategy_dashboard(
 
     log_tabs = []
     if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
+    if bt_bull: log_tabs.append("📋 Bull Market Trade Log 🧪")
     if bt_oos:  log_tabs.append("📋 OOS Trade Log")
     if bt_full: log_tabs.append("📋 Full (Since Inception) Trade Log")
 
     if log_tabs:
         ltabs = st.tabs(log_tabs)
         lt_idx = 0
-        for bt_src, lbl in [(bt_bear, "bear"), (bt_oos, "oos"), (bt_full, "full")]:
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull"), (bt_oos, "oos"), (bt_full, "full")]:
             if bt_src is None:
                 continue
             rows, has_p, s = _mstu_opts_trade_log_rows(bt_src)
@@ -7989,6 +8077,8 @@ def render_mstu_options_trading_strategy_dashboard(
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
                     caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                elif lbl == "bull":
+                    caption += "🧪 Synthetic MSTU prices (OLS from MSTR). In-sample for BTC CT model."
                 else:
                     caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
                 st.caption(caption)
@@ -12053,7 +12143,8 @@ with tab_mstu:
         "trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)** instead. "
         "All entry/exit signals are computed from the BTC CT model predictions — only the "
         "traded asset changes. MSTU provides **2× daily leveraged exposure** to MSTR stock, "
-        "which holds ~580,000 BTC. ⚠️ MSTU launched ~Jun 2025 — no bull market period is available."
+        "which holds ~580,000 BTC. MSTU launched ~Jun 2025; the **Bull Market period uses "
+        "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
     _mstu_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
@@ -12062,12 +12153,15 @@ with tab_mstu:
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
     _mstu_bear     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
+    _mstu_bull     = _run_fixed_period_mstu_backtest(
+        "2025-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–May 2025 (synthetic)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
     _mstu_full     = _run_fixed_period_mstu_backtest(
-        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)     # locked Jun 2025–May 2026
+        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)     # Full: Jun 2024–May 2026 (synthetic+actual)
     render_mstu_trading_strategy_dashboard(
         _mstu_bear,
+        bt_bull=_mstu_bull,
         bt_full_oos=_mstu_full_oos,
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
@@ -12081,7 +12175,8 @@ with tab_mstu_opts:
         "**strike = MSTU spot price at entry** and **596 days to expiry**, priced via "
         "**Black-Scholes** (σ = 60-day rolling historical MSTU volatility, r = 4.5%). "
         "Exit is triggered by the same BTC D2/D3 regime-adaptive signals. "
-        "B&H benchmark is MSTU stock. ⚠️ MSTU launched ~Jun 2025 — no bull market period."
+        "B&H benchmark is MSTU stock. MSTU launched ~Jun 2025; the **Bull Market period uses "
+        "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
     _mstu_opts_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                                if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
@@ -12090,12 +12185,15 @@ with tab_mstu_opts:
     _mstu_opts_data_end = _mstu_opts_raw.index.max().strftime("%Y-%m-%d") if not _mstu_opts_raw.empty else ""
     _mstu_opts_bear     = _run_fixed_period_mstu_options_backtest(
         "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
+    _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
+        "2025-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_full     = _run_fixed_period_mstu_options_backtest(
-        "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
+        "2026-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     render_mstu_options_trading_strategy_dashboard(
         _mstu_opts_bear,
+        bt_bull=_mstu_opts_bull,
         bt_full_oos=_mstu_opts_full_oos,
         bt_full=_mstu_opts_full,
         key_suffix="mstu_opts_tab",
