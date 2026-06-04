@@ -60,6 +60,10 @@ _ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
             "estimated-transaction-volume-usd","market-cap",
             "avg-block-size","cost-per-transaction"]
 
+# Must match btc_hourly_app.py ANCHOR_HOUR_UTC = 12
+# Bar labeled date D covers 12:00 UTC on D → 11:59 UTC on D+1 (= open of D+1 12:00 bar)
+ANCHOR_HOUR_UTC = 12
+
 
 def _yf(sym, start, end, auto_adjust=False):
     d = yf.download(sym, start=start, end=end, progress=False,
@@ -68,6 +72,83 @@ def _yf(sym, start, end, auto_adjust=False):
         d.columns = [c[0] for c in d.columns]
     d.index = pd.DatetimeIndex(d.index).tz_localize(None).normalize()
     return d
+
+
+def fetch_btc_12utc_daily(start_str, end_str):
+    """Fetch BTC OHLCV as 12:00→12:00 UTC daily bars from Binance public API.
+
+    Matches the UI's _fetch_binance_hourly + _rebucket_12utc pipeline exactly.
+    Bar labeled date D: Open=price at 12:00 UTC D, Close=price at 12:00 UTC D+1.
+    Falls back to yfinance 1h → rebucketed if Binance is unavailable.
+    """
+    BINANCE_URL = "https://api.binance.us/api/v3/klines"
+    start_dt = pd.Timestamp(start_str)
+    end_dt   = pd.Timestamp(end_str)
+    # Fetch extra days so the first and last daily bars are complete
+    fetch_start_ms = int((start_dt - pd.Timedelta(days=2)).timestamp() * 1000)
+    fetch_end_ms   = int((end_dt   + pd.Timedelta(days=2)).timestamp() * 1000)
+
+    rows = []
+    cursor = fetch_start_ms
+    while cursor < fetch_end_ms:
+        try:
+            r = requests.get(BINANCE_URL,
+                             params=dict(symbol="BTCUSDT", interval="1h",
+                                         startTime=cursor, limit=1000),
+                             timeout=30)
+            batch = r.json()
+        except Exception as exc:
+            print(f" (Binance err: {exc})", end=""); break
+        if not batch or not isinstance(batch, list):
+            break
+        rows.extend(batch)
+        cursor = int(batch[-1][0]) + 3_600_000
+        time.sleep(0.05)
+
+    if not rows:
+        # Fallback: yfinance 1h rebucketed to 12:00 UTC daily
+        print(" (Binance unavailable, falling back to yfinance 1h)", end="")
+        try:
+            raw = yf.download("BTC-USD", period="730d", interval="60m",
+                              progress=False, auto_adjust=False)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = [c[0] for c in raw.columns]
+            h = raw[["Open","High","Low","Close","Volume"]].copy()
+            h.columns = ["open","high","low","close","volume"]
+            h.index = pd.to_datetime(h.index)
+            if h.index.tz is not None:
+                h.index = h.index.tz_convert("UTC").tz_localize(None)
+            h.index.name = "ts"
+            h = h[~h.index.duplicated(keep="last")].sort_index()
+            rows = None   # signal: use h directly
+        except Exception:
+            return pd.DataFrame()   # complete failure
+
+    if rows is not None:
+        cols = ["open_time","open","high","low","close","volume",
+                "close_time","qv","n","tb","tq","ig"]
+        df_h = pd.DataFrame(rows, columns=cols)
+        df_h["ts"] = pd.to_datetime(df_h["open_time"], unit="ms", utc=True).dt.tz_convert(None)
+        for c in ["open","high","low","close","volume"]:
+            df_h[c] = df_h[c].astype(float)
+        h = df_h.set_index("ts")[["open","high","low","close","volume"]]
+        h = h[~h.index.duplicated(keep="last")].sort_index()
+
+    # Rebucket: same logic as UI's _rebucket_12utc
+    h = h.copy()
+    h["bucket"] = (h.index - pd.Timedelta(hours=ANCHOR_HOUR_UTC)).normalize()
+    g = h.groupby("bucket").agg(
+        btc_open   = ("open",   "first"),
+        btc_high   = ("high",   "max"),
+        btc_low    = ("low",    "min"),
+        btc_close  = ("close",  "last"),
+        btc_volume = ("volume", "sum"),
+        n_hours    = ("close",  "size"),
+    )
+    g = g[g["n_hours"] == 24].drop(columns="n_hours")
+    g.index = pd.DatetimeIndex(g.index)
+    # Slice to requested date range
+    return g.loc[(g.index >= start_dt.normalize()) & (g.index <= end_dt.normalize())]
 
 
 def fetch_coinbase_daily(start_str, end_str):
@@ -105,9 +186,19 @@ def fetch_coinbase_daily(start_str, end_str):
 def fetch_data(fetch_start, fetch_end):
     print(f"\nFetching BTC + macro: {fetch_start} → {fetch_end}")
     frames = {}
-    d = _yf("BTC-USD", fetch_start, fetch_end)
-    frames.update({"btc_close": d["Close"], "btc_high": d["High"],
-                   "btc_low": d["Low"], "btc_volume": d["Volume"]})
+
+    # Use Binance 12:00→12:00 UTC daily bars — must match the model's training data.
+    # yfinance daily bars (midnight-UTC) give different H/L/Close → wrong predictions.
+    print("  Fetching BTC 12:00-UTC bars from Binance …", end=" ")
+    btc12 = fetch_btc_12utc_daily(fetch_start, fetch_end)
+    if not btc12.empty:
+        frames.update({k: btc12[k] for k in ["btc_close","btc_high","btc_low","btc_volume"]})
+        print(f"OK ({len(btc12)} bars, last={btc12.index.max().date()})")
+    else:
+        print("FAILED — falling back to yfinance daily")
+        d = _yf("BTC-USD", fetch_start, fetch_end)
+        frames.update({"btc_close": d["Close"], "btc_high": d["High"],
+                       "btc_low": d["Low"], "btc_volume": d["Volume"]})
     for name, sym in _MACRO_SYMS.items():
         try:
             frames[f"{name}_close"] = _yf(sym, fetch_start, fetch_end)["Close"]
