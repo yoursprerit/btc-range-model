@@ -49,16 +49,17 @@ import yfinance as yf
 import streamlit as st
 import plotly.graph_objects as go
 
-# Pre-import every sklearn._loss submodule that the serialised models
-# reference.  joblib uses pickle, which re-imports classes by dotted path
-# at load time.  On some runtimes (e.g. Python 3.14) these submodules are
-# not automatically loaded, so pickle raises ModuleNotFoundError.  The
-# three submodules below cover QuantileRegressor (loss/link) and the C
-# extension (_loss) that registers as the top-level '_loss' alias.
+# The serialised models reference sklearn's internal _loss C extension by
+# its bare compiled name '_loss' (not 'sklearn._loss._loss').  On Python
+# 3.12+ the extension is no longer auto-registered under the bare name, so
+# pickle raises "No module named '_loss'".  Fix: import the extension and
+# explicitly register it as sys.modules['_loss'] before any joblib.load().
 try:
-    import sklearn._loss._loss  # noqa: F401 — registers '_loss' in sys.modules
-    import sklearn._loss.loss   # noqa: F401 — HalfSquaredError, etc.
-    import sklearn._loss.link   # noqa: F401 — IdentityLink, etc.
+    import sklearn._loss._loss as _sklearn_loss_ext
+    if "_loss" not in sys.modules:
+        sys.modules["_loss"] = _sklearn_loss_ext
+    import sklearn._loss.loss  # noqa: F401
+    import sklearn._loss.link  # noqa: F401
 except Exception:
     pass
 
