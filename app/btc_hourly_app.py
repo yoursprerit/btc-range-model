@@ -49,14 +49,16 @@ import yfinance as yf
 import streamlit as st
 import plotly.graph_objects as go
 
-# sklearn's QuantileRegressor loss functions live in a C extension that
-# registers itself in sys.modules as '_loss' (top-level).  On some
-# deployment environments that entry is missing until the extension is
-# explicitly imported, causing joblib deserialization to fail with
-# "No module named '_loss'".  Importing the extension here ensures it
-# is registered before any joblib.load() call.
+# Pre-import every sklearn._loss submodule that the serialised models
+# reference.  joblib uses pickle, which re-imports classes by dotted path
+# at load time.  On some runtimes (e.g. Python 3.14) these submodules are
+# not automatically loaded, so pickle raises ModuleNotFoundError.  The
+# three submodules below cover QuantileRegressor (loss/link) and the C
+# extension (_loss) that registers as the top-level '_loss' alias.
 try:
     import sklearn._loss._loss  # noqa: F401 — registers '_loss' in sys.modules
+    import sklearn._loss.loss   # noqa: F401 — HalfSquaredError, etc.
+    import sklearn._loss.link   # noqa: F401 — IdentityLink, etc.
 except Exception:
     pass
 
@@ -87,7 +89,11 @@ def load_assets():
         st.error(f"Model artefacts not found at {ASSETS_PATH}.\n"
                  "Run `python train_hourly_model.py` first.")
         st.stop()
-    return joblib.load(ASSETS_PATH)
+    try:
+        return joblib.load(ASSETS_PATH)
+    except Exception as e:
+        st.error(f"Hourly model could not be loaded: {e}")
+        st.stop()
 
 A = load_assets()
 model     = A["model"]
