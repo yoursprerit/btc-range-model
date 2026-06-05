@@ -658,7 +658,11 @@ def compute_daily_forecast(target_date_iso, data_end=None):
     path = str(DAILY_MODEL_CT)
     if not os.path.exists(path):
         return None
-    AD = joblib.load(path)
+    try:
+        AD = joblib.load(path)
+    except Exception as e:
+        st.warning(f"Daily H/L model could not be loaded ({e}). Predictions unavailable.")
+        return None
     mh, ml = AD["hi_model"], AD["lo_model"]
     sh, sl = AD["sigma_hi"], AD["sigma_lo"]
     fc = AD["feat_cols"]
@@ -904,7 +908,10 @@ def _load_cone_7d():
     p = str(CONE_7D_MODEL)
     if not os.path.exists(p):
         return None
-    return joblib.load(p)
+    try:
+        return joblib.load(p)
+    except Exception:
+        return None
 
 
 @st.cache_resource
@@ -913,7 +920,10 @@ def _load_cone_14d():
     p = str(CONE_14D_MODEL)
     if not os.path.exists(p):
         return None
-    return joblib.load(p)
+    try:
+        return joblib.load(p)
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
@@ -1582,7 +1592,10 @@ def _load_daily_hl():
     p = str(DAILY_MODEL_CT)
     if not os.path.exists(p):
         return {}
-    return joblib.load(p)
+    try:
+        return joblib.load(p)
+    except Exception:
+        return {}
 
 
 @st.cache_resource
@@ -1591,7 +1604,10 @@ def _load_day_type():
     p = str(DAY_TYPE_MODEL)
     if not os.path.exists(p):
         return None
-    return joblib.load(p)
+    try:
+        return joblib.load(p)
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=86400, show_spinner="Classifying day-type …")
