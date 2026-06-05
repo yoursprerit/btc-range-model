@@ -341,6 +341,35 @@ def fetch_equity_prices():
             prices.get("MSTU"), changes.get("MSTU"))
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_mstr_atm_call(mstr_spot: float | None):
+    """Price a 743-day ATM MSTR call via Black-Scholes with 60-day trailing HV.
+
+    Returns (option_price, hv_pct, strike) or (None, None, None) on error.
+    mstr_spot is passed as a cache key so the result refreshes when the live
+    price changes meaningfully (rounded to nearest dollar).
+    """
+    import math
+    RF_RATE     = 0.045
+    OPTION_DAYS = 743
+    HV_WINDOW   = 60
+    try:
+        hist   = yf.Ticker("MSTR").history(period="120d", interval="1d",
+                                            auto_adjust=True)
+        if hist.empty or len(hist) < HV_WINDOW + 1:
+            return None, None, None
+        closes  = hist["Close"].dropna()
+        log_ret = np.log(closes / closes.shift(1)).dropna()
+        hv      = float(log_ret.rolling(HV_WINDOW).std().iloc[-1]) * math.sqrt(252)
+        hv      = max(0.20, min(hv, 4.00))
+        spot    = float(mstr_spot) if mstr_spot else float(closes.iloc[-1])
+        T       = OPTION_DAYS / 365.0
+        opt_px  = _bs_call(spot, spot, T, RF_RATE, hv)
+        return opt_px, hv, spot
+    except Exception:
+        return None, None, None
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_btc_1m():
     """Fetch the last ~25 hours of 1-minute BTC/USDT klines from Binance.
@@ -8827,8 +8856,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     else:
         c5.metric("Market Regime", "—")
 
-    # ─────────── MSTR / MSTU live prices ──────────────────────────────────
-    e1, e2, _, _, _ = st.columns(5)
+    # ─────────── MSTR / MSTU live prices + 743d ATM call ─────────────────
+    _mstr_spot_key = round(mstr_price) if mstr_price else None
+    mstr_call_px, mstr_hv, mstr_call_strike = fetch_mstr_atm_call(_mstr_spot_key)
+    e1, e2, e3, _, _ = st.columns(5)
     e1.metric(
         "MSTR (MicroStrategy)",
         f"${mstr_price:,.2f}" if mstr_price is not None else "—",
@@ -8838,6 +8869,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         "MSTU (2× Long MSTR)",
         f"${mstu_price:,.2f}" if mstu_price is not None else "—",
         delta=(f"{mstu_chg:+.2f}% today" if mstu_chg is not None else None),
+    )
+    e3.metric(
+        "MSTR 743d ATM Call (BS)",
+        f"${mstr_call_px:,.2f}" if mstr_call_px is not None else "—",
+        delta=(f"K=${mstr_call_strike:,.0f} · σ={mstr_hv*100:.0f}%"
+               if mstr_call_px is not None else None),
     )
 
     # ── Historical picker: date strip, calendar, hour slider ──────────────
