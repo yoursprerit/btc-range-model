@@ -324,6 +324,24 @@ def fetch_live_spot():
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def fetch_equity_prices():
+    """Fetch live MSTR and MSTU prices via Yahoo Finance."""
+    prices, changes = {}, {}
+    for ticker in ("MSTR", "MSTU"):
+        try:
+            fi = yf.Ticker(ticker).fast_info
+            price = float(fi.last_price)
+            prev  = float(fi.previous_close)
+            prices[ticker] = price
+            changes[ticker] = (price - prev) / prev * 100 if prev else None
+        except Exception:
+            prices[ticker] = None
+            changes[ticker] = None
+    return (prices.get("MSTR"), changes.get("MSTR"),
+            prices.get("MSTU"), changes.get("MSTU"))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_btc_1m():
     """Fetch the last ~25 hours of 1-minute BTC/USDT klines from Binance.
 
@@ -2029,6 +2047,7 @@ if not valid_mask.any():
     st.stop()
 latest_t_global = F_filled.index[valid_mask][-1]
 live_spot, live_spot_ts = fetch_live_spot()
+mstr_price, mstr_chg, mstu_price, mstu_chg = fetch_equity_prices()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -8807,6 +8826,19 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                   delta_color="normal" if _regime_bull else "inverse")
     else:
         c5.metric("Market Regime", "—")
+
+    # ─────────── MSTR / MSTU live prices ──────────────────────────────────
+    e1, e2, _, _, _ = st.columns(5)
+    e1.metric(
+        "MSTR (MicroStrategy)",
+        f"${mstr_price:,.2f}" if mstr_price is not None else "—",
+        delta=(f"{mstr_chg:+.2f}% today" if mstr_chg is not None else None),
+    )
+    e2.metric(
+        "MSTU (2× Long MSTR)",
+        f"${mstu_price:,.2f}" if mstu_price is not None else "—",
+        delta=(f"{mstu_chg:+.2f}% today" if mstu_chg is not None else None),
+    )
 
     # ── Historical picker: date strip, calendar, hour slider ──────────────
     # Rendered at the top right of the tab (below BTC price/forecast, above
