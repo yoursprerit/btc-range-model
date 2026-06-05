@@ -49,17 +49,6 @@ import yfinance as yf
 import streamlit as st
 import plotly.graph_objects as go
 
-# sklearn's QuantileRegressor loss functions live in a C extension that
-# registers itself in sys.modules as '_loss' (top-level).  On some
-# deployment environments that entry is missing until the extension is
-# explicitly imported, causing joblib deserialization to fail with
-# "No module named '_loss'".  Importing the extension here ensures it
-# is registered before any joblib.load() call.
-try:
-    import sklearn._loss._loss  # noqa: F401 — registers '_loss' in sys.modules
-except Exception:
-    pass
-
 # ════════════════════════════════════════════════════════════════════════
 # CONFIG
 ASSETS_PATH      = str(HOURLY_MODEL)
@@ -669,11 +658,7 @@ def compute_daily_forecast(target_date_iso, data_end=None):
     path = str(DAILY_MODEL_CT)
     if not os.path.exists(path):
         return None
-    try:
-        AD = joblib.load(path)
-    except Exception as e:
-        st.warning(f"Daily H/L model could not be loaded: {e}")
-        return None
+    AD = joblib.load(path)
     mh, ml = AD["hi_model"], AD["lo_model"]
     sh, sl = AD["sigma_hi"], AD["sigma_lo"]
     fc = AD["feat_cols"]
@@ -919,10 +904,7 @@ def _load_cone_7d():
     p = str(CONE_7D_MODEL)
     if not os.path.exists(p):
         return None
-    try:
-        return joblib.load(p)
-    except Exception:
-        return None
+    return joblib.load(p)
 
 
 @st.cache_resource
@@ -931,10 +913,7 @@ def _load_cone_14d():
     p = str(CONE_14D_MODEL)
     if not os.path.exists(p):
         return None
-    try:
-        return joblib.load(p)
-    except Exception:
-        return None
+    return joblib.load(p)
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
@@ -1603,10 +1582,7 @@ def _load_daily_hl():
     p = str(DAILY_MODEL_CT)
     if not os.path.exists(p):
         return {}
-    try:
-        return joblib.load(p)
-    except Exception:
-        return {}
+    return joblib.load(p)
 
 
 @st.cache_resource
@@ -1615,10 +1591,7 @@ def _load_day_type():
     p = str(DAY_TYPE_MODEL)
     if not os.path.exists(p):
         return None
-    try:
-        return joblib.load(p)
-    except Exception:
-        return None
+    return joblib.load(p)
 
 
 @st.cache_data(ttl=86400, show_spinner="Classifying day-type …")
