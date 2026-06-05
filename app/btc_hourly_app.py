@@ -927,7 +927,8 @@ def _load_cone_7d():
         return None
     try:
         return joblib.load(p)
-    except Exception:
+    except Exception as e:
+        st.warning(f"7-day cone model could not be loaded: {e}")
         return None
 
 
@@ -939,7 +940,8 @@ def _load_cone_14d():
         return None
     try:
         return joblib.load(p)
-    except Exception:
+    except Exception as e:
+        st.warning(f"14-day cone model could not be loaded: {e}")
         return None
 
 
@@ -1611,7 +1613,8 @@ def _load_daily_hl():
         return {}
     try:
         return joblib.load(p)
-    except Exception:
+    except Exception as e:
+        st.warning(f"Daily H/L artefact could not be loaded: {e}")
         return {}
 
 
@@ -1623,7 +1626,8 @@ def _load_day_type():
         return None
     try:
         return joblib.load(p)
-    except Exception:
+    except Exception as e:
+        st.warning(f"Day-type model could not be loaded: {e}")
         return None
 
 
@@ -2432,7 +2436,8 @@ def _build_ct_batch_predictions(data_end=None):
         return None
     try:
         AD = joblib.load(path)
-    except Exception:
+    except Exception as e:
+        st.warning(f"CT model could not be loaded: {e}")
         return None
 
     df = _fetch_daily_raw().copy()
@@ -2609,7 +2614,8 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
         return None
     try:
         AD = joblib.load(path)
-    except Exception:
+    except Exception as e:
+        st.warning(f"CT model (extended) could not be loaded: {e}")
         return None
 
     FETCH_START = "2024-02-01"
