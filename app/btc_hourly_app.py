@@ -10246,12 +10246,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         )
     if hl30 and _hl_mtest:
         _defs_hl = [
-            ("MAPE HIGH",        "mape_h", "MAPE_H",             True,  "%.2f %%"),
-            ("MAPE LOW",         "mape_l", "MAPE_L",             True,  "%.2f %%"),
-            ("Hit ±1.5 % HIGH",  "hit_h",  "hit2_H",             False, "%.1f %%"),
-            ("Hit ±1.5 % LOW",   "hit_l",  "hit2_L",             False, "%.1f %%"),
-            ("Dir acc HIGH",     "dir_h",  "direction_hit_rate",  False, "%.1f %%"),
-            ("Dir acc LOW",      "dir_l",  "direction_hit_rate",  False, "%.1f %%"),
+            ("MAPE HIGH",        "mape_h", "mape_h",        True,  "%.2f %%"),
+            ("MAPE LOW",         "mape_l", "mape_l",        True,  "%.2f %%"),
+            ("Hit ±1.5 % HIGH",  "hit_h",  "hit2_h",        False, "%.1f %%"),
+            ("Hit ±1.5 % LOW",   "hit_l",  "hit2_l",        False, "%.1f %%"),
+            ("Dir acc HIGH",     "dir_h",  "direction_hit", False, "%.1f %%"),
+            ("Dir acc LOW",      "dir_l",  "direction_hit", False, "%.1f %%"),
         ]
         _hlc = st.columns(len(_defs_hl))
         for _ci, (_lbl, _k30, _ktest, _lo, _fmt) in enumerate(_defs_hl):
@@ -10466,15 +10466,15 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             "Overall":         _ov_h,
         })
     if hl30 and _hl_mtest:
-        _pm_hl  = _badge(hl30["mape_h"], _hl_mtest.get("MAPE_H", 0), True)
-        _da_hl  = _badge(hl30["dir_h"],  _hl_mtest.get("direction_hit_rate", 50), False)
+        _pm_hl  = _badge(hl30["mape_h"], _hl_mtest.get("mape_h", 0), True)
+        _da_hl  = _badge(hl30["dir_h"],  _hl_mtest.get("direction_hit", 50), False)
         _ov_hl  = "🔴" if "🔴" in (_pm_hl, _da_hl) else ("🟡" if "🟡" in (_pm_hl, _da_hl) else "🟢")
         _drift_rows.append({
             "Model":           "📅 Daily H/L",
             "Perf drift":      (f"{_pm_hl}  MAPE-H {hl30['mape_h']:.2f}% "
-                                f"vs {_hl_mtest.get('MAPE_H',0):.2f}%"),
+                                f"vs {_hl_mtest.get('mape_h',0):.2f}%"),
             "Direction drift": (f"{_da_hl}  dir-H {hl30['dir_h']:.1f}% "
-                                f"vs {_hl_mtest.get('direction_hit_rate',50):.1f}%"),
+                                f"vs {_hl_mtest.get('direction_hit',50):.1f}%"),
             "Overall":         _ov_hl,
         })
     if cone30:
@@ -10947,11 +10947,11 @@ def render_retrain_dashboard():
             mh30, ml30 = hl30["mape_h"], hl30["mape_l"]
             hh30, hl_30 = hl30["hit_h"], hl30["hit_l"]
             dh30 = hl30["dir_h"]
-            mh_t = _hl_mtest.get("MAPE_H", 1.32)
-            ml_t = _hl_mtest.get("MAPE_L", 1.30)
-            hh_t = _hl_mtest.get("hit2_H", 79.7)
-            hl_t = _hl_mtest.get("hit2_L", 87.9)
-            dh_t = _hl_mtest.get("direction_hit_rate", 50.0)
+            mh_t = _hl_mtest.get("mape_h", 1.32)
+            ml_t = _hl_mtest.get("mape_l", 1.30)
+            hh_t = _hl_mtest.get("hit2_h", 79.7)
+            hl_t = _hl_mtest.get("hit2_l", 87.9)
+            dh_t = _hl_mtest.get("direction_hit", 50.0)
             hl_c = st.columns(5)
             hl_c[0].metric(
                 f"{_drift(mh30, mh_t)} MAPE-H (30d)",
