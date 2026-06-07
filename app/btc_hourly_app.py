@@ -8859,8 +8859,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     else:
         c5.metric("Market Regime", "—")
 
-    # ─────────── second row: MA30 · predicted H/L · realized H/L ─────────
-    f1, f2, f3, f4, f5 = st.columns(5)
+    # ── second row: MA30 · Daily High (pred + realized) · Daily Low (pred + realized) ──
+    f1, f2, f3 = st.columns(3)
     _ma30 = sigs.get("ma30_value") if sigs else None
     if _ma30 is not None:
         _spot_ref = live_spot if (is_live and live_spot is not None) else latest_close
@@ -8871,28 +8871,34 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     else:
         f1.metric("30-Day MA", "—")
 
+    # High column: predicted high then realized high stacked
     if daily is not None:
         f2.metric("Predicted Daily High",
                   f"${daily['pred_high']:,.0f}",
                   delta=f"+{(daily['pred_high']/daily['close_asof']-1)*100:.2f}% vs close")
+    else:
+        f2.metric("Predicted Daily High", "—")
+    if _intra_raw is not None:
+        _hrs = _intra_raw["hours_elapsed"]
+        f2.metric("Realized High (today)",
+                  f"${_intra_raw['running_high']:,.0f}",
+                  delta=f"{_hrs}h into bar")
+    else:
+        f2.metric("Realized High (today)", "—")
+
+    # Low column: predicted low then realized low stacked
+    if daily is not None:
         f3.metric("Predicted Daily Low",
                   f"${daily['pred_low']:,.0f}",
                   delta=f"{(daily['pred_low']/daily['close_asof']-1)*100:.2f}% vs close")
     else:
-        f2.metric("Predicted Daily High", "—")
         f3.metric("Predicted Daily Low", "—")
-
     if _intra_raw is not None:
-        _hrs = _intra_raw["hours_elapsed"]
-        f4.metric("Realized High (today)",
-                  f"${_intra_raw['running_high']:,.0f}",
-                  delta=f"{_hrs}h into bar")
-        f5.metric("Realized Low (today)",
+        f3.metric("Realized Low (today)",
                   f"${_intra_raw['running_low']:,.0f}",
                   delta=f"{_hrs}h into bar")
     else:
-        f4.metric("Realized High (today)", "—")
-        f5.metric("Realized Low (today)", "—")
+        f3.metric("Realized Low (today)", "—")
 
     # ─────────── MSTR / MSTU live prices + 743d ATM call ─────────────────
     _mstr_spot_key = round(mstr_price) if mstr_price else None
