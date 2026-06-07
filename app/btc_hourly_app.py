@@ -8827,6 +8827,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     expected_ret_pct = (np.exp(y_pred) - 1) * 100
     fng_now = int(df.loc[latest_t, "fng"]) if pd.notna(df.loc[latest_t, "fng"]) else None
 
+    # Fetch intraday bar data early so realized H/L appear in the top panel
+    _intra_raw = _fetch_current_bar_intraday() if is_live else None
+
     # ─────────────────────────── headline KPIs ────────────────────────────
     c1, c2, c3, c4, c5 = st.columns(5)
     if live_spot is not None:
@@ -8855,6 +8858,41 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                   delta_color="normal" if _regime_bull else "inverse")
     else:
         c5.metric("Market Regime", "—")
+
+    # ─────────── second row: MA30 · predicted H/L · realized H/L ─────────
+    f1, f2, f3, f4, f5 = st.columns(5)
+    _ma30 = sigs.get("ma30_value") if sigs else None
+    if _ma30 is not None:
+        _spot_ref = live_spot if (is_live and live_spot is not None) else latest_close
+        _ma30_diff = _spot_ref - _ma30
+        f1.metric("30-Day MA", f"${_ma30:,.0f}",
+                  delta=f"${_ma30_diff:+,.0f} vs spot",
+                  delta_color="normal" if _ma30_diff >= 0 else "inverse")
+    else:
+        f1.metric("30-Day MA", "—")
+
+    if daily is not None:
+        f2.metric("Predicted Daily High",
+                  f"${daily['pred_high']:,.0f}",
+                  delta=f"+{(daily['pred_high']/daily['close_asof']-1)*100:.2f}% vs close")
+        f3.metric("Predicted Daily Low",
+                  f"${daily['pred_low']:,.0f}",
+                  delta=f"{(daily['pred_low']/daily['close_asof']-1)*100:.2f}% vs close")
+    else:
+        f2.metric("Predicted Daily High", "—")
+        f3.metric("Predicted Daily Low", "—")
+
+    if _intra_raw is not None:
+        _hrs = _intra_raw["hours_elapsed"]
+        f4.metric("Realized High (today)",
+                  f"${_intra_raw['running_high']:,.0f}",
+                  delta=f"{_hrs}h into bar")
+        f5.metric("Realized Low (today)",
+                  f"${_intra_raw['running_low']:,.0f}",
+                  delta=f"{_hrs}h into bar")
+    else:
+        f4.metric("Realized High (today)", "—")
+        f5.metric("Realized Low (today)", "—")
 
     # ─────────── MSTR / MSTU live prices + 743d ATM call ─────────────────
     _mstr_spot_key = round(mstr_price) if mstr_price else None
@@ -8885,7 +8923,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
     if sigs is not None:
-        _intra_raw = _fetch_current_bar_intraday() if is_live else None
+        # _intra_raw already fetched above for the top-panel realized H/L metrics
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
         render_trend_signatures(sigs, intraday=_intra_sig)
 
