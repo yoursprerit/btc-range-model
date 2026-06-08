@@ -3141,6 +3141,7 @@ def run_full_period_backtest(end_date_iso: str,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
+                          entry_trigger=e_trigger,
                           stop_price=round(peak_px * 0.93, 2),
                           peak_price=round(peak_px, 2)) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
@@ -3424,6 +3425,7 @@ def run_mstr_backtest(end_date_iso: str,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
+                          entry_trigger=e_trigger,
                           stop_price=round(stop_px, 4)) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
         stats = dict(
@@ -3713,6 +3715,7 @@ def run_mstu_backtest(end_date_iso: str,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
+                          entry_trigger=e_trigger,
                           stop_price=round(stop_px, 4)) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
         stats = dict(
@@ -8415,64 +8418,121 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         unsafe_allow_html=True,
     )
 
-    # ── Live Open Position Monitor ──────────────────────────────────────────
+    # ── Live Position Panel — always rendered for all 3 assets ─────────────
     if open_positions:
-        _pos_cards_html = []
-        for _asset_key, _pos in open_positions.items():
-            _oe       = _pos.get("entry", {})
+        _lp_cards = []
+        for _asset_key in ("btc", "mstr", "mstu"):
+            _pos      = open_positions.get(_asset_key, {})
+            _is_open  = bool(_pos.get("open_pos", False))
+            _oe       = _pos.get("entry") or {}
             _live_px  = _pos.get("live_price")
             _label    = _pos.get("asset_label", _asset_key.upper())
             _stype    = _pos.get("stop_type", "")
-            _e_px     = _oe.get("price")
-            _e_date   = _oe.get("date")
-            _sl_px    = _oe.get("stop_price")
-            _pk_px    = _oe.get("peak_price")
-            if _e_px is None:
-                continue
-            _is_btc  = _asset_key == "btc"
-            _fmt     = (lambda p: f"${p:,.0f}") if _is_btc else (lambda p: f"${p:,.2f}")
-            _edate_s = pd.Timestamp(_e_date).strftime("%b %d, %Y") if _e_date else "—"
-            if _live_px is not None and _live_px > 0:
-                _unr_pct = (_live_px / _e_px - 1) * 100
-                _unr_col = "#16a34a" if _unr_pct >= 0 else "#dc2626"
-                _px_s    = _fmt(_live_px)
-                _unr_s   = f"<b style='color:{_unr_col}'>{_unr_pct:+.1f}%</b>"
-            else:
-                _px_s = "—"; _unr_s = "—"
-            if _sl_px is not None and _sl_px > 0:
-                _stop_s = _fmt(_sl_px)
-                if _pk_px:
-                    _stop_s += f" (peak {_fmt(_pk_px)})"
-                if _live_px is not None and _live_px > 0:
-                    _dist   = (_live_px / _sl_px - 1) * 100
-                    _dcol   = "#dc2626" if _dist < 1.5 else ("#d97706" if _dist < 3.0 else "#64748b")
-                    _warn   = " ⚠️ NEAR STOP" if _dist < 1.5 else (" ⚠️ Watch" if _dist < 3.0 else "")
-                    _dist_s = f"<span style='color:{_dcol}'>{_dist:+.1f}% to stop{_warn}</span>"
+            _nav      = _pos.get("nav")
+            _last     = _pos.get("last_trade")
+            _is_btc   = _asset_key == "btc"
+            _fmt      = (lambda p: f"${p:,.0f}") if _is_btc else (lambda p: f"${p:,.2f}")
+
+            if _is_open:
+                # ── LONG position card ───────────────────────────────────────
+                _e_px   = _oe.get("price")
+                _e_date = _oe.get("date")
+                _sl_px  = _oe.get("stop_price")
+                _pk_px  = _oe.get("peak_price")
+                _e_trig = _oe.get("entry_trigger", "—")
+                _days   = (pd.Timestamp("today") - pd.Timestamp(_e_date)).days if _e_date else 0
+                _edate_s = pd.Timestamp(_e_date).strftime("%b %d, %Y") if _e_date else "—"
+
+                if _live_px is not None and _live_px > 0 and _e_px:
+                    _unr_pct = (_live_px / _e_px - 1) * 100
+                    _unr_col = "#16a34a" if _unr_pct >= 0 else "#dc2626"
+                    _unr_s   = f"<b style='color:{_unr_col}'>{_unr_pct:+.1f}%</b>"
+                    _px_s    = _fmt(_live_px)
                 else:
-                    _dist_s = "—"
+                    _px_s = "—"; _unr_s = "—"
+
+                if _sl_px and _sl_px > 0:
+                    _stop_s = _fmt(_sl_px)
+                    if _pk_px:
+                        _stop_s += f"<br><span style='color:#94a3b8;font-size:11px'>peak {_fmt(_pk_px)}</span>"
+                    if _live_px and _live_px > 0 and _e_px:
+                        _dist   = (_live_px / _sl_px - 1) * 100
+                        _dcol   = "#dc2626" if _dist < 1.5 else ("#d97706" if _dist < 3.0 else "#16a34a")
+                        _warn   = " ⚠️ NEAR STOP" if _dist < 1.5 else (" ⚠️" if _dist < 3.0 else "")
+                        _dist_s = (f"<span style='color:{_dcol};font-weight:600'>"
+                                   f"{_dist:+.1f}% from stop{_warn}</span>")
+                    else:
+                        _dist_s = "—"
+                else:
+                    _stop_s = "—"; _dist_s = "—"
+
+                _nav_s = f"${_nav:,.0f}" if _nav else "—"
+                _lp_cards.append(
+                    f"<div style='flex:1;min-width:220px;background:#f0fdf4;"
+                    f"border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
+                    f"<div style='font-size:12px;font-weight:700;color:#15803d;"
+                    f"margin-bottom:6px;letter-spacing:.3px'>📍 {_label} — LONG</div>"
+                    f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Entry</td>"
+                    f"<td>{_edate_s} @ {_fmt(_e_px) if _e_px else '—'}</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Trigger</td>"
+                    f"<td>{_e_trig}</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Days held</td>"
+                    f"<td>{_days}d</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
+                    f"<td>{_px_s} · {_unr_s}</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Stop ({_stype})</td>"
+                    f"<td>{_stop_s}</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Distance</td>"
+                    f"<td>{_dist_s}</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Strategy NAV</td>"
+                    f"<td>{_nav_s}</td></tr>"
+                    f"</table></div>"
+                )
             else:
-                _stop_s = "—"; _dist_s = "—"
-            _pos_cards_html.append(
-                f"<div style='flex:1; min-width:210px; background:#f8fafc; "
-                f"border:1px solid #cbd5e1; border-radius:8px; padding:10px 14px;'>"
-                f"<div style='font-size:13px; font-weight:700; color:#1e293b; "
-                f"margin-bottom:5px;'>📍 <b>{_label}</b> — In Position</div>"
-                f"<div style='font-size:12px; color:#475569; line-height:1.8;'>"
-                f"Entry: {_edate_s} @ {_fmt(_e_px)}<br>"
-                f"Live: {_px_s} · P&L: {_unr_s}<br>"
-                f"Stop ({_stype}): {_stop_s}<br>"
-                f"{_dist_s}"
-                f"</div></div>"
-            )
-        if _pos_cards_html:
+                # ── CASH / flat card ─────────────────────────────────────────
+                _nav_s = f"${_nav:,.0f}" if _nav else "—"
+                if _last:
+                    _lt_date = pd.Timestamp(_last["exit_date"]).strftime("%b %d")
+                    _lt_pct  = _last.get("pnl_pct", 0.0)
+                    _lt_sig  = _last.get("exit_signal", "—")
+                    _lt_col  = "#16a34a" if _lt_pct >= 0 else "#dc2626"
+                    _last_s  = (f"{_lt_date} exit · "
+                                f"<span style='color:{_lt_col};font-weight:600'>{_lt_pct:+.1f}%</span>"
+                                f" ({_lt_sig})")
+                else:
+                    _last_s  = "No closed trades yet"
+
+                _live_s = ""
+                if _live_px is not None and _live_px > 0:
+                    _live_s = (f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
+                               f"<td>{_fmt(_live_px)}</td></tr>")
+
+                _lp_cards.append(
+                    f"<div style='flex:1;min-width:220px;background:#f8fafc;"
+                    f"border:1.5px solid #cbd5e1;border-radius:10px;padding:12px 14px;'>"
+                    f"<div style='font-size:12px;font-weight:700;color:#64748b;"
+                    f"margin-bottom:6px;letter-spacing:.3px'>💤 {_label} — CASH</div>"
+                    f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Strategy NAV</td>"
+                    f"<td><b>{_nav_s}</b></td></tr>"
+                    f"{_live_s}"
+                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Last trade</td>"
+                    f"<td>{_last_s}</td></tr>"
+                    f"<tr><td style='color:#64748b;padding:2px 6px 0 0;vertical-align:top'>Waiting for</td>"
+                    f"<td style='color:#475569'>U1 + (↑MA30 or clean10d)</td></tr>"
+                    f"</table></div>"
+                )
+
+        if _lp_cards:
             st.markdown(
-                "<div style='background:#f1f5f9; border:1.5px solid #94a3b8; "
-                "border-radius:10px; padding:12px 16px; margin:6px 0 10px 0;'>"
-                "<div style='font-size:13px; font-weight:700; color:#334155; "
-                "margin-bottom:8px;'>💼 Live Position Monitor — Stop-Loss Tracking</div>"
-                "<div style='display:flex; gap:12px; flex-wrap:wrap;'>"
-                + "".join(_pos_cards_html) +
-                "</div></div>",
+                "<div style='background:#f1f5f9;border:1.5px solid #94a3b8;"
+                "border-radius:10px;padding:12px 16px;margin:6px 0 10px 0'>"
+                "<div style='font-size:13px;font-weight:700;color:#334155;"
+                "margin-bottom:8px'>💼 Live Position Panel</div>"
+                "<div style='display:flex;gap:10px;flex-wrap:wrap'>"
+                + "".join(_lp_cards)
+                + "</div></div>",
                 unsafe_allow_html=True,
             )
 
@@ -9132,25 +9192,41 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # Compute MSTR/MSTU OOS positions for the live position tracker
         _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
         _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
-        _open_positions: dict = {}
-        if _bt_full_oos and _bt_full_oos.get("open_pos") and _bt_full_oos.get("open_entry"):
-            _oe = _bt_full_oos["open_entry"]
-            _open_positions["btc"] = dict(
-                entry=_oe, live_price=live_spot,
-                asset_label="BTC", stop_type="trail-7%",
-            )
-        if _bt_mstr_oos and _bt_mstr_oos.get("open_pos") and _bt_mstr_oos.get("open_entry"):
-            _oe = _bt_mstr_oos["open_entry"]
-            _open_positions["mstr"] = dict(
-                entry=_oe, live_price=mstr_price,
-                asset_label="MSTR", stop_type="fixed-3%",
-            )
-        if _bt_mstu_oos and _bt_mstu_oos.get("open_pos") and _bt_mstu_oos.get("open_entry"):
-            _oe = _bt_mstu_oos["open_entry"]
-            _open_positions["mstu"] = dict(
-                entry=_oe, live_price=mstu_price,
-                asset_label="MSTU", stop_type="fixed-3%",
-            )
+
+        def _last_closed_trade(bt: dict | None) -> dict | None:
+            _tl = (bt or {}).get("trades") or []
+            return _tl[-1] if _tl else None
+
+        # Always populate all 3 assets so the panel renders in both open and cash states.
+        _open_positions: dict = {
+            "btc": dict(
+                open_pos   = bool(_bt_full_oos and _bt_full_oos.get("open_pos")),
+                entry      = (_bt_full_oos or {}).get("open_entry"),
+                live_price = live_spot,
+                asset_label= "BTC",
+                stop_type  = "trail-7%",
+                nav        = (_bt_full_oos or {}).get("stats", {}).get("final_nav"),
+                last_trade = _last_closed_trade(_bt_full_oos),
+            ),
+            "mstr": dict(
+                open_pos   = bool(_bt_mstr_oos and _bt_mstr_oos.get("open_pos")),
+                entry      = (_bt_mstr_oos or {}).get("open_entry"),
+                live_price = mstr_price,
+                asset_label= "MSTR",
+                stop_type  = "fixed-3%",
+                nav        = (_bt_mstr_oos or {}).get("stats", {}).get("final_nav"),
+                last_trade = _last_closed_trade(_bt_mstr_oos),
+            ),
+            "mstu": dict(
+                open_pos   = bool(_bt_mstu_oos and _bt_mstu_oos.get("open_pos")),
+                entry      = (_bt_mstu_oos or {}).get("open_entry"),
+                live_price = mstu_price,
+                asset_label= "MSTU",
+                stop_type  = "fixed-3%",
+                nav        = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
+                last_trade = _last_closed_trade(_bt_mstu_oos),
+            ),
+        }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
 
     # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
