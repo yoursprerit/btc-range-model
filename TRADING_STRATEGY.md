@@ -1,12 +1,13 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-05-26  
+**Last updated:** 2026-06-08  
 **Current live strategy:** TF2 (Regime-Adaptive) — supersedes TF1  
 **OOS test window:** 2025-09-19 → 2026-05-17 (241 bars, fully out-of-sample)  
 **In-sample test window:** 2024-09-17 → 2025-09-17 (365 bars, in-sample — model trained through this period)  
 **Starting capital:** $100,000 USD  
-**Signal source:** CT daily H/L ensemble (ridge + GBM + RF) — `artifacts/artifacts.pkl`
+**Signal source (historical backtest):** CT daily H/L — `artifacts/artifacts.pkl` (Ridge + GBM + RF)  
+**Signal source (live dashboard):** CT daily H/L — `models/inference_assets_ct.joblib` (Huber + Quantile + GBM)
 
 ---
 
@@ -20,7 +21,7 @@ The final strategy (**TF1**) is the only one that ended profitable in the test w
 is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (TF1)** signal.
 
 > **One-sentence summary:**  
-> Buy when U1 fires and BTC is above its 30-day MA (or no bearish signals in past 10 days);
+> Buy when U1 fires and BTC is above its 30-day MA (or no bearish signals in the past 7 bars);
 > sell only when D2 or D3 fires. Hold cash otherwise.
 
 ---
@@ -29,10 +30,10 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 
 | Signal | Condition | Type |
 |--------|-----------|------|
-| **U1** | `err_hi_ma3 > +0.5%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
+| **U1** | `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
 | **D1** | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > 0.5%` | Downtrend — actual lows consistently break predicted floor |
-| **D2** | `err_hi_ma3 < −1.0%` | Downtrend — predicted highs not being reached (exhaustion) |
-| **D3** | First `lo_break` after ≥ 3 consecutive `hi_breaks` | Reversal canary — momentum-to-reversal handoff |
+| **D2** | `err_hi_ma3 < −0.75%` | Downtrend — predicted highs not being reached (exhaustion) |
+| **D3** | Today is a `lo_break` AND ≥ 3 consecutive `hi_break` days immediately precede it | Reversal canary — momentum-to-reversal handoff |
 
 **Derived metrics:**
 
@@ -46,7 +47,7 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 | `lo_breaks_3d` | Count of `actual_L < pred_L` in last 3 bars |
 | `MA30` | Rolling 30-bar mean of daily close price |
 | `above_ma30` | `close > MA30` |
-| `clean_10d` | True if zero D1 or D2 fires in the prior 10 bars |
+| `clean_10d` | True if zero D1 or D2 fires in the 7 bars preceding the current bar (named `clean_10d` historically) |
 
 **Execution rule:** Signal fires on bar *i*; trade executes at bar *i+1* close (1-bar lag).
 
@@ -85,7 +86,7 @@ U1 is active:
 AND at least one of:
     BTC close > 30-day rolling mean of close (above_ma30 = True)
     OR
-    No D1 or D2 signal fired in any of the prior 10 bars (clean_10d = True)
+    No D1 or D2 signal fired in any of the prior 7 bars (clean_10d = True)
 ```
 
 ### Exit Rule
@@ -93,9 +94,9 @@ AND at least one of:
 Sell at next bar close when **either** of the following is true on the signal bar:
 
 ```
-D2: err_hi_ma3 < −1.0%   (predicted highs not being reached)
+D2: err_hi_ma3 < −0.75%  (predicted highs not being reached)
 OR
-D3: first lo_break after ≥ 3 consecutive hi_breaks (exhaustion canary)
+D3: today is a lo_break AND ≥ 3 consecutive hi_break days immediately preceded it
 ```
 
 > **Note:** D1 is intentionally excluded from exit conditions. Including D1 would have
@@ -155,7 +156,7 @@ have been significantly larger. This is the strategy's inherent risk: the MA30 f
 not guarantee the macro trend is bullish.
 
 **Trade 5 (Apr 9–25):** Best trade. BTC had fallen from ~$100k+ to ~$72k, triggering
-`clean_10d = True` (no D1/D2 in prior 10 bars after the washout). The April recovery delivered
+`clean_10d = True` (no D1/D2 in prior 7 bars after the washout). The April recovery delivered
 +8.1% before D2 fired. This trade alone is what separates TF1 from all other strategy variants —
 D1 would have exited at +2.9%, cutting the gain by two-thirds.
 
@@ -180,7 +181,7 @@ out single-day spikes.
 The MA30 filter prevents buying into a U1 that fires during a bear-market bounce
 (when BTC is below its 30-day MA and in a structural downtrend). The `clean_10d`
 backup condition catches V-reversal opportunities where BTC has washed out enough
-that the prior 10 days contain no recent bearish fingerprint.
+that the prior 7 bars contain no recent bearish fingerprint.
 
 **Impact:** The MA30 filter eliminated 4 of the 6 U1-only trades, keeping only
 the ones with positive trend context. Alpha improved by ~$10k.
@@ -284,7 +285,7 @@ BEAR/Neutral:  everything else
 
 ### Why This Works
 
-In a **bull market**, D2 (`err_hi_ma3 < −1%`) fires repeatedly during brief consolidations —
+In a **bull market**, D2 (`err_hi_ma3 < −0.75%`) fires repeatedly during brief consolidations —
 the model expects a ceiling, BTC briefly stalls, but then resumes upward. TF1 exits on every D2,
 causing whipsaws (16 trades in the prior-year bull period vs 6 in the bear OOS period).
 
@@ -618,5 +619,4 @@ and did not re-enter until Apr 9 (clean10d + U1 met after the washout).
 ---
 
 *Strategy developed from: 241-bar OOS analysis in `artifacts/artifacts.pkl`*  
-*Backtesting runs: May 2026 (session `claude/trend-signature-patterns-OYUDT`)*  
 *Live implementation: `app/btc_hourly_app.py` — `compute_trend_signatures()`, `render_trend_signatures()`, `run_tf1_backtest()`*
