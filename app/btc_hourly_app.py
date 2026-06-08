@@ -8463,6 +8463,15 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     if open_positions:
         _lp_cards  = []
         _panel_aod = open_positions.get("as_of_date") or pd.Timestamp("today")
+
+        # Exit-signal display config: icon, readable label, bg, border, text
+        _SIG_CFG = {
+            "SL-trail-7%": ("🛑", "Stop Loss hit — Trailing −7%", "#fef2f2", "#dc2626", "#991b1b"),
+            "SL-fixed-3%": ("🛑", "Stop Loss hit — Fixed −3%",    "#fef2f2", "#dc2626", "#991b1b"),
+            "D3":          ("📉", "D3 Downtrend Signature",        "#fff7ed", "#ea580c", "#9a3412"),
+            "D2 (bear)":   ("📉", "D2 + Bear Regime Exit",         "#fff7ed", "#ea580c", "#9a3412"),
+        }
+
         for _asset_key in ("btc", "mstr", "mstu"):
             _pos      = open_positions.get(_asset_key, {})
             _is_open  = bool(_pos.get("open_pos", False))
@@ -8470,12 +8479,64 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             _live_px  = _pos.get("live_price")
             _label    = _pos.get("asset_label", _asset_key.upper())
             _stype    = _pos.get("stop_type", "")
-            _nav      = _pos.get("nav")
             _last     = _pos.get("last_trade")
             _is_btc   = _asset_key == "btc"
             _fmt      = (lambda p: f"${p:,.0f}") if _is_btc else (lambda p: f"${p:,.2f}")
 
             if not _is_open:
+                # Show CLOSED card if the last trade exited on the panel date (±1 day —
+                # covers live mode where OOS ends yesterday).
+                if _last is not None:
+                    _ex_dt    = pd.Timestamp(_last["exit_date"])
+                    _days_ago = (pd.Timestamp(_panel_aod).normalize()
+                                 - _ex_dt.normalize()).days
+                    if 0 <= _days_ago <= 1:
+                        _cl_pnl    = _last.get("pnl_pct", 0.0)
+                        _profit    = _cl_pnl > 0
+                        _cl_bg     = "#f0fdf4" if _profit else "#fef2f2"
+                        _cl_brd    = "#16a34a" if _profit else "#dc2626"
+                        _cl_hdr    = "#15803d" if _profit else "#991b1b"
+                        _cl_pnl_c  = "#16a34a" if _profit else "#dc2626"
+                        _cl_badge  = "✅ CLOSED — PROFIT" if _profit else "🔴 CLOSED — LOSS"
+
+                        _ex_sig    = _last.get("exit_signal", "—")
+                        _si, _sl, _sb, _sbd, _st = _SIG_CFG.get(
+                            _ex_sig,
+                            ("📤", _ex_sig, "#f1f5f9", "#94a3b8", "#334155"),
+                        )
+
+                        _en_dt_s  = pd.Timestamp(_last["entry_date"]).strftime("%b %d, %Y")
+                        _ex_dt_s  = _ex_dt.strftime("%b %d, %Y")
+                        _cl_days  = _last.get("duration_days", 0)
+                        _en_px    = _last.get("entry_price")
+                        _ex_px    = _last.get("exit_price")
+                        _en_trig  = _last.get("entry_trigger", "—")
+
+                        _lp_cards.append(
+                            f"<div style='flex:1;min-width:220px;background:{_cl_bg};"
+                            f"border:2.5px solid {_cl_brd};border-radius:10px;padding:12px 14px;'>"
+                            # Header row
+                            f"<div style='font-size:12px;font-weight:700;color:{_cl_hdr};"
+                            f"margin-bottom:6px;letter-spacing:.3px'>{_cl_badge} — {_label}</div>"
+                            # Exit signal badge (full-width, prominent)
+                            f"<div style='background:{_sb};border:1.5px solid {_sbd};"
+                            f"border-radius:6px;padding:5px 9px;margin-bottom:7px;"
+                            f"font-size:12px;font-weight:700;color:{_st};letter-spacing:.2px'>"
+                            f"{_si}&nbsp; {_sl}</div>"
+                            # Details table
+                            f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>"
+                            f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Entry</td>"
+                            f"<td>{_en_dt_s} @ {_fmt(_en_px) if _en_px else '—'}</td></tr>"
+                            f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Entry trigger</td>"
+                            f"<td>{_en_trig}</td></tr>"
+                            f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Exit</td>"
+                            f"<td>{_ex_dt_s} @ {_fmt(_ex_px) if _ex_px else '—'}</td></tr>"
+                            f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>P&L</td>"
+                            f"<td><b style='color:{_cl_pnl_c}'>{_cl_pnl:+.1f}%</b></td></tr>"
+                            f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Days held</td>"
+                            f"<td>{_cl_days}d</td></tr>"
+                            f"</table></div>"
+                        )
                 continue
 
             # ── LONG position card ───────────────────────────────────────────
