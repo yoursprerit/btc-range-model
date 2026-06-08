@@ -2370,6 +2370,21 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         if consec_hi >= 3 and lo_break[-1]:
             exhaustion_active = True
 
+    # ── D3 for the PREVIOUS bar (n-2) — backtest uses si=i-1 offset ────
+    # The backtest exits on day N because d3 fired on day N-1.  Checking
+    # the previous bar here lets the dashboard turn red on the exit day
+    # (and keeps it red the day after D3 fires), matching user expectations.
+    prev_exhaustion_active = False
+    if n >= 5:
+        consec_hi_prev = 0
+        for k in range(n - 3, -1, -1):
+            if hi_break[k]:
+                consec_hi_prev += 1
+            else:
+                break
+        if consec_hi_prev >= 3 and lo_break[-2]:
+            prev_exhaustion_active = True
+
     # ── V-reversal capitulation: lo_err spike today ────────────────────
     # Last bar's single-day lo error > 3% (massive undershoot = capitulation)
     last_lo_err = float(err_lo[-1])
@@ -2448,7 +2463,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # ── Signature trigger flags ─────────────────────────────────────────
     d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
     d2_triggered  = (err_hi_ma3 < -0.75)
-    d3_triggered  = exhaustion_active
+    # D3 triggers on the CURRENT bar OR the previous bar.  The backtest executes
+    # exits with si=i-1 (signal from the prior bar drives today's exit), so D3
+    # that fired yesterday is still an active exit-driving signal today.
+    d3_triggered  = exhaustion_active or prev_exhaustion_active
     u1_triggered  = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
@@ -2523,6 +2541,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         v_recent_gate        = v_recent_gate,
         v_recent_gate_age    = v_recent_gate_age,
         exhaustion_active    = exhaustion_active,
+        prev_exhaustion_active = prev_exhaustion_active,
         # Composite alert
         alert_level  = alert_level,
         dn_count     = dn_count,
@@ -8367,15 +8386,20 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _v_gate_ok    = sigs.get("v_recent_gate", False)
     _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
-    _exit_d3      = sigs.get("exhaustion_active", False)
-    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
-    _exit_signal  = _exit_d3 or _exit_d2
+    _exit_d3_today = sigs.get("exhaustion_active", False)
+    _exit_d3_prev  = sigs.get("prev_exhaustion_active", False)
+    _exit_d3       = _exit_d3_today or _exit_d3_prev
+    _exit_d2       = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
+    _exit_signal   = _exit_d3 or _exit_d2
+    _d3_label      = ("D3 exhaustion fired TODAY (exit in all regimes)"
+                      if _exit_d3_today else
+                      "D3 exhaustion fired YESTERDAY → exit executes today (si=i−1 lag)")
 
     if _exit_signal and _entry_signal:
         _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
         _action_label = "EXIT SIGNAL ACTIVE"
         _action_sub   = (
-            f"D3={'FIRED' if _exit_d3 else 'clear'}, "
+            f"D3={'FIRED' if _exit_d3_today else ('FIRED YESTERDAY' if _exit_d3_prev else 'clear')}, "
             f"D2 (bear-only)={'FIRED' if _exit_d2 else 'clear'}  |  "
             f"Entry conditions also met — EXIT takes priority if in position"
         )
@@ -8383,7 +8407,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
         _action_label = "EXIT SIGNAL ACTIVE"
         _exit_parts   = []
-        if _exit_d3: _exit_parts.append("D3 exhaustion fired (exit in all regimes)")
+        if _exit_d3: _exit_parts.append(_d3_label)
         if _exit_d2: _exit_parts.append(f"D2 hi-band collapse in {_regime_label} regime → defensive exit")
         _action_sub   = " · ".join(_exit_parts)
     elif _entry_signal:
@@ -8690,16 +8714,27 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     col3, col4 = st.columns(2)
 
     # Card D3
-    d3_streak_str = f"streak = {sigs['streak']:+d}" if sigs["streak"] != 0 else "streak = 0"
-    _d3_lo_today  = bool(sigs["detail_rows"] and sigs["detail_rows"][-1]["lo_break"])
+    d3_streak_str  = f"streak = {sigs['streak']:+d}" if sigs["streak"] != 0 else "streak = 0"
+    _d3_lo_today   = bool(sigs["detail_rows"] and sigs["detail_rows"][-1]["lo_break"])
+    _d3_lo_prev    = bool(len(sigs["detail_rows"]) >= 2 and sigs["detail_rows"][-2]["lo_break"])
+    _d3_today      = sigs.get("exhaustion_active", False)
+    _d3_prev       = sigs.get("prev_exhaustion_active", False)
+    _d3_card_title = ("D3 — Exhaustion Canary"
+                      if _d3_today else
+                      ("D3 — Exhaustion Canary (fired YESTERDAY)" if _d3_prev else
+                       "D3 — Exhaustion Canary"))
     d3_rows = [
-        ("Lo-break today",
+        ("Lo-break TODAY",
          "YES" if _d3_lo_today else "NO",
-         "= YES  (actual low < pred low)",
+         "= YES  (actual low < pred low today)",
          _d3_lo_today, True),
+        ("Lo-break YESTERDAY",
+         "YES" if _d3_lo_prev else "NO",
+         "= YES  (D3 fires yesterday → exit today via si=i−1)",
+         _d3_lo_prev and _d3_prev, True),
         ("Prior hi-break streak",
          f"{sigs['hi_breaks_3d']}/3 recent hi-breaks",
-         "≥ 3 consecutive immediately prior (approx.)",
+         "≥ 3 consecutive immediately prior",
          sigs['hi_breaks_3d'] >= 3, False),
         ("Current streak",
          d3_streak_str,
@@ -8709,7 +8744,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     with col3:
         st.markdown(
             _sig_card(
-                title="D3 — Exhaustion Canary",
+                title=_d3_card_title,
                 icon="🟡",
                 color="#d97706",
                 triggered=sigs["d3_triggered"],
@@ -8720,7 +8755,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                     "a low-band break</b> marks exhaustion. Price was pushing through every "
                     "predicted ceiling, then suddenly can't hold and takes out the predicted floor. "
                     "This is the exact inflection point — the momentum-to-reversal handoff. "
-                    "Context: Oct 6 2025 fired; Oct 7–10 dropped −9.5% over 3 days."
+                    "Context: Oct 6 2025 fired; Oct 7–10 dropped −9.5% over 3 days. "
+                    "<b>Note:</b> The strategy executes exits on the bar AFTER the signal fires "
+                    "(si = i−1 in backtest), so D3 firing on day N causes the exit on day N+1."
                 ),
                 timing="Fires at the <b>exact top</b> of a momentum move — usually 1 day "
                        "before the reversal accelerates. Most useful after streak ≥ +4 days.",
@@ -11476,7 +11513,9 @@ def render_retrain_dashboard():
     sc[2].metric(
         "🔴 D3 — Exhaustion",
         "🔥 ACTIVE" if sigs.get("d3_triggered") else "💤 inactive",
-        delta=("exhaustion fired" if sigs.get("d3_triggered") else "no hi-break streak → lo-break"),
+        delta=("exhaustion fired today" if sigs.get("exhaustion_active")
+               else ("exhaustion fired YESTERDAY" if sigs.get("prev_exhaustion_active")
+                     else "no hi-break streak → lo-break")),
         delta_color="off",
         help=(
             "First `lo_break` after ≥3 consecutive `hi_breaks`.  "
