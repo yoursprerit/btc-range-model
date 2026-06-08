@@ -2387,6 +2387,9 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         _v_rev_per_bar[_j] = (_dns > 0.8) and (float(err_lo[_j]) > 3.0)
     # True if any of the last 3 bars fired a V-reversal (same window as backtest)
     v_recent_gate = bool(np.any(_v_rev_per_bar[-min(3, n):]))
+    # How many bars ago the most recent V-reversal fired (0=today, 1=yesterday, 2=2d ago)
+    _vr_ages = [i for i in range(min(3, n)) if _v_rev_per_bar[n - 1 - i]]
+    v_recent_gate_age = _vr_ages[0] if _vr_ages else None
 
     # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
     # Re-compute D1/D2 signal for every historical bar so we can check
@@ -2430,10 +2433,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
-    # V-gate: V-reversal within last 3 bars (3-bar window) also satisfies trend gate.
-    # Use v_recent_gate (per-bar rolling check) rather than single-bar v_reversal_likely
-    # so the live signal matches the backtest's 3-bar v_recent[] array exactly.
-    v_gate_ok     = v_recent_gate or capitulation_signal
+    # V-gate: V-reversal within last 3 bars (dn_score>0.8, err_lo>3%) satisfies trend gate.
+    # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
+    # not an entry gate, to keep live signal consistent with backtest behaviour.
+    v_gate_ok     = v_recent_gate
     tf1_triggered = u1_triggered and (above_ma30 or clean_10d or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
@@ -2495,10 +2498,11 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         d3_triggered      = d3_triggered,
         u1_triggered      = u1_triggered,
         tf1_triggered     = tf1_triggered,
-        capitulation_signal = capitulation_signal,
-        v_reversal_likely   = v_reversal_likely,
-        v_recent_gate       = v_recent_gate,
-        exhaustion_active   = exhaustion_active,
+        capitulation_signal  = capitulation_signal,
+        v_reversal_likely    = v_reversal_likely,
+        v_recent_gate        = v_recent_gate,
+        v_recent_gate_age    = v_recent_gate_age,
+        exhaustion_active    = exhaustion_active,
         # Composite alert
         alert_level  = alert_level,
         dn_count     = dn_count,
@@ -8355,7 +8359,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     # ── ACTION SIGNAL banner — synthesised top-level indicator ────────────
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
-    _v_gate_ok    = sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
+    _v_gate_ok    = sigs.get("v_recent_gate", False)
     _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3      = sigs.get("exhaustion_active", False)
@@ -8496,7 +8500,6 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             and intraday.get("err_lo_intra", 0) > 3.0
             and intraday.get("pct_through", 0) >= 0.40
             and not sigs.get("v_recent_gate", False)
-            and not sigs.get("v_reversal_likely", False)
             and not sigs.get("capitulation_signal", False)):
         _ia_pct = intraday["pct_through"] * 100
         _ia_hrs = intraday["hours_elapsed"]
@@ -8772,19 +8775,23 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          "= YES  (entry gate — alt. to ↑MA30)",
          sigs["clean_10d"], True),
         ("⚡ V-reversal (3-bar gate)",
-         ("ACTIVE — capitulation within 3 bars, dn_score={:.2f}, err_lo={:+.1f}%"
-          .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
-         if sigs.get("v_recent_gate") or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal")
-         else "○ not active — no recent capitulation spike (err_lo < 3% or dn_score < 0.8)",
+         (("ACTIVE today — dn_score={:.2f}, err_lo={:+.1f}% (threshold: >0.8 & >3%)"
+           .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
+          if sigs.get("v_recent_gate_age") == 0
+          else ("ACTIVE — fired {} bar{} ago (gate open for {} more bar{})"
+                .format(sigs.get("v_recent_gate_age", "?"),
+                        "s" if (sigs.get("v_recent_gate_age") or 0) != 1 else "",
+                        2 - (sigs.get("v_recent_gate_age") or 0),
+                        "s" if 2 - (sigs.get("v_recent_gate_age") or 0) != 1 else ""))
+          if sigs.get("v_recent_gate")
+          else "○ not active — no capitulation spike in last 3 bars (dn_score < 0.8 or err_lo < 3%)"),
          "= ACTIVE  (entry gate — alt. to ↑MA30)",
-         sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
+         sigs.get("v_recent_gate", False), True),
         ("Entry filter (↑MA30 OR clean7d OR V-rev)",
-         "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]
-                       or sigs.get("v_recent_gate") or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal"))
+         "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"] or sigs.get("v_recent_gate"))
          else "FAIL ✗",
          "= PASS  (U1 + this gate = full entry signal)",
-         sigs["above_ma30"] or sigs["clean_10d"]
-         or sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
+         sigs["above_ma30"] or sigs["clean_10d"] or sigs.get("v_recent_gate", False), True),
         ("MA30 slope (5-bar)",
          f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
          f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
@@ -8835,29 +8842,49 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     )
 
     # ── V-Reversal signal — always show; highlight when active ────────────
-    _v_likely = sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False)
+    _v_gate   = sigs.get("v_recent_gate", False)
+    _v_age    = sigs.get("v_recent_gate_age")      # 0=today, 1=yesterday, 2=2d ago, None=inactive
     _v_cap    = sigs.get("capitulation_signal", False)
-    _v_active = _v_likely or _v_cap
-    if _v_active:
-        v_bg    = "#ede9fe" if _v_likely else "#fdf4ff"
-        v_brd   = "#7c3aed" if _v_likely else "#a855f7"
-        v_label = "⚡ V-REVERSAL ACTIVE — Entry gate open" if _v_likely else "💜 Capitulation Detected — monitoring for U1"
+    _v_active = _v_gate or _v_cap
+    if _v_gate:
+        v_bg    = "#ede9fe"; v_brd = "#7c3aed"
+        v_label = "⚡ V-REVERSAL ACTIVE — Entry gate open"
+        if _v_age == 0:
+            v_body = (
+                f"<b>Today's</b> actual low massively overshot the predicted low "
+                f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
+                f"This is the <b>V-reversal capitulation pattern</b>. "
+                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.7% AND "
+                f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
+                f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
+            )
+        else:
+            _bars_remaining = 2 - _v_age
+            v_body = (
+                f"A capitulation spike fired <b>{_v_age} bar{'s' if _v_age != 1 else ''} ago</b> "
+                f"(not today — today's dn_score={sigs['dn_score_raw']:.2f}, err_lo={sigs['last_lo_err']:+.2f}%). "
+                f"The V-gate remains open for <b>{_bars_remaining} more bar{'s' if _bars_remaining != 1 else ''}</b>. "
+                f"If U1 fires (err_hi_ma3 &gt; +0.7% AND hi_breaks_3d ≥ 2) the strategy will enter "
+                f"even below MA30.<br><br>"
+                f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
+            )
+    elif _v_cap:
+        v_bg    = "#fdf4ff"; v_brd = "#a855f7"
+        v_label = "💜 Capitulation Approaching — monitoring for V-reversal"
         v_body  = (
-            f"Today's actual low <b>massively overshot</b> the predicted low "
-            f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
-            f"This is the <b>V-reversal capitulation pattern</b>. "
-            f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.7% AND "
-            f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
-            f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
+            f"Capitulation signal detected today (dn_score = <b>{sigs['dn_score_raw']:.2f}</b>, "
+            f"err_lo = <b>{sigs['last_lo_err']:+.2f}%</b>). "
+            f"This crosses the monitoring threshold (dn_score &gt; 0.7) but not yet the V-gate threshold "
+            f"(dn_score &gt; 0.8). The entry gate is <b>not open yet</b>. "
+            f"If dn_score reaches 0.8+ on this or a future bar, the full V-gate activates."
         )
     else:
-        v_bg    = "#f8fafc"
-        v_brd   = "#cbd5e1"
+        v_bg    = "#f8fafc"; v_brd = "#cbd5e1"
         v_label = "⚡ V-Reversal Gate — not active"
         v_body  = (
-            f"No capitulation signal today (dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
+            f"No capitulation in the last 3 bars (today: dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
             f"err_lo = <b>{sigs.get('last_lo_err', 0):+.2f}%</b>). "
-            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on the same bar. "
+            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on any bar within the last 3. "
             f"<br><br>"
             f"<b>What the V-gate does:</b> When a capitulation spike fires, the strategy can enter "
             f"on U1 within the next 3 bars even if BTC is below MA30 and clean_10d fails — "
@@ -11408,7 +11435,7 @@ def render_retrain_dashboard():
     )
     sc[3].metric(
         "V-Gate — Reversal",
-        "🔥 ACTIVE" if (sigs.get("v_recent_gate") or sigs.get("v_reversal_likely")) else "💤 inactive",
+        "🔥 ACTIVE" if sigs.get("v_recent_gate") else "💤 inactive",
         delta=(
             (f"dn_score {_dns:.2f}  |  lo_err {_lle:+.1f}%"
              if _dns is not None and _lle is not None else "threshold: dn_score >0.8 & lo_err >5%")
