@@ -8385,22 +8385,39 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             "margin-left:8px;'>" + status_txt + "</span>"
         )
         rows_html = ""
-        for label, val, thr, fired in signal_rows:
-            val_col = color if fired else "#64748b"
-            if fired:
-                fired_span = ("<span style='color:" + color
-                              + "; font-weight:700; margin-left:auto;'>✓ TRIGGERED</span>")
+        for row in signal_rows:
+            # Rows are (label, val, annotation, fired) or (label, val, annotation, fired, is_trigger).
+            # is_trigger=True  → actual condition that fires the signal; show "threshold:" + ✓/○ badge
+            # is_trigger=False → informational context only; show "context:" in italic, no badge
+            is_trigger = row[4] if len(row) > 4 else True
+            label, val, annotation, fired = row[:4]
+            if is_trigger:
+                val_col    = color if fired else "#64748b"
+                ann_html   = ("<span style='font-size:11px; color:#94a3b8;'>"
+                              "threshold: " + annotation + "</span>")
+                badge_html = (
+                    ("<span style='color:" + color + "; font-weight:700; "
+                     "margin-left:auto;'>✓ TRIGGERED</span>")
+                    if fired else
+                    "<span style='color:#94a3b8; margin-left:auto;'>○</span>"
+                )
+                row_style  = ""
             else:
-                fired_span = "<span style='color:#94a3b8; margin-left:auto;'>○</span>"
+                val_col    = "#64748b"
+                ann_html   = ("<span style='font-size:11px; color:#94a3b8; "
+                              "font-style:italic;'>context: " + annotation + "</span>")
+                badge_html = ("<span style='font-size:10px; color:#cbd5e1; "
+                              "margin-left:auto;'>ℹ</span>")
+                row_style  = ("background:rgba(148,163,184,0.08); border-radius:4px; "
+                              "padding-left:4px;")
             rows_html += (
                 "<div style='display:flex; align-items:center; gap:8px; "
-                "padding:4px 0; border-bottom:1px solid #e2e8f0;'>"
+                "padding:4px 0; border-bottom:1px solid #e2e8f0; " + row_style + "'>"
                 "<span style='font-size:12px; color:#64748b; width:130px; "
                 "flex-shrink:0;'>" + label + "</span>"
                 "<span style='font-weight:700; color:" + val_col + "; font-size:13px; "
                 "min-width:70px;'>" + val + "</span>"
-                "<span style='font-size:11px; color:#94a3b8;'>threshold: " + thr + "</span>"
-                + fired_span +
+                + ann_html + badge_html +
                 "</div>"
             )
         title_col = color if triggered else "#475569"
@@ -8459,8 +8476,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card D2
     d2_rows = [
-        ("err_hi 3d avg",     f"{sigs['err_hi_ma3']:+.2f}%", "< −0.75%", sigs['err_hi_ma3'] < -0.75),
-        ("Hi-band breaks (3d)",f"{sigs['hi_breaks_3d']}/3",  "< 1",     sigs['hi_breaks_3d'] < 1),
+        ("err_hi 3d avg",       f"{sigs['err_hi_ma3']:+.2f}%", "< −0.75%",
+         sigs['err_hi_ma3'] < -0.75, True),
+        ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3",
+         "often 0 when D2 fires; not part of trigger",
+         sigs['hi_breaks_3d'] < 1, False),
     ]
     with col2:
         st.markdown(
@@ -8492,12 +8512,20 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card D3
     d3_streak_str = f"streak = {sigs['streak']:+d}" if sigs["streak"] != 0 else "streak = 0"
+    _d3_lo_today  = bool(sigs["detail_rows"] and sigs["detail_rows"][-1]["lo_break"])
     d3_rows = [
-        ("Consecutive hi-breaks before today", f"{sigs['hi_breaks_3d']}/3", "≥ 3 prior", False),
-        ("Lo-break today",                     "YES" if sigs["detail_rows"] and sigs["detail_rows"][-1]["lo_break"] else "NO",
-                                               "= 1",
-                                               bool(sigs["detail_rows"] and sigs["detail_rows"][-1]["lo_break"])),
-        ("Current streak",                     d3_streak_str, "≥ +4 prior", sigs["streak"] >= 4),
+        ("Lo-break today",
+         "YES" if _d3_lo_today else "NO",
+         "= YES  (actual low < pred low)",
+         _d3_lo_today, True),
+        ("Prior hi-break streak",
+         f"{sigs['hi_breaks_3d']}/3 recent hi-breaks",
+         "≥ 3 consecutive immediately prior (approx.)",
+         sigs['hi_breaks_3d'] >= 3, False),
+        ("Current streak",
+         d3_streak_str,
+         "stronger signal when streak was ≥ +4 before D3 fired",
+         sigs["streak"] >= 4, False),
     ]
     with col3:
         st.markdown(
@@ -8527,9 +8555,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
 
     # Card U1
     u1_rows = [
-        ("err_hi 3d avg",      f"{sigs['err_hi_ma3']:+.2f}%","  > +0.7%", sigs['err_hi_ma3'] > 0.7),
-        ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3", "≥ 2",       sigs['hi_breaks_3d'] >= 2),
-        ("Current streak",      d3_streak_str,                "> 0",       sigs['streak'] > 0),
+        ("err_hi 3d avg",       f"{sigs['err_hi_ma3']:+.2f}%", "> +0.7%",
+         sigs['err_hi_ma3'] > 0.7, True),
+        ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3",   "≥ 2",
+         sigs['hi_breaks_3d'] >= 2, True),
+        ("Current streak",      d3_streak_str,
+         "strengthens signal; not part of trigger",
+         sigs['streak'] > 0, False),
     ]
     with col4:
         st.markdown(
@@ -8567,39 +8599,39 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     tf1_rows = [
         ("U1 Signal",
          "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
-         "= ACTIVE",
-         sigs["u1_triggered"]),
+         "= ACTIVE  (required)",
+         sigs["u1_triggered"], True),
         ("BTC vs 30-day MA",
          f"${sigs['current_close_sig']:,.0f}  vs  MA=${sigs['ma30_value']:,.0f} ({_ma30_pct:+.1f}%)",
-         "> MA30",
-         sigs["above_ma30"]),
-        ("MA30 slope (5-bar)",
-         f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = ${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} "
-         f"({_slope_pct:+.2f}%)",
-         "> 0 (rising)",
-         sigs.get("ma30_slope_pos", False)),
-        ("Regime",
-         f"{_regime_label}  →  Exit mode: {_exit_mode}",
-         "≠ BEAR",
-         _bull_regime),
+         "> MA30  (entry gate — satisfies trend filter)",
+         sigs["above_ma30"], True),
         ("Clean 7d (no D1/D2)",
          "YES — zero D1/D2 fires in prior 7 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
-         "= YES",
-         sigs["clean_10d"]),
+         "= YES  (entry gate — alt. to ↑MA30)",
+         sigs["clean_10d"], True),
         ("⚡ V-reversal (3-bar gate)",
          ("ACTIVE — capitulation within 3 bars, dn_score={:.2f}, err_lo={:+.1f}%"
           .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
          if sigs.get("v_reversal_likely") or sigs.get("capitulation_signal")
          else "○ not active — no recent capitulation spike (err_lo < 3% or dn_score < 0.8)",
-         "= ACTIVE",
-         sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)),
+         "= ACTIVE  (entry gate — alt. to ↑MA30)",
+         sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
         ("Entry filter (↑MA30 OR clean7d OR V-rev)",
          "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]
                        or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal"))
          else "FAIL ✗",
-         "= PASS",
+         "= PASS  (U1 + this gate = full entry signal)",
          sigs["above_ma30"] or sigs["clean_10d"]
-         or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)),
+         or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
+        ("MA30 slope (5-bar)",
+         f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
+         f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
+         "rising MA30 + price > MA30 = BULL regime (affects exit mode only)",
+         sigs.get("ma30_slope_pos", False), False),
+        ("Regime → exit mode",
+         f"{_regime_label}  →  {_exit_mode}",
+         "BULL exits D3 only; BEAR/Neutral exits D2 or D3",
+         _bull_regime, False),
     ]
     st.markdown(
         _sig_card(
