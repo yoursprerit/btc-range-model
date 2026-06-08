@@ -342,23 +342,44 @@ def fetch_equity_prices():
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _fetch_equity_price_at_date(ticker: str, date_str: str) -> float | None:
-    """Return closing price of `ticker` on or before `date_str` from yfinance."""
+def _fetch_equity_price_at_datetime(ticker: str, dt_str: str) -> float | None:
+    """Return price of `ticker` at or before `dt_str` (UTC ISO, tz-naive) using 1h bars.
+
+    Falls back to daily close when the date is outside yfinance's 730-day 1h window.
+    """
     try:
-        d = pd.Timestamp(date_str)
+        dt = pd.Timestamp(dt_str)
         hist = yf.Ticker(ticker).history(
-            start=(d - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
-            end=(d + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-            interval="1d", auto_adjust=True,
+            start=(dt - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+            end=(dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            interval="1h", auto_adjust=True,
         )
         if hist.empty:
-            return None
-        hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
-        hist.index = hist.index.normalize()
-        mask = hist.index <= d.normalize()
-        return float(hist["Close"][mask].iloc[-1]) if mask.any() else None
+            raise ValueError("empty")
+        # Normalise to UTC tz-naive so comparison with `dt` works
+        if hist.index.tzinfo is not None:
+            hist.index = hist.index.tz_convert("UTC").tz_localize(None)
+        mask = hist.index <= dt
+        if mask.any():
+            return float(hist["Close"][mask].iloc[-1])
+        return float(hist["Close"].iloc[0])
     except Exception:
-        return None
+        # Fall back to daily close (e.g. date > 730 days ago)
+        try:
+            d = pd.Timestamp(dt_str)
+            hist = yf.Ticker(ticker).history(
+                start=(d - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
+                end=(d + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                interval="1d", auto_adjust=True,
+            )
+            if hist.empty:
+                return None
+            hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+            hist.index = hist.index.normalize()
+            mask = hist.index <= d.normalize()
+            return float(hist["Close"][mask].iloc[-1]) if mask.any() else None
+        except Exception:
+            return None
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -9183,10 +9204,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _mstr_panel_px = mstr_price
             _mstu_panel_px = mstu_price
         else:
-            _hist_date_s   = target_date.strftime("%Y-%m-%d")
+            _hist_dt_s     = latest_t.isoformat()  # full UTC timestamp for hourly lookup
             _btc_panel_px  = latest_close
-            _mstr_panel_px = _fetch_equity_price_at_date("MSTR", _hist_date_s)
-            _mstu_panel_px = _fetch_equity_price_at_date("MSTU", _hist_date_s)
+            _mstr_panel_px = _fetch_equity_price_at_datetime("MSTR", _hist_dt_s)
+            _mstu_panel_px = _fetch_equity_price_at_datetime("MSTU", _hist_dt_s)
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
