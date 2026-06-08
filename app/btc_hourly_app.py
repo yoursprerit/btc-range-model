@@ -1002,23 +1002,19 @@ def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
         if pred is None:
             continue
         ts = pd.Timestamp(target_date)
-        # i == 0 is the end-target bar itself.  At signal-generation time that bar
-        # was always in-progress (its actual H/L was unknown).  Force NaN so it is
-        # excluded from `completed` in every caller, matching live-mode behaviour
-        # where the current bar has not yet closed.  Without this, Historical mode
-        # leaks the target date's own outcome into the signal — e.g. viewing June 7
-        # on June 8 would silently include June 7's closed bar, shifting the 3-day
-        # window forward by one day and producing the same value as today's live view.
-        if i == 0:
-            actual_h = np.nan
-            actual_l = np.nan
-        else:
-            actual_h = (float(daily_df.loc[ts, "btc_high"])
-                        if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_high"])
-                        else np.nan)
-            actual_l = (float(daily_df.loc[ts, "btc_low"])
-                        if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_low"])
-                        else np.nan)
+        # Always read actual H/L from data.  In live mode the current bar is still
+        # in progress so daily_df won't have its H/L yet → NaN naturally.  In
+        # historical mode the bar has already closed, so including it keeps the
+        # signal window aligned with the backtest (which also runs through the
+        # selected date) — without this the signal dashboard lags one bar behind
+        # the backtest and can show D3/D1 as "clear" while the position panel
+        # correctly shows the position closed by that signal on the same date.
+        actual_h = (float(daily_df.loc[ts, "btc_high"])
+                    if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_high"])
+                    else np.nan)
+        actual_l = (float(daily_df.loc[ts, "btc_low"])
+                    if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_low"])
+                    else np.nan)
         rows.append(dict(
             target_date=ts,
             as_of_date=pred["as_of_date"],
