@@ -2367,6 +2367,27 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 3.0)
     v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 3.0)
 
+    # Per-bar V-reversal flags using 3-bar rolling window — matches backtest exactly.
+    # The backtest checks v_recent[i] = any(v_rev_bar[i-2:i+1]), so we must replicate
+    # that per-bar dn_score computation here rather than using the single current-bar value.
+    _dn_norm_per = np.array([
+        float(np.mean(err_hi[max(0, _j - 29): _j + 1])) for _j in range(n)
+    ])
+    _v_rev_per_bar = np.zeros(n, dtype=bool)
+    for _j in range(n):
+        _s3  = max(0, _j - 2)
+        _eh  = float(np.mean(err_hi[_s3: _j + 1]))
+        _el  = float(np.mean(err_lo[_s3: _j + 1]))
+        _lb3 = int(np.sum(lo_break[_s3: _j + 1]))
+        _nrm = max(abs(_dn_norm_per[_j]), 0.01)
+        _dns = ((-_eh / _nrm)                       * 0.30 +
+                (_lb3 / 3.0)                         * 0.30 +
+                (_el  / max(abs(_el), 0.10))         * 0.20 +
+                float(lo_break[_j])                  * 0.20)
+        _v_rev_per_bar[_j] = (_dns > 0.8) and (float(err_lo[_j]) > 3.0)
+    # True if any of the last 3 bars fired a V-reversal (same window as backtest)
+    v_recent_gate = bool(np.any(_v_rev_per_bar[-min(3, n):]))
+
     # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
     # Re-compute D1/D2 signal for every historical bar so we can check
     # whether any fired in the 7 bars preceding the current bar (clean_10d).
@@ -2409,8 +2430,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
-    # V-gate: V-reversal (dn_score>0.8 & err_lo>3%) within last 3 bars also satisfies trend gate.
-    v_gate_ok     = v_reversal_likely or capitulation_signal
+    # V-gate: V-reversal within last 3 bars (3-bar window) also satisfies trend gate.
+    # Use v_recent_gate (per-bar rolling check) rather than single-bar v_reversal_likely
+    # so the live signal matches the backtest's 3-bar v_recent[] array exactly.
+    v_gate_ok     = v_recent_gate or capitulation_signal
     tf1_triggered = u1_triggered and (above_ma30 or clean_10d or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
@@ -2474,6 +2497,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         tf1_triggered     = tf1_triggered,
         capitulation_signal = capitulation_signal,
         v_reversal_likely   = v_reversal_likely,
+        v_recent_gate       = v_recent_gate,
         exhaustion_active   = exhaustion_active,
         # Composite alert
         alert_level  = alert_level,
@@ -8278,7 +8302,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     # ── ACTION SIGNAL banner — synthesised top-level indicator ────────────
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
-    _v_gate_ok    = sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
+    _v_gate_ok    = sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
     _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3      = sigs.get("exhaustion_active", False)
@@ -8357,6 +8381,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
             and intraday.get("lo_break_intra", False)
             and intraday.get("err_lo_intra", 0) > 3.0
             and intraday.get("pct_through", 0) >= 0.40
+            and not sigs.get("v_recent_gate", False)
             and not sigs.get("v_reversal_likely", False)
             and not sigs.get("capitulation_signal", False)):
         _ia_pct = intraday["pct_through"] * 100
@@ -8635,17 +8660,17 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
         ("⚡ V-reversal (3-bar gate)",
          ("ACTIVE — capitulation within 3 bars, dn_score={:.2f}, err_lo={:+.1f}%"
           .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
-         if sigs.get("v_reversal_likely") or sigs.get("capitulation_signal")
+         if sigs.get("v_recent_gate") or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal")
          else "○ not active — no recent capitulation spike (err_lo < 3% or dn_score < 0.8)",
          "= ACTIVE  (entry gate — alt. to ↑MA30)",
-         sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
+         sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
         ("Entry filter (↑MA30 OR clean7d OR V-rev)",
          "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"]
-                       or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal"))
+                       or sigs.get("v_recent_gate") or sigs.get("v_reversal_likely") or sigs.get("capitulation_signal"))
          else "FAIL ✗",
          "= PASS  (U1 + this gate = full entry signal)",
          sigs["above_ma30"] or sigs["clean_10d"]
-         or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
+         or sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False), True),
         ("MA30 slope (5-bar)",
          f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
          f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
@@ -8696,7 +8721,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None):
     )
 
     # ── V-Reversal signal — always show; highlight when active ────────────
-    _v_likely = sigs.get("v_reversal_likely", False)
+    _v_likely = sigs.get("v_recent_gate", False) or sigs.get("v_reversal_likely", False)
     _v_cap    = sigs.get("capitulation_signal", False)
     _v_active = _v_likely or _v_cap
     if _v_active:
@@ -11246,7 +11271,7 @@ def render_retrain_dashboard():
     )
     sc[3].metric(
         "V-Gate — Reversal",
-        "🔥 ACTIVE" if sigs.get("v_reversal_likely") else "💤 inactive",
+        "🔥 ACTIVE" if (sigs.get("v_recent_gate") or sigs.get("v_reversal_likely")) else "💤 inactive",
         delta=(
             (f"dn_score {_dns:.2f}  |  lo_err {_lle:+.1f}%"
              if _dns is not None and _lle is not None else "threshold: dn_score >0.8 & lo_err >5%")
