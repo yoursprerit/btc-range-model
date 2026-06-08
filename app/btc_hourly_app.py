@@ -8437,12 +8437,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 continue
 
             # ── LONG position card ───────────────────────────────────────────
-            _e_px   = _oe.get("price")
-            _e_date = _oe.get("date")
-            _sl_px  = _oe.get("stop_price")
-            _pk_px  = _oe.get("peak_price")
-            _e_trig = _oe.get("entry_trigger", "—")
-            _days   = (pd.Timestamp("today") - pd.Timestamp(_e_date)).days if _e_date else 0
+            _e_px    = _oe.get("price")
+            _e_date  = _oe.get("date")
+            _sl_px   = _oe.get("stop_price")
+            _e_trig  = _oe.get("entry_trigger", "—")
+            _days    = (pd.Timestamp("today") - pd.Timestamp(_e_date)).days if _e_date else 0
             _edate_s = pd.Timestamp(_e_date).strftime("%b %d, %Y") if _e_date else "—"
 
             if _live_px is not None and _live_px > 0 and _e_px:
@@ -8453,24 +8452,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             else:
                 _px_s = "—"; _unr_s = "—"
 
-            if _sl_px and _sl_px > 0:
-                _stop_s = _fmt(_sl_px)
-                if _pk_px:
-                    _stop_s += f"<br><span style='color:#94a3b8;font-size:11px'>peak {_fmt(_pk_px)}</span>"
-                if _live_px and _live_px > 0 and _e_px:
-                    _dist   = (_live_px / _sl_px - 1) * 100
-                    _dcol   = "#dc2626" if _dist < 1.5 else ("#d97706" if _dist < 3.0 else "#16a34a")
-                    _warn   = " ⚠️ NEAR STOP" if _dist < 1.5 else (" ⚠️" if _dist < 3.0 else "")
-                    _dist_s = (f"<span style='color:{_dcol};font-weight:600'>"
-                               f"{_dist:+.1f}% from stop{_warn}</span>")
-                else:
-                    _dist_s = "—"
-            else:
-                _stop_s = "—"; _dist_s = "—"
+            _stop_s = _fmt(_sl_px) if (_sl_px and _sl_px > 0) else "—"
 
-            _nav_s = f"${_nav:,.0f}" if _nav else "—"
             _lp_cards.append(
-                f"<div style='flex:1;min-width:220px;background:#f0fdf4;"
+                f"<div style='flex:1;min-width:200px;background:#f0fdf4;"
                 f"border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
                 f"<div style='font-size:12px;font-weight:700;color:#15803d;"
                 f"margin-bottom:6px;letter-spacing:.3px'>📍 {_label} — LONG</div>"
@@ -8479,16 +8464,14 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"<td>{_edate_s} @ {_fmt(_e_px) if _e_px else '—'}</td></tr>"
                 f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Trigger</td>"
                 f"<td>{_e_trig}</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>P&L</td>"
+                f"<td>{_unr_s}</td></tr>"
                 f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Days held</td>"
                 f"<td>{_days}d</td></tr>"
                 f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
-                f"<td>{_px_s} · {_unr_s}</td></tr>"
+                f"<td>{_px_s}</td></tr>"
                 f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Stop ({_stype})</td>"
                 f"<td>{_stop_s}</td></tr>"
-                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Distance</td>"
-                f"<td>{_dist_s}</td></tr>"
-                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Strategy NAV</td>"
-                f"<td>{_nav_s}</td></tr>"
                 f"</table></div>"
             )
 
