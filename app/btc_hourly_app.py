@@ -8433,96 +8433,64 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             _is_btc   = _asset_key == "btc"
             _fmt      = (lambda p: f"${p:,.0f}") if _is_btc else (lambda p: f"${p:,.2f}")
 
-            if _is_open:
-                # ── LONG position card ───────────────────────────────────────
-                _e_px   = _oe.get("price")
-                _e_date = _oe.get("date")
-                _sl_px  = _oe.get("stop_price")
-                _pk_px  = _oe.get("peak_price")
-                _e_trig = _oe.get("entry_trigger", "—")
-                _days   = (pd.Timestamp("today") - pd.Timestamp(_e_date)).days if _e_date else 0
-                _edate_s = pd.Timestamp(_e_date).strftime("%b %d, %Y") if _e_date else "—"
+            if not _is_open:
+                continue
 
-                if _live_px is not None and _live_px > 0 and _e_px:
-                    _unr_pct = (_live_px / _e_px - 1) * 100
-                    _unr_col = "#16a34a" if _unr_pct >= 0 else "#dc2626"
-                    _unr_s   = f"<b style='color:{_unr_col}'>{_unr_pct:+.1f}%</b>"
-                    _px_s    = _fmt(_live_px)
-                else:
-                    _px_s = "—"; _unr_s = "—"
+            # ── LONG position card ───────────────────────────────────────────
+            _e_px   = _oe.get("price")
+            _e_date = _oe.get("date")
+            _sl_px  = _oe.get("stop_price")
+            _pk_px  = _oe.get("peak_price")
+            _e_trig = _oe.get("entry_trigger", "—")
+            _days   = (pd.Timestamp("today") - pd.Timestamp(_e_date)).days if _e_date else 0
+            _edate_s = pd.Timestamp(_e_date).strftime("%b %d, %Y") if _e_date else "—"
 
-                if _sl_px and _sl_px > 0:
-                    _stop_s = _fmt(_sl_px)
-                    if _pk_px:
-                        _stop_s += f"<br><span style='color:#94a3b8;font-size:11px'>peak {_fmt(_pk_px)}</span>"
-                    if _live_px and _live_px > 0 and _e_px:
-                        _dist   = (_live_px / _sl_px - 1) * 100
-                        _dcol   = "#dc2626" if _dist < 1.5 else ("#d97706" if _dist < 3.0 else "#16a34a")
-                        _warn   = " ⚠️ NEAR STOP" if _dist < 1.5 else (" ⚠️" if _dist < 3.0 else "")
-                        _dist_s = (f"<span style='color:{_dcol};font-weight:600'>"
-                                   f"{_dist:+.1f}% from stop{_warn}</span>")
-                    else:
-                        _dist_s = "—"
-                else:
-                    _stop_s = "—"; _dist_s = "—"
-
-                _nav_s = f"${_nav:,.0f}" if _nav else "—"
-                _lp_cards.append(
-                    f"<div style='flex:1;min-width:220px;background:#f0fdf4;"
-                    f"border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
-                    f"<div style='font-size:12px;font-weight:700;color:#15803d;"
-                    f"margin-bottom:6px;letter-spacing:.3px'>📍 {_label} — LONG</div>"
-                    f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Entry</td>"
-                    f"<td>{_edate_s} @ {_fmt(_e_px) if _e_px else '—'}</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Trigger</td>"
-                    f"<td>{_e_trig}</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Days held</td>"
-                    f"<td>{_days}d</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
-                    f"<td>{_px_s} · {_unr_s}</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Stop ({_stype})</td>"
-                    f"<td>{_stop_s}</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Distance</td>"
-                    f"<td>{_dist_s}</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Strategy NAV</td>"
-                    f"<td>{_nav_s}</td></tr>"
-                    f"</table></div>"
-                )
+            if _live_px is not None and _live_px > 0 and _e_px:
+                _unr_pct = (_live_px / _e_px - 1) * 100
+                _unr_col = "#16a34a" if _unr_pct >= 0 else "#dc2626"
+                _unr_s   = f"<b style='color:{_unr_col}'>{_unr_pct:+.1f}%</b>"
+                _px_s    = _fmt(_live_px)
             else:
-                # ── CASH / flat card ─────────────────────────────────────────
-                _nav_s = f"${_nav:,.0f}" if _nav else "—"
-                if _last:
-                    _lt_date = pd.Timestamp(_last["exit_date"]).strftime("%b %d")
-                    _lt_pct  = _last.get("pnl_pct", 0.0)
-                    _lt_sig  = _last.get("exit_signal", "—")
-                    _lt_col  = "#16a34a" if _lt_pct >= 0 else "#dc2626"
-                    _last_s  = (f"{_lt_date} exit · "
-                                f"<span style='color:{_lt_col};font-weight:600'>{_lt_pct:+.1f}%</span>"
-                                f" ({_lt_sig})")
+                _px_s = "—"; _unr_s = "—"
+
+            if _sl_px and _sl_px > 0:
+                _stop_s = _fmt(_sl_px)
+                if _pk_px:
+                    _stop_s += f"<br><span style='color:#94a3b8;font-size:11px'>peak {_fmt(_pk_px)}</span>"
+                if _live_px and _live_px > 0 and _e_px:
+                    _dist   = (_live_px / _sl_px - 1) * 100
+                    _dcol   = "#dc2626" if _dist < 1.5 else ("#d97706" if _dist < 3.0 else "#16a34a")
+                    _warn   = " ⚠️ NEAR STOP" if _dist < 1.5 else (" ⚠️" if _dist < 3.0 else "")
+                    _dist_s = (f"<span style='color:{_dcol};font-weight:600'>"
+                               f"{_dist:+.1f}% from stop{_warn}</span>")
                 else:
-                    _last_s  = "No closed trades yet"
+                    _dist_s = "—"
+            else:
+                _stop_s = "—"; _dist_s = "—"
 
-                _live_s = ""
-                if _live_px is not None and _live_px > 0:
-                    _live_s = (f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
-                               f"<td>{_fmt(_live_px)}</td></tr>")
-
-                _lp_cards.append(
-                    f"<div style='flex:1;min-width:220px;background:#f8fafc;"
-                    f"border:1.5px solid #cbd5e1;border-radius:10px;padding:12px 14px;'>"
-                    f"<div style='font-size:12px;font-weight:700;color:#64748b;"
-                    f"margin-bottom:6px;letter-spacing:.3px'>💤 {_label} — CASH</div>"
-                    f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Strategy NAV</td>"
-                    f"<td><b>{_nav_s}</b></td></tr>"
-                    f"{_live_s}"
-                    f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Last trade</td>"
-                    f"<td>{_last_s}</td></tr>"
-                    f"<tr><td style='color:#64748b;padding:2px 6px 0 0;vertical-align:top'>Waiting for</td>"
-                    f"<td style='color:#475569'>U1 + (↑MA30 or clean10d)</td></tr>"
-                    f"</table></div>"
-                )
+            _nav_s = f"${_nav:,.0f}" if _nav else "—"
+            _lp_cards.append(
+                f"<div style='flex:1;min-width:220px;background:#f0fdf4;"
+                f"border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
+                f"<div style='font-size:12px;font-weight:700;color:#15803d;"
+                f"margin-bottom:6px;letter-spacing:.3px'>📍 {_label} — LONG</div>"
+                f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Entry</td>"
+                f"<td>{_edate_s} @ {_fmt(_e_px) if _e_px else '—'}</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Trigger</td>"
+                f"<td>{_e_trig}</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Days held</td>"
+                f"<td>{_days}d</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
+                f"<td>{_px_s} · {_unr_s}</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Stop ({_stype})</td>"
+                f"<td>{_stop_s}</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Distance</td>"
+                f"<td>{_dist_s}</td></tr>"
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Strategy NAV</td>"
+                f"<td>{_nav_s}</td></tr>"
+                f"</table></div>"
+            )
 
         if _lp_cards:
             st.markdown(
@@ -9057,11 +9025,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_end      = target_date.strftime("%Y-%m-%d")
     # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
-    # Bear and Full periods are locked. OOS ends at yesterday (prior calendar day)
-    # on a rolling basis so the window is consistent regardless of bar anchor time.
-    # data_end is passed as a cache-busting key so fixed-period results refresh
-    # whenever new daily BTC price data lands — without requiring a model retrain.
-    _bt_oos_end  = (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
+    # Bear and Full periods are locked. OOS ends at yesterday in live mode so the
+    # window is consistent regardless of bar anchor time.  In historical mode, use
+    # the selected bar date so the Live Position Panel reflects position state at
+    # that exact date rather than always showing today's live position.
+    _bt_oos_end  = (
+        (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1))
+        .normalize().strftime("%Y-%m-%d")
+        if is_live
+        else _bt_end
+    )
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime, data_end=_data_end or "")
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
