@@ -341,6 +341,26 @@ def fetch_equity_prices():
             prices.get("MSTU"), changes.get("MSTU"))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_equity_price_at_date(ticker: str, date_str: str) -> float | None:
+    """Return closing price of `ticker` on or before `date_str` from yfinance."""
+    try:
+        d = pd.Timestamp(date_str)
+        hist = yf.Ticker(ticker).history(
+            start=(d - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
+            end=(d + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            interval="1d", auto_adjust=True,
+        )
+        if hist.empty:
+            return None
+        hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+        hist.index = hist.index.normalize()
+        mask = hist.index <= d.normalize()
+        return float(hist["Close"][mask].iloc[-1]) if mask.any() else None
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_mstr_atm_call(mstr_spot: float | None):
     """Price a 743-day ATM MSTR call via Black-Scholes with 60-day trailing HV.
@@ -8420,7 +8440,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 
     # ── Live Position Panel — always rendered for all 3 assets ─────────────
     if open_positions:
-        _lp_cards = []
+        _lp_cards  = []
+        _panel_aod = open_positions.get("as_of_date") or pd.Timestamp("today")
         for _asset_key in ("btc", "mstr", "mstu"):
             _pos      = open_positions.get(_asset_key, {})
             _is_open  = bool(_pos.get("open_pos", False))
@@ -8441,7 +8462,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             _e_date  = _oe.get("date")
             _sl_px   = _oe.get("stop_price")
             _e_trig  = _oe.get("entry_trigger", "—")
-            _days    = (pd.Timestamp("today") - pd.Timestamp(_e_date)).days if _e_date else 0
+            _days    = (pd.Timestamp(_panel_aod) - pd.Timestamp(_e_date)).days if _e_date else 0
             _edate_s = pd.Timestamp(_e_date).strftime("%b %d, %Y") if _e_date else "—"
 
             if _live_px is not None and _live_px > 0 and _e_px:
@@ -9153,12 +9174,27 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _tl = (bt or {}).get("trades") or []
             return _tl[-1] if _tl else None
 
+        # Live prices: in live mode use real-time prices; in historical mode use
+        # the close at the selected bar (BTC) or the yfinance close on that date
+        # (MSTR/MSTU) so the panel reflects the position state at the chosen time.
+        _panel_as_of = target_date  # date used for Days Held and P&L
+        if is_live:
+            _btc_panel_px  = live_spot
+            _mstr_panel_px = mstr_price
+            _mstu_panel_px = mstu_price
+        else:
+            _hist_date_s   = target_date.strftime("%Y-%m-%d")
+            _btc_panel_px  = latest_close
+            _mstr_panel_px = _fetch_equity_price_at_date("MSTR", _hist_date_s)
+            _mstu_panel_px = _fetch_equity_price_at_date("MSTU", _hist_date_s)
+
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
+            "as_of_date": _panel_as_of,
             "btc": dict(
                 open_pos   = bool(_bt_full_oos and _bt_full_oos.get("open_pos")),
                 entry      = (_bt_full_oos or {}).get("open_entry"),
-                live_price = live_spot,
+                live_price = _btc_panel_px,
                 asset_label= "BTC",
                 stop_type  = "trail-7%",
                 nav        = (_bt_full_oos or {}).get("stats", {}).get("final_nav"),
@@ -9167,7 +9203,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             "mstr": dict(
                 open_pos   = bool(_bt_mstr_oos and _bt_mstr_oos.get("open_pos")),
                 entry      = (_bt_mstr_oos or {}).get("open_entry"),
-                live_price = mstr_price,
+                live_price = _mstr_panel_px,
                 asset_label= "MSTR",
                 stop_type  = "fixed-3%",
                 nav        = (_bt_mstr_oos or {}).get("stats", {}).get("final_nav"),
@@ -9176,7 +9212,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             "mstu": dict(
                 open_pos   = bool(_bt_mstu_oos and _bt_mstu_oos.get("open_pos")),
                 entry      = (_bt_mstu_oos or {}).get("open_entry"),
-                live_price = mstu_price,
+                live_price = _mstu_panel_px,
                 asset_label= "MSTU",
                 stop_type  = "fixed-3%",
                 nav        = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
