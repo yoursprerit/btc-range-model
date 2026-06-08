@@ -2723,12 +2723,53 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
         st.warning(f"CT model (extended) could not be loaded: {e}")
         return None
 
-    # Use the same daily DataFrame as compute_daily_forecast() so predictions
+    # Use the same daily DataFrame as compute_daily_forecast() so OOS predictions
     # are identical — same Binance 12:00-UTC bars, same macro, same on-chain.
     df = _fetch_daily_raw().copy()
     if df.empty:
         return None
     df = df.sort_index().ffill(limit=5)
+
+    # If Binance data doesn't reach back to Jun 2024 (e.g. no local CSV in cloud),
+    # supplement with yfinance daily for the warmup period so all backtest windows
+    # (Bull Market Jun 2024, Full Market Jun 2024) have enough history.
+    WARMUP_START = "2024-02-01"
+    _warmup_ts = pd.Timestamp(WARMUP_START)
+    if df.index.min() > _warmup_ts + pd.Timedelta(days=30):
+        try:
+            FETCH_END = (datetime.now(timezone.utc).date()
+                         + pd.Timedelta(days=1).to_pytimedelta()).strftime("%Y-%m-%d")
+            d_btc = yf.download("BTC-USD", start=WARMUP_START, end=FETCH_END,
+                                progress=False, auto_adjust=False)
+            if isinstance(d_btc.columns, pd.MultiIndex):
+                d_btc.columns = [c[0] for c in d_btc.columns]
+            d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
+            # Build a minimal warmup-period DataFrame covering pre-Binance dates.
+            _warmup = pd.DataFrame({
+                "btc_close":  d_btc["Close"],
+                "btc_high":   d_btc["High"],
+                "btc_low":    d_btc["Low"],
+                "btc_volume": d_btc["Volume"],
+            })
+            _cutoff = df.index.min()
+            _warmup = _warmup[_warmup.index < _cutoff]
+            # Macro from yfinance for the warmup slice
+            _MACRO_WU = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC","vix":"^VIX",
+                         "gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
+            for _nm, _sym in _MACRO_WU.items():
+                try:
+                    _d = yf.download(_sym, start=WARMUP_START, end=FETCH_END,
+                                     progress=False, auto_adjust=False)
+                    if isinstance(_d.columns, pd.MultiIndex):
+                        _d.columns = [c[0] for c in _d.columns]
+                    _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+                    _warmup[f"{_nm}_close"] = _d["Close"].reindex(_warmup.index)
+                except Exception:
+                    pass
+            df = pd.concat([_warmup, df]).sort_index()
+            df = df[~df.index.duplicated(keep="last")].ffill(limit=5)
+        except Exception:
+            pass
 
     # raw_df carries actual OHLCV for the backtest loop to fill actual_high/low.
     raw_df = df[["btc_close", "btc_high", "btc_low", "btc_volume"]].copy()
@@ -2802,12 +2843,17 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
     feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
     # Coinbase Premium — use if already present in the daily DataFrame (matches
     # compute_daily_forecast() behaviour; _fetch_daily_raw() includes it when available).
-    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+    # Must NOT be left as NaN: dropna() would eliminate all rows.
+    if "coinbase_close" in df.columns and df["coinbase_close"].notna().any():
         _cb = df["coinbase_close"]; _ref = df["btc_close"]
         _prem = (_cb - _ref) / _ref * 100
         feat["cb_premium"]     = _prem
         feat["cb_premium_ma3"] = _prem.rolling(3).mean()
         feat["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
+    else:
+        feat["cb_premium"]     = 0.0
+        feat["cb_premium_ma3"] = 0.0
+        feat["cb_premium_z7"]  = 0.0
 
     fc = AD["feat_cols"]
     feat = feat.replace([np.inf, -np.inf], np.nan)

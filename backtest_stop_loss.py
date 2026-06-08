@@ -247,11 +247,16 @@ def build_features_and_predictions(df: pd.DataFrame, AD: dict) -> pd.DataFrame:
     sma50 = c.rolling(50).mean()
     feat["below_sma50"]    = (c < sma50).astype(float)
     feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
-    # Coinbase premium features (may be absent — model handles via NaN fill)
-    if "cb_premium" in df.columns:
+    # Coinbase premium — use pre-computed columns if available, else 0-fill.
+    # Must NOT be left as NaN: dropna() would eliminate all rows.
+    if "cb_premium" in df.columns and df["cb_premium"].notna().any():
         feat["cb_premium"]     = df["cb_premium"]
         feat["cb_premium_ma3"] = df["cb_premium_ma3"]
         feat["cb_premium_z7"]  = df["cb_premium_z7"]
+    else:
+        feat["cb_premium"]     = 0.0
+        feat["cb_premium_ma3"] = 0.0
+        feat["cb_premium_z7"]  = 0.0
 
     fc = AD["feat_cols"]
     feat = feat.replace([np.inf, -np.inf], np.nan)
