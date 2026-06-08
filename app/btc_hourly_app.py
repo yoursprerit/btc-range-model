@@ -2695,12 +2695,17 @@ def _build_ct_batch_predictions(data_end=None):
 
 @st.cache_data(ttl=3600 * 6, show_spinner="Building extended 2-year predictions …")
 def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = ""):
-    """Build CT predictions using yfinance daily data fetched from 2024-02-01.
+    """Build CT predictions using the same Binance 12:00-UTC data as compute_daily_forecast().
 
-    Provides 115+ days of feature warmup before the May 26, 2024 backtest start
-    so all 90-day rolling features (dist_hi_90, corr_30, etc.) are fully
-    initialised.  Uses yfinance midnight-UTC daily closes — same source as
-    backtest_2year.py — so results match the documented +83.5% two-year figure.
+    Uses _fetch_daily_raw() (Binance 12:00-UTC resampled bars + yfinance macro +
+    blockchain.info on-chain) so that predictions are byte-for-byte identical to
+    those produced by compute_daily_forecast() for the same date.  This ensures the
+    OOS backtest trade log and the historical-replay signal agree on every bar.
+
+    Previously used yfinance midnight-UTC closes which produced different close
+    prices and therefore different predictions, causing the same bar to show an
+    entry signal in the backtest but no signal in historical replay (root cause of
+    the March 11 2026 entry discrepancy).
 
     data_end is a cache-busting key (latest raw BTC date). When new daily data
     arrives the cache key changes, forcing a fresh fetch even within the 6h TTL.
@@ -2718,65 +2723,15 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
         st.warning(f"CT model (extended) could not be loaded: {e}")
         return None
 
-    FETCH_START = "2024-02-01"
-    FETCH_END   = (datetime.now(timezone.utc).date()
-                   + pd.Timedelta(days=1).to_pytimedelta()).strftime("%Y-%m-%d")
-
-    # ── BTC daily (yfinance midnight-UTC close) ─────────────────────
-    try:
-        d_btc = yf.download("BTC-USD", start=FETCH_START, end=FETCH_END,
-                            progress=False, auto_adjust=False)
-        if isinstance(d_btc.columns, pd.MultiIndex):
-            d_btc.columns = [c[0] for c in d_btc.columns]
-        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
-    except Exception:
+    # Use the same daily DataFrame as compute_daily_forecast() so predictions
+    # are identical — same Binance 12:00-UTC bars, same macro, same on-chain.
+    df = _fetch_daily_raw().copy()
+    if df.empty:
         return None
-
-    raw_df = pd.DataFrame({
-        "btc_close":  d_btc["Close"],
-        "btc_high":   d_btc["High"],
-        "btc_low":    d_btc["Low"],
-        "btc_volume": d_btc["Volume"],
-    })
-
-    # ── Macro (yfinance daily) ──────────────────────────────────────
-    SYMS = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
-            "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
-    df = raw_df.copy()
-    for name, sym in SYMS.items():
-        try:
-            d = yf.download(sym, start=FETCH_START, end=FETCH_END,
-                            progress=False, auto_adjust=False)
-            if isinstance(d.columns, pd.MultiIndex):
-                d.columns = [c[0] for c in d.columns]
-            d.index = pd.DatetimeIndex(d.index).tz_localize(None).normalize()
-            df[f"{name}_close"] = d["Close"].reindex(df.index)
-        except Exception:
-            pass
-
-    # ── On-chain (blockchain.info) ──────────────────────────────────
-    ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
-               "n-unique-addresses","transaction-fees-usd","mempool-size",
-               "estimated-transaction-volume-usd","market-cap",
-               "avg-block-size","cost-per-transaction"]
-    for m in ONCHAIN:
-        col = f"oc_{m.replace('-','_')}"
-        try:
-            r = requests.get(
-                f"https://api.blockchain.info/charts/{m}",
-                params={"timespan":"3years","format":"json","sampled":"true"},
-                timeout=20)
-            vals = r.json().get("values", [])
-            s = pd.Series(
-                {pd.Timestamp(v["x"], unit="s").normalize(): v["y"] for v in vals},
-                name=col, dtype=float)
-            s = s[~s.index.duplicated(keep="last")].sort_index()
-            s.index = pd.DatetimeIndex(s.index).tz_localize(None)
-            df[col] = s.reindex(df.index).ffill(limit=7)
-        except Exception:
-            pass
-
     df = df.sort_index().ffill(limit=5)
+
+    # raw_df carries actual OHLCV for the backtest loop to fill actual_high/low.
+    raw_df = df[["btc_close", "btc_high", "btc_low", "btc_volume"]].copy()
 
     # ── Feature engineering (identical to _build_ct_batch_predictions) ─
     feat  = pd.DataFrame(index=df.index)
@@ -2845,31 +2800,11 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
     sma50 = c.rolling(50).mean()
     feat["below_sma50"]    = (c < sma50).astype(float)
     feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
-    # Coinbase Premium (fetch directly via public API)
-    _cb_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
-    _cb_rows: list = []
-    _cb_cur = pd.Timestamp(FETCH_START)
-    _cb_end = pd.Timestamp(FETCH_END)
-    while _cb_cur <= _cb_end:
-        _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
-        try:
-            _r = requests.get(_cb_url, params={
-                "granularity": 86400,
-                "start": _cb_cur.isoformat() + "Z",
-                "end":   (_cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
-            }, timeout=30)
-            if _r.status_code == 200:
-                _cb_rows.extend(_r.json())
-        except Exception:
-            pass
-        _cb_cur = _cb_chunk + pd.Timedelta(days=1)
-        time.sleep(0.2)
-    if _cb_rows:
-        _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
-        _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
-        _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
-        _cb_close = _cb_df["close"].reindex(df.index)
-        _prem = (_cb_close - df["btc_close"]) / df["btc_close"] * 100
+    # Coinbase Premium — use if already present in the daily DataFrame (matches
+    # compute_daily_forecast() behaviour; _fetch_daily_raw() includes it when available).
+    if "coinbase_close" in df.columns and "btc_close" in df.columns:
+        _cb = df["coinbase_close"]; _ref = df["btc_close"]
+        _prem = (_cb - _ref) / _ref * 100
         feat["cb_premium"]     = _prem
         feat["cb_premium_ma3"] = _prem.rolling(3).mean()
         feat["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
@@ -2939,10 +2874,11 @@ def run_full_period_backtest(end_date_iso: str,
                              initial_capital: float = 100_000.0,
                              model_mtime: float = 0.0,
                              data_end: str = ""):
-    """Full-period TF2 backtest using extended yfinance daily data.
+    """Full-period TF2 backtest using Binance 12:00-UTC daily data.
 
-    Fetches from 2024-02-01 to ensure 90-day feature warmup before the
-    May 26, 2024 backtest start — reproduces the backtest_2year.py +83.5% figure.
+    Uses _fetch_daily_raw() (same source as compute_daily_forecast) so backtest
+    predictions are identical to historical-replay signals — fixing the discrepancy
+    where entries appeared in the trade log but not in historical replay.
     Returns the same dict structure as run_tf1_backtest.
     data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
     """
