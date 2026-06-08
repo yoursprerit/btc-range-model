@@ -586,13 +586,21 @@ def _fetch_binance_hourly(days_back=None):
 
 
 @st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
-def _fetch_daily_raw_inner(_bar_start_iso: str):
-    """Implementation of the daily-bar fetch.  The `_bar_start_iso` parameter is
-    NOT used inside the function body — it is a cache-busting key that equals the
-    ISO date of the 12:00-UTC bar currently open (i.e. floor((now_utc − 12h).date())).
-    It changes at exactly 12:00 UTC (7am CT) each day, so the cache is invalidated
-    on the very first page-load after each bar closes rather than waiting up to 6
-    arbitrary hours for the TTL to expire.
+def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = ""):
+    """Implementation of the daily-bar fetch.  Neither `_bar_start_iso` nor
+    `_hourly_end_iso` is used inside the function body — both are cache-busting keys.
+
+    `_bar_start_iso` equals the ISO date of the 12:00-UTC bar currently open
+    (i.e. floor((now_utc − 12h).date())).  It changes at exactly 12:00 UTC each day,
+    giving this function a cache miss at bar-close time.
+
+    `_hourly_end_iso` equals the ISO timestamp of the latest candle in
+    _fetch_binance_hourly() at the time _fetch_daily_raw() is called.  It changes
+    when the hourly cache refreshes and picks up the final candle of the just-closed
+    daily bar (e.g. the Jun 8 11:00 UTC candle needed to complete the Jun 7 daily bar).
+    Without this second key, a cache miss at 12:00 UTC can populate the daily cache
+    with incomplete data (missing the newest completed bar) and hold it stale for the
+    full 6-hour TTL — causing today's and yesterday's err_hi_ma3 to show the same value.
 
     Build the daily-bar DataFrame anchored at 12:00 UTC.
 
@@ -693,14 +701,18 @@ def _fetch_daily_raw_inner(_bar_start_iso: str):
 
 
 def _fetch_daily_raw():
-    """Public wrapper — calls _fetch_daily_raw_inner with the current bar-start ISO
-    date so the cache invalidates automatically at each 12:00 UTC (7am CT) boundary.
-    All call sites use this function unchanged; only the inner cache key changes."""
+    """Public wrapper — calls _fetch_daily_raw_inner with two cache-busting keys:
+    the current bar-start ISO date (changes at 12:00 UTC) and the latest hourly
+    candle ISO timestamp (changes whenever _fetch_binance_hourly() picks up new data).
+    The second key prevents a 6-hour stale window when the hourly cache hasn't yet
+    delivered the final candle of the just-closed daily bar at the time of bar rollover."""
     _bar_start_iso = (
         (datetime.now(timezone.utc) - timedelta(hours=ANCHOR_HOUR_UTC))
         .date().isoformat()
     )
-    return _fetch_daily_raw_inner(_bar_start_iso)
+    _hourly = _fetch_binance_hourly()
+    _hourly_end_iso = _hourly.index.max().isoformat() if not _hourly.empty else ""
+    return _fetch_daily_raw_inner(_bar_start_iso, _hourly_end_iso)
 
 
 @st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
