@@ -4925,6 +4925,21 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     _lp_bt   = bt_full_oos if bt_full_oos is not None else bt_bear
     _lp_open = bool(_lp_bt and _lp_bt.get("open_pos") and _lp_bt.get("open_entry"))
 
+    # Detect a position closed ON the viewing date (trail-stop or signal exit fired today).
+    # bt_full_oos ends at the viewing date, so stats["end_date"] is the viewing date.
+    # A trade whose exit_date matches shows the panel even after the position is gone.
+    _lp_closed_today = None
+    if _lp_bt and not _lp_open:
+        _lp_trades = _lp_bt.get("trades") or []
+        if _lp_trades:
+            _lp_vd = pd.Timestamp(
+                _lp_bt.get("stats", {}).get("end_date") or
+                _lp_bt["nav_series"].index[-1]
+            ).normalize()
+            _last_t = _lp_trades[-1]
+            if pd.Timestamp(_last_t["exit_date"]).normalize() == _lp_vd:
+                _lp_closed_today = _last_t
+
     # Build signal-detail row (shared across all panel states)
     _lp_gates_str = (" + ".join(_lp_entry_gates)) if _lp_entry_gates else "none"
     _lp_u1_str    = "✅ ACTIVE" if _lp_u1 else "○ inactive"
@@ -4965,6 +4980,42 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"Bought {pd.Timestamp(oe['date']).strftime('%b %d, %Y')} @ ${oe['price']:,.0f} &nbsp;·&nbsp; "
             f"Unrealized P&amp;L: <span style='color:{oe_col}; font-weight:700;'>{unr:+.1f}%</span>"
             f"{_sl_str}{_exit_warn}</div>"
+            + _lp_sig_row +
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    elif _lp_closed_today:
+        _cl_pnl   = _lp_closed_today.get("pnl_pct", 0.0)
+        _cl_pos   = _cl_pnl > 0
+        _cl_bg    = "#f0fdf4" if _cl_pos else "#fef2f2"
+        _cl_brd   = "#16a34a" if _cl_pos else "#dc2626"
+        _cl_col   = "#16a34a" if _cl_pos else "#dc2626"
+        _cl_badge = "✅ CLOSED — PROFIT" if _cl_pos else "🔴 CLOSED — LOSS"
+        _cl_exit  = _lp_closed_today.get("exit_signal", "—")
+        _cl_en_dt = pd.Timestamp(_lp_closed_today["entry_date"]).strftime("%b %d, %Y")
+        _cl_ex_dt = pd.Timestamp(_lp_closed_today["exit_date"]).strftime("%b %d, %Y")
+        _cl_en_px = _lp_closed_today.get("entry_price") or 0
+        _cl_ex_px = _lp_closed_today.get("exit_price") or 0
+        _cl_days  = _lp_closed_today.get("duration_days", 0)
+        _cl_trig  = _lp_closed_today.get("entry_trigger", "—")
+        _cl_next  = (
+            f"<br><span style='color:#16a34a; font-weight:600;'>🟢 Entry signal active — "
+            f"new position will enter at next bar's close</span>"
+            if _lp_entry_signal else ""
+        )
+        st.markdown(
+            f"<div style='background:{_cl_bg}; border:2px solid {_cl_brd}; border-radius:10px; "
+            f"padding:12px 16px; margin:0 0 12px 0; color:#1f2937;'>"
+            f"<div style='font-size:14px; font-weight:700; margin-bottom:4px; color:{_cl_brd};'>"
+            f"📍 Live Position Panel — <span style='color:{_cl_brd};'>{_cl_badge}</span></div>"
+            f"<div style='font-size:13px;'>"
+            f"<b>Exit reason:</b> {_cl_exit} &nbsp;·&nbsp; "
+            f"Entered {_cl_en_dt} @ ${_cl_en_px:,.0f} &nbsp;·&nbsp; "
+            f"Exited {_cl_ex_dt} @ ${_cl_ex_px:,.0f} &nbsp;·&nbsp; "
+            f"P&L: <span style='color:{_cl_col}; font-weight:700;'>{_cl_pnl:+.1f}%</span> &nbsp;·&nbsp; "
+            f"{_cl_days}d held &nbsp;·&nbsp; "
+            f"<b>Trigger:</b> {_cl_trig}"
+            f"{_cl_next}</div>"
             + _lp_sig_row +
             f"</div>",
             unsafe_allow_html=True,
