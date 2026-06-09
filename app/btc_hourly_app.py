@@ -9516,14 +9516,6 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _mstu_series   = _fetch_equity_hourly_series("MSTU", _date_str)
             _mstr_panel_px = _equity_price_at(_mstr_series, latest_t)
             _mstu_panel_px = _equity_price_at(_mstu_series, latest_t)
-            # DEBUG — remove after confirming intraday prices update with slider
-            _dbg_mstr = f"{_mstr_panel_px:.2f}" if _mstr_panel_px else "None"
-            _dbg_mstu = f"{_mstu_panel_px:.4f}" if _mstu_panel_px else "None"
-            _dbg_len  = len(_mstr_series) if _mstr_series is not None else 0
-            st.caption(
-                f"🔍 debug · latest_t={latest_t} · "
-                f"MSTR={_dbg_mstr} · MSTU={_dbg_mstu} · series_len_mstr={_dbg_len}"
-            )
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
