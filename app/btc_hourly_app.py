@@ -1008,19 +1008,20 @@ def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
         real_l = (float(daily_df.loc[ts, "btc_low"])
                   if ts in daily_df.index and pd.notna(daily_df.loc[ts, "btc_low"])
                   else np.nan)
-        # The end_target date is the "viewing date" — the day the user selected.
-        # We treat it as in-progress (like live mode) so that signals and the
-        # completed-bars filter are based solely on the PREVIOUS bar's close.
-        # overlay_high/low always carries the realized value for chart display.
-        is_viewing_date = (i == 0)
+        # actual_high/low is the realized bar value if known.  In live mode the
+        # current bar is in progress so daily_df won't have it yet → NaN naturally.
+        # In historical mode the bar has closed → real_h/l is available and used
+        # for signal computation, matching the same-bar backtest logic exactly.
+        # overlay_high/low mirrors actual_high/low for chart display (diamond marker
+        # only shown when actual_high is NaN, i.e. live in-progress bar).
         rows.append(dict(
             target_date  = ts,
             as_of_date   = pred["as_of_date"],
             close_asof   = float(pred["close_asof"]),
             pred_high    = float(pred["pred_high"]),
             pred_low     = float(pred["pred_low"]),
-            actual_high  = np.nan if is_viewing_date else real_h,
-            actual_low   = np.nan if is_viewing_date else real_l,
+            actual_high  = real_h,
+            actual_low   = real_l,
             overlay_high = real_h,
             overlay_low  = real_l,
         ))
@@ -2466,9 +2467,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # ── Signature trigger flags ─────────────────────────────────────────
     d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
     d2_triggered  = (err_hi_ma3 < -0.75)
-    # D3 triggers on the CURRENT bar OR the previous bar.  The backtest executes
-    # exits with si=i-1 (signal from the prior bar drives today's exit), so D3
-    # that fired yesterday is still an active exit-driving signal today.
+    # D3 triggers on the current bar (same-bar execution — signal and exit both on bar i).
     d3_triggered  = exhaustion_active
     u1_triggered  = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
@@ -8530,7 +8529,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _exit_d3       = sigs.get("exhaustion_active", False)
     _exit_d2       = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
     _exit_signal   = _exit_d3 or _exit_d2
-    _d3_label      = "D3 exhaustion fired on preceding bar — exit signal active today"
+    _d3_label      = "D3 exhaustion fired today — exit signal active"
 
     if _exit_signal and _entry_signal:
         _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
@@ -8912,17 +8911,17 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     col3, col4 = st.columns(2)
 
     # Card D3
-    # With the "viewing date" semantics, detail_rows[-1] is the last COMPLETED bar
-    # (the day before the selected date). D3 active means it fired on that preceding bar.
+    # detail_rows[-1] is the viewing date's bar (included in completed after same-bar fix).
+    # D3 active means it fired on today's bar.
     d3_streak_str  = f"streak = {sigs['streak']:+d}" if sigs["streak"] != 0 else "streak = 0"
     _d3_lo_last    = bool(sigs["detail_rows"] and sigs["detail_rows"][-1]["lo_break"])
     _d3_lo_prev    = bool(len(sigs["detail_rows"]) >= 2 and sigs["detail_rows"][-2]["lo_break"])
     _d3_active     = sigs.get("exhaustion_active", False)
     _d3_card_title = "D3 — Exhaustion Canary (ACTIVE)" if _d3_active else "D3 — Exhaustion Canary"
     d3_rows = [
-        ("Lo-break on preceding bar",
+        ("Lo-break today",
          "YES" if _d3_lo_last else "NO",
-         "= YES  (actual low < pred low on last completed bar → D3 trigger)",
+         "= YES  (actual low < pred low on today's bar → D3 trigger)",
          _d3_lo_last, True),
         ("Lo-break 2 bars ago",
          "YES" if _d3_lo_prev else "NO",
@@ -8948,12 +8947,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 interpretation=(
                     "After ≥ 3 consecutive days where actual highs <b>exceeded</b> the "
                     "predicted high (strong uptrend momentum), the <b>first appearance of "
-                    "a low-band break</b> on the preceding bar marks exhaustion. "
-                    "When viewing a date, this fires if the previous bar met the exhaustion "
-                    "condition — meaning the exit signal is active for today's session. "
+                    "a low-band break</b> on today's bar marks exhaustion. "
+                    "Signal and exit execute on the same bar — today's lo-break triggers "
+                    "an immediate exit at today's close. "
                     "Context: Oct 6 2025 fired; Oct 7–10 dropped −9.5% over 3 days."
                 ),
-                timing="Fires when the preceding bar shows the first lo_break after a "
+                timing="Fires when today's bar shows the first lo_break after a "
                        "streak of ≥ 3 hi_breaks. Most reliable when streak ≥ +4 days.",
                 prob_txt="Contextual signal — most reliable when streak ≥ +4 AND this is "
                          "the <b>first</b> lo_break in the series. Oct 2025 textbook case.",
@@ -9983,7 +9982,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             f"#### 📈 Daily H/L — predictions vs actuals "
             f"(last 7 completed bars + viewing date; each bar opens 12:00 UTC = 7am CT · "
             f"viewing date = **{end_target.strftime('%Y-%m-%d')}** — "
-            f"signals based on preceding bar; ◆ = realized outcome overlay)"
+            f"signals based on completed bars through viewing date; ◆ = in-progress bar overlay)"
         )
         fig2 = go.Figure()
         # ±2 % uncertainty bands around each predicted line — added first so
@@ -10058,7 +10057,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # distinct marker so the user can compare prediction to outcome.
         if "overlay_high" in series.columns:
             ov_row = series.iloc[[-1]]
-            if pd.notna(ov_row["overlay_high"].iloc[0]):
+            if pd.notna(ov_row["overlay_high"].iloc[0]) and pd.isna(ov_row["actual_high"].iloc[0]):
                 fig2.add_trace(go.Scatter(
                     x=ov_row["target_date"], y=ov_row["overlay_high"],
                     mode="markers",
@@ -11733,8 +11732,8 @@ def render_retrain_dashboard():
     sc[2].metric(
         "🔴 D3 — Exhaustion",
         "🔥 ACTIVE" if sigs.get("d3_triggered") else "💤 inactive",
-        delta=("exhaustion fired on preceding bar" if sigs.get("exhaustion_active")
-               else "no hi-break streak → lo-break on preceding bar"),
+        delta=("exhaustion fired today" if sigs.get("exhaustion_active")
+               else "no hi-break streak → lo-break today"),
         delta_color="off",
         help=(
             "First `lo_break` after ≥3 consecutive `hi_breaks`.  "
