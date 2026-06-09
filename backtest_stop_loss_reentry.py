@@ -2,43 +2,47 @@
 """
 Stop-Loss Re-Entry Criteria Analysis
 =====================================
-Evaluates smart re-entry criteria after stop-loss exits for BTC, MSTR, and MSTU.
+Exact stop-loss levels in the current trading strategy:
+  BTC  : trailing stop  −7%   (fires when close drops 7% below the running peak)
+  MSTR : fixed stop     −3%   (fires when MSTR close drops 3% below entry price)
+  MSTU : fixed stop     −10%  (fires when MSTU close drops 10% below entry price)
 
-Why this analysis:
-  Adding a hard stop loss to TF2+V-Gate "cuts" positions during bull-market
-  consolidations — the downside protection comes at the cost of missed upside
-  when the rally resumes.  This script quantifies how much upside is recovered
-  by different re-entry strategies after a stop fires.
+These tight stops capture most real downside but cause premature exits in bull
+markets — the position is stopped out during a normal consolidation, then BTC
+continues higher without us.
+
+Question: after a stop fires, what re-entry criterion best recovers the missed
+upside while avoiding re-entering into continued downside?
 
 Baseline:
-  B0 — TF2+V-Gate, NO stop loss (current live strategy)
+  B0 — TF2+V-Gate, NO stop loss (current live strategy, signal-only exits)
 
-Stop-loss + re-entry variants (tested for each asset):
-  SL0 — stop loss + standard re-entry  (U1 + MA30/clean7d, same as base entry)
-  SL1 — stop loss + price-recovery gate (BTC must recover ≥3% above SL-exit BTC price)
-  SL2 — stop loss + EMA10 reclaim       (BTC close > EMA10 on re-entry signal bar)
-  SL3 — stop loss + 5-bar cooldown      (wait 5 bars after SL then normal entry)
-  SL4 — stop loss + regime-adaptive     (bull regime: immediate; bear regime: 10-bar cooldown)
+Stop-loss + re-entry variants (each variant only changes what happens AFTER a SL):
+  SL0 — standard re-entry     : wait for normal U1+MA30/clean7d/V-gate, no price gate
+  SL1 — above stop level      : re-enter only when asset price recovers above the SL
+                                 exit price (most natural "wait for recovery" gate)
+  SL2 — above entry price     : re-enter only when asset price recovers above the
+                                 original entry price (full pullback recovery)
+  SL3 — BTC +2% recovery      : re-enter when BTC close > BTC-at-SL-exit × 1.02
+                                 (signal asset confirms recovery, not execution asset)
+  SL4 — 5-bar cooldown        : block re-entry for 5 bars after SL, then standard
+  SL5 — regime-adaptive       : bull regime → standard re-entry; bear → 10-bar cooldown
+                                 (smart: patient in confirmed downtrend, quick in bull)
 
-Stop-loss percentages (calibrated to each asset's typical volatility):
-  BTC:  −10%  (about 2× daily ATR-14, catches deep corrections not minor noise)
-  MSTR: −20%  (≈2× BTC SL; MSTR beta vs BTC ≈ 1.5–2.5×)
-  MSTU: −25%  (≈2.5× BTC SL; MSTU = 2× daily leveraged MSTR, ≈3–4× BTC)
+Periods:
+  Bull  Sep 2024 → Sep 2025   BTC +93%   [in-sample for CT model]
+  Bear  Jun 2025 → May 2026   BTC −35%   [partly OOS]
+  OOS   Sep 2025 → May 2026   BTC −33%   [fully OOS]
+  OOS-Recent  Mar → May 2026  [fully OOS, recent]
+  Full  Jun 2024 → May 2026   2-year combined
 
-Backtesting periods:
-  1. Bull  (Sep 2024 → Sep 2025)  BTC +93%  [in-sample for CT model]
-  2. Bear  (Jun 2025 → May 2026)  BTC −35%  [partly OOS]
-  3. OOS   (Sep 2025 → May 2026)  BTC −33%  [fully OOS]
-  4. OOS-Recent (Mar → May 2026)  BTC (recent)  [fully OOS]
-  5. Full  (Jun 2024 → May 2026)  2-year combined
-
-MSTU (T-Rex 2X Long MSTR) launched ≈ Sep 18 2024 — only available for periods
-starting on/after that date.
-
-All executions: 1-bar lag (signal on bar i → trade at bar i+1 close).
+Assets: BTC (stop on BTC price), MSTR (stop on MSTR price), MSTU (stop on MSTU price).
+All entry/exit SIGNALS are BTC-derived (TF2+V-Gate).
+Stop loss fires on EXECUTION ASSET price.
+MSTU (T-Rex 2X Long MSTR) launched ≈ Sep 18 2024; unavailable for earlier periods.
 """
 
-import sys, warnings, joblib, requests
+import sys, warnings, joblib, requests, time as _time
 warnings.filterwarnings("ignore")
 from pathlib import Path
 
@@ -50,21 +54,37 @@ import pandas as pd
 import yfinance as yf
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Config
+# Configuration — exact stop levels from the live strategy
 # ─────────────────────────────────────────────────────────────────────────────
 ASSET_CONFIG = {
-    "BTC":  {"ticker": "BTC-USD", "sl_pct": 0.10, "name": "Bitcoin"},
-    "MSTR": {"ticker": "MSTR",    "sl_pct": 0.20, "name": "MicroStrategy"},
-    "MSTU": {"ticker": "MSTU",    "sl_pct": 0.25, "name": "T-Rex 2X Long MSTR (2×)"},
+    "BTC": {
+        "ticker":    "BTC-USD",
+        "sl_type":   "trailing",   # trailing from running high-watermark
+        "sl_pct":    0.07,         # fire when price < watermark × (1 − 0.07)
+        "name":      "Bitcoin",
+    },
+    "MSTR": {
+        "ticker":    "MSTR",
+        "sl_type":   "fixed",      # fixed from entry price
+        "sl_pct":    0.03,         # fire when MSTR < entry × 0.97
+        "name":      "MicroStrategy",
+    },
+    "MSTU": {
+        "ticker":    "MSTU",
+        "sl_type":   "fixed",      # fixed from entry price
+        "sl_pct":    0.10,         # fire when MSTU < entry × 0.90
+        "name":      "T-Rex 2X Long MSTR (2×)",
+    },
 }
 
 REENTRY_LABELS = {
-    "B0":  "TF2+VGate (no SL)  ← baseline",
+    "B0":  "TF2+VGate (no SL)  [baseline]",
     "SL0": "SL + standard re-entry",
-    "SL1": "SL + price-recovery +3%",
-    "SL2": "SL + EMA10 reclaim",
-    "SL3": "SL + 5-bar cooldown",
-    "SL4": "SL + regime-adaptive",
+    "SL1": "SL + above SL exit price",       # asset recovers past stop level
+    "SL2": "SL + above original entry",      # asset recovers above entry price
+    "SL3": "SL + BTC +2% recovery",          # BTC signal asset confirms
+    "SL4": "SL + 5-bar cooldown",
+    "SL5": "SL + regime-adaptive",
 }
 
 PERIODS = {
@@ -76,7 +96,7 @@ PERIODS = {
 }
 
 INITIAL_CAPITAL = 100_000.0
-WARMUP          = 35  # bars before backtest window starts
+WARMUP = 35
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model
@@ -113,7 +133,6 @@ def _yf_dl(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 
 def fetch_data(fetch_start: str, fetch_end: str) -> pd.DataFrame:
-    """Fetch BTC OHLCV + macro + on-chain into one aligned daily DataFrame."""
     print(f"  Fetching {fetch_start} → {fetch_end} …")
     d = _yf_dl("BTC-USD", fetch_start, fetch_end)
     frames = {
@@ -127,7 +146,6 @@ def fetch_data(fetch_start: str, fetch_end: str) -> pd.DataFrame:
             pass
     df = pd.DataFrame(frames).sort_index().ffill(limit=5)
     df.index.name = "date"
-
     print("    On-chain …", end=" ", flush=True)
     ok = 0
     for m in _ONCHAIN:
@@ -135,13 +153,11 @@ def fetch_data(fetch_start: str, fetch_end: str) -> pd.DataFrame:
             r = requests.get(
                 f"https://api.blockchain.info/charts/{m}",
                 params={"timespan": "3years", "format": "json", "sampled": "true"},
-                timeout=20,
-            )
+                timeout=20)
             vals = r.json().get("values", [])
             s = pd.Series(
                 {pd.Timestamp(v["x"], unit="s").normalize(): v["y"] for v in vals},
-                name=f"oc_{m.replace('-','_')}", dtype=float,
-            )
+                name=f"oc_{m.replace('-','_')}", dtype=float)
             s = s[~s.index.duplicated(keep="last")].sort_index()
             s.index = pd.DatetimeIndex(s.index).tz_localize(None)
             df[s.name] = s.reindex(df.index).ffill(limit=7)
@@ -153,7 +169,6 @@ def fetch_data(fetch_start: str, fetch_end: str) -> pd.DataFrame:
 
 
 def fetch_asset_prices(ticker: str, fetch_start: str, fetch_end: str) -> pd.Series:
-    """Fetch split-adjusted closes for MSTR / MSTU, forward-filled daily."""
     try:
         d = _yf_dl(ticker, fetch_start, fetch_end)
         px = d["Close"].sort_index()
@@ -165,9 +180,11 @@ def fetch_asset_prices(ticker: str, fetch_start: str, fetch_end: str) -> pd.Seri
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CT Predictions
+# CT Predictions (includes Coinbase premium)
 # ─────────────────────────────────────────────────────────────────────────────
-def build_ct_preds(df: pd.DataFrame, fetch_start: str = "2020-01-01", fetch_end: str = "2030-01-01") -> pd.DataFrame:
+def build_ct_preds(df: pd.DataFrame,
+                   fetch_start: str = "2020-01-01",
+                   fetch_end: str   = "2030-01-01") -> pd.DataFrame:
     c, h, l_, v = df["btc_close"], df["btc_high"], df["btc_low"], df["btc_volume"]
     ret = np.log(c).diff()
     f = pd.DataFrame(index=df.index)
@@ -180,7 +197,7 @@ def build_ct_preds(df: pd.DataFrame, fetch_start: str = "2020-01-01", fetch_end:
     f["range_ma7"]    = ((h - l_) / c).rolling(7).mean()
     f["range_ma30"]   = ((h - l_) / c).rolling(30).mean()
     f["range_std30"]  = ((h - l_) / c).rolling(30).std()
-    g = c.diff().clip(lower=0).rolling(14).mean()
+    g  = c.diff().clip(lower=0).rolling(14).mean()
     ls = (-c.diff().clip(upper=0)).rolling(14).mean()
     f["rsi_14"] = 100 - 100 / (1 + g / ls.replace(0, np.nan))
     e12 = c.ewm(span=12, adjust=False).mean()
@@ -194,12 +211,12 @@ def build_ct_preds(df: pd.DataFrame, fetch_start: str = "2020-01-01", fetch_end:
     f["dist_hi_30"] = c / c.rolling(30).max() - 1
     f["dist_lo_30"] = c / c.rolling(30).min() - 1
     f["dist_hi_90"] = c / c.rolling(90).max() - 1
-    f["vol_chg_1"]  = np.log(v).diff()
-    f["vol_z_20"]   = (np.log(v) - np.log(v).rolling(20).mean()) / np.log(v).rolling(20).std()
+    f["vol_chg_1"]    = np.log(v).diff()
+    f["vol_z_20"]     = (np.log(v)-np.log(v).rolling(20).mean()) / np.log(v).rolling(20).std()
     f["vol_ma_ratio"] = v / v.rolling(20).mean()
     dow = df.index.dayofweek
     for i in range(6): f[f"dow_{i}"] = (dow == i).astype(float)
-    for nm in ["spx", "ndx", "vix", "gold", "dxy", "tnx", "eth"]:
+    for nm in ["spx","ndx","vix","gold","dxy","tnx","eth"]:
         col = f"{nm}_close"
         if col not in df.columns: continue
         s = df[col]; lr = np.log(s).diff()
@@ -234,9 +251,8 @@ def build_ct_preds(df: pd.DataFrame, fetch_start: str = "2020-01-01", fetch_end:
     f["below_sma50"]    = (c < sma50).astype(float)
     f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
 
-    # ── Coinbase premium (fetch daily candles, set to 0 if unavailable) ──
-    import time as _time
-    _CB_URL  = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    # ── Coinbase premium (public API; set to 0 if unavailable) ───────────
+    _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
     _cb_rows: list = []
     _cb_cur  = pd.Timestamp(fetch_start)
     _cb_end  = pd.Timestamp(fetch_end)
@@ -265,17 +281,13 @@ def build_ct_preds(df: pd.DataFrame, fetch_start: str = "2020-01-01", fetch_end:
         f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
         print(f"    Coinbase premium: {int(_prem.notna().sum())} days")
     else:
-        # Fill with 0 (neutral: no Coinbase/reference exchange premium)
-        f["cb_premium"]     = 0.0
-        f["cb_premium_ma3"] = 0.0
-        f["cb_premium_z7"]  = 0.0
-        print("    Coinbase premium: not available (set to 0)")
+        f["cb_premium"] = f["cb_premium_ma3"] = f["cb_premium_z7"] = 0.0
+        print("    Coinbase premium: unavailable (set to 0)")
 
     fc = AD["feat_cols"]
     f  = f.replace([np.inf, -np.inf], np.nan)
     for col in fc:
         if col not in f.columns: f[col] = np.nan
-    # Fill remaining NaN in cb_premium cols with 0 to avoid losing rows to dropna
     for _cb_col in ["cb_premium", "cb_premium_ma3", "cb_premium_z7"]:
         if _cb_col in f.columns:
             f[_cb_col] = f[_cb_col].fillna(0.0)
@@ -303,16 +315,14 @@ def build_ct_preds(df: pd.DataFrame, fetch_start: str = "2020-01-01", fetch_end:
     nd[:-1] = idx[1:]; nd[-1] = idx[-1] + np.timedelta64(1, "D")
     res = pd.DataFrame(
         {"close_asof": c_vals, "pred_high": ph, "pred_low": pl},
-        index=pd.DatetimeIndex(nd, name="target_date"),
-    )
+        index=pd.DatetimeIndex(nd, name="target_date"))
     return res[~res.index.duplicated(keep="last")]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Signal computation
+# Signal computation (BTC-derived; drives entry/exit for all assets)
 # ─────────────────────────────────────────────────────────────────────────────
 def compute_signals(comp: pd.DataFrame) -> dict:
-    """Compute all BTC signal arrays from a joined prediction+actual DataFrame."""
     N      = len(comp)
     c_asof = comp["close_asof"].values.astype(float)
     ph     = comp["pred_high"].values.astype(float)
@@ -344,7 +354,6 @@ def compute_signals(comp: pd.DataFrame) -> dict:
         if consec >= 3 and lo_brk[i]:
             d3[i] = True
 
-    # MA30 + regime
     ma30 = np.full(N, np.nan)
     for i in range(N):
         w = min(30, i + 1)
@@ -356,13 +365,11 @@ def compute_signals(comp: pd.DataFrame) -> dict:
             ma30_slope[i] = ma30[i] > ma30[i - 5]
     bull_regime = above_ma30 & ma30_slope
 
-    # Clean-7d
     clean_7d = np.zeros(N, dtype=bool)
     for i in range(N):
         lo_i = max(0, i - 7)
         clean_7d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
-    # V-reversal (same as live app: dn_score > 0.8 & err_lo > 3%)
     roll_norm = np.array([float(np.mean(err_hi[max(0, i-29):i+1])) for i in range(N)])
     dn_score  = np.zeros(N)
     for i in range(N):
@@ -378,61 +385,68 @@ def compute_signals(comp: pd.DataFrame) -> dict:
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i - 2):i + 1]))
 
-    # EMA10 of BTC close (used for SL2 re-entry gate)
-    ema10_series = pd.Series(c_asof).ewm(span=10, adjust=False).mean().values
+    # EMA10 of BTC close (for SL3 variant)
+    ema10 = pd.Series(c_asof).ewm(span=10, adjust=False).mean().values
 
-    # Full entry condition (TF2 + V-Gate)
     tf2_entry = u1 & (above_ma30 | clean_7d | v_recent)
 
     return dict(
         N=N, c_asof=c_asof,
-        err_hi=err_hi, err_lo=err_lo, hi_brk=hi_brk, lo_brk=lo_brk,
-        ehma3=ehma3, elma3=elma3, hb3=hb3, lb3=lb3,
         u1=u1, d1=d1, d2=d2, d3=d3,
-        ma30=ma30, above_ma30=above_ma30, bull_regime=bull_regime,
-        clean_7d=clean_7d, v_recent=v_recent, ema10=ema10_series,
-        tf2_entry=tf2_entry,
+        above_ma30=above_ma30, bull_regime=bull_regime,
+        clean_7d=clean_7d, v_recent=v_recent,
+        ema10=ema10, tf2_entry=tf2_entry,
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Backtest engine
+# Core backtest engine
 # ─────────────────────────────────────────────────────────────────────────────
 def run_backtest(
     dates:      pd.DatetimeIndex,
-    asset_px:   np.ndarray,   # execution prices for BTC / MSTR / MSTU
-    btc_px:     np.ndarray,   # BTC close (always BTC for signal checks)
+    asset_px:   np.ndarray,   # execution prices (BTC / MSTR / MSTU)
+    btc_px:     np.ndarray,   # BTC close — always used for signal checks
     sigs:       dict,
-    variant:    str   = "B0", # "B0" = no SL; "SL0"–"SL4" = with SL
-    sl_pct:     float = 0.10, # stop loss fraction (e.g. 0.10 = −10%)
+    variant:    str   = "B0",
+    sl_type:    str   = "fixed",  # "trailing" | "fixed"
+    sl_pct:     float = 0.10,
     cap:        float = 100_000.0,
 ) -> dict:
     """
-    Core backtest loop.
-    Signal decisions (entry/exit) always use BTC-derived signals.
-    P&L and stop-loss are computed on asset_px (BTC, MSTR, or MSTU prices).
+    Execute one backtest variant.
+
+    Signal decisions (entry gate + TF2 exit) always use BTC-derived sigs.
+    Stop-loss and execution P&L use asset_px (BTC / MSTR / MSTU).
+    Re-entry gate depends on variant:
+      B0  — no SL, pure signal-based exits
+      SL0 — SL fires, immediate standard re-entry
+      SL1 — SL fires, re-enter only when asset_px > sl_exit_asset_price
+      SL2 — SL fires, re-enter only when asset_px > original entry_price
+      SL3 — SL fires, re-enter only when btc_px > btc_at_sl_exit × 1.02
+      SL4 — SL fires, 5-bar cooldown then standard entry
+      SL5 — SL fires, bull: standard; bear: 10-bar cooldown
     """
-    N    = len(dates)
-    u1   = sigs["u1"]; d2 = sigs["d2"]; d3 = sigs["d3"]
-    abv  = sigs["above_ma30"]; bull = sigs["bull_regime"]
-    c7d  = sigs["clean_7d"];   vr   = sigs["v_recent"]
-    ema10 = sigs["ema10"]
+    N         = len(dates)
+    d2        = sigs["d2"]; d3 = sigs["d3"]
+    bull      = sigs["bull_regime"]
     tf2_entry = sigs["tf2_entry"]
 
     nav   = cap; pos = "CASH"; qty = 0.0
-    e_price_asset = None   # asset entry price (for SL calculation)
-    e_price_btc   = None   # BTC price at entry (for SL1 gate check)
+    e_asset_price = None   # asset entry price
+    e_btc_price   = None   # BTC price at entry
     e_date        = None
     e_nav         = None
     e_trigger     = None
+    hwm           = None   # high-water mark for trailing stop
 
-    # Re-entry state (only matters when variant != "B0")
-    from_sl          = False   # last exit was a stop loss
-    sl_btc_exit_px   = None   # BTC price at the SL exit bar
-    bars_since_sl    = 0       # bars elapsed since last SL exit
+    # State after a stop-loss exit
+    from_sl          = False
+    sl_exit_asset_px = None   # asset price at stop exit (= stop level)
+    sl_exit_btc_px   = None   # BTC price at stop exit
+    bars_since_sl    = 0
 
-    trades    = []
-    nav_arr   = np.full(N, np.nan)
+    trades  = []
+    nav_arr = np.full(N, np.nan)
 
     for i in range(N):
         si    = i - 1
@@ -442,63 +456,71 @@ def run_backtest(
             nav_arr[i] = cap
             continue
 
-        # ── COUNT bars since last stop loss ───────────────────────────────
         if pos == "CASH" and from_sl:
             bars_since_sl += 1
 
         if pos == "LONG":
             cur = qty * price
 
-            # ── Stop-loss check (highest priority) ────────────────────────
-            sl_fired = False
-            if variant != "B0":
-                sl_level = e_price_asset * (1.0 - sl_pct)
-                if price <= sl_level:
-                    sl_fired = True
+            # Update high-water mark (trailing stop only)
+            if sl_type == "trailing":
+                hwm = max(hwm, price)
+                stop_level = hwm * (1.0 - sl_pct)
+            else:
+                stop_level = e_asset_price * (1.0 - sl_pct)
+
+            # ── Stop-loss check ────────────────────────────────────────────
+            sl_fired = (variant != "B0") and (price <= stop_level)
 
             if sl_fired:
                 nav = cur
                 trades.append(dict(
                     entry_date    = e_date,
-                    entry_price   = e_price_asset,
+                    entry_price   = e_asset_price,
                     entry_nav     = e_nav,
                     entry_trigger = e_trigger,
                     exit_date     = dates[i],
                     exit_price    = price,
                     exit_nav      = nav,
-                    pnl_pct       = (price / e_price_asset - 1) * 100,
+                    pnl_pct       = (price / e_asset_price - 1) * 100,
                     pnl_abs       = nav - e_nav,
-                    exit_signal   = f"SL-{sl_pct*100:.0f}%",
+                    exit_signal   = (f"SL-trail-{sl_pct*100:.0f}%"
+                                     if sl_type == "trailing"
+                                     else f"SL-fixed-{sl_pct*100:.0f}%"),
                     duration_days = (dates[i] - e_date).days,
                     was_sl        = True,
+                    hwm           = hwm if sl_type == "trailing" else e_asset_price,
                 ))
                 pos = "CASH"; qty = 0.0
-                from_sl       = True
-                sl_btc_exit_px = btc_px[i]
-                bars_since_sl  = 0
+                from_sl          = True
+                sl_exit_asset_px = price
+                sl_exit_btc_px   = btc_px[i]
+                bars_since_sl    = 0
+                hwm              = None
 
             elif si >= 0:
-                # ── TF2 signal exit ──────────────────────────────────────
+                # ── TF2 signal exit ────────────────────────────────────────
                 should_exit = bool(d3[si] or (d2[si] and not bull[si]))
                 xl = "D3" if d3[si] else "D2"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
                         entry_date    = e_date,
-                        entry_price   = e_price_asset,
+                        entry_price   = e_asset_price,
                         entry_nav     = e_nav,
                         entry_trigger = e_trigger,
                         exit_date     = dates[i],
                         exit_price    = price,
                         exit_nav      = nav,
-                        pnl_pct       = (price / e_price_asset - 1) * 100,
+                        pnl_pct       = (price / e_asset_price - 1) * 100,
                         pnl_abs       = nav - e_nav,
                         exit_signal   = xl,
                         duration_days = (dates[i] - e_date).days,
                         was_sl        = False,
+                        hwm           = hwm,
                     ))
                     pos = "CASH"; qty = 0.0
-                    from_sl = False
+                    from_sl = False; hwm = None
                 else:
                     nav = cur
             else:
@@ -506,23 +528,33 @@ def run_backtest(
 
         else:  # CASH
             if si >= 0 and tf2_entry[si]:
-                # Decide if re-entry is allowed (only matters after SL)
                 allow = True
                 if from_sl and variant != "B0":
-                    btc_now = btc_px[si]
+                    a_now   = asset_px[si]   # signal bar asset price (1-bar lag)
+                    b_now   = btc_px[si]
                     if variant == "SL0":
-                        allow = True   # no additional gate
+                        allow = True
+
                     elif variant == "SL1":
-                        # BTC must recover ≥3% above the BTC price at SL exit
-                        allow = (sl_btc_exit_px is not None and
-                                 btc_now >= sl_btc_exit_px * 1.03)
+                        # Re-enter only when asset has recovered above stop exit price
+                        allow = (sl_exit_asset_px is not None and
+                                 a_now >= sl_exit_asset_px)
+
                     elif variant == "SL2":
-                        # BTC close must be above its own EMA10
-                        allow = (btc_now > ema10[si])
+                        # Re-enter only when asset has fully recovered above original entry
+                        allow = (e_asset_price is not None and
+                                 a_now >= e_asset_price)
+
                     elif variant == "SL3":
+                        # BTC must be ≥2% above BTC price at stop exit
+                        allow = (sl_exit_btc_px is not None and
+                                 b_now >= sl_exit_btc_px * 1.02)
+
+                    elif variant == "SL4":
                         # 5-bar cooldown
                         allow = (bars_since_sl >= 5)
-                    elif variant == "SL4":
+
+                    elif variant == "SL5":
                         # Regime-adaptive: bull → immediate; bear → 10-bar cooldown
                         allow = bool(bull[si]) or (bars_since_sl >= 10)
 
@@ -531,14 +563,15 @@ def run_backtest(
                         nav_arr[i] = nav
                         continue
                     qty = nav / price
-                    e_price_asset = price
-                    e_price_btc   = btc_px[i]
+                    e_asset_price = price
+                    e_btc_price   = btc_px[i]
                     e_date        = dates[i]
                     e_nav         = nav
                     pos           = "LONG"
+                    hwm           = price   # initialise trailing HWM at entry
                     from_sl       = False
                     bars_since_sl = 0
-                    # Build trigger label
+                    abv = sigs["above_ma30"]; c7d = sigs["clean_7d"]; vr = sigs["v_recent"]
                     if vr[si] and not abv[si] and not c7d[si]:
                         e_trigger = "U1+V-reversal"
                     elif abv[si] and c7d[si]:
@@ -555,11 +588,10 @@ def run_backtest(
 
     nav_s = pd.Series(nav_arr[WARMUP:], index=dates[WARMUP:]).ffill()
     bh_s  = pd.Series(
-        cap * asset_px[WARMUP:] / asset_px[WARMUP], index=dates[WARMUP:]
-    )
+        cap * asset_px[WARMUP:] / asset_px[WARMUP], index=dates[WARMUP:])
     return dict(trades=trades, nav=nav_s, bh=bh_s,
                 open_pos=(pos == "LONG"),
-                open_entry=dict(price=e_price_asset, date=e_date) if pos == "LONG" else None)
+                open_entry=dict(price=e_asset_price, date=e_date) if pos == "LONG" else None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -570,56 +602,43 @@ def metrics(res: dict, cap: float = INITIAL_CAPITAL) -> dict:
     fn  = float(nav.iloc[-1]); fb = float(bh.iloc[-1])
     n_y = (nav.index[-1] - nav.index[0]).days / 365.25
     cagr = ((fn / cap) ** (1 / n_y) - 1) * 100 if n_y > 0 else 0
-
     dr  = nav.pct_change().fillna(0)
-    rfd = (1.045) ** (1 / 252) - 1
+    rfd = 1.045 ** (1 / 252) - 1
     exc = dr - rfd
-    sharpe  = float(exc.mean() / exc.std() * np.sqrt(252)) if exc.std() > 0 else 0
-    rm      = nav.cummax(); dd = (nav - rm) / rm * 100
-    max_dd  = float(dd.min())
-    rm_bh   = bh.cummax(); dd_bh = (bh - rm_bh) / rm_bh * 100
-    bh_maxdd = float(dd_bh.min())
-
-    wins    = [t for t in trades if t["pnl_pct"] > 0]
-    losses  = [t for t in trades if t["pnl_pct"] <= 0]
-    sl_exits = [t for t in trades if t.get("was_sl")]
+    sharpe = float(exc.mean() / exc.std() * np.sqrt(252)) if exc.std() > 0 else 0
+    rm     = nav.cummax(); dd = (nav - rm) / rm * 100
+    max_dd = float(dd.min())
+    rm_bh  = bh.cummax()
+    bh_maxdd = float(((bh - rm_bh) / rm_bh * 100).min())
+    wins   = [t for t in trades if t["pnl_pct"] > 0]
+    losses = [t for t in trades if t["pnl_pct"] <= 0]
+    sl_ex  = [t for t in trades if t.get("was_sl")]
     win_rate = 100 * len(wins) / len(trades) if trades else 0
-
     gp = sum(t["pnl_abs"] for t in wins)  if wins   else 0
     gl = abs(sum(t["pnl_abs"] for t in losses)) if losses else 1e-9
     pf = gp / gl
-
     avg_win  = float(np.mean([t["pnl_pct"] for t in wins]))   if wins   else 0
     avg_loss = float(np.mean([t["pnl_pct"] for t in losses])) if losses else 0
-
     days_in  = sum(t["duration_days"] for t in trades)
     tot_days = max(1, (nav.index[-1] - nav.index[0]).days)
-
     return dict(
-        final_nav  = fn,    bh_nav     = fb,
-        strat_ret  = (fn / cap - 1) * 100,
-        bh_ret     = (fb / cap - 1) * 100,
-        alpha_abs  = fn - fb,
-        cagr       = cagr,
-        sharpe     = sharpe,
-        max_dd     = max_dd,   bh_maxdd = bh_maxdd,
-        n_trades   = len(trades),
-        n_sl       = len(sl_exits),
-        n_wins     = len(wins),   n_losses = len(losses),
-        win_rate   = win_rate,
-        avg_win    = avg_win,  avg_loss = avg_loss,
-        profit_factor = pf,
-        time_in    = 100 * days_in / tot_days,
-        trades     = trades,
-        open_pos   = res.get("open_pos"),
+        final_nav=fn,  bh_nav=fb,
+        strat_ret=(fn/cap-1)*100, bh_ret=(fb/cap-1)*100,
+        alpha_abs=fn-fb, cagr=cagr,
+        sharpe=sharpe, max_dd=max_dd, bh_maxdd=bh_maxdd,
+        n_trades=len(trades), n_sl=len(sl_ex),
+        n_wins=len(wins), n_losses=len(losses),
+        win_rate=win_rate, avg_win=avg_win, avg_loss=avg_loss,
+        profit_factor=pf,
+        time_in=100*days_in/tot_days,
+        trades=trades, open_pos=res.get("open_pos"),
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Period-level runner: builds signals once, runs all variants
+# Period runner
 # ─────────────────────────────────────────────────────────────────────────────
 def _prep_comp(df_raw, preds, start_iso, end_iso):
-    """Join preds with actuals for [start, end]."""
     sd, ed = pd.Timestamp(start_iso), pd.Timestamp(end_iso)
     p = preds.loc[
         (preds.index >= sd - pd.Timedelta(days=60)) & (preds.index <= ed)
@@ -632,53 +651,37 @@ def _prep_comp(df_raw, preds, start_iso, end_iso):
     return comp
 
 
-def run_period(
-    period_name: str, start_iso: str, end_iso: str, fetch_start: str,
-    df_raw_cache: dict,
-) -> dict:
-    """Run all variants across BTC / MSTR / MSTU for one period."""
+def run_period(period_name, start_iso, end_iso, fetch_start, df_raw_cache):
     fetch_end = (pd.Timestamp(end_iso) + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
-
-    # ── Fetch + predictions (cached by fetch_start) ───────────────────────
     cache_key = (fetch_start, fetch_end)
     if cache_key not in df_raw_cache:
-        df_raw   = fetch_data(fetch_start, fetch_end)
-        preds    = build_ct_preds(df_raw, fetch_start=fetch_start, fetch_end=fetch_end)
+        df_raw      = fetch_data(fetch_start, fetch_end)
+        preds       = build_ct_preds(df_raw, fetch_start=fetch_start, fetch_end=fetch_end)
         mstr_px_raw = fetch_asset_prices("MSTR", fetch_start, fetch_end)
         mstu_px_raw = fetch_asset_prices("MSTU", fetch_start, fetch_end)
         df_raw_cache[cache_key] = dict(
             df_raw=df_raw, preds=preds,
-            mstr_px=mstr_px_raw, mstu_px=mstu_px_raw,
-        )
-    cached = df_raw_cache[cache_key]
+            mstr_px=mstr_px_raw, mstu_px=mstu_px_raw)
+    cached      = df_raw_cache[cache_key]
     df_raw      = cached["df_raw"]
     preds       = cached["preds"]
     mstr_px_raw = cached["mstr_px"]
     mstu_px_raw = cached["mstu_px"]
 
-    # ── Build aligned comparison DataFrame ───────────────────────────────
     comp = _prep_comp(df_raw, preds, start_iso, end_iso)
     if len(comp) < WARMUP + 3:
         print(f"  [SKIP] {period_name}: insufficient bars ({len(comp)})")
         return {}
     dates = pd.DatetimeIndex(comp["target_date"])
-
-    # ── Signal arrays (computed once) ─────────────────────────────────────
-    sigs = compute_signals(comp)
-    N    = sigs["N"]
-
-    # ── Asset price arrays aligned to dates ───────────────────────────────
+    sigs  = compute_signals(comp)
+    N     = sigs["N"]
     btc_px = comp["actual_close"].values.astype(float)
 
-    def align_asset(px_series: pd.Series) -> np.ndarray:
-        """Align an asset price Series to dates; returns array or None if unavailable."""
-        if px_series.empty:
-            return None
-        aligned = px_series.reindex(dates).ffill().bfill().values.astype(float)
-        valid   = np.sum(np.isfinite(aligned) & (aligned > 0))
-        if valid < WARMUP + 3:
-            return None
-        return aligned
+    def align_asset(px_series):
+        if px_series.empty: return None
+        a = px_series.reindex(dates).ffill().bfill().values.astype(float)
+        if np.sum(np.isfinite(a) & (a > 0)) < WARMUP + 3: return None
+        return a
 
     asset_arrays = {
         "BTC":  btc_px,
@@ -686,32 +689,30 @@ def run_period(
         "MSTU": align_asset(mstu_px_raw),
     }
 
-    period_results = {}
     variants = list(REENTRY_LABELS.keys())
+    period_results = {}
 
     for asset_name, asset_px in asset_arrays.items():
         if asset_px is None:
-            print(f"  [SKIP] {asset_name}: no data for {period_name}")
+            print(f"  [SKIP] {asset_name}: no price data for {period_name}")
             continue
-
-        # Check earliest valid MSTU data
         if asset_name == "MSTU":
-            first_valid = np.argmax(np.isfinite(asset_px) & (asset_px > 0))
+            first_valid = int(np.argmax(np.isfinite(asset_px) & (asset_px > 0)))
             if first_valid > WARMUP + 10:
-                print(f"  [SKIP] MSTU: first valid bar too late "
-                      f"(bar {first_valid}/{N})")
+                print(f"  [SKIP] MSTU: data starts too late (bar {first_valid}/{N})")
                 continue
 
-        sl_pct = ASSET_CONFIG[asset_name]["sl_pct"]
+        cfg    = ASSET_CONFIG[asset_name]
+        sl_t   = cfg["sl_type"]
+        sl_pct = cfg["sl_pct"]
         period_results[asset_name] = {}
 
         for variant in variants:
             try:
                 res = run_backtest(dates, asset_px, btc_px, sigs,
-                                   variant=variant, sl_pct=sl_pct,
+                                   variant=variant, sl_type=sl_t, sl_pct=sl_pct,
                                    cap=INITIAL_CAPITAL)
-                m = metrics(res, INITIAL_CAPITAL)
-                period_results[asset_name][variant] = m
+                period_results[asset_name][variant] = metrics(res, INITIAL_CAPITAL)
             except Exception as e:
                 print(f"  [ERR] {asset_name}/{variant}: {e}")
 
@@ -721,272 +722,282 @@ def run_period(
 # ─────────────────────────────────────────────────────────────────────────────
 # Printing helpers
 # ─────────────────────────────────────────────────────────────────────────────
-def print_asset_period_table(period_name: str, asset: str, results: dict):
-    """Print comparison table for one asset × one period."""
-    variants = list(REENTRY_LABELS.keys())
-    W = 16
-    header_cols = ["Variant", "Ret%", "B&H%", "Alpha$k", "MaxDD%",
-                   "Sharpe", "Trades", "#SL", "WinRate", "TiM%"]
-    W2 = 9
-    sep = "─" * (22 + W2 * (len(header_cols) - 1))
+_HDR = ("Ret%", "B&H%", "Alpha$k", "MaxDD%", "Sharpe", "Trades", "#SL", "WR%", "TiM%")
+_COL = 9
 
-    asset_cfg = ASSET_CONFIG[asset]
-    sl_pct    = asset_cfg["sl_pct"]
-
-    print(f"\n  {asset} ({asset_cfg['name']})  ── SL level: −{sl_pct*100:.0f}%")
-    print(f"  {sep}")
-    print(f"  {'Variant':<22}" + "".join(f"{h:>{W2}}" for h in header_cols[1:]))
-    print(f"  {sep}")
-
-    for v in variants:
-        if v not in results:
-            print(f"  {REENTRY_LABELS[v]:<22}  — data unavailable")
-            continue
-        m = results[v]
-        tag = "★" if v == "B0" else " "
-        label = f"{tag} [{v}]"
-        line = (
-            f"  {label:<22}"
-            f"{m['strat_ret']:>+{W2}.1f}%"[:-1] + "%"
-            if False else
-            f"  {label:<22}"
-            f"{m['strat_ret']:>{W2-1}.1f}%"
-            f"{m['bh_ret']:>{W2-1}.1f}%"
-            f"${m['alpha_abs']/1e3:>{W2-2}.1f}k"
-            f"{m['max_dd']:>{W2-1}.1f}%"
-            f"{m['sharpe']:>{W2}.2f}"
-            f"{m['n_trades']:>{W2}}"
-            f"{m['n_sl']:>{W2}}"
-            f"{m['win_rate']:>{W2-1}.0f}%"
-            f"{m['time_in']:>{W2-1}.0f}%"
-        )
-        print(line)
-
-    print(f"  {sep}")
+def _fmt_row(variant_label, m, baseline_nav=None):
+    if m is None:
+        return f"  {variant_label:<30}  — data unavailable"
+    marker = "▲" if (baseline_nav and m["final_nav"] > baseline_nav) else " "
+    return (
+        f"  {variant_label:<30}"
+        f"{m['strat_ret']:>{_COL-1}.1f}%"
+        f"{m['bh_ret']:>{_COL-1}.1f}%"
+        f"${m['alpha_abs']/1e3:>{_COL-2}.1f}k"
+        f"{m['max_dd']:>{_COL-1}.1f}%"
+        f"{m['sharpe']:>{_COL}.2f}"
+        f"{m['n_trades']:>{_COL}}"
+        f"{m['n_sl']:>{_COL}}"
+        f"{m['win_rate']:>{_COL-1}.0f}%"
+        f"{m['time_in']:>{_COL-1}.0f}%"
+        f"  {marker}"
+    )
 
 
-def print_full_table(period_name: str, period_results: dict):
-    """Print a compact multi-asset table for one period."""
-    W  = 72
-    print(f"\n{'═' * W}")
+def _sep():
+    return "  " + "─" * (30 + _COL * 9 + 4)
+
+
+def print_period_asset(period_name, asset_name, results):
+    cfg = ASSET_CONFIG[asset_name]
+    sl_desc = (f"trailing −{cfg['sl_pct']*100:.0f}%"
+               if cfg["sl_type"] == "trailing"
+               else f"fixed −{cfg['sl_pct']*100:.0f}% from entry")
+    print(f"\n  {asset_name} ({cfg['name']})  — stop: {sl_desc}")
+    print(_sep())
+    hdr = f"  {'Variant':<30}" + "".join(f"{h:>{_COL}}" for h in _HDR)
+    print(hdr)
+    print(_sep())
+
+    b0_nav = results.get("B0", {}).get("final_nav")
+    sl0_nav = results.get("SL0", {}).get("final_nav")
+    for v, lbl in REENTRY_LABELS.items():
+        label = f"{'★' if v=='B0' else ' '} [{v}] {lbl}"[:30]
+        m = results.get(v)
+        ref = sl0_nav if v not in ("B0",) else None
+        print(_fmt_row(label, m, ref))
+    print(_sep())
+
+
+def print_full_period(period_name, period_results):
+    W = 78
+    print(f"\n{'═'*W}")
     print(f"  PERIOD: {period_name}")
-    print(f"{'═' * W}")
-
+    print(f"{'═'*W}")
     for asset in ["BTC", "MSTR", "MSTU"]:
-        if asset not in period_results:
-            print(f"  {asset}: no data")
-            continue
-        print_asset_period_table(period_name, asset, period_results[asset])
+        if asset in period_results:
+            print_period_asset(period_name, asset, period_results[asset])
+        else:
+            print(f"\n  {asset}: no data")
 
 
-def print_cross_period_summary(all_results: dict):
-    """
-    Cross-period view: for each asset, show how each re-entry variant
-    performs across all periods.
-    """
-    print(f"\n{'═' * 90}")
-    print("  CROSS-PERIOD SUMMARY — Strategy Return % by Variant × Period")
-    print(f"{'═' * 90}")
-
-    periods = list(all_results.keys())
+def print_cross_period_summary(all_results):
+    W = 88
+    print(f"\n{'═'*W}")
+    print("  CROSS-PERIOD SUMMARY — Strategy Return % (and Δ vs SL0)")
+    print(f"{'═'*W}")
+    periods  = list(all_results.keys())
     variants = list(REENTRY_LABELS.keys())
+    P_W, V_W = 24, 17
 
     for asset in ["BTC", "MSTR", "MSTU"]:
-        print(f"\n  {'─' * 85}")
-        print(f"  Asset: {asset} ({ASSET_CONFIG[asset]['name']})"
-              f"  SL: −{ASSET_CONFIG[asset]['sl_pct']*100:.0f}%")
-        print(f"  {'─' * 85}")
-
-        # Print header
-        P_W = 22
-        V_W = 12
-        pnames_short = [p.split("(")[0].strip() for p in periods]
+        cfg = ASSET_CONFIG[asset]
+        sl_desc = (f"trail −{cfg['sl_pct']*100:.0f}%" if cfg["sl_type"]=="trailing"
+                   else f"fixed −{cfg['sl_pct']*100:.0f}%")
+        print(f"\n  {'─'*85}")
+        print(f"  {asset} ({cfg['name']})  — stop: {sl_desc}")
+        print(f"  {'─'*85}")
+        pnames_short = [p.split("(")[0].strip()[:15] for p in periods]
         print(f"  {'Variant':<{P_W}}" + "".join(f"{p:>{V_W}}" for p in pnames_short))
-        print(f"  {'─' * (P_W + V_W * len(periods))}")
+        print(f"  {'─'*(P_W + V_W*len(periods))}")
 
         for v in variants:
             row_vals = []
             for pname in periods:
-                pr = all_results.get(pname, {})
-                ar = pr.get(asset, {})
-                m  = ar.get(v)
+                pr = all_results.get(pname, {}).get(asset, {})
+                m  = pr.get(v)
+                sl0 = pr.get("SL0")
                 if m is None:
-                    row_vals.append("   n/a")
+                    row_vals.append("    n/a")
+                elif v == "B0" or sl0 is None:
+                    row_vals.append(f"{m['strat_ret']:>+8.1f}%")
                 else:
-                    row_vals.append(f"{m['strat_ret']:>+.1f}%")
-
-            label = REENTRY_LABELS[v][:P_W]
+                    delta = m["strat_ret"] - sl0["strat_ret"]
+                    sign  = "+" if delta >= 0 else ""
+                    row_vals.append(f"{m['strat_ret']:>+6.1f}%({sign}{delta:.1f})")
+            label = (f"{'★' if v=='B0' else ' '} {REENTRY_LABELS[v]}")[:P_W]
             print(f"  {label:<{P_W}}" + "".join(f"{v:>{V_W}}" for v in row_vals))
 
-        # Show B&H row for reference
+        # B&H row
         bh_vals = []
         for pname in periods:
-            pr = all_results.get(pname, {})
-            ar = pr.get(asset, {})
-            m  = ar.get("B0")
-            if m is None:
-                bh_vals.append("   n/a")
-            else:
-                bh_vals.append(f"{m['bh_ret']:>+.1f}%")
-        print(f"  {'─' * (P_W + V_W * len(periods))}")
-        print(f"  {'Buy & Hold':<{P_W}}" + "".join(f"{v:>{V_W}}" for v in bh_vals))
-
-    print(f"\n{'═' * 90}")
-
-
-def print_recommendation(all_results: dict):
-    """Identify and print the recommended re-entry criterion per asset."""
-    print(f"\n{'═' * 90}")
-    print("  RECOMMENDATION SUMMARY")
-    print(f"{'═' * 90}")
-
-    periods     = list(all_results.keys())
-    sl_variants = [v for v in REENTRY_LABELS if v != "B0"]
-
-    for asset in ["BTC", "MSTR", "MSTU"]:
-        print(f"\n  {'─' * 60}")
-        print(f"  {asset} ({ASSET_CONFIG[asset]['name']})")
-        print(f"  {'─' * 60}")
-
-        # Score each variant: for each period, is it better than SL0?
-        # Higher NAV than SL0 = positive point; also check max_dd vs SL0
-        scores = {v: [] for v in sl_variants}
-        b0_navs = {}
-
-        for pname in periods:
             pr = all_results.get(pname, {}).get(asset, {})
-            sl0 = pr.get("SL0")
-            b0  = pr.get("B0")
-            if sl0 is None:
-                continue
-            b0_navs[pname] = b0["final_nav"] if b0 else None
+            m  = pr.get("B0")
+            bh_vals.append(f"{m['bh_ret']:>+8.1f}%" if m else "    n/a")
+        print(f"  {'─'*(P_W + V_W*len(periods))}")
+        print(f"  {'  Buy & Hold':<{P_W}}" + "".join(f"{v:>{V_W}}" for v in bh_vals))
 
-            for v in sl_variants:
-                m = pr.get(v)
-                if m is None:
-                    continue
-                # +1 for each period where variant beats SL0 on NAV
-                # +0.5 for each period where max_dd is better than SL0
-                beats_nav = m["final_nav"] > sl0["final_nav"]
-                beats_dd  = m["max_dd"]    > sl0["max_dd"]   # less negative = better
-                scores[v].append(beats_nav + 0.5 * beats_dd)
-
-        # Print score table
-        print(f"  {'Variant':<26}  {'Avg score':>10}  {'Win rate vs SL0':>16}  Notes")
-        for v in sl_variants:
-            sc = scores[v]
-            if not sc:
-                print(f"  {REENTRY_LABELS[v]:<26}  {'n/a':>10}")
-                continue
-            avg_sc  = float(np.mean(sc))
-            win_pct = 100 * sum(s >= 0.5 for s in sc) / len(sc)
-            marker  = "◄ BEST" if avg_sc == max(np.mean(s) for s in scores.values() if s) else ""
-            print(f"  {REENTRY_LABELS[v]:<26}  {avg_sc:>10.2f}  {win_pct:>14.0f}%  {marker}")
-
-        # Print verdict
-        best_v = max(sl_variants, key=lambda v: float(np.mean(scores[v])) if scores[v] else -999)
-        b0_text = ""
-        baseline_variants_with_data = [v for v in sl_variants if scores[v]]
-        if not baseline_variants_with_data:
-            print("  [No data available for recommendation]")
-            continue
-        best_score = float(np.mean(scores[best_v]))
-
-        print(f"\n  Recommendation for {asset}:")
-        if best_score <= 0.6:
-            print(f"    ⚠ No re-entry criterion consistently outperforms SL0 "
-                  f"(best avg score: {best_score:.2f}/1.5). Standard re-entry "
-                  f"(SL0) is the simplest and acceptable default.")
-        else:
-            print(f"    ✓ [{best_v}] {REENTRY_LABELS[best_v]}")
-            print(f"      Avg score vs SL0: {best_score:.2f}/1.5 across periods.")
-
-    print(f"\n{'═' * 90}")
+    print(f"\n{'═'*W}")
 
 
-def print_trade_log_after_sl(period_results: dict, period_name: str, asset: str):
-    """Show how different variants handle post-SL re-entries."""
-    if asset not in period_results:
-        return
-    res = period_results[asset]
-    b0  = res.get("B0"); sl0 = res.get("SL0")
-    if not b0 or not sl0:
-        return
-
+def print_sl_trade_detail(period_results, period_name, asset):
+    """Show post-SL re-entry lag and outcome per variant for each SL exit."""
+    if asset not in period_results: return
+    res  = period_results[asset]
+    sl0  = res.get("SL0")
+    if not sl0: return
     sl_exits = [t for t in sl0["trades"] if t.get("was_sl")]
     if not sl_exits:
-        print(f"\n  No stop-loss exits in {period_name} for {asset} — stop level "
-              f"not triggered in this period.")
+        print(f"\n  ✓ {asset} — no stops triggered in {period_name}")
         return
 
-    print(f"\n  Post-SL Re-Entry Comparison — {asset}, {period_name}")
-    print(f"  SL level: −{ASSET_CONFIG[asset]['sl_pct']*100:.0f}%  "
-          f"| {len(sl_exits)} stop loss exits in SL0")
-    print(f"  {'SL Exit':>12}  {'SL Exit $':>10}  {'SL PnL%':>8}  "
-          + "  ".join(f"{v:>8}" for v in ["SL0","SL1","SL2","SL3","SL4"]))
-    print(f"  {'─' * 75}")
+    cfg = ASSET_CONFIG[asset]
+    sl_desc = (f"trail −{cfg['sl_pct']*100:.0f}%" if cfg["sl_type"]=="trailing"
+               else f"fixed −{cfg['sl_pct']*100:.0f}%")
+    print(f"\n  Stop-Loss Events — {asset} ({sl_desc}), {period_name}")
+    print(f"  {len(sl_exits)} stop(s) fired in SL0 baseline")
+
+    v_list = ["SL0","SL1","SL2","SL3","SL4","SL5"]
+    header = (f"  {'Exit Date':>12}  {'Exit $':>10}  {'SL P&L':>8}  {'HWM $':>10}  "
+              + "  ".join(f"[{v}]" for v in v_list))
+    print(f"\n{header}")
+    print(f"  {'─'*105}")
 
     for sl_t in sl_exits:
-        exit_dt = pd.Timestamp(sl_t["exit_date"])
-        row = f"  {exit_dt.strftime('%b %d %Y'):>12}  ${sl_t['exit_price']:>9,.1f}  {sl_t['pnl_pct']:>+7.1f}%"
-        for v in ["SL0", "SL1", "SL2", "SL3", "SL4"]:
+        exit_dt  = pd.Timestamp(sl_t["exit_date"])
+        hwm_str  = (f"${sl_t['hwm']:>9,.0f}" if sl_t.get("hwm") else "     n/a   ")
+        row = (f"  {exit_dt.strftime('%b %d %Y'):>12}  "
+               f"${sl_t['exit_price']:>9,.1f}  "
+               f"{sl_t['pnl_pct']:>+7.1f}%  "
+               f"{hwm_str}  ")
+        for v in v_list:
             vres = res.get(v)
             if vres is None:
-                row += f"  {'n/a':>8}"; continue
-            # Find next trade after this SL exit
+                row += f"  {'n/a':>14}"; continue
+            # Find the first re-entry trade AFTER this SL exit
             nxt = next(
                 (t for t in vres["trades"]
-                 if pd.Timestamp(t["entry_date"]) >= exit_dt),
+                 if pd.Timestamp(t["entry_date"]) > exit_dt
+                 and not t.get("was_sl")),
                 None
             )
             if nxt:
-                lag_days = (pd.Timestamp(nxt["entry_date"]) - exit_dt).days
-                row += f"  {nxt['pnl_pct']:>+6.1f}%(+{lag_days}d)"
+                lag = (pd.Timestamp(nxt["entry_date"]) - exit_dt).days
+                row += f"  {nxt['pnl_pct']:>+7.1f}%(+{lag:2d}d)"
             else:
-                row += f"  {'no re-entry':>8}"
+                row += f"  {'stayed cash':>14}"
         print(row)
+    print()
+
+
+def print_recommendation(all_results):
+    W = 88
+    print(f"\n{'═'*W}")
+    print("  RECOMMENDATION SUMMARY")
+    print(f"{'═'*W}")
+    periods  = list(all_results.keys())
+    sl_vars  = [v for v in REENTRY_LABELS if v != "B0"]
+
+    for asset in ["BTC", "MSTR", "MSTU"]:
+        cfg = ASSET_CONFIG[asset]
+        sl_desc = (f"trail −{cfg['sl_pct']*100:.0f}%" if cfg["sl_type"]=="trailing"
+                   else f"fixed −{cfg['sl_pct']*100:.0f}%")
+        print(f"\n  {'─'*65}")
+        print(f"  {asset} ({cfg['name']})  — stop: {sl_desc}")
+        print(f"  {'─'*65}")
+
+        # Count how many SL exits occurred across all periods
+        total_sl = 0
+        for pname in periods:
+            sl0 = all_results.get(pname, {}).get(asset, {}).get("SL0")
+            if sl0:
+                total_sl += sl0["n_sl"]
+        print(f"  Total stop-loss fires (SL0 across all periods): {total_sl}")
+
+        # Scoring: vs SL0 on NAV (+1) and max_dd (+0.5)
+        scores = {v: [] for v in sl_vars}
+        for pname in periods:
+            pr  = all_results.get(pname, {}).get(asset, {})
+            sl0 = pr.get("SL0")
+            if sl0 is None: continue
+            for v in sl_vars:
+                m = pr.get(v)
+                if m is None: continue
+                nav_win = m["final_nav"] > sl0["final_nav"]
+                dd_win  = m["max_dd"]   > sl0["max_dd"]   # less negative = better
+                scores[v].append(nav_win + 0.5 * dd_win)
+
+        print(f"\n  {'Variant':<32}  {'Score/1.5':>9}  {'Win%vsS0':>9}  "
+              f"{'Periods w/data':>14}")
+        for v in sl_vars:
+            sc = scores[v]
+            if not sc:
+                print(f"  {REENTRY_LABELS[v]:<32}  {'n/a':>9}")
+                continue
+            avg = float(np.mean(sc))
+            wp  = 100 * sum(s > 0 for s in sc) / len(sc)
+            best_mark = "◄ BEST" if (avg == max(
+                float(np.mean(scores[vv])) for vv in sl_vars if scores[vv]
+            )) else ""
+            print(f"  {REENTRY_LABELS[v]:<32}  {avg:>9.2f}  {wp:>8.0f}%  "
+                  f"{len(sc):>14}  {best_mark}")
+
+        # Verdict
+        scored = [(v, float(np.mean(scores[v]))) for v in sl_vars if scores[v]]
+        if not scored:
+            print(f"\n  [No data — cannot recommend]")
+            continue
+        best_v, best_s = max(scored, key=lambda x: x[1])
+        print(f"\n  Verdict for {asset}:")
+        if total_sl == 0:
+            print(f"    ✓ Stop at {sl_desc} NEVER fires in any tested period.")
+            print(f"      The TF2+V-Gate signal exits already provide equivalent protection.")
+            print(f"      No re-entry criterion is needed — position is never stopped out.")
+        elif best_s <= 0.6:
+            print(f"    ⚠ No variant consistently beats SL0 (best avg score: {best_s:.2f}/1.5).")
+            print(f"      Standard immediate re-entry (SL0) is the simplest acceptable default.")
+        else:
+            print(f"    ✓ [{best_v}] {REENTRY_LABELS[best_v]}")
+            print(f"      Avg score vs SL0: {best_s:.2f}/1.5 across {len(scores[best_v])} periods.")
+
+    print(f"\n{'═'*W}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n" + "═" * 90)
+    print("\n" + "═" * 88)
     print("  STOP-LOSS RE-ENTRY CRITERIA ANALYSIS")
-    print("  BTC | MSTR | MSTU  ×  TF2+V-Gate with Hard Stop + Smart Re-Entry")
-    print("═" * 90)
-    print("\nStop-loss levels:")
+    print("  BTC (trail −7%) | MSTR (fixed −3%) | MSTU (fixed −10%)")
+    print("  TF2+V-Gate entry/exit signals; stop on execution-asset price")
+    print("═" * 88)
+    print("\nStop-loss levels in current strategy:")
     for asset, cfg in ASSET_CONFIG.items():
-        print(f"  {asset:<6}: −{cfg['sl_pct']*100:.0f}%  ({cfg['name']})")
-    print("\nRe-entry variants:")
+        sl_desc = (f"trailing −{cfg['sl_pct']*100:.0f}% from running peak"
+                   if cfg["sl_type"] == "trailing"
+                   else f"fixed −{cfg['sl_pct']*100:.0f}% from entry price")
+        print(f"  {asset:<6}: {sl_desc}")
+    print("\nRe-entry variants tested (applied ONLY after a stop-loss exit):")
     for v, lbl in REENTRY_LABELS.items():
         print(f"  {v}: {lbl}")
     print()
 
-    # Cache raw data to avoid redundant fetches across periods with same window
     df_raw_cache: dict = {}
+    all_results: dict  = {}
 
-    all_results: dict = {}
     for pname, (start, end, fs) in PERIODS.items():
-        print(f"\n{'─' * 70}")
+        print(f"\n{'─'*70}")
         print(f"  PERIOD: {pname}  ({start} → {end})")
-        print(f"{'─' * 70}")
+        print(f"{'─'*70}")
         pr = run_period(pname, start, end, fs, df_raw_cache)
         all_results[pname] = pr
-        print_full_table(pname, pr)
+        print_full_period(pname, pr)
 
     # ── Cross-period summary ───────────────────────────────────────────────
     print_cross_period_summary(all_results)
 
-    # ── Detailed post-SL trade analysis for key periods ───────────────────
-    for pname in ["Bull (Sep24→Sep25)", "Bear (Jun25→May26)", "OOS (Sep25→May26)"]:
-        if pname not in all_results:
-            continue
+    # ── Per-stop-loss-event drill-down ─────────────────────────────────────
+    print(f"\n{'═'*88}")
+    print("  STOP-LOSS EVENT DETAIL — what happens after each stop fires")
+    print(f"{'═'*88}")
+    for pname in ["Bull (Sep24→Sep25)", "Bear (Jun25→May26)",
+                  "OOS (Sep25→May26)", "Full (Jun24→May26)"]:
+        if pname not in all_results: continue
         for asset in ["BTC", "MSTR", "MSTU"]:
             if asset in all_results[pname]:
-                print_trade_log_after_sl(all_results[pname], pname, asset)
+                print_sl_trade_detail(all_results[pname], pname, asset)
 
     # ── Recommendations ───────────────────────────────────────────────────
     print_recommendation(all_results)
-
     print("\n✓ Analysis complete.")
