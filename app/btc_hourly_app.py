@@ -5033,7 +5033,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"📍 Live Position Panel</div>"
             f"<div style='font-size:13px;'>"
             f"<b>Status:</b> <span style='color:#16a34a; font-weight:700;'>🟢 ENTRY SIGNAL ACTIVE</span> — CASH &nbsp;·&nbsp; "
-            f"Entry executes at today's bar close &nbsp;·&nbsp; "
+            f"Signal confirmed today → position enters at <b>next bar's close</b> &nbsp;·&nbsp; "
             f"U1 confirmed · trend gate: {_lp_gates_str}"
             f"{_entry_exit_warn}</div>"
             + _lp_sig_row +
