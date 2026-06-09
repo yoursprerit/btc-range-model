@@ -5285,64 +5285,113 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     )
 
     # ── Live Position Panel ───────────────────────────────────────────────────────
-    # Shown whenever a position is open OR an entry/exit signal is active, so
-    # users see actionable state immediately without scrolling into the backtest.
+    # Always rendered in the same full-detail format. Visible whenever a position
+    # is open OR an entry/exit signal is active.
     _lp_entry_signal = False
     _lp_exit_signal  = False
     _lp_entry_gates  = []
+    _lp_sig_date     = None
+    _lp_regime_lbl   = "—"
+    _lp_u1           = False
+    _lp_above_ma30   = False
+    _lp_clean_10d    = False
+    _lp_err_hi_ma3   = None
     if sigs is not None:
-        _lp_bull  = sigs.get("bull_regime", False)
-        _lp_vgate = sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
-        _lp_trend = sigs["above_ma30"] or sigs["clean_10d"] or _lp_vgate
+        _lp_bull       = sigs.get("bull_regime", False)
+        _lp_vgate      = sigs.get("v_recent_gate", False)
+        _lp_trend      = sigs["above_ma30"] or sigs["clean_10d"] or _lp_vgate
         _lp_entry_signal = bool(sigs["u1_triggered"] and _lp_trend)
         _lp_exit_signal  = bool(
             sigs.get("exhaustion_active", False)
             or ((sigs.get("err_hi_ma3", 0) < -0.75) and not _lp_bull)
         )
+        _lp_u1         = bool(sigs["u1_triggered"])
+        _lp_above_ma30 = bool(sigs["above_ma30"])
+        _lp_clean_10d  = bool(sigs["clean_10d"])
+        _lp_err_hi_ma3 = sigs.get("err_hi_ma3")
+        _lp_regime_lbl = "🐂 BULL" if _lp_bull else "🐻 BEAR / NEUTRAL"
+        _lp_sig_date   = pd.Timestamp(sigs["as_of_date"]).strftime("%b %d, %Y")
         if sigs["above_ma30"]: _lp_entry_gates.append("↑MA30")
         if sigs["clean_10d"]:  _lp_entry_gates.append("Clean 7d")
         if _lp_vgate:          _lp_entry_gates.append("⚡V-reversal")
 
     _lp_open = bool(bt_bear and bt_bear["open_pos"] and bt_bear["open_entry"])
 
+    # Build signal-detail row (shared across all panel states)
+    _lp_gates_str = (" + ".join(_lp_entry_gates)) if _lp_entry_gates else "none"
+    _lp_u1_str    = "✅ ACTIVE" if _lp_u1 else "○ inactive"
+    _lp_ma30_str  = "↑ above" if _lp_above_ma30 else "↓ below"
+    _lp_clean_str = "✓" if _lp_clean_10d else "✗"
+    _lp_ma3_str   = (f"{_lp_err_hi_ma3:+.2f}%" if _lp_err_hi_ma3 is not None else "—")
+    _lp_sig_row   = (
+        f"<div style='font-size:12px; color:#374151; margin-top:6px; line-height:1.7;'>"
+        f"<b>Signal as-of:</b> {_lp_sig_date or '—'} &nbsp;|&nbsp; "
+        f"<b>Regime:</b> {_lp_regime_lbl} &nbsp;|&nbsp; "
+        f"<b>U1:</b> {_lp_u1_str} &nbsp;|&nbsp; "
+        f"<b>MA30:</b> {_lp_ma30_str} &nbsp;|&nbsp; "
+        f"<b>Clean&nbsp;7d:</b> {_lp_clean_str} &nbsp;|&nbsp; "
+        f"<b>Trend gate:</b> {_lp_gates_str} &nbsp;|&nbsp; "
+        f"<b>err_hi_ma3:</b> {_lp_ma3_str}"
+        f"</div>"
+    )
+
     if _lp_open:
         oe     = bt_bear["open_entry"]
         unr    = (float(bt_bear["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
         oe_col = "#16a34a" if unr >= 0 else "#dc2626"
         _sl_px = oe.get("stop_price"); _pk_px = oe.get("peak_price")
-        _sl_str = (f" · Trail stop: <b>${_sl_px:,.0f}</b> (peak ${_pk_px:,.0f})"
+        _sl_str = (f"<br><b>Trail stop:</b> ${_sl_px:,.0f} &nbsp;(peak ${_pk_px:,.0f})"
                    if _sl_px else "")
-        _exit_note = (" · <span style='color:#dc2626; font-weight:600;'>⚠️ Exit signal active</span>"
-                      if _lp_exit_signal else "")
+        _exit_warn = (
+            f"<br><span style='color:#dc2626; font-weight:600;'>⚠️ Exit signal now active — "
+            f"consider closing position</span>"
+            if _lp_exit_signal else ""
+        )
         st.markdown(
             f"<div style='background:#f0fdf4; border:2px solid #16a34a; border-radius:10px; "
-            f"padding:10px 16px; margin:0 0 12px 0; font-size:13px; color:#14532d;'>"
-            f"<b>📍 Live Position Panel</b><br>"
-            f"<b>Status:</b> LONG · bought {pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
-            f"@ ${oe['price']:,.0f} · "
-            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>{unr:+.1f}%</span>"
-            f"{_sl_str}{_exit_note}</div>",
+            f"padding:12px 16px; margin:0 0 12px 0; color:#14532d;'>"
+            f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>"
+            f"📍 Live Position Panel</div>"
+            f"<div style='font-size:13px;'>"
+            f"<b>Status:</b> <span style='color:#16a34a; font-weight:700;'>LONG</span> &nbsp;·&nbsp; "
+            f"Bought {pd.Timestamp(oe['date']).strftime('%b %d, %Y')} @ ${oe['price']:,.0f} &nbsp;·&nbsp; "
+            f"Unrealized P&amp;L: <span style='color:{oe_col}; font-weight:700;'>{unr:+.1f}%</span>"
+            f"{_sl_str}{_exit_warn}</div>"
+            + _lp_sig_row +
+            f"</div>",
             unsafe_allow_html=True,
         )
-    elif _lp_entry_signal and not _lp_exit_signal:
-        _gates_str = " + ".join(_lp_entry_gates) if _lp_entry_gates else "trend gate"
+    elif _lp_entry_signal:
+        _entry_exit_warn = (
+            f"<br><span style='color:#dc2626; font-weight:600;'>⚠️ Exit signal also active — "
+            f"entry and exit conflict; exercise caution</span>"
+            if _lp_exit_signal else ""
+        )
         st.markdown(
             f"<div style='background:#f0fdf4; border:2px solid #16a34a; border-radius:10px; "
-            f"padding:10px 16px; margin:0 0 12px 0; font-size:13px; color:#14532d;'>"
-            f"<b>📍 Live Position Panel</b><br>"
-            f"<b>Status:</b> CASH · <span style='color:#16a34a; font-weight:700;'>"
-            f"🟢 ENTRY SIGNAL ACTIVE</span> — U1 confirmed · {_gates_str}<br>"
-            f"<span style='color:#374151; font-size:12px;'>Position would enter at today's close "
-            f"(backtest executes at bar close after signal bar).</span></div>",
+            f"padding:12px 16px; margin:0 0 12px 0; color:#14532d;'>"
+            f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>"
+            f"📍 Live Position Panel</div>"
+            f"<div style='font-size:13px;'>"
+            f"<b>Status:</b> <span style='color:#16a34a; font-weight:700;'>🟢 ENTRY SIGNAL ACTIVE</span> — CASH &nbsp;·&nbsp; "
+            f"Entry executes at today's bar close &nbsp;·&nbsp; "
+            f"U1 confirmed · trend gate: {_lp_gates_str}"
+            f"{_entry_exit_warn}</div>"
+            + _lp_sig_row +
+            f"</div>",
             unsafe_allow_html=True,
         )
     elif _lp_exit_signal and not _lp_open:
         st.markdown(
             f"<div style='background:#fef2f2; border:2px solid #dc2626; border-radius:10px; "
-            f"padding:10px 16px; margin:0 0 12px 0; font-size:13px; color:#7f1d1d;'>"
-            f"<b>📍 Live Position Panel</b><br>"
-            f"<b>Status:</b> CASH · <span style='color:#dc2626; font-weight:700;'>"
-            f"🔴 EXIT SIGNAL ACTIVE</span> — no position / staying on sidelines</div>",
+            f"padding:12px 16px; margin:0 0 12px 0; color:#7f1d1d;'>"
+            f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>"
+            f"📍 Live Position Panel</div>"
+            f"<div style='font-size:13px;'>"
+            f"<b>Status:</b> <span style='color:#dc2626; font-weight:700;'>🔴 EXIT SIGNAL ACTIVE</span> — CASH &nbsp;·&nbsp; "
+            f"No position open · staying on sidelines</div>"
+            + _lp_sig_row +
+            f"</div>",
             unsafe_allow_html=True,
         )
 
