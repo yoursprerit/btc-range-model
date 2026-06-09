@@ -9484,15 +9484,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         else:
             _hist_dt_s     = latest_t.isoformat()  # full UTC timestamp for hourly lookup
             _btc_panel_px  = latest_close
-            # Use backtest last_price (from yf.download) for MSTR/MSTU so split
-            # adjustments are consistent with the entry price stored in open_entry.
-            # Fall back to _fetch_equity_price_at_datetime only if backtest unavailable.
-            _mstr_panel_px = ((_bt_mstr_oos.get("last_price") or None)
-                              if _bt_mstr_oos
-                              else _fetch_equity_price_at_datetime("MSTR", _hist_dt_s))
-            _mstu_panel_px = ((_bt_mstu_oos.get("last_price") or None)
-                              if _bt_mstu_oos
-                              else _fetch_equity_price_at_datetime("MSTU", _hist_dt_s))
+            # Use hourly yf.Ticker.history prices so the panel price updates as
+            # the intraday slider moves through hours within the same date.
+            _mstr_panel_px = _fetch_equity_price_at_datetime("MSTR", _hist_dt_s)
+            _mstu_panel_px = _fetch_equity_price_at_datetime("MSTU", _hist_dt_s)
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
