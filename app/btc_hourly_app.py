@@ -3472,6 +3472,7 @@ def run_mstr_backtest(end_date_iso: str,
         nav_series = nav_series,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
+        last_price = float(mstr_px[N-1]) if N > 0 and np.isfinite(mstr_px[N-1]) else None,
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
                           entry_trigger=e_trigger,
                           stop_price=round(stop_px, 4)) if pos == "LONG" else None),
@@ -3808,6 +3809,7 @@ def run_mstu_backtest(end_date_iso: str,
         nav_series = nav_series,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
+        last_price = float(mstu_px[N-1]) if N > 0 and np.isfinite(mstu_px[N-1]) else None,
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
                           entry_trigger=e_trigger,
                           stop_price=round(stop_px, 4)) if pos == "LONG" else None),
@@ -9465,9 +9467,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _tl = (bt or {}).get("trades") or []
             return _tl[-1] if _tl else None
 
-        # Live prices: in live mode use real-time prices; in historical mode use
-        # the close at the selected bar (BTC) or the yfinance close on that date
-        # (MSTR/MSTU) so the panel reflects the position state at the chosen time.
+        # Live prices: in live mode use real-time prices; in historical mode derive
+        # MSTR/MSTU prices from the backtest's own yf.download() data so that the
+        # entry price and current price are always on the same split-adjusted scale.
+        # (yf.Ticker.history interval="1h" can apply split adjustments differently
+        # from yf.download interval="1d", producing a false ×10 mismatch for MSTU.)
         _panel_as_of = target_date  # date used for Days Held and P&L
         if is_live:
             _btc_panel_px  = live_spot
@@ -9476,8 +9480,15 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         else:
             _hist_dt_s     = latest_t.isoformat()  # full UTC timestamp for hourly lookup
             _btc_panel_px  = latest_close
-            _mstr_panel_px = _fetch_equity_price_at_datetime("MSTR", _hist_dt_s)
-            _mstu_panel_px = _fetch_equity_price_at_datetime("MSTU", _hist_dt_s)
+            # Use backtest last_price (from yf.download) for MSTR/MSTU so split
+            # adjustments are consistent with the entry price stored in open_entry.
+            # Fall back to _fetch_equity_price_at_datetime only if backtest unavailable.
+            _mstr_panel_px = ((_bt_mstr_oos.get("last_price") or None)
+                              if _bt_mstr_oos
+                              else _fetch_equity_price_at_datetime("MSTR", _hist_dt_s))
+            _mstu_panel_px = ((_bt_mstu_oos.get("last_price") or None)
+                              if _bt_mstu_oos
+                              else _fetch_equity_price_at_datetime("MSTU", _hist_dt_s))
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
