@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl1-v1"   # SL5 for MSTR, SL1 for MSTU, no BTC stop
+_BT_LOGIC_VERSION = "sl5-sl1-v2"   # SL5 for MSTR, SL1 for MSTU, no BTC stop
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3380,6 +3380,7 @@ def run_mstr_backtest(end_date_iso: str,
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
+    e_reentry = False   # True when current position was entered after an SL exit
     stop_px  = 0.0
     # SL5 regime-adaptive re-entry state
     from_sl = False; bars_since_sl = 0
@@ -3405,8 +3406,9 @@ def run_mstr_backtest(end_date_iso: str,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
                     pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
+                    was_reentry=e_reentry,
                 ))
-                pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0
+                pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
@@ -3419,8 +3421,9 @@ def run_mstr_backtest(end_date_iso: str,
                         exit_nav=nav, pnl_pct=(price/e_price-1)*100,
                         pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
                         duration_days=(dates[i]-e_date).days, stop_triggered=False,
+                        was_reentry=e_reentry,
                     ))
-                    pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0
+                    pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 else:
                     nav = cur
         else:
@@ -3432,6 +3435,7 @@ def run_mstr_backtest(end_date_iso: str,
                               or bool(bull_regime[i])
                               or bars_since_sl >= 10)
             if tf1_entry[i] and not _exit_at_i and _sl_reentry_ok:
+                e_reentry = bool(from_sl)              # mark if entering after SL
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
@@ -3504,6 +3508,7 @@ def run_mstr_backtest(end_date_iso: str,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
             alpha_abs       = final_nav - final_bh,
             n_trades        = len(trades),    n_stop_exits  = sum(1 for t in trades if t.get("stop_triggered")),
+            n_reentries     = sum(1 for t in trades if t.get("was_reentry")),
             n_wins          = len(wins),      n_losses      = len(losses),
             win_rate        = win_rate,       avg_pnl       = avg_pnl,
             best_trade      = best_t,         worst_trade   = worst_t,
@@ -3731,6 +3736,7 @@ def run_mstu_backtest(end_date_iso: str,
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
+    e_reentry = False   # True when current position was entered after an SL exit
     stop_px  = 0.0
     # SL1 above-exit-price re-entry state
     from_sl = False; sl_exit_price = None
@@ -3756,8 +3762,9 @@ def run_mstu_backtest(end_date_iso: str,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
                     pnl_abs=nav-e_nav,   exit_signal="SL-fixed-10%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
+                    was_reentry=e_reentry,
                 ))
-                pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0
+                pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; sl_exit_price = exit_px   # SL1: remember stop exit price
             else:
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
@@ -3770,8 +3777,9 @@ def run_mstu_backtest(end_date_iso: str,
                         exit_nav=nav, pnl_pct=(price/e_price-1)*100,
                         pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
                         duration_days=(dates[i]-e_date).days, stop_triggered=False,
+                        was_reentry=e_reentry,
                     ))
-                    pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0
+                    pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 else:
                     nav = cur
         else:
@@ -3780,6 +3788,7 @@ def run_mstu_backtest(end_date_iso: str,
             _sl_reentry_ok = (not from_sl
                               or (sl_exit_price is not None and price >= sl_exit_price))
             if tf1_entry[i] and not _exit_at_i and _sl_reentry_ok:
+                e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.90
                 from_sl = False; sl_exit_price = None   # reset SL1 state on re-entry
@@ -3852,6 +3861,7 @@ def run_mstu_backtest(end_date_iso: str,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
             alpha_abs       = final_nav - final_bh,
             n_trades        = len(trades),    n_stop_exits  = sum(1 for t in trades if t.get("stop_triggered")),
+            n_reentries     = sum(1 for t in trades if t.get("was_reentry")),
             n_wins          = len(wins),      n_losses      = len(losses),
             win_rate        = win_rate,       avg_pnl       = avg_pnl,
             best_trade      = best_t,         worst_trade   = worst_t,
@@ -5968,10 +5978,12 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         sh2  = s["sharpe"];          shb = s["bh_sharpe"]
         tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
         wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        nsl  = s.get("n_stop_exits", 0); nre = s.get("n_reentries", 0)
         ic   = s["initial_capital"]
         bh_ltcg_tax = 0.15 * max(0.0, bh - ic)
         bh_ltcg     = bh - bh_ltcg_tax
         bh_ltcg_ret = (bh_ltcg / ic - 1) * 100
+        _sl_re_str = f"🛑{nsl} SL · ♻{nre} re-entry" if (nsl or nre) else ""
         return {
             "nav":  (_cell(tf2, bh, fmt_nav) +
                      _cell(tax, bh_ltcg, fmt_nav) +
@@ -6003,7 +6015,9 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                       _tag("$0", "#dcfce7") +
                       _tag(f"${bh_ltcg_tax:,.0f}", "#ecfdf5", fg="#065f46")),
             "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
-                     f"{wr:.0f}% ({nw}W/{nl}L)</td>" +
+                     f"{wr:.0f}% ({nw}W/{nl}L)"
+                     + (f"<br><span style='font-size:11px;color:#6b7280;'>{_sl_re_str}</span>" if _sl_re_str else "")
+                     + "</td>" +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
@@ -6430,6 +6444,10 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         for i, t in enumerate(bt["trades"], 1):
             if t.get("stop_triggered"):
                 result = "🛑 SL EXIT"
+            elif t.get("was_reentry") and t["pnl_pct"] > 0:
+                result = "♻ RE-ENTRY ✓"
+            elif t.get("was_reentry"):
+                result = "♻ RE-ENTRY ✗"
             elif t["pnl_pct"] > 0:
                 result = "✓ WIN"
             else:
@@ -6681,6 +6699,8 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         sh2  = s["sharpe"];          shb = s["bh_sharpe"]
         tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
         wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        nsl  = s.get("n_stop_exits", 0); nre = s.get("n_reentries", 0)
+        _sl_re_str = f"\U0001f6d1{nsl} SL · ♻{nre} re-entry" if (nsl or nre) else ""
         ic   = s["initial_capital"]
         bh_ltcg_tax = 0.15 * max(0.0, bh - ic)
         bh_ltcg     = bh - bh_ltcg_tax
@@ -6716,7 +6736,9 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                       _tag("$0", "#dcfce7") +
                       _tag(f"${bh_ltcg_tax:,.0f}", "#ecfdf5", fg="#065f46")),
             "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
-                     f"{wr:.0f}% ({nw}W/{nl}L)</td>" +
+                     f"{wr:.0f}% ({nw}W/{nl}L)"
+                     + (f"<br><span style='font-size:11px;color:#6b7280;'>{_sl_re_str}</span>" if _sl_re_str else "")
+                     + "</td>" +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
                      _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
@@ -7141,6 +7163,10 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         for i, t in enumerate(bt["trades"], 1):
             if t.get("stop_triggered"):
                 result = "🛑 SL EXIT"
+            elif t.get("was_reentry") and t["pnl_pct"] > 0:
+                result = "♻ RE-ENTRY ✓"
+            elif t.get("was_reentry"):
+                result = "♻ RE-ENTRY ✗"
             elif t["pnl_pct"] > 0:
                 result = "✓ WIN"
             else:
