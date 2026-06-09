@@ -345,36 +345,51 @@ def fetch_equity_prices():
 def _fetch_equity_price_at_datetime(ticker: str, dt_str: str) -> float | None:
     """Return price of `ticker` at or before `dt_str` (UTC ISO, tz-naive) using 1h bars.
 
-    Falls back to daily close when the date is outside yfinance's 730-day 1h window.
+    Uses ``yf.download(interval="60m")`` — the same API the rest of the app
+    relies on for hourly bars — rather than ``yf.Ticker().history()``, which is
+    markedly flakier / more rate-limited on hosted environments and silently
+    degrades to a constant daily close.  ``auto_adjust=True`` keeps the returned
+    price on the same split-adjusted scale as the backtest entry prices
+    (which also use ``yf.download(auto_adjust=True)``), so intraday P&L is sound.
+
+    Falls back to a daily close when the hourly window returns nothing (e.g. a
+    date older than yfinance's ~730-day 1h retention).
     """
+    def _flatten(frame):
+        if isinstance(frame.columns, pd.MultiIndex):
+            frame.columns = [c[0] for c in frame.columns]
+        if frame.index.tzinfo is not None:
+            frame.index = frame.index.tz_convert("UTC").tz_localize(None)
+        return frame
+
     try:
         dt = pd.Timestamp(dt_str)
-        hist = yf.Ticker(ticker).history(
+        hist = yf.download(
+            ticker,
             start=(dt - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
             end=(dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-            interval="1h", auto_adjust=True,
+            interval="60m", progress=False, auto_adjust=True,
         )
         if hist.empty:
             raise ValueError("empty")
-        # Normalise to UTC tz-naive so comparison with `dt` works
-        if hist.index.tzinfo is not None:
-            hist.index = hist.index.tz_convert("UTC").tz_localize(None)
+        hist = _flatten(hist)
         mask = hist.index <= dt
         if mask.any():
             return float(hist["Close"][mask].iloc[-1])
         return float(hist["Close"].iloc[0])
     except Exception:
-        # Fall back to daily close (e.g. date > 730 days ago)
+        # Fall back to daily close (e.g. date > 730 days ago or hourly empty)
         try:
             d = pd.Timestamp(dt_str)
-            hist = yf.Ticker(ticker).history(
+            hist = yf.download(
+                ticker,
                 start=(d - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
                 end=(d + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                interval="1d", auto_adjust=True,
+                interval="1d", progress=False, auto_adjust=True,
             )
             if hist.empty:
                 return None
-            hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+            hist = _flatten(hist)
             hist.index = hist.index.normalize()
             mask = hist.index <= d.normalize()
             return float(hist["Close"][mask].iloc[-1]) if mask.any() else None
