@@ -3088,15 +3088,17 @@ def run_full_period_backtest(end_date_iso: str,
         if i < _bt0:
             nav_arr[i] = initial_capital; continue
         if pos == "LONG":
-            peak_px    = max(peak_px, price)
+            peak_px    = max(peak_px, act_hi[i])   # intraday high tightens trailing stop
             trail_stop = peak_px * 0.93
             cur        = btc_qty * price
-            if price < trail_stop:
-                nav = cur
+            if act_lo[i] < trail_stop:             # triggered intraday if low breaches stop
+                exit_px  = trail_stop              # fill at stop level
+                exit_nav = btc_qty * exit_px
+                nav = exit_nav
                 trades.append(dict(
                     entry_date=e_date, entry_price=e_price, entry_nav=e_nav,
-                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
-                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
+                    exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
                     pnl_abs=nav-e_nav, exit_signal="SL-trail-7%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                 ))
@@ -3290,6 +3292,14 @@ def run_mstr_backtest(end_date_iso: str,
     ).ffill()
     mstr_px = mstr_all.reindex(dates).ffill().bfill().values.astype(float)
 
+    # MSTR intraday lows — used to trigger the 3% fixed stop intraday
+    mstr_lo_raw = d_mstr["Low"].sort_index() if "Low" in d_mstr.columns else mstr_raw
+    mstr_lo_all = mstr_lo_raw.reindex(
+        pd.date_range(mstr_lo_raw.index[0],
+                      max(mstr_lo_raw.index[-1], end_dt), freq="D")
+    ).ffill()
+    mstr_lo = mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)
+
     # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
     c_asof  = comp["close_asof"].values.astype(float)
     pred_hi = comp["pred_high"].values.astype(float)
@@ -3373,12 +3383,14 @@ def run_mstr_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstr_qty * price
-            if price < stop_px:
-                nav = cur
+            if mstr_lo[i] < stop_px:              # triggered intraday if low breaches stop
+                exit_px  = stop_px                 # fill at stop level
+                exit_nav = mstr_qty * exit_px
+                nav = exit_nav
                 trades.append(dict(
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
-                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
-                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
+                    exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
                     pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                 ))
@@ -3585,6 +3597,52 @@ def run_mstu_backtest(end_date_iso: str,
     act_hi  = comp["actual_high"].values.astype(float)
     act_lo  = comp["actual_low"].values.astype(float)
 
+    # ── MSTU intraday lows for stop-loss intraday triggering ──────────────────
+    # Real MSTU (post-inception): use yfinance daily Low.
+    # Synthetic MSTU (pre-inception): approximate from 2× BTC intraday drawdown.
+    mstu_lo = np.full(N, np.nan)
+    if start_dt < _MSTU_INCEPTION:
+        # Fetch real MSTU Low for the post-inception portion
+        _mstu_real_lo = None
+        try:
+            _d_mstu_lo = yf.download(
+                "MSTU",
+                start=_MSTU_INCEPTION.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(_d_mstu_lo.columns, pd.MultiIndex):
+                _d_mstu_lo.columns = [c[0] for c in _d_mstu_lo.columns]
+            _d_mstu_lo.index = pd.DatetimeIndex(_d_mstu_lo.index).tz_localize(None).normalize()
+            if not _d_mstu_lo.empty and "Low" in _d_mstu_lo.columns:
+                _lo_raw  = _d_mstu_lo["Low"].sort_index()
+                _lo_all  = _lo_raw.reindex(
+                    pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
+                ).ffill()
+                _mstu_real_lo = _lo_all.reindex(dates).values.astype(float)
+        except Exception:
+            pass
+        for _j in range(N):
+            if (_mstu_real_lo is not None
+                    and dates[_j] >= _MSTU_INCEPTION
+                    and np.isfinite(_mstu_real_lo[_j])):
+                mstu_lo[_j] = _mstu_real_lo[_j]
+            else:
+                # Approximate: 2× BTC intraday drawdown applied to prior MSTU close
+                prev_px = mstu_px[_j - 1] if _j > 0 else mstu_px[_j]
+                btc_dd  = min(0.0, (act_lo[_j] - c_asof[_j]) / max(c_asof[_j], 1.0))
+                mstu_lo[_j] = max(0.01, prev_px * (1.0 + 2.0 * btc_dd))
+    else:
+        # Real MSTU only; d_mstu fetched above
+        if "Low" in d_mstu.columns:
+            _lo_raw  = d_mstu["Low"].sort_index()
+            _lo_all  = _lo_raw.reindex(
+                pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
+            ).ffill()
+            mstu_lo = _lo_all.reindex(dates).ffill().bfill().values.astype(float)
+        else:
+            mstu_lo = mstu_px.copy()
+
     err_hi = (act_hi - pred_hi) / c_asof * 100
     err_lo = (pred_lo - act_lo) / c_asof * 100
     hi_brk = (act_hi > pred_hi).astype(int)
@@ -3661,12 +3719,14 @@ def run_mstu_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstu_qty * price
-            if price < stop_px:
-                nav = cur
+            if mstu_lo[i] < stop_px:              # triggered intraday if low breaches stop
+                exit_px  = stop_px                 # fill at stop level
+                exit_nav = mstu_qty * exit_px
+                nav = exit_nav
                 trades.append(dict(
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
-                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
-                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
+                    exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
                     pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                 ))
