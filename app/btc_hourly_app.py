@@ -3728,7 +3728,7 @@ def run_mstu_backtest(end_date_iso: str,
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
                     entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-5%",
+                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-10%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                 ))
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0
@@ -3751,7 +3751,7 @@ def run_mstu_backtest(end_date_iso: str,
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             if tf1_entry[i] and not _exit_at_i:
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * 0.95
+                e_nav = nav; pos = "LONG"; stop_px = price * 0.90
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
@@ -8669,7 +8669,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _SIG_CFG = {
             "SL-trail-7%": ("🛑", "Stop Loss hit — Trailing −7%", "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-3%": ("🛑", "Stop Loss hit — Fixed −3%",    "#fef2f2", "#dc2626", "#991b1b"),
-            "SL-fixed-5%": ("🛑", "Stop Loss hit — Fixed −5%",    "#fef2f2", "#dc2626", "#991b1b"),
+            "SL-fixed-5%":  ("🛑", "Stop Loss hit — Fixed −5%",   "#fef2f2", "#dc2626", "#991b1b"),
+            "SL-fixed-10%": ("🛑", "Stop Loss hit — Fixed −10%",  "#fef2f2", "#dc2626", "#991b1b"),
             "D3":          ("📉", "D3 Downtrend Signature",        "#fff7ed", "#ea580c", "#9a3412"),
             "D2 (bear)":   ("📉", "D2 + Bear Regime Exit",         "#fff7ed", "#ea580c", "#9a3412"),
         }
@@ -9517,7 +9518,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 entry      = (_bt_mstu_oos or {}).get("open_entry"),
                 live_price = _mstu_panel_px,
                 asset_label= "MSTU",
-                stop_type  = "fixed-5%",
+                stop_type  = "fixed-10%",
                 nav        = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
                 last_trade = _last_closed_trade(_bt_mstu_oos),
             ),
