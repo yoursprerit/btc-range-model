@@ -60,11 +60,13 @@ PERIODS = {
 }
 
 # Stop-loss configurations: (label, type, pct)
+# Live strategy uses: BTC → Trail -7%, MSTR → Fixed -3%, MSTU → Fixed -10%
 SL_CONFIGS = [
     ("Baseline",    "none",     0.00),
     ("Fixed  -3%",  "fixed",    0.03),
     ("Fixed  -5%",  "fixed",    0.05),
     ("Fixed  -7%",  "fixed",    0.07),
+    ("Fixed -10%",  "fixed",    0.10),
     ("Trail  -5%",  "trailing", 0.05),
     ("Trail  -7%",  "trailing", 0.07),
     ("Trail -10%",  "trailing", 0.10),
