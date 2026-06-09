@@ -70,6 +70,9 @@ REFRESH_SECONDS  = 60           # auto-refresh interval (1 min — rolling forec
 LOOKBACK_HOURS   = 24           # how many past hours to show
 CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
+# Backtest logic version — bump this string whenever backtest loop logic changes
+# so @st.cache_data returns fresh results rather than stale cached ones.
+_BT_LOGIC_VERSION = "sl5-sl1-v1"   # SL5 for MSTR, SL1 for MSTU, no BTC stop
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3215,13 +3218,13 @@ def run_full_period_backtest(end_date_iso: str,
 @st.cache_data(show_spinner="Loading fixed-period backtest …")
 def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                 model_mtime: float = 0.0,
-                                data_end: str = ""):
+                                data_end: str = "",
+                                logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
 
-    No TTL — results persist until either the model file changes (model_mtime)
-    or new daily BTC price data arrives (data_end).  The OOS period is NOT
-    routed through here; it calls run_full_period_backtest directly so it
-    rolls daily.
+    No TTL — results persist until the model file changes (model_mtime),
+    new daily BTC price data arrives (data_end), or backtest logic changes
+    (logic_version).  The OOS period calls run_full_period_backtest directly.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
                                     model_mtime=model_mtime, data_end=data_end)
@@ -3232,7 +3235,8 @@ def run_mstr_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-05-26",
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
-                      data_end: str = ""):
+                      data_end: str = "",
+                      logic_version: str = _BT_LOGIC_VERSION):
     """MSTR backtest driven by BTC TF2+V-Gate signals.
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
@@ -3517,13 +3521,16 @@ def run_mstr_backtest(end_date_iso: str,
 @st.cache_data(show_spinner="Loading fixed-period MSTR backtest …")
 def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
-                                    data_end: str = ""):
+                                    data_end: str = "",
+                                    logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period MSTR backtests.
 
-    Invalidates on model change (model_mtime) or new daily price data (data_end).
+    Invalidates on model change (model_mtime), new daily price data (data_end),
+    or backtest logic change (logic_version).
     """
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
-                             model_mtime=model_mtime, data_end=data_end)
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -3535,7 +3542,8 @@ def run_mstu_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2025-06-04",
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
-                      data_end: str = ""):
+                      data_end: str = "",
+                      logic_version: str = _BT_LOGIC_VERSION):
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
@@ -3861,14 +3869,17 @@ def run_mstu_backtest(end_date_iso: str,
 @st.cache_data(show_spinner="Loading fixed-period MSTU backtest …")
 def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
-                                    data_end: str = ""):
+                                    data_end: str = "",
+                                    logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period MSTU backtests.
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
-    Invalidates on model change (model_mtime) or new daily price data (data_end).
+    Invalidates on model change (model_mtime), new daily price data (data_end),
+    or backtest logic change (logic_version).
     """
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
-                             model_mtime=model_mtime, data_end=data_end)
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version)
 
 
 # ═══════════════════════════════════════════════════════════════════
