@@ -3120,7 +3120,8 @@ def run_full_period_backtest(end_date_iso: str,
                     nav = cur
         else:
             _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            if si >= 0 and tf1_entry[si] and not _exit_at_si:
+            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
+            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
                 btc_qty = nav/price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; peak_px = price
                 if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
@@ -3405,7 +3406,8 @@ def run_mstr_backtest(end_date_iso: str,
                     nav = cur
         else:
             _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            if si >= 0 and tf1_entry[si] and not _exit_at_si:
+            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
+            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
                 if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
@@ -3696,7 +3698,8 @@ def run_mstu_backtest(end_date_iso: str,
                     nav = cur
         else:
             _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            if si >= 0 and tf1_entry[si] and not _exit_at_si:
+            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
+            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
                 if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
@@ -4023,7 +4026,8 @@ def run_mstr_options_backtest(end_date_iso: str,
                 nav = cur
         else:
             _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            if si >= 0 and tf1_entry[si] and not _exit_at_si:
+            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
+            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
                 T_entry  = option_days / 365.0
                 opt_prem = _bs_call(price, price, T_entry, RF_RATE, sigma)
                 if opt_prem <= 0.01:
@@ -4365,7 +4369,8 @@ def run_mstu_options_backtest(end_date_iso: str,
                 nav = cur
         else:
             _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            if si >= 0 and tf1_entry[si] and not _exit_at_si:
+            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
+            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
                 T_entry  = option_days / 365.0
                 opt_prem = _bs_call(price, price, T_entry, RF_RATE, sigma)
                 if opt_prem <= 0.01:
@@ -4757,7 +4762,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         else:  # CASH
             _tf1_exit_at_si = si >= 0 and (tf1_exit[si] if strategy != "TF2"
                                             else (d3[si] or (d2[si] and not bull_regime[si])))
-            if si >= 0 and tf1_entry[si] and not _tf1_exit_at_si:
+            _tf1_exit_at_i  = (tf1_exit[i] if strategy != "TF2"
+                               else (d3[i] or (d2[i] and not bull_regime[i])))
+            if si >= 0 and tf1_entry[si] and not _tf1_exit_at_si and not _tf1_exit_at_i:
                 btc_qty  = nav / price
                 e_price  = price; e_date = dates[i]
                 e_nav    = nav;   pos    = "LONG"
