@@ -4862,10 +4862,13 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 
 
 def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
-                                       bt_full=None, key_suffix: str = "") -> None:
+                                       bt_full=None, key_suffix: str = "",
+                                       sigs: dict = None) -> None:
     """Render the TF2 trading strategy summary + backtest dashboard.
 
     Shows:
+      • Live Position Panel — visible whenever entry signal is active or a
+        position is open (so users never miss an actionable signal)
       • Strategy rules summary card (entry, exit, regime logic)
       • Unified comparison table: four periods × three columns (TF2+V-Gate | TF2+V-Gate-tax | B&H)
       • Equity-curve charts — one per period — in tabs
@@ -5281,22 +5284,65 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         unsafe_allow_html=True,
     )
 
-    # ── Open-position badge (from bear period — most recent) ─────────────────────
-    if bt_bear and bt_bear["open_pos"] and bt_bear["open_entry"]:
-        oe  = bt_bear["open_entry"]
-        unr = (float(bt_bear["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+    # ── Live Position Panel ───────────────────────────────────────────────────────
+    # Shown whenever a position is open OR an entry/exit signal is active, so
+    # users see actionable state immediately without scrolling into the backtest.
+    _lp_entry_signal = False
+    _lp_exit_signal  = False
+    _lp_entry_gates  = []
+    if sigs is not None:
+        _lp_bull  = sigs.get("bull_regime", False)
+        _lp_vgate = sigs.get("v_reversal_likely", False) or sigs.get("capitulation_signal", False)
+        _lp_trend = sigs["above_ma30"] or sigs["clean_10d"] or _lp_vgate
+        _lp_entry_signal = bool(sigs["u1_triggered"] and _lp_trend)
+        _lp_exit_signal  = bool(
+            sigs.get("exhaustion_active", False)
+            or ((sigs.get("err_hi_ma3", 0) < -0.75) and not _lp_bull)
+        )
+        if sigs["above_ma30"]: _lp_entry_gates.append("↑MA30")
+        if sigs["clean_10d"]:  _lp_entry_gates.append("Clean 7d")
+        if _lp_vgate:          _lp_entry_gates.append("⚡V-reversal")
+
+    _lp_open = bool(bt_bear and bt_bear["open_pos"] and bt_bear["open_entry"])
+
+    if _lp_open:
+        oe     = bt_bear["open_entry"]
+        unr    = (float(bt_bear["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
         oe_col = "#16a34a" if unr >= 0 else "#dc2626"
         _sl_px = oe.get("stop_price"); _pk_px = oe.get("peak_price")
         _sl_str = (f" · Trail stop: <b>${_sl_px:,.0f}</b> (peak ${_pk_px:,.0f})"
                    if _sl_px else "")
+        _exit_note = (" · <span style='color:#dc2626; font-weight:600;'>⚠️ Exit signal active</span>"
+                      if _lp_exit_signal else "")
         st.markdown(
-            f"<div style='background:#f0fdf4; border:1px solid #16a34a; border-radius:8px; "
-            f"padding:8px 14px; margin:0 0 10px 0; font-size:13px; color:#14532d;'>"
-            f"📍 <b>Open position</b> — bought "
-            f"{pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
+            f"<div style='background:#f0fdf4; border:2px solid #16a34a; border-radius:10px; "
+            f"padding:10px 16px; margin:0 0 12px 0; font-size:13px; color:#14532d;'>"
+            f"<b>📍 Live Position Panel</b><br>"
+            f"<b>Status:</b> LONG · bought {pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
             f"@ ${oe['price']:,.0f} · "
-            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>"
-            f"{unr:+.1f}%</span>{_sl_str}</div>",
+            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>{unr:+.1f}%</span>"
+            f"{_sl_str}{_exit_note}</div>",
+            unsafe_allow_html=True,
+        )
+    elif _lp_entry_signal and not _lp_exit_signal:
+        _gates_str = " + ".join(_lp_entry_gates) if _lp_entry_gates else "trend gate"
+        st.markdown(
+            f"<div style='background:#f0fdf4; border:2px solid #16a34a; border-radius:10px; "
+            f"padding:10px 16px; margin:0 0 12px 0; font-size:13px; color:#14532d;'>"
+            f"<b>📍 Live Position Panel</b><br>"
+            f"<b>Status:</b> CASH · <span style='color:#16a34a; font-weight:700;'>"
+            f"🟢 ENTRY SIGNAL ACTIVE</span> — U1 confirmed · {_gates_str}<br>"
+            f"<span style='color:#374151; font-size:12px;'>Position would enter at today's close "
+            f"(backtest executes at bar close after signal bar).</span></div>",
+            unsafe_allow_html=True,
+        )
+    elif _lp_exit_signal and not _lp_open:
+        st.markdown(
+            f"<div style='background:#fef2f2; border:2px solid #dc2626; border-radius:10px; "
+            f"padding:10px 16px; margin:0 0 12px 0; font-size:13px; color:#7f1d1d;'>"
+            f"<b>📍 Live Position Panel</b><br>"
+            f"<b>Status:</b> CASH · <span style='color:#dc2626; font-weight:700;'>"
+            f"🔴 EXIT SIGNAL ACTIVE</span> — no position / staying on sidelines</div>",
             unsafe_allow_html=True,
         )
 
@@ -9330,7 +9376,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
     render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
-                                       bt_full=_bt_full, key_suffix=_chart_key)
+                                       bt_full=_bt_full, key_suffix=_chart_key,
+                                       sigs=sigs)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
