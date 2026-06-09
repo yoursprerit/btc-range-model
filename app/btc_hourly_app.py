@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl1-v2"   # SL5 for MSTR, SL1 for MSTU, no BTC stop
+_BT_LOGIC_VERSION = "sl5-sl1-v3"   # SL5 for MSTR, SL1 for MSTU, no BTC stop; re-entry bypass _exit_at_i
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3434,7 +3434,10 @@ def run_mstr_backtest(end_date_iso: str,
             _sl_reentry_ok = (not from_sl
                               or bool(bull_regime[i])
                               or bars_since_sl >= 10)
-            if tf1_entry[i] and not _exit_at_i and _sl_reentry_ok:
+            # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
+            # almost every bar; blocking on it would permanently prevent re-entry).
+            # Fresh entries still require no exit signal on the same bar.
+            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
@@ -3787,7 +3790,9 @@ def run_mstu_backtest(end_date_iso: str,
             # SL1: after stop exit, only re-enter when price recovers to or above stop exit price
             _sl_reentry_ok = (not from_sl
                               or (sl_exit_price is not None and price >= sl_exit_price))
-            if tf1_entry[i] and not _exit_at_i and _sl_reentry_ok:
+            # Post-SL re-entries bypass the _exit_at_i gate (same rationale as MSTR SL5).
+            # Fresh entries still require no exit signal on the same bar.
+            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.90
