@@ -9326,19 +9326,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
     # Bear and Full periods are locked. OOS ends at yesterday in live mode so the
     # window is consistent regardless of bar anchor time.  In historical mode, use
-    # the selected bar date for BTC chart/dashboard display.
+    # the selected bar date so the Live Position Panel reflects position state and
+    # price at that exact date.
     _bt_oos_end  = (
         (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1))
         .normalize().strftime("%Y-%m-%d")
         if is_live
         else _bt_end
-    )
-    # The Live Position Panel must always reflect current (today's) position state
-    # and price for MSTR/MSTU regardless of where the historical slider sits.
-    # Using today-1 here decouples panel pricing from the historical slider.
-    _live_bt_end = (
-        (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1))
-        .normalize().strftime("%Y-%m-%d")
     )
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime, data_end=_data_end or "")
@@ -9468,10 +9462,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
 
         # Compute MSTR/MSTU OOS positions for the live position tracker.
-        # Always use _live_bt_end (today-1) so the panel shows current position
-        # state and price regardless of where the historical slider is positioned.
-        _bt_mstr_oos = run_mstr_backtest(_live_bt_end, model_mtime=_model_mtime, data_end=_data_end or "")
-        _bt_mstu_oos = run_mstu_backtest(_live_bt_end, model_mtime=_model_mtime, data_end=_data_end or "")
+        # Uses _bt_oos_end (slider date in historical mode, yesterday in live mode)
+        # so last_price and open_pos reflect the selected date's state.
+        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
+        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
 
         def _last_closed_trade(bt: dict | None) -> dict | None:
             _tl = (bt or {}).get("trades") or []
