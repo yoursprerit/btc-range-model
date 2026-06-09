@@ -292,40 +292,52 @@ def build_features_and_predictions(df: pd.DataFrame, AD: dict) -> pd.DataFrame:
     return preds[~preds.index.duplicated(keep="last")]
 
 
-def fetch_mstr(end_date: str) -> pd.Series:
+def fetch_mstr(end_date: str) -> tuple:
+    """Returns (close, lo, hi) as daily-reindexed pd.Series."""
     d = _yf_download("MSTR", FETCH_START,
                      (pd.Timestamp(end_date) + pd.Timedelta(days=2)).strftime("%Y-%m-%d"))
-    raw = d["Close"].sort_index()
-    return raw.reindex(
-        pd.date_range(raw.index[0], max(raw.index[-1], pd.Timestamp(end_date)), freq="D")
-    ).ffill()
+    idx = pd.date_range(d["Close"].sort_index().index[0],
+                        max(d["Close"].sort_index().index[-1], pd.Timestamp(end_date)), freq="D")
+    close = d["Close"].sort_index().reindex(idx).ffill()
+    lo    = d["Low"].sort_index().reindex(idx).ffill()
+    hi    = d["High"].sort_index().reindex(idx).ffill()
+    return close, lo, hi
 
 
-def build_synthetic_mstu(end_date: str) -> pd.Series:
-    """OLS-calibrated synthetic MSTU prices for pre-Jun 2025, spliced with actual."""
+def build_synthetic_mstu(end_date: str, df_btc: pd.DataFrame) -> tuple:
+    """OLS-calibrated synthetic MSTU prices for pre-Jun 2025, spliced with actual.
+
+    Returns (close, lo, hi) as daily-reindexed pd.Series.
+    Pre-inception intraday low approximated as prev_close * (1 + 2 * btc_intraday_drawdown).
+    Pre-inception intraday high approximated symmetrically from btc_intraday_gain.
+    """
     end_dt = pd.Timestamp(end_date)
     _mstu_end = max(end_dt, MSTU_INCEPTION + pd.Timedelta(days=90)) + pd.Timedelta(days=2)
 
     try:
         d_mstu = _yf_download("MSTU", MSTU_INCEPTION.strftime("%Y-%m-%d"),
                                _mstu_end.strftime("%Y-%m-%d"))
-        mstu_actual = d_mstu["Close"].sort_index()
+        mstu_actual_close = d_mstu["Close"].sort_index()
+        mstu_actual_lo    = d_mstu["Low"].sort_index()
+        mstu_actual_hi    = d_mstu["High"].sort_index()
     except Exception:
-        return pd.Series(dtype=float)
+        empty = pd.Series(dtype=float)
+        return empty, empty, empty
 
     try:
         d_mstr = _yf_download("MSTR", FETCH_START, _mstu_end.strftime("%Y-%m-%d"))
         mstr_all = d_mstr["Close"].sort_index()
     except Exception:
-        return pd.Series(dtype=float)
+        empty = pd.Series(dtype=float)
+        return empty, empty, empty
 
     # OLS calibration on actual overlapping post-inception data
     mstr_post = mstr_all[mstr_all.index >= MSTU_INCEPTION]
-    common_idx = mstu_actual.index.intersection(mstr_post.index)
+    common_idx = mstu_actual_close.index.intersection(mstr_post.index)
     beta, alpha_ols = 2.0, -0.0002
     if len(common_idx) >= 10:
-        mstu_lr = np.log(mstu_actual.loc[common_idx] /
-                         mstu_actual.loc[common_idx].shift(1)).dropna()
+        mstu_lr = np.log(mstu_actual_close.loc[common_idx] /
+                         mstu_actual_close.loc[common_idx].shift(1)).dropna()
         mstr_lr = np.log(mstr_post.loc[mstu_lr.index] /
                          mstr_post.loc[mstu_lr.index].shift(1)).dropna()
         cidx = mstu_lr.index.intersection(mstr_lr.index)
@@ -335,27 +347,56 @@ def build_synthetic_mstu(end_date: str) -> pd.Series:
             xm = x - x.mean(); ym = y - y.mean()
             denom = float(np.dot(xm, xm))
             if denom > 1e-10:
-                beta     = float(np.dot(xm, ym) / denom)
+                beta      = float(np.dot(xm, ym) / denom)
                 alpha_ols = float(y.mean() - beta * x.mean())
 
     # Synthetic pre-inception prices
     mstr_pre = mstr_all[mstr_all.index < MSTU_INCEPTION].sort_index()
     if len(mstr_pre) < 2:
-        mstu_full = mstu_actual.copy()
+        mstu_full_close = mstu_actual_close.copy()
+        mstu_full_lo    = mstu_actual_lo.copy()
+        mstu_full_hi    = mstu_actual_hi.copy()
     else:
         mstr_lr_pre = np.log(mstr_pre / mstr_pre.shift(1)).fillna(0.0).values
         syn_lr = beta * mstr_lr_pre + alpha_ols
         syn_lr[0] = 0.0
-        inception_price = float(mstu_actual.iloc[0])
+        inception_price = float(mstu_actual_close.iloc[0])
         cum_syn = np.cumsum(syn_lr)
-        syn_px = inception_price * np.exp(cum_syn - cum_syn[-1])
+        syn_px  = inception_price * np.exp(cum_syn - cum_syn[-1])
         syn_series = pd.Series(syn_px, index=mstr_pre.index)
-        mstu_full = pd.concat([syn_series, mstu_actual])
-        mstu_full = mstu_full[~mstu_full.index.duplicated(keep="last")].sort_index()
 
-    return mstu_full.reindex(
-        pd.date_range(mstu_full.index[0], max(mstu_full.index[-1], end_dt), freq="D")
-    ).ffill()
+        # Pre-inception intraday low/high: approx 2× BTC intraday move applied to prev close
+        btc_close = df_btc["btc_close"].reindex(mstr_pre.index).ffill()
+        btc_lo    = df_btc["btc_low"].reindex(mstr_pre.index).ffill()
+        btc_hi    = df_btc["btc_high"].reindex(mstr_pre.index).ffill()
+        btc_dd    = np.minimum(0.0, (btc_lo.values - btc_close.values) /
+                               np.maximum(btc_close.values, 1.0))
+        btc_gain  = np.maximum(0.0, (btc_hi.values - btc_close.values) /
+                               np.maximum(btc_close.values, 1.0))
+        prev_px   = np.concatenate([[syn_px[0]], syn_px[:-1]])
+        syn_lo    = np.maximum(0.01, prev_px * (1.0 + 2.0 * btc_dd))
+        syn_hi    = prev_px * (1.0 + 2.0 * btc_gain)
+        syn_lo_s  = pd.Series(syn_lo, index=mstr_pre.index)
+        syn_hi_s  = pd.Series(syn_hi, index=mstr_pre.index)
+
+        def _splice(pre, post):
+            s = pd.concat([pre, post])
+            return s[~s.index.duplicated(keep="last")].sort_index()
+
+        mstu_full_close = _splice(syn_series, mstu_actual_close)
+        mstu_full_lo    = _splice(syn_lo_s,   mstu_actual_lo)
+        mstu_full_hi    = _splice(syn_hi_s,   mstu_actual_hi)
+
+    full_idx = pd.date_range(
+        mstu_full_close.index[0],
+        max(mstu_full_close.index[-1], end_dt),
+        freq="D"
+    )
+    return (
+        mstu_full_close.reindex(full_idx).ffill(),
+        mstu_full_lo.reindex(full_idx).ffill(),
+        mstu_full_hi.reindex(full_idx).ffill(),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -444,16 +485,19 @@ def build_signals(comp: pd.DataFrame):
 def run_backtest(comp: pd.DataFrame, asset_px: np.ndarray,
                  dates: pd.DatetimeIndex, _bt0: int, signals: dict,
                  sl_type: str = "none", sl_pct: float = 0.0,
-                 initial_capital: float = INITIAL_CAPITAL) -> dict:
+                 initial_capital: float = INITIAL_CAPITAL,
+                 asset_lo: np.ndarray = None,
+                 asset_hi: np.ndarray = None) -> dict:
     """
     Backtest TF2+V-Gate with optional stop-loss applied to asset prices.
 
-    sl_type : "none" | "fixed" | "trailing"
-    sl_pct  : decimal fraction (e.g. 0.05 for 5%)
+    sl_type  : "none" | "fixed" | "trailing"
+    sl_pct   : decimal fraction (e.g. 0.05 for 5%)
+    asset_lo : intraday low array — stop triggered when lo < stop_price
+    asset_hi : intraday high array — trailing peak updated from intraday high
 
-    Stop-loss execution: checked at bar-close (conservative daily resolution).
-    Signal exits retain 1-bar lag; stop-loss exits are same-bar (close).
-    Priority: stop-loss > signal exit.
+    Stop-loss triggered on intraday low; filled at stop price (not close).
+    Signal exits use 1-bar lag. Priority: stop-loss > signal exit.
     """
     N          = signals["N"]
     d2         = signals["d2"]
@@ -463,6 +507,12 @@ def run_backtest(comp: pd.DataFrame, asset_px: np.ndarray,
     above_ma30 = signals["above_ma30"]
     clean_10d  = signals["clean_10d"]
     v_recent   = signals["v_recent"]
+
+    # Fall back to close if intraday arrays not supplied
+    if asset_lo is None:
+        asset_lo = asset_px
+    if asset_hi is None:
+        asset_hi = asset_px
 
     nav      = initial_capital
     pos      = "CASH"
@@ -475,6 +525,8 @@ def run_backtest(comp: pd.DataFrame, asset_px: np.ndarray,
     for i in range(N):
         si    = i - 1
         price = asset_px[i]
+        lo    = asset_lo[i]
+        hi    = asset_hi[i]
 
         if i < _bt0:
             nav_arr[i] = initial_capital
@@ -485,26 +537,30 @@ def run_backtest(comp: pd.DataFrame, asset_px: np.ndarray,
             continue
 
         if pos == "LONG":
-            # Update trailing peak
+            # Update trailing peak using intraday high
             if sl_type == "trailing":
-                peak_px = max(peak_px, price)
+                peak_px = max(peak_px, hi if np.isfinite(hi) and hi > 0 else price)
 
-            # Check stop-loss (same-bar, fill at close)
-            stop_hit = False
-            exit_lbl = ""
+            # Check stop-loss — triggered by intraday low, filled at stop level
+            stop_hit  = False
+            exit_px   = price
+            exit_lbl  = ""
             if sl_type == "fixed" and sl_pct > 0:
                 stop_price = e_price * (1.0 - sl_pct)
-                if price < stop_price:
+                if np.isfinite(lo) and lo < stop_price:
                     stop_hit = True
+                    exit_px  = stop_price
                     exit_lbl = f"SL-fixed-{sl_pct*100:.0f}%"
             elif sl_type == "trailing" and sl_pct > 0:
                 trail_stop = peak_px * (1.0 - sl_pct)
-                if price < trail_stop:
+                if np.isfinite(lo) and lo < trail_stop:
                     stop_hit = True
+                    exit_px  = trail_stop
                     exit_lbl = f"SL-trail-{sl_pct*100:.0f}%"
 
             # Check signal-based exit (1-bar lag: signal fires at si, exit at i)
             sig_exit = False
+            sig_lbl  = ""
             if si >= 0:
                 sig_exit = bool(d3[si] or (d2[si] and not bull[si]))
                 sig_lbl  = "D3" if d3[si] else "D2(bear)"
@@ -513,17 +569,18 @@ def run_backtest(comp: pd.DataFrame, asset_px: np.ndarray,
             if should_exit:
                 if not exit_lbl:
                     exit_lbl = sig_lbl
-                nav = qty * price
+                    exit_px  = price   # signal exits fill at close
+                nav = qty * exit_px
                 trades.append(dict(
                     entry_date    = e_date,
                     entry_price   = e_price,
                     entry_trigger = e_trigger,
                     entry_nav     = e_nav,
                     exit_date     = dates[i],
-                    exit_price    = price,
+                    exit_price    = exit_px,
                     exit_nav      = nav,
                     exit_signal   = exit_lbl,
-                    pnl_pct       = (price / e_price - 1) * 100,
+                    pnl_pct       = (exit_px / e_price - 1) * 100,
                     pnl_abs       = nav - e_nav,
                     duration_days = (dates[i] - e_date).days,
                     peak_price    = peak_px,
@@ -538,7 +595,7 @@ def run_backtest(comp: pd.DataFrame, asset_px: np.ndarray,
                 e_price  = price
                 e_date   = dates[i]
                 e_nav    = nav
-                peak_px  = price
+                peak_px  = hi if np.isfinite(hi) and hi > 0 else price
                 pos      = "LONG"
                 if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
                     e_trigger = "U1+V-rev"
@@ -716,27 +773,28 @@ def main():
     preds = build_features_and_predictions(df, AD)
     print(f"{len(preds)} bars")
 
-    print("\n[3/4] Fetching MSTR prices …", end=" ", flush=True)
-    mstr_all = fetch_mstr("2026-06-09")
-    print(f"{len(mstr_all)} bars")
+    print("\n[3/4] Fetching MSTR prices (close + intraday lo/hi) …", end=" ", flush=True)
+    mstr_close, mstr_lo_all, mstr_hi_all = fetch_mstr("2026-06-09")
+    print(f"{len(mstr_close)} bars")
 
     print("\n[4/4] Building synthetic MSTU prices (OLS-calibrated pre-Jun 2025) …",
           end=" ", flush=True)
-    mstu_all = build_synthetic_mstu("2026-06-09")
-    print(f"{len(mstu_all)} bars")
+    mstu_close, mstu_lo_all, mstu_hi_all = build_synthetic_mstu("2026-06-09", df)
+    print(f"{len(mstu_close)} bars")
 
     # ══════════════════════════════════════════════════════════════════════════
     # Run backtests
     # ══════════════════════════════════════════════════════════════════════════
+    # Each entry: (close_series, lo_series, hi_series) — None means use BTC arrays
     asset_defs = {
-        "BTC":  None,   # uses BTC closes from raw_df
-        "MSTR": mstr_all,
-        "MSTU": mstu_all,
+        "BTC":  (None, None, None),
+        "MSTR": (mstr_close, mstr_lo_all, mstr_hi_all),
+        "MSTU": (mstu_close, mstu_lo_all, mstu_hi_all),
     }
 
     all_results: dict = {}  # asset → period → list[metrics]
 
-    for asset_name, asset_price_series in asset_defs.items():
+    for asset_name, (asset_price_series, asset_lo_series, asset_hi_series) in asset_defs.items():
         print(f"\n{'─'*80}")
         print(f"  Running backtests for {asset_name}")
         print(f"{'─'*80}")
@@ -772,14 +830,20 @@ def main():
             if N - _bt0 < 3:
                 continue
 
-            # BTC execution prices (daily close)
+            # BTC execution prices and intraday arrays
             btc_px_arr = comp["actual_close"].values.astype(float)
+            btc_lo_arr = comp["actual_low"].values.astype(float)
+            btc_hi_arr = comp["actual_high"].values.astype(float)
 
-            # Asset execution prices
+            # Asset execution prices and intraday arrays
             if asset_price_series is not None:
-                ax = asset_price_series.reindex(dates).ffill().bfill().values.astype(float)
+                ax    = asset_price_series.reindex(dates).ffill().bfill().values.astype(float)
+                ax_lo = asset_lo_series.reindex(dates).ffill().bfill().values.astype(float)
+                ax_hi = asset_hi_series.reindex(dates).ffill().bfill().values.astype(float)
             else:
-                ax = btc_px_arr
+                ax    = btc_px_arr
+                ax_lo = btc_lo_arr
+                ax_hi = btc_hi_arr
 
             # Compute signals once per period
             signals = build_signals(comp)
@@ -790,6 +854,7 @@ def main():
                 res = run_backtest(
                     comp, ax, dates, _bt0, signals,
                     sl_type=sl_type, sl_pct=sl_pct,
+                    asset_lo=ax_lo, asset_hi=ax_hi,
                 )
                 period_results.append(res)
 

@@ -1,32 +1,35 @@
 """
-Re-Entry Criteria Evaluation after Stop-Loss Exits
-====================================================
-After a stop-loss is triggered (Trail-7% baseline), evaluates smart re-entry
-criteria that let the position recapture upside without repeated whipsaws.
+Re-Entry Criteria Evaluation after Stop-Loss Exits  (MSTR & MSTU)
+==================================================================
+Evaluates smart re-entry criteria applied ONLY after stop-loss exits,
+using the EXACT stop-loss parameters from the live trading strategy:
 
-Re-entry criteria are ONLY applied after stop-loss exits, not after normal
-D2/D3 signal exits (which are clean exits and can re-enter normally).
+  MSTR — Fixed -3%  stop (entry_price × 0.97), triggered on intraday low
+  MSTU — Fixed -10% stop (entry_price × 0.90), triggered on intraday low
 
-Base stop-loss: Trail-7% (trailing 7% from peak close since entry)
+Both assets use BTC-derived TF2+V-Gate signals but execute in the
+respective equity.  Signal logic is same-bar (matching app behavior):
+entry and exit signals from bar i are acted on at bar i's close.
 
-Re-entry Criteria Tested:
-  RE0 — Immediate      : Standard U1 re-entry immediately after SL (current)
-  RE1 — Cooldown-3d    : Block re-entry for 3 bars after SL exit
-  RE2 — Cooldown-5d    : Block re-entry for 5 bars after SL exit
-  RE3 — Recovery+2%    : Only re-enter when asset price > sl_exit × 1.02
-  RE4 — Recovery+5%    : Only re-enter when asset price > sl_exit × 1.05
-  RE5 — MA30-Mandatory : Only re-enter after SL if BTC price is above MA30
-  RE6 — Strong-U1      : After SL, require err_hi_ma3 > 1.2 AND hi_breaks >= 3
-  RE7 — 3d+MA30        : 3-bar cooldown AND above MA30 (combines RE1+RE5)
-  RE8 — D2Reset+MA30   : After SL, wait for D2 to fire once (momentum cleared),
-                         then re-enter on next U1 above MA30
+Re-entry criteria (applied ONLY after stop-loss exits):
+  RE0 — Immediate       : Standard U1 re-entry on next matching bar (current)
+  RE1 — 3d Cooldown     : Block re-entry for 3 bars after SL exit
+  RE2 — 5d Cooldown     : Block re-entry for 5 bars after SL exit
+  RE3 — Recovery +2%    : Re-enter only when close > sl_exit_price × 1.02
+  RE4 — Recovery +5%    : Re-enter only when close > sl_exit_price × 1.05
+  RE5 — MA30 Mandatory  : After SL, re-enter only if BTC is above MA30
+  RE6 — Strong U1       : After SL, require err_hi_ma3 > 1.2 AND hi_breaks ≥ 3
+  RE7 — 3d+MA30         : 3-bar cooldown AND above MA30
+  RE8 — D2Reset+MA30    : After SL, wait for D2 signal, then re-enter above MA30
 
-Also included for reference:
-  Baseline (no SL)     : Strategy without any stop-loss applied
+Reference row:
+  Baseline (no SL)      : Strategy without any stop-loss
 
-Assets: BTC, MSTR, MSTU
-Periods: Bear (Jun 2025–May 2026), Bull (Jun 2024–Jun 2025),
-         Full (Jun 2024–May 2026), OOS (Mar 2026–today)
+Periods (matching locked Streamlit windows):
+  Bear Market   Jun 2025 – May 2026
+  Bull Market   Jun 2024 – Jun 2025
+  Full Market   Jun 2024 – May 2026
+  OOS Only      Mar 2026 – today
 
 Usage:
   python backtest_reentry.py
@@ -37,7 +40,6 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
 
-# ── sklearn _loss compatibility fix (Python 3.11/3.12) ────────────────────────
 try:
     import sklearn._loss._loss as _sklearn_loss_ext
     if "_loss" not in sys.modules:
@@ -70,40 +72,33 @@ FETCH_START    = "2024-02-01"
 MSTU_INCEPTION = pd.Timestamp("2025-06-04")
 WARMUP         = 35
 
-# Base stop-loss used for all re-entry criteria tests
-SL_TYPE = "trailing"
-SL_PCT  = 0.07
+# Per-asset stop-loss configuration (matching live strategy exactly)
+ASSET_SL = {
+    "MSTR": {"sl_type": "fixed", "sl_pct": 0.03, "sl_label": "SL-fixed-3%"},
+    "MSTU": {"sl_type": "fixed", "sl_pct": 0.10, "sl_label": "SL-fixed-10%"},
+}
 
 # Re-entry criteria: (label, mode, param)
-# Modes: "NO_SL" | "none" | "cooldown" | "recovery" | "ma30" | "strong_u1"
-#        | "composite" | "d2reset_ma30"
-# Param: cooldown bars (int) for cooldown/composite; recovery fraction for
-#        recovery; 0 otherwise
 RE_CONFIGS = [
-    ("Baseline (no SL)",  "NO_SL",        0    ),
-    ("RE0: Immediate",    "none",         0    ),
-    ("RE1: 3d Cooldown",  "cooldown",     3    ),
-    ("RE2: 5d Cooldown",  "cooldown",     5    ),
-    ("RE3: Recov +2%",    "recovery",     0.02 ),
-    ("RE4: Recov +5%",    "recovery",     0.05 ),
-    ("RE5: MA30 Mandatory","ma30",        0    ),
-    ("RE6: Strong U1",    "strong_u1",    0    ),
-    ("RE7: 3d+MA30",      "composite",    3    ),
-    ("RE8: D2Reset+MA30", "d2reset_ma30", 0    ),
+    ("Baseline (no SL)",   "NO_SL",        0    ),
+    ("RE0: Immediate",     "none",         0    ),
+    ("RE1: 3d Cooldown",   "cooldown",     3    ),
+    ("RE2: 5d Cooldown",   "cooldown",     5    ),
+    ("RE3: Recov +2%",     "recovery",     0.02 ),
+    ("RE4: Recov +5%",     "recovery",     0.05 ),
+    ("RE5: MA30 Mandatory","ma30",         0    ),
+    ("RE6: Strong U1",     "strong_u1",    0    ),
+    ("RE7: 3d+MA30",       "composite",    3    ),
+    ("RE8: D2Reset+MA30",  "d2reset_ma30", 0    ),
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DATA FETCHING  (identical to backtest_stop_loss.py)
+# DATA FETCHING
 # ══════════════════════════════════════════════════════════════════════════════
 
 _MACRO_SYMS = {
-    "eth":  "ETH-USD",
-    "spx":  "^GSPC",
-    "ndx":  "^IXIC",
-    "vix":  "^VIX",
-    "gold": "GC=F",
-    "dxy":  "DX-Y.NYB",
-    "tnx":  "^TNX",
+    "eth":  "ETH-USD", "spx": "^GSPC", "ndx": "^IXIC",
+    "vix":  "^VIX",    "gold": "GC=F", "dxy": "DX-Y.NYB", "tnx": "^TNX",
 }
 _ONCHAIN_METRICS = [
     "hash-rate", "difficulty", "n-transactions", "miners-revenue",
@@ -161,17 +156,16 @@ def fetch_btc_and_macro(end_date: str) -> pd.DataFrame:
             pass
     print(f"{ok}/{len(_ONCHAIN_METRICS)} OK")
 
-    _cb_url  = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    _cb_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
     _cb_rows: list = []
-    _cb_cur  = pd.Timestamp(FETCH_START)
-    _cb_end  = pd.Timestamp(end_date)
+    _cb_cur = pd.Timestamp(FETCH_START); _cb_end = pd.Timestamp(end_date)
     while _cb_cur <= _cb_end:
         _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
         try:
             _r = requests.get(_cb_url, params={
                 "granularity": 86400,
-                "start":       _cb_cur.isoformat() + "Z",
-                "end":         (_cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
+                "start": _cb_cur.isoformat() + "Z",
+                "end":   (_cb_chunk + pd.Timedelta(days=1)).isoformat() + "Z",
             }, timeout=30)
             if _r.status_code == 200:
                 _cb_rows.extend(_r.json())
@@ -238,36 +232,34 @@ def build_features_and_predictions(df: pd.DataFrame, AD: dict) -> pd.DataFrame:
             feat[f"btc_{nm}_corr_30"] = ret.rolling(30).corr(np.log(df[col]).diff())
     for col in [x for x in df.columns if x.startswith("oc_")]:
         s=df[col].astype(float); sl=np.log(s.replace(0,np.nan))
-        feat[f"{col}_d1"] = sl.diff(1); feat[f"{col}_d7"] = sl.diff(7)
-        feat[f"{col}_z30"] = (sl-sl.rolling(30).mean())/sl.rolling(30).std()
+        feat[f"{col}_d1"]=sl.diff(1); feat[f"{col}_d7"]=sl.diff(7)
+        feat[f"{col}_z30"]=(sl-sl.rolling(30).mean())/sl.rolling(30).std()
     nh,nl = h.shift(-1),l_.shift(-1)
-    y_hi = (nh-c)/c; y_lo = (c-nl)/c
-    feat["y_hi_ema3"] = y_hi.shift(1).ewm(span=3,adjust=False).mean()
-    feat["y_lo_ema3"] = y_lo.shift(1).ewm(span=3,adjust=False).mean()
-    feat["y_hi_ema7"] = y_hi.shift(1).ewm(span=7,adjust=False).mean()
-    feat["y_lo_ema7"] = y_lo.shift(1).ewm(span=7,adjust=False).mean()
+    y_hi=(nh-c)/c; y_lo=(c-nl)/c
+    feat["y_hi_ema3"]=y_hi.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_lo_ema3"]=y_lo.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_hi_ema7"]=y_hi.shift(1).ewm(span=7,adjust=False).mean()
+    feat["y_lo_ema7"]=y_lo.shift(1).ewm(span=7,adjust=False).mean()
     p3h=h.shift(1).rolling(3).max(); p3l=l_.shift(1).rolling(3).min()
-    feat["above_3d_high"] = (c>p3h).astype(float)
-    feat["below_3d_low"]  = (c<p3l).astype(float)
-    feat["bo_strength_up"] = (c/p3h-1).clip(lower=0)
-    feat["bo_strength_dn"] = (1-c/p3l).clip(lower=0)
+    feat["above_3d_high"]=(c>p3h).astype(float)
+    feat["below_3d_low"] =(c<p3l).astype(float)
+    feat["bo_strength_up"]=(c/p3h-1).clip(lower=0)
+    feat["bo_strength_dn"]=(1-c/p3l).clip(lower=0)
     yhl=y_hi.shift(1); yll=y_lo.shift(1)
-    feat["y_hi_surprise"] = yhl-yhl.ewm(span=7,adjust=False).mean()
-    feat["y_lo_surprise"] = yll-yll.ewm(span=7,adjust=False).mean()
+    feat["y_hi_surprise"]=yhl-yhl.ewm(span=7,adjust=False).mean()
+    feat["y_lo_surprise"]=yll-yll.ewm(span=7,adjust=False).mean()
     nr=ret.clip(upper=0)
-    feat["dn_vol_5"]  = nr.rolling(5).std()
-    feat["dn_vol_20"] = nr.rolling(20).std()
+    feat["dn_vol_5"] =nr.rolling(5).std()
+    feat["dn_vol_20"]=nr.rolling(20).std()
     sma50=c.rolling(50).mean()
-    feat["below_sma50"]    = (c<sma50).astype(float)
-    feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
+    feat["below_sma50"]   =(c<sma50).astype(float)
+    feat["below_sma50_5d"]=feat["below_sma50"].rolling(5).min().fillna(0)
     if "cb_premium" in df.columns and df["cb_premium"].notna().any():
-        feat["cb_premium"]     = df["cb_premium"]
-        feat["cb_premium_ma3"] = df["cb_premium_ma3"]
-        feat["cb_premium_z7"]  = df["cb_premium_z7"]
+        feat["cb_premium"]    =df["cb_premium"]
+        feat["cb_premium_ma3"]=df["cb_premium_ma3"]
+        feat["cb_premium_z7"] =df["cb_premium_z7"]
     else:
-        feat["cb_premium"]     = 0.0
-        feat["cb_premium_ma3"] = 0.0
-        feat["cb_premium_z7"]  = 0.0
+        feat["cb_premium"]=feat["cb_premium_ma3"]=feat["cb_premium_z7"]=0.0
 
     fc = AD["feat_cols"]
     feat = feat.replace([np.inf,-np.inf], np.nan)
@@ -278,94 +270,134 @@ def build_features_and_predictions(df: pd.DataFrame, AD: dict) -> pd.DataFrame:
         raise RuntimeError("Feature matrix is empty — check data coverage")
 
     if AD.get("ensemble") and AD.get("constituents"):
-        yhi_arr = np.mean([con["m_hi"].predict(F) for con in AD["constituents"]], axis=0)
-        ylo_arr = np.mean([con["m_lo"].predict(F) for con in AD["constituents"]], axis=0)
-        if AD.get("blended") and float(AD.get("alpha",1.0)) < 1.0:
-            a = float(AD["alpha"])
-            yhi_arr = a*yhi_arr + (1-a)*float(AD.get("mu_hi",0))
-            ylo_arr = a*ylo_arr + (1-a)*float(AD.get("mu_lo",0))
+        yhi_arr=np.mean([con["m_hi"].predict(F) for con in AD["constituents"]],axis=0)
+        ylo_arr=np.mean([con["m_lo"].predict(F) for con in AD["constituents"]],axis=0)
+        if AD.get("blended") and float(AD.get("alpha",1.0))<1.0:
+            a=float(AD["alpha"])
+            yhi_arr=a*yhi_arr+(1-a)*float(AD.get("mu_hi",0))
+            ylo_arr=a*ylo_arr+(1-a)*float(AD.get("mu_lo",0))
     else:
-        yhi_arr = AD["hi_model"].predict(F)
-        ylo_arr = AD["lo_model"].predict(F)
+        yhi_arr=AD["hi_model"].predict(F); ylo_arr=AD["lo_model"].predict(F)
 
-    cv = c.reindex(F.index).values
-    ph = cv*(1+np.clip(yhi_arr,0,None))
-    pl = cv*(1-np.clip(ylo_arr,0,None))
-    idx = np.asarray(F.index, dtype="datetime64[ns]")
-    nd = np.empty(len(F), dtype="datetime64[ns]")
-    nd[:-1] = idx[1:]; nd[-1] = idx[-1]+np.timedelta64(1,"D")
-    preds = pd.DataFrame(
-        {"close_asof":cv,"pred_high":ph,"pred_low":pl},
-        index=pd.DatetimeIndex(nd, name="target_date"),
-    )
+    cv=c.reindex(F.index).values
+    ph=cv*(1+np.clip(yhi_arr,0,None)); pl=cv*(1-np.clip(ylo_arr,0,None))
+    idx=np.asarray(F.index,dtype="datetime64[ns]")
+    nd=np.empty(len(F),dtype="datetime64[ns]")
+    nd[:-1]=idx[1:]; nd[-1]=idx[-1]+np.timedelta64(1,"D")
+    preds=pd.DataFrame({"close_asof":cv,"pred_high":ph,"pred_low":pl},
+                       index=pd.DatetimeIndex(nd,name="target_date"))
     return preds[~preds.index.duplicated(keep="last")]
 
 
-def fetch_mstr(end_date: str) -> pd.Series:
+def fetch_mstr_ohlc(end_date: str) -> tuple[pd.Series, pd.Series]:
+    """Returns (close_series, low_series) for MSTR, daily, forward-filled."""
     d = _yf_download("MSTR", FETCH_START,
                      (pd.Timestamp(end_date)+pd.Timedelta(days=2)).strftime("%Y-%m-%d"))
-    raw = d["Close"].sort_index()
-    return raw.reindex(
-        pd.date_range(raw.index[0], max(raw.index[-1],pd.Timestamp(end_date)), freq="D")
-    ).ffill()
+    idx = pd.date_range(d.index[0], max(d.index[-1], pd.Timestamp(end_date)), freq="D")
+    close = d["Close"].sort_index().reindex(idx).ffill()
+    low   = d["Low"].sort_index().reindex(idx).ffill()
+    return close, low
 
 
-def build_synthetic_mstu(end_date: str) -> pd.Series:
+def build_mstu_px_and_lo(end_date: str, df_btc: pd.DataFrame
+                          ) -> tuple[pd.Series, pd.Series]:
+    """
+    Returns (mstu_close, mstu_lo) where:
+      - mstu_close: actual post-inception + OLS-synthetic pre-inception closes
+      - mstu_lo   : actual post-inception Low + 2×BTC-drawdown approximation pre-inception
+
+    Matches the intraday low construction in app/btc_hourly_app.py exactly.
+    """
     end_dt = pd.Timestamp(end_date)
     _mstu_end = max(end_dt, MSTU_INCEPTION+pd.Timedelta(days=90))+pd.Timedelta(days=2)
+
     try:
         d_mstu = _yf_download("MSTU", MSTU_INCEPTION.strftime("%Y-%m-%d"),
                                _mstu_end.strftime("%Y-%m-%d"))
-        mstu_actual = d_mstu["Close"].sort_index()
+        mstu_actual_close = d_mstu["Close"].sort_index()
+        mstu_actual_low   = d_mstu["Low"].sort_index() if "Low" in d_mstu.columns else mstu_actual_close
     except Exception:
-        return pd.Series(dtype=float)
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+
     try:
         d_mstr = _yf_download("MSTR", FETCH_START, _mstu_end.strftime("%Y-%m-%d"))
         mstr_all = d_mstr["Close"].sort_index()
     except Exception:
-        return pd.Series(dtype=float)
+        return pd.Series(dtype=float), pd.Series(dtype=float)
 
+    # OLS calibration on overlapping data
     mstr_post = mstr_all[mstr_all.index >= MSTU_INCEPTION]
-    common_idx = mstu_actual.index.intersection(mstr_post.index)
+    common_idx = mstu_actual_close.index.intersection(mstr_post.index)
     beta, alpha_ols = 2.0, -0.0002
     if len(common_idx) >= 10:
-        mstu_lr = np.log(mstu_actual.loc[common_idx]/
-                         mstu_actual.loc[common_idx].shift(1)).dropna()
-        mstr_lr = np.log(mstr_post.loc[mstu_lr.index]/
+        mstu_lr = np.log(mstu_actual_close.loc[common_idx] /
+                         mstu_actual_close.loc[common_idx].shift(1)).dropna()
+        mstr_lr = np.log(mstr_post.loc[mstu_lr.index] /
                          mstr_post.loc[mstu_lr.index].shift(1)).dropna()
         cidx = mstu_lr.index.intersection(mstr_lr.index)
         if len(cidx) >= 5:
             x=mstr_lr.loc[cidx].values; y=mstu_lr.loc[cidx].values
             xm=x-x.mean(); ym=y-y.mean()
             denom=float(np.dot(xm,xm))
-            if denom > 1e-10:
+            if denom>1e-10:
                 beta=float(np.dot(xm,ym)/denom)
                 alpha_ols=float(y.mean()-beta*x.mean())
 
+    # Build synthetic pre-inception close
     mstr_pre = mstr_all[mstr_all.index < MSTU_INCEPTION].sort_index()
     if len(mstr_pre) < 2:
-        mstu_full = mstu_actual.copy()
+        mstu_full_close = mstu_actual_close.copy()
     else:
         mstr_lr_pre = np.log(mstr_pre/mstr_pre.shift(1)).fillna(0.0).values
-        syn_lr = beta*mstr_lr_pre+alpha_ols; syn_lr[0] = 0.0
-        inception_price = float(mstu_actual.iloc[0])
+        syn_lr = beta*mstr_lr_pre+alpha_ols; syn_lr[0]=0.0
+        inception_price = float(mstu_actual_close.iloc[0])
         cum_syn = np.cumsum(syn_lr)
         syn_px = inception_price*np.exp(cum_syn-cum_syn[-1])
         syn_series = pd.Series(syn_px, index=mstr_pre.index)
-        mstu_full = pd.concat([syn_series, mstu_actual])
-        mstu_full = mstu_full[~mstu_full.index.duplicated(keep="last")].sort_index()
+        mstu_full_close = pd.concat([syn_series, mstu_actual_close])
+        mstu_full_close = mstu_full_close[~mstu_full_close.index.duplicated(keep="last")].sort_index()
 
-    return mstu_full.reindex(
-        pd.date_range(mstu_full.index[0], max(mstu_full.index[-1],end_dt), freq="D")
+    full_idx = pd.date_range(mstu_full_close.index[0], max(mstu_full_close.index[-1], end_dt), freq="D")
+    mstu_close_series = mstu_full_close.reindex(full_idx).ffill()
+
+    # Build intraday low series
+    # Post-inception: actual MSTU Low
+    mstu_lo_actual_reindexed = mstu_actual_low.reindex(
+        pd.date_range(mstu_actual_low.index[0], max(mstu_actual_low.index[-1], end_dt), freq="D")
     ).ffill()
+
+    # Pre-inception: approximate as 2× BTC intraday drawdown applied to prior MSTU close
+    btc_close = df_btc["btc_close"]
+    btc_low   = df_btc["btc_low"]
+    mstu_lo_series = pd.Series(np.nan, index=full_idx)
+    for dt in full_idx:
+        if dt >= MSTU_INCEPTION:
+            lo = mstu_lo_actual_reindexed.get(dt, np.nan)
+            mstu_lo_series[dt] = lo if pd.notna(lo) else np.nan
+        else:
+            # 2× BTC intraday drawdown on prior MSTU close
+            prev_dt = dt - pd.Timedelta(days=1)
+            while prev_dt not in mstu_close_series.index and prev_dt >= full_idx[0]:
+                prev_dt -= pd.Timedelta(days=1)
+            prev_px = mstu_close_series.get(prev_dt, np.nan)
+            btc_c   = btc_close.get(dt, np.nan)
+            btc_l   = btc_low.get(dt, np.nan)
+            if pd.notna(prev_px) and pd.notna(btc_c) and pd.notna(btc_l) and btc_c > 0:
+                btc_dd = min(0.0, (btc_l - btc_c) / btc_c)
+                mstu_lo_series[dt] = max(0.01, prev_px * (1.0 + 2.0 * btc_dd))
+            else:
+                mstu_lo_series[dt] = prev_px if pd.notna(prev_px) else np.nan
+
+    mstu_lo_series = mstu_lo_series.ffill()
+    return mstu_close_series, mstu_lo_series
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SIGNAL GENERATION  (extended to return raw arrays for re-entry criteria)
+# SIGNAL GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_signals(comp: pd.DataFrame) -> dict:
-    """Compute all TF2+V-Gate arrays.  Also returns raw ehma3/hb3 for RE6."""
+    """All TF2+V-Gate signal arrays.  Returns raw ehma3/hb3 for RE6."""
     N       = len(comp)
     c_asof  = comp["close_asof"].values.astype(float)
     pred_hi = comp["pred_high"].values.astype(float)
@@ -373,137 +405,124 @@ def build_signals(comp: pd.DataFrame) -> dict:
     act_hi  = comp["actual_high"].values.astype(float)
     act_lo  = comp["actual_low"].values.astype(float)
 
-    err_hi = (act_hi-pred_hi)/c_asof*100
-    err_lo = (pred_lo-act_lo)/c_asof*100
-    hi_brk = (act_hi>pred_hi).astype(int)
-    lo_brk = (act_lo<pred_lo).astype(int)
+    err_hi=(act_hi-pred_hi)/c_asof*100; err_lo=(pred_lo-act_lo)/c_asof*100
+    hi_brk=(act_hi>pred_hi).astype(int); lo_brk=(act_lo<pred_lo).astype(int)
 
-    ehma3 = np.zeros(N); elma3 = np.zeros(N)
-    hb3   = np.zeros(N, dtype=int); lb3 = np.zeros(N, dtype=int)
+    ehma3=np.zeros(N); elma3=np.zeros(N)
+    hb3=np.zeros(N,dtype=int); lb3=np.zeros(N,dtype=int)
     for i in range(N):
         s=max(0,i-2)
         ehma3[i]=np.mean(err_hi[s:i+1]); elma3[i]=np.mean(err_lo[s:i+1])
         hb3[i]=int(np.sum(hi_brk[s:i+1])); lb3[i]=int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3>0.7) & (hb3>=2)
-    d1 = (lb3>=2)    & (elma3>0.5)
-    d2 = ehma3 < -0.75
-    d3 = np.zeros(N, dtype=bool)
+    u1=(ehma3>0.7)&(hb3>=2)
+    d1=(lb3>=2)&(elma3>0.5)
+    d2=ehma3<-0.75
+    d3=np.zeros(N,dtype=bool)
     for i in range(1,N):
-        consec = 0
+        consec=0
         for k in range(i-1,-1,-1):
-            if hi_brk[k]: consec += 1
+            if hi_brk[k]: consec+=1
             else: break
-        if consec >= 3 and lo_brk[i]:
-            d3[i] = True
+        if consec>=3 and lo_brk[i]: d3[i]=True
 
-    ma30 = np.full(N, np.nan)
+    ma30=np.full(N,np.nan)
     for i in range(N):
-        w=min(30,i+1)
-        ma30[i]=np.mean(c_asof[max(0,i-w+1):i+1])
-    above_ma30     = c_asof > ma30
-    ma30_slope_pos = np.zeros(N, dtype=bool)
+        w=min(30,i+1); ma30[i]=np.mean(c_asof[max(0,i-w+1):i+1])
+    above_ma30=c_asof>ma30
+    ma30_slope_pos=np.zeros(N,dtype=bool)
     for i in range(N):
         if i>=5 and np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
-            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
-    bull_regime = above_ma30 & ma30_slope_pos
+            ma30_slope_pos[i]=ma30[i]>ma30[i-5]
+    bull_regime=above_ma30&ma30_slope_pos
 
-    clean_10d = np.zeros(N, dtype=bool)
+    clean_10d=np.zeros(N,dtype=bool)
     for i in range(N):
         lo_i=max(0,i-7)
-        clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
+        clean_10d[i]=not bool(np.any(d1[lo_i:i]|d2[lo_i:i]))
 
-    _DN_NORM_W    = 30
-    roll_ehi_norm = np.array([
-        float(np.mean(err_hi[max(0,i-_DN_NORM_W+1):i+1])) for i in range(N)
-    ])
-    dn_score_arr = np.zeros(N)
+    _DN_NORM_W=30
+    roll_ehi_norm=np.array([float(np.mean(err_hi[max(0,i-_DN_NORM_W+1):i+1])) for i in range(N)])
+    dn_score_arr=np.zeros(N)
     for i in range(N):
         norm=max(abs(roll_ehi_norm[i]),0.01)
-        dn_score_arr[i] = (
-            (-ehma3[i]/norm)                           * 0.30 +
-            (lb3[i]/3.0)                               * 0.30 +
-            (elma3[i]/max(abs(elma3[i]),0.10))         * 0.20 +
-            float(lo_brk[i])                           * 0.20
-        )
-    v_rev_bar = (dn_score_arr>0.8) & (err_lo>3.0)
-    v_recent  = np.zeros(N, dtype=bool)
+        dn_score_arr[i]=((-ehma3[i]/norm)*0.30+(lb3[i]/3.0)*0.30
+                         +(elma3[i]/max(abs(elma3[i]),0.10))*0.20+float(lo_brk[i])*0.20)
+    v_rev_bar=(dn_score_arr>0.8)&(err_lo>3.0)
+    v_recent=np.zeros(N,dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0,i-2):i+1]))
+        v_recent[i]=bool(np.any(v_rev_bar[max(0,i-2):i+1]))
 
-    entry = u1 & (above_ma30 | clean_10d | v_recent)
+    entry=u1&(above_ma30|clean_10d|v_recent)
 
     return dict(
         N=N, d1=d1, d2=d2, d3=d3, bull_regime=bull_regime,
         entry=entry, above_ma30=above_ma30, clean_10d=clean_10d, v_recent=v_recent,
-        # Raw arrays for RE6 (strong U1) criterion
         ehma3=ehma3, hb3=hb3,
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKTEST ENGINE WITH RE-ENTRY CRITERIA
+# BACKTEST ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_backtest_reentry(
-    comp: pd.DataFrame,
-    asset_px: np.ndarray,
-    dates: pd.DatetimeIndex,
-    _bt0: int,
-    signals: dict,
-    sl_type: str   = "trailing",
-    sl_pct: float  = 0.07,
-    reentry_mode: str  = "none",
+    comp:          pd.DataFrame,
+    asset_px:      np.ndarray,       # daily close prices for execution asset
+    asset_lo:      np.ndarray,       # intraday low prices for SL triggering
+    dates:         pd.DatetimeIndex,
+    _bt0:          int,
+    signals:       dict,
+    sl_type:       str   = "fixed",
+    sl_pct:        float = 0.03,
+    sl_label:      str   = "SL-fixed-3%",
+    reentry_mode:  str   = "none",
     reentry_param: float = 0,
     initial_capital: float = INITIAL_CAPITAL,
 ) -> dict:
     """
-    Backtest TF2+V-Gate with Trail-7% stop-loss and a pluggable re-entry filter.
+    Backtest TF2+V-Gate with per-asset fixed stop-loss and a pluggable
+    re-entry filter.  Matches app logic exactly:
 
-    The re-entry filter is ONLY active after a stop-loss exit.  Normal D2/D3
-    signal exits return to the standard U1 re-entry logic immediately.
+      • Intraday low triggers stop-loss; fill at stop price (not at close)
+      • Entry and signal exit are SAME-BAR (like the app, not 1-bar lag)
+      • Stop-loss check takes priority over signal exit within the same bar
+      • Re-entry filter only activates after a stop-loss exit, not after
+        normal D2/D3 signal exits
 
-    reentry_mode options:
-      "NO_SL"        — no stop-loss at all (baseline reference)
-      "none"         — SL applied, immediate re-entry after SL (current behaviour)
-      "cooldown"     — block re-entry for `reentry_param` bars after SL
-      "recovery"     — re-enter only when price > sl_exit_price × (1+reentry_param)
-      "ma30"         — re-enter after SL only when BTC close is above MA30
-      "strong_u1"    — re-enter after SL only when ehma3>1.2 AND hi_breaks>=3
-      "composite"    — cooldown(`reentry_param` bars) AND above MA30
-      "d2reset_ma30" — after SL, wait until D2 fires (clears bull momentum),
-                       then re-enter on next U1 above MA30
+    reentry_mode:
+      "NO_SL"        — no stop-loss at all (reference baseline)
+      "none"         — SL on, immediate U1 re-entry after SL (current)
+      "cooldown"     — block re-entry for reentry_param bars after SL
+      "recovery"     — re-enter only when close > sl_exit_price×(1+param)
+      "ma30"         — re-enter after SL only if BTC is above MA30
+      "strong_u1"    — after SL, require err_hi_ma3>1.2 AND hi_breaks≥3
+      "composite"    — cooldown(param bars) AND above MA30
+      "d2reset_ma30" — after SL, wait for D2 to fire, then re-enter above MA30
     """
     N          = signals["N"]
-    d1         = signals["d1"]
-    d2         = signals["d2"]
-    d3         = signals["d3"]
+    d1         = signals["d1"]; d2 = signals["d2"]; d3 = signals["d3"]
     bull       = signals["bull_regime"]
     entry      = signals["entry"]
     above_ma30 = signals["above_ma30"]
     clean_10d  = signals["clean_10d"]
     v_recent   = signals["v_recent"]
-    ehma3      = signals["ehma3"]
-    hb3        = signals["hb3"]
+    ehma3      = signals["ehma3"]; hb3 = signals["hb3"]
 
-    nav      = initial_capital
-    pos      = "CASH"
-    qty      = 0.0
-    e_price  = e_nav = e_date = e_trigger = None
-    peak_px  = 0.0
-    trades   = []
-    nav_arr  = np.full(N, np.nan)
+    nav    = initial_capital; pos = "CASH"; qty = 0.0
+    e_price = e_nav = e_date = e_trigger = None
+    stop_px = 0.0        # fixed stop level set at entry
+    trades  = []; nav_arr = np.full(N, np.nan)
 
-    # Re-entry state (only active after SL exits)
-    sl_active          = False   # currently in post-SL re-entry filter mode
-    sl_exit_bar        = -999    # bar index of last SL exit
-    sl_exit_price      = 0.0    # asset price at last SL exit
-    d2_fired_since_sl  = False   # D2 signal fired since last SL exit
-    n_reentry_blocked  = 0       # count of U1 signals blocked by re-entry filter
+    sl_active          = False
+    sl_exit_bar        = -999
+    sl_exit_price      = 0.0
+    d2_fired_since_sl  = False
+    n_reentry_blocked  = 0
 
     for i in range(N):
-        si    = i - 1
         price = asset_px[i]
+        lo    = asset_lo[i] if np.isfinite(asset_lo[i]) else price
 
         if i < _bt0:
             nav_arr[i] = initial_capital
@@ -514,111 +533,96 @@ def run_backtest_reentry(
             continue
 
         if pos == "LONG":
-            if sl_type == "trailing":
-                peak_px = max(peak_px, price)
-
-            # Evaluate stop-loss
-            stop_hit = False; exit_lbl = ""
+            # 1. Intraday stop check (highest priority)
+            stop_hit = False; exit_px = price; exit_lbl = ""
             if reentry_mode != "NO_SL" and sl_type == "fixed" and sl_pct > 0:
-                if price < e_price*(1.0-sl_pct):
-                    stop_hit = True; exit_lbl = f"SL-fixed-{sl_pct*100:.0f}%"
-            elif reentry_mode != "NO_SL" and sl_type == "trailing" and sl_pct > 0:
-                if price < peak_px*(1.0-sl_pct):
-                    stop_hit = True; exit_lbl = f"SL-trail-{sl_pct*100:.0f}%"
+                if lo < stop_px:
+                    stop_hit = True
+                    exit_px  = stop_px   # fill at stop level
+                    exit_lbl = sl_label
 
-            # Evaluate signal exit (1-bar lag)
-            sig_exit = False
-            if si >= 0:
-                sig_exit = bool(d3[si] or (d2[si] and not bull[si]))
-                sig_lbl  = "D3" if (si>=0 and d3[si]) else "D2(bear)"
+            # 2. Same-bar signal exit (only if stop not hit)
+            sig_exit = False; sig_lbl = ""
+            if not stop_hit:
+                sig_exit = bool(d3[i] or (d2[i] and not bull[i]))
+                sig_lbl  = "D3" if d3[i] else "D2(bear)"
 
             should_exit = stop_hit or sig_exit
             if should_exit:
                 if not exit_lbl: exit_lbl = sig_lbl
-                nav = qty * price
+                nav = qty * exit_px
                 trades.append(dict(
                     entry_date     = e_date,
                     entry_price    = e_price,
                     entry_trigger  = e_trigger,
                     entry_nav      = e_nav,
                     exit_date      = dates[i],
-                    exit_price     = price,
+                    exit_price     = exit_px,
                     exit_nav       = nav,
                     exit_signal    = exit_lbl,
-                    pnl_pct        = (price/e_price - 1)*100,
+                    pnl_pct        = (exit_px/e_price - 1)*100,
                     pnl_abs        = nav - e_nav,
                     duration_days  = (dates[i]-e_date).days,
-                    peak_price     = peak_px,
                     stop_triggered = stop_hit,
                 ))
-                pos = "CASH"; qty = 0.0
+                pos = "CASH"; qty = 0.0; stop_px = 0.0
                 e_price = e_nav = e_date = e_trigger = None
-
                 if stop_hit:
-                    sl_active         = True
-                    sl_exit_bar       = i
-                    sl_exit_price     = price
-                    d2_fired_since_sl = False
+                    sl_active        = True
+                    sl_exit_bar      = i
+                    sl_exit_price    = exit_px
+                    d2_fired_since_sl= False
+            else:
+                nav = qty * price
 
         else:  # CASH
-            # Track D2 firing after SL exit (used by d2reset_ma30)
-            if sl_active and si >= 0 and d2[si]:
+            # Track D2 firing post-SL for d2reset_ma30 criterion
+            if sl_active and d2[i]:
                 d2_fired_since_sl = True
 
-            if si >= 0 and entry[si]:
-                # Determine whether the re-entry filter allows entry here
+            # Same-bar entry: entry[i] observed, act at bar i's close
+            _exit_at_i = bool(d3[i] or (d2[i] and not bull[i]))
+            if entry[i] and not _exit_at_i:
                 can_enter = True
-
                 if sl_active:
                     if reentry_mode == "cooldown":
-                        cooldown = int(reentry_param)
-                        can_enter = (i >= sl_exit_bar + cooldown + 1)
-
+                        can_enter = (i >= sl_exit_bar + int(reentry_param) + 1)
                     elif reentry_mode == "recovery":
+                        # Price must close above sl_exit_price × (1+param)
                         can_enter = (price > sl_exit_price * (1.0 + float(reentry_param)))
-
                     elif reentry_mode == "ma30":
-                        # MA30 mandatory (not just one of three gates)
-                        can_enter = bool(above_ma30[si])
-
+                        can_enter = bool(above_ma30[i])
                     elif reentry_mode == "strong_u1":
-                        # Stricter momentum: err_hi_ma3 > 1.2% AND 3 hi-breaks in 3d
-                        can_enter = bool(ehma3[si] > 1.2 and hb3[si] >= 3)
-
+                        can_enter = bool(ehma3[i] > 1.2 and hb3[i] >= 3)
                     elif reentry_mode == "composite":
                         cooldown = int(reentry_param)
-                        can_enter = (
-                            (i >= sl_exit_bar + cooldown + 1)
-                            and bool(above_ma30[si])
-                        )
-
+                        can_enter = (i >= sl_exit_bar + cooldown + 1) and bool(above_ma30[i])
                     elif reentry_mode == "d2reset_ma30":
-                        # Wait until D2 fires post-SL (signals momentum has reset),
-                        # then require above MA30 for re-entry
-                        can_enter = d2_fired_since_sl and bool(above_ma30[si])
+                        can_enter = d2_fired_since_sl and bool(above_ma30[i])
 
                     if not can_enter:
                         n_reentry_blocked += 1
                     else:
-                        sl_active = False   # filter satisfied; exit SL mode
+                        sl_active = False   # filter passed; clear SL mode
 
                 if can_enter:
                     qty     = nav / price
-                    e_price = price; e_date = dates[i]
-                    e_nav   = nav;   peak_px = price
+                    e_price = price; e_date = dates[i]; e_nav = nav
+                    # Set stop for new position (fixed at entry close)
+                    stop_px = price * (1.0 - sl_pct) if reentry_mode != "NO_SL" else 0.0
                     pos     = "LONG"
-                    if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                    if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                         e_trigger = "U1+V-rev"
-                    elif above_ma30[si] and clean_10d[si]:
+                    elif above_ma30[i] and clean_10d[i]:
                         e_trigger = "U1+↑MA30+c10d"
-                    elif above_ma30[si]:
+                    elif above_ma30[i]:
                         e_trigger = "U1+↑MA30"
                     else:
                         e_trigger = "U1+c10d"
 
         nav_arr[i] = qty*price if pos=="LONG" else nav
 
-    if pos=="LONG" and np.isfinite(asset_px[N-1]) and asset_px[N-1] > 0:
+    if pos=="LONG" and np.isfinite(asset_px[N-1]) and asset_px[N-1]>0:
         nav_arr[N-1] = qty*asset_px[N-1]
 
     nav_series = pd.Series(nav_arr[_bt0:], index=dates[_bt0:]).ffill()
@@ -637,40 +641,33 @@ def run_backtest_reentry(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def compute_metrics(res: dict, ic: float = INITIAL_CAPITAL) -> dict:
-    nav    = res["nav"]; bh = res["bh"]; trades = res["trades"]
-    final  = float(nav.iloc[-1])
-    bh_fin = float(bh.iloc[-1])
-    ret    = (final/ic - 1)*100
-    bh_ret = (bh_fin/ic - 1)*100
-    n_yr   = (nav.index[-1]-nav.index[0]).days/365.25
-    cagr   = ((final/ic)**(1/n_yr)-1)*100 if n_yr > 0 else 0.0
-    rm     = nav.cummax()
-    max_dd = float(((nav-rm)/rm*100).min())
-    dr     = nav.pct_change().fillna(0)
-    rf_d   = (1.045)**(1/252)-1
-    exc    = dr-rf_d
-    sharpe = float(exc.mean()/exc.std()*np.sqrt(252)) if exc.std() > 0 else 0.0
-    wins   = [t for t in trades if t["pnl_pct"] > 0]
-    losses = [t for t in trades if t["pnl_pct"] <= 0]
-    wr     = 100*len(wins)/len(trades) if trades else 0.0
-    best   = max([t["pnl_pct"] for t in trades]) if trades else 0.0
-    worst  = min([t["pnl_pct"] for t in trades]) if trades else 0.0
-    avg_pnl= float(np.mean([t["pnl_pct"] for t in trades])) if trades else 0.0
-    gp     = sum(t["pnl_abs"] for t in wins) if wins else 0.0
-    gl     = abs(sum(t["pnl_abs"] for t in losses)) if losses else 1.0
-    pf     = gp/gl if gl > 0 else float("inf")
-    days_in= sum(t["duration_days"] for t in trades)
-    tot_d  = max(1,(nav.index[-1]-nav.index[0]).days)
-    n_sl   = sum(1 for t in trades if t.get("stop_triggered",False))
-    n_blocked = res.get("n_reentry_blocked", 0)
+    nav=res["nav"]; bh=res["bh"]; trades=res["trades"]
+    final=float(nav.iloc[-1]); bh_fin=float(bh.iloc[-1])
+    ret=(final/ic-1)*100; bh_ret=(bh_fin/ic-1)*100
+    n_yr=(nav.index[-1]-nav.index[0]).days/365.25
+    cagr=((final/ic)**(1/n_yr)-1)*100 if n_yr>0 else 0.0
+    rm=nav.cummax(); max_dd=float(((nav-rm)/rm*100).min())
+    dr=nav.pct_change().fillna(0); rf_d=(1.045)**(1/252)-1
+    exc=dr-rf_d
+    sharpe=float(exc.mean()/exc.std()*np.sqrt(252)) if exc.std()>0 else 0.0
+    wins=[t for t in trades if t["pnl_pct"]>0]
+    losses=[t for t in trades if t["pnl_pct"]<=0]
+    wr=100*len(wins)/len(trades) if trades else 0.0
+    best=max([t["pnl_pct"] for t in trades]) if trades else 0.0
+    worst=min([t["pnl_pct"] for t in trades]) if trades else 0.0
+    avg_pnl=float(np.mean([t["pnl_pct"] for t in trades])) if trades else 0.0
+    gp=sum(t["pnl_abs"] for t in wins) if wins else 0.0
+    gl=abs(sum(t["pnl_abs"] for t in losses)) if losses else 1.0
+    pf=gp/gl if gl>0 else float("inf")
+    days_in=sum(t["duration_days"] for t in trades)
+    tot_d=max(1,(nav.index[-1]-nav.index[0]).days)
+    n_sl=sum(1 for t in trades if t.get("stop_triggered",False))
+    n_blocked=res.get("n_reentry_blocked",0)
     return dict(
-        ret=ret, bh_ret=bh_ret, cagr=cagr,
-        max_dd=max_dd, sharpe=sharpe,
+        ret=ret, bh_ret=bh_ret, cagr=cagr, max_dd=max_dd, sharpe=sharpe,
         n_trades=len(trades), win_rate=wr, avg_pnl=avg_pnl,
         best=best, worst=worst, profit_factor=pf,
-        time_in=100*days_in/tot_d,
-        n_sl_exits=n_sl,
-        n_reentry_blocked=n_blocked,
+        time_in=100*days_in/tot_d, n_sl_exits=n_sl, n_reentry_blocked=n_blocked,
     )
 
 
@@ -681,145 +678,120 @@ def compute_metrics(res: dict, ic: float = INITIAL_CAPITAL) -> dict:
 RE_LABELS = [cfg[0] for cfg in RE_CONFIGS]
 COL_W = 18
 
+_SHORT_HDRS = [
+    ("Baseline", "(no SL)"),
+    ("RE0",      "Immediate"),
+    ("RE1",      "3d Cool"),
+    ("RE2",      "5d Cool"),
+    ("RE3",      "Recov+2%"),
+    ("RE4",      "Recov+5%"),
+    ("RE5",      "MA30 Mand"),
+    ("RE6",      "Strong U1"),
+    ("RE7",      "3d+MA30"),
+    ("RE8",      "D2+MA30"),
+]
 
-def print_period_table(period_label: str, asset: str,
+
+def print_period_table(period_label: str, asset: str, sl_desc: str,
                        results_list: list, bh_ret: float):
-    """Print a comparison table for one period × one asset across all re-entry configs."""
     metrics_list = [compute_metrics(r) for r in results_list]
-
-    hdr = f"  Asset: {asset}   Period: {period_label}"
-    print(f"\n{hdr}")
-    print(f"  B&H return for period: {bh_ret:+.1f}%   "
-          f"(Trail-7% SL used for RE0–RE8; no SL for Baseline)")
-    sep = "  " + "─"*(32 + COL_W*len(RE_LABELS))
+    print(f"\n  Asset: {asset}  [{sl_desc}]   Period: {period_label}")
+    print(f"  B&H return for period: {bh_ret:+.1f}%")
+    sep = "  " + "─"*(32+COL_W*len(RE_LABELS))
     print(sep)
-    # Column headers (wrap at 17 chars)
-    short_labels = [
-        "Baseline\n(no SL)",
-        "RE0\nImmediate",
-        "RE1\n3d Cooldown",
-        "RE2\n5d Cooldown",
-        "RE3\nRecov+2%",
-        "RE4\nRecov+5%",
-        "RE5\nMA30 Mand.",
-        "RE6\nStrong U1",
-        "RE7\n3d+MA30",
-        "RE8\nD2+MA30",
-    ]
-    # Print two-line header
-    top    = f"  {'Metric':<32}" + "".join(f"{s.split(chr(10))[0]:>{COL_W}}" for s in short_labels)
-    bottom = f"  {'':32}"        + "".join(f"{s.split(chr(10))[1]:>{COL_W}}" for s in short_labels)
+    top    = f"  {'Metric':<32}" + "".join(f"{h[0]:>{COL_W}}" for h in _SHORT_HDRS)
+    bottom = f"  {'':32}"        + "".join(f"{h[1]:>{COL_W}}" for h in _SHORT_HDRS)
     print(top); print(bottom); print(sep)
 
-    base = metrics_list[0]   # Baseline (no SL) is the first config
-
-    def row(label: str, key: str, fmt: str, higher_better: bool = True):
-        vals = [m[key] for m in metrics_list]
-        cells = []
-        for j, v in enumerate(vals):
-            s = f"{v:{fmt}}"
-            if j == 0:
+    def row(label, key, fmt, hb=True):
+        vals=[m[key] for m in metrics_list]
+        cells=[]
+        for j,v in enumerate(vals):
+            s=f"{v:{fmt}}"
+            if j==0:
                 cells.append(f"{s:>{COL_W}}")
             else:
-                delta = v - vals[0]
-                if abs(delta) < 0.05:
-                    marker = " ="
-                elif (delta > 0) == higher_better:
-                    marker = " ▲"
-                else:
-                    marker = " ▼"
+                delta=v-vals[0]
+                marker=" ="  if abs(delta)<0.05 else (" ▲" if (delta>0)==hb else " ▼")
                 cells.append(f"{s:>{COL_W-2}}{marker}")
-        print(f"  {label:<32}" + "".join(cells))
+        print(f"  {label:<32}"+"".join(cells))
 
-    row("Total return (%)",        "ret",                "+.1f")
-    row("CAGR (%)",                "cagr",               "+.1f")
-    row("Max drawdown (%)",        "max_dd",             "+.1f", higher_better=True)
-    row("Sharpe ratio",            "sharpe",             ".2f")
-    row("Win rate (%)",            "win_rate",           ".1f")
-    row("Profit factor",           "profit_factor",      ".2f")
-    row("Avg trade P&L (%)",       "avg_pnl",            "+.2f")
-    row("Best trade (%)",          "best",               "+.1f")
-    row("Worst trade (%)",         "worst",              "+.1f", higher_better=True)
-    row("# Trades",                "n_trades",           "d",    higher_better=False)
-    row("# SL exits",              "n_sl_exits",         "d",    higher_better=False)
-    row("# Re-entries blocked",    "n_reentry_blocked",  "d",    higher_better=False)
-    row("Time in market (%)",      "time_in",            ".1f",  higher_better=False)
+    row("Total return (%)",     "ret",               "+.1f")
+    row("CAGR (%)",             "cagr",              "+.1f")
+    row("Max drawdown (%)",     "max_dd",            "+.1f", hb=True)
+    row("Sharpe ratio",         "sharpe",            ".2f")
+    row("Win rate (%)",         "win_rate",          ".1f")
+    row("Profit factor",        "profit_factor",     ".2f")
+    row("Avg trade P&L (%)",    "avg_pnl",           "+.2f")
+    row("Best trade (%)",       "best",              "+.1f")
+    row("Worst trade (%)",      "worst",             "+.1f", hb=True)
+    row("# Trades",             "n_trades",          "d",   hb=False)
+    row("# SL exits",           "n_sl_exits",        "d",   hb=False)
+    row("# Re-entries blocked", "n_reentry_blocked", "d",   hb=False)
+    row("Time in market (%)",   "time_in",           ".1f", hb=False)
     print(sep)
 
 
-def print_asset_summary(asset: str, all_period_metrics: dict):
-    """Print Return | Max-DD | Sharpe summary across all periods for one asset."""
+def print_asset_summary(asset: str, sl_desc: str, all_period_metrics: dict):
     print(f"\n{'═'*120}")
-    print(f"  SUMMARY — {asset}  |  ▲=better vs Baseline(no-SL)  ▼=worse")
+    print(f"  SUMMARY — {asset} [{sl_desc}]  |  ▲=better vs Baseline(no-SL)  ▼=worse")
     print(f"{'═'*120}")
-    hdr_line = f"  {'Period / Metric':<40}" + "".join(f"{c:>{COL_W}}" for c in RE_LABELS)
-    print(hdr_line)
+    hdr = f"  {'Period / Metric':<40}" + "".join(f"{c:>{COL_W}}" for c in RE_LABELS)
+    print(hdr)
     print(f"  {'─'*40}" + "─"*COL_W*len(RE_LABELS))
-
     for period, mlist in all_period_metrics.items():
         short_p = period[:36]
-        for key, label, fmt, hb in [
-            ("ret",    "  Return (%)",    "+.1f", True),
-            ("max_dd", "  Max DD (%)",    "+.1f", True),
-            ("sharpe", "  Sharpe",        ".2f",  True),
+        for key, lbl, fmt, hb in [
+            ("ret",    "  Return (%)", "+.1f", True),
+            ("max_dd", "  Max DD (%)", "+.1f", True),
+            ("sharpe", "  Sharpe",     ".2f",  True),
         ]:
-            vals = [m[key] for m in mlist]
-            cells = []
-            for j, v in enumerate(vals):
-                s = f"{v:{fmt}}"
-                if j == 0:
+            vals=[m[key] for m in mlist]
+            cells=[]
+            for j,v in enumerate(vals):
+                s=f"{v:{fmt}}"
+                if j==0:
                     cells.append(f"{s:>{COL_W}}")
                 else:
-                    delta = v - vals[0]
-                    if abs(delta) < 0.05:
-                        marker = "="
-                    elif (delta > 0) == hb:
-                        marker = "▲"
-                    else:
-                        marker = "▼"
+                    delta=v-vals[0]
+                    marker="=" if abs(delta)<0.05 else ("▲" if (delta>0)==hb else "▼")
                     cells.append(f"{s:>{COL_W-1}}{marker}")
-            period_prefix = f"  {short_p:<38}" if key=="ret" else f"  {'':38}"
-            print(f"{period_prefix} {label:<1}" + "".join(cells))
+            prefix=f"  {short_p:<38}" if key=="ret" else f"  {'':38}"
+            print(f"{prefix} {lbl:<1}" + "".join(cells))
         print()
 
 
-def print_cross_asset_recommendation(all_asset_results: dict):
-    """Print a concise recommendation table comparing best criteria per asset."""
-    print("\n" + "═"*120)
-    print("  CROSS-ASSET RECOMMENDATION SUMMARY")
-    print("  Scoring: for each (asset × period), award 1 point if criterion beats RE0 on Return AND Sharpe.")
-    print("  The criterion with the most points across all periods for a given asset is recommended.")
+def print_recommendation(all_asset_results: dict):
+    print("\n"+"═"*120)
+    print("  CROSS-PERIOD RECOMMENDATION SUMMARY")
+    print("  Scoring: award 1 pt per period where criterion beats RE0 on BOTH Return AND Sharpe.")
     print("═"*120)
-
-    re_labels = RE_LABELS[1:]   # skip Baseline (no-SL); compare RE0–RE8
+    re_labels = RE_LABELS[1:]   # skip Baseline(no-SL); compare RE0–RE8
 
     for asset, per_asset in all_asset_results.items():
-        scores = {lbl: 0 for lbl in re_labels}
-        n_periods = 0
-
+        scores={lbl:0 for lbl in re_labels}; n_p=0
+        re0_wins=0   # periods where RE0 beats baseline on return
         for period, mlist in per_asset.items():
             if not mlist: continue
-            n_periods += 1
-            base_m  = mlist[0]  # Baseline (no SL)
-            re0_m   = mlist[1]  # RE0 (immediate, current behaviour)
-
-            for j, lbl in enumerate(re_labels):
-                m = mlist[j+1]  # j+1 because index 0 is Baseline
-                # Award point if this criterion beats RE0 on return AND sharpe
-                if m["ret"] > re0_m["ret"] and m["sharpe"] > re0_m["sharpe"]:
-                    scores[lbl] += 1
-
-        best_crit = max(scores, key=lambda k: scores[k])
-        best_score = scores[best_crit]
-
-        print(f"\n  {asset}  ({n_periods} periods scored)")
-        print(f"  {'Criterion':<22}" + "  ".join(f"{lbl[:16]:>16}" for lbl in re_labels))
-        print(f"  {'Score / ' + str(n_periods):<22}" +
-              "  ".join(f"{scores[lbl]:>16d}" for lbl in re_labels))
-        if best_score > 0:
-            print(f"  ► Best: {best_crit}  (beats RE0 in {best_score}/{n_periods} periods on Return+Sharpe)")
+            n_p+=1
+            re0_m=mlist[1]  # RE0
+            if re0_m["ret"]>mlist[0]["ret"]: re0_wins+=1
+            for j,lbl in enumerate(re_labels):
+                m=mlist[j+1]
+                if m["ret"]>re0_m["ret"] and m["sharpe"]>re0_m["sharpe"]:
+                    scores[lbl]+=1
+        best_crit=max(scores,key=lambda k:scores[k])
+        best_score=scores[best_crit]
+        print(f"\n  {asset}  ({n_p} periods;  RE0 beats no-SL baseline in {re0_wins}/{n_p} periods on Return)")
+        col_fmt = "  ".join(f"{lbl[:16]:>16}" for lbl in re_labels)
+        print(f"  {'Criterion':<22}" + col_fmt)
+        score_fmt = "  ".join(f"{scores[lbl]:>16d}" for lbl in re_labels)
+        print(f"  {'Score / ' + str(n_p):<22}" + score_fmt)
+        if best_score>0:
+            print(f"  ► Recommended: {best_crit}  "
+                  f"(outperforms RE0 on Return+Sharpe in {best_score}/{n_p} periods)")
         else:
-            print(f"  ► No criterion consistently beats RE0 across periods for {asset}")
+            print(f"  ► No criterion consistently outperforms RE0 for {asset}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -827,52 +799,56 @@ def print_cross_asset_recommendation(all_asset_results: dict):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═"*80)
-    print("  BTC RANGE MODEL — Re-Entry Criteria Evaluation (post Stop-Loss)")
+    TODAY = "2026-06-09"
+    print("\n"+"═"*80)
+    print("  BTC RANGE MODEL — Re-Entry Criteria Evaluation")
+    print("  MSTR: Fixed -3% stop  |  MSTU: Fixed -10% stop")
+    print("  (intraday-triggered, fill at stop price; same-bar entry/exit)")
     print("═"*80)
-    print(f"  Base SL: Trail-{SL_PCT*100:.0f}% (trailing stop)")
-    print(f"  Testing {len(RE_CONFIGS)} re-entry criteria × "
-          f"{len(PERIODS)} periods × 3 assets\n")
+    print(f"  Testing {len(RE_CONFIGS)} re-entry criteria × {len(PERIODS)} periods × 2 assets\n")
 
-    # ── Load model ─────────────────────────────────────────────────────────────
+    # Load model
     model_path = _ROOT/"models"/"inference_assets_ct.joblib"
     print("Loading CT model …", end=" ", flush=True)
     AD = joblib.load(str(model_path))
     cm = AD.get("calibration_meta", {})
-    oos_start = cm.get("test_start", "2026-03-01")
+    oos_start = cm.get("test_start","2026-03-01")
     print(f"OK  (trained through {cm.get('train_end','?')}, test_start={oos_start})")
     PERIODS["OOS Only   (Mar 2026–Jun 2026)"] = (oos_start, "2026-06-07")
 
-    # ── Fetch data ──────────────────────────────────────────────────────────────
     print("\n[1/4] Fetching BTC + macro + on-chain data …")
-    df = fetch_btc_and_macro("2026-06-09")
+    df = fetch_btc_and_macro(TODAY)
 
     print("\n[2/4] Building CT predictions …", end=" ", flush=True)
     preds = build_features_and_predictions(df, AD)
     print(f"{len(preds)} bars")
 
-    print("\n[3/4] Fetching MSTR prices …", end=" ", flush=True)
-    mstr_all = fetch_mstr("2026-06-09")
-    print(f"{len(mstr_all)} bars")
+    print("\n[3/4] Fetching MSTR OHLC …", end=" ", flush=True)
+    mstr_close, mstr_lo = fetch_mstr_ohlc(TODAY)
+    print(f"{len(mstr_close)} close bars, {int(mstr_lo.notna().sum())} low bars")
 
-    print("\n[4/4] Building synthetic MSTU prices …", end=" ", flush=True)
-    mstu_all = build_synthetic_mstu("2026-06-09")
-    print(f"{len(mstu_all)} bars")
+    print("\n[4/4] Building MSTU prices + intraday lows …", end=" ", flush=True)
+    mstu_close, mstu_lo = build_mstu_px_and_lo(TODAY, df)
+    print(f"{len(mstu_close)} close bars, {int(mstu_lo.notna().sum())} low bars")
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Run backtests
-    # ══════════════════════════════════════════════════════════════════════════
     asset_defs = {
-        "BTC":  None,
-        "MSTR": mstr_all,
-        "MSTU": mstu_all,
+        "MSTR": {
+            "close": mstr_close, "lo": mstr_lo,
+            "sl_type": "fixed", "sl_pct": 0.03, "sl_label": "SL-fixed-3%",
+            "sl_desc": "Fixed -3% stop",
+        },
+        "MSTU": {
+            "close": mstu_close, "lo": mstu_lo,
+            "sl_type": "fixed", "sl_pct": 0.10, "sl_label": "SL-fixed-10%",
+            "sl_desc": "Fixed -10% stop",
+        },
     }
 
-    all_results: dict = {}  # asset → period → list[result_dict]
+    all_results: dict = {}
 
-    for asset_name, asset_price_series in asset_defs.items():
+    for asset_name, adef in asset_defs.items():
         print(f"\n{'─'*80}")
-        print(f"  Running backtests for {asset_name}")
+        print(f"  Running backtests for {asset_name}  [{adef['sl_desc']}]")
         print(f"{'─'*80}")
         per_asset: dict = {}
 
@@ -881,12 +857,9 @@ def main():
             end_dt   = pd.Timestamp(p_end)
             pre_dt   = start_dt - pd.Timedelta(days=60)
 
-            p_slice = preds.loc[
-                (preds.index >= pre_dt) & (preds.index <= end_dt)
-            ].copy()
+            p_slice = preds.loc[(preds.index>=pre_dt)&(preds.index<=end_dt)].copy()
             if len(p_slice) < WARMUP+3:
-                print(f"  SKIP {period_label}: insufficient prediction rows")
-                continue
+                print(f"  SKIP {period_label}: insufficient rows"); continue
 
             p_slice["actual_high"]  = df["btc_high"].reindex(p_slice.index).values
             p_slice["actual_low"]   = df["btc_low"].reindex(p_slice.index).values
@@ -894,18 +867,15 @@ def main():
             comp = p_slice.dropna(
                 subset=["actual_high","actual_low","actual_close"]
             ).reset_index()
-            N = len(comp)
+            N = len(comp);
             if N < WARMUP+3: continue
-
             dates = pd.DatetimeIndex(comp["target_date"])
             _bt0  = max(WARMUP, int(dates.searchsorted(start_dt)))
             if N-_bt0 < 3: continue
 
-            btc_px_arr = comp["actual_close"].values.astype(float)
-            ax = (
-                asset_price_series.reindex(dates).ffill().bfill().values.astype(float)
-                if asset_price_series is not None else btc_px_arr
-            )
+            # Asset execution prices
+            ax  = adef["close"].reindex(dates).ffill().bfill().values.astype(float)
+            alo = adef["lo"].reindex(dates).ffill().bfill().values.astype(float)
 
             signals = build_signals(comp)
 
@@ -913,53 +883,51 @@ def main():
             for re_label, re_mode, re_param in RE_CONFIGS:
                 if re_mode == "NO_SL":
                     res = run_backtest_reentry(
-                        comp, ax, dates, _bt0, signals,
-                        sl_type="none", sl_pct=0.0,
+                        comp, ax, alo, dates, _bt0, signals,
+                        sl_type="none", sl_pct=0.0, sl_label="",
                         reentry_mode="NO_SL",
                     )
                 else:
                     res = run_backtest_reentry(
-                        comp, ax, dates, _bt0, signals,
-                        sl_type=SL_TYPE, sl_pct=SL_PCT,
+                        comp, ax, alo, dates, _bt0, signals,
+                        sl_type=adef["sl_type"], sl_pct=adef["sl_pct"],
+                        sl_label=adef["sl_label"],
                         reentry_mode=re_mode, reentry_param=re_param,
                     )
                 period_results.append(res)
 
-            bh_ret = (ax[N-1]/ax[_bt0]-1)*100 if ax[_bt0] > 0 else 0.0
+            bh_ret = (ax[N-1]/ax[_bt0]-1)*100 if ax[_bt0]>0 else 0.0
             per_asset[period_label] = period_results
-            baseline_ret = compute_metrics(period_results[0])["ret"]
-            re0_ret      = compute_metrics(period_results[1])["ret"]
+            bl_ret = compute_metrics(period_results[0])["ret"]
+            re0_ret= compute_metrics(period_results[1])["ret"]
             print(f"  {period_label}  ({N-_bt0} bars)  "
                   f"B&H {bh_ret:+.1f}%  "
-                  f"Baseline(no SL) {baseline_ret:+.1f}%  "
+                  f"Baseline(no-SL) {bl_ret:+.1f}%  "
                   f"RE0(immediate) {re0_ret:+.1f}%")
 
         all_results[asset_name] = per_asset
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Print detailed tables
-    # ══════════════════════════════════════════════════════════════════════════
-    print("\n\n" + "═"*120)
-    print("  RE-ENTRY CRITERIA EVALUATION RESULTS")
-    print("  ▲ = improvement vs Baseline(no-SL)   ▼ = deterioration vs Baseline(no-SL)")
+    # ── Print detailed tables ─────────────────────────────────────────────────
+    print("\n\n"+"═"*120)
+    print("  RE-ENTRY CRITERIA RESULTS  (▲/▼ vs Baseline no-SL)")
     print("═"*120)
 
     for asset_name, per_asset in all_results.items():
+        adef = asset_defs[asset_name]
         print(f"\n\n{'█'*120}")
-        print(f"  ASSET: {asset_name}")
+        print(f"  ASSET: {asset_name}   [{adef['sl_desc']}]")
         print(f"{'█'*120}")
         summary_data: dict = {}
 
         for period_label, period_results in per_asset.items():
             ax_bh = compute_metrics(period_results[0])["bh_ret"]
-            print_period_table(period_label, asset_name, period_results, ax_bh)
+            print_period_table(period_label, asset_name, adef["sl_desc"],
+                               period_results, ax_bh)
             summary_data[period_label] = [compute_metrics(r) for r in period_results]
 
-        print_asset_summary(asset_name, summary_data)
+        print_asset_summary(asset_name, adef["sl_desc"], summary_data)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Cross-asset recommendation
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── Cross-period recommendation ───────────────────────────────────────────
     all_period_metrics_by_asset = {
         asset: {
             period: [compute_metrics(r) for r in results]
@@ -967,62 +935,42 @@ def main():
         }
         for asset, per_asset in all_results.items()
     }
-    print_cross_asset_recommendation(all_period_metrics_by_asset)
+    print_recommendation(all_period_metrics_by_asset)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Interpretation guide
-    # ══════════════════════════════════════════════════════════════════════════
-    print("\n" + "═"*120)
+    # ── Interpretation guide ──────────────────────────────────────────────────
+    print("\n"+"═"*120)
     print("  INTERPRETATION GUIDE")
     print("═"*120)
-    print("""
-  What each criterion does and when it helps:
-  ────────────────────────────────────────────
-  RE0  Immediate       — Re-enters on the very next U1 after SL. Can whipsaw in
-                         bear trends where the SL fired for good reason.
+    print(f"""
+  Stop-loss mechanics (matching live strategy):
+  ─────────────────────────────────────────────
+  MSTR  Fixed -3%   stop set at entry_price × 0.97.  Triggered when the
+        day's intraday LOW breaches the stop level; filled at stop price.
+        With MSTR's typical daily range of 4–8%, this stop fires frequently
+        on normal intraday volatility even when the daily close is fine.
 
-  RE1  3d Cooldown     — Simple time gate: wait 3 bars. Misses fast V-recoveries
-                         but avoids getting immediately re-stopped in trending
-                         bear markets.
+  MSTU  Fixed -10%  stop set at entry_price × 0.90.  Same intraday-low
+        triggering; filled at stop price.  MSTU (2× leveraged MSTR) has
+        daily ranges of 8–20%, so a -10% stop is roughly equivalent in
+        frequency of firing to MSTR's -3%.
 
-  RE2  5d Cooldown     — More conservative; better in sustained bear trends,
-                         worse in fast recoveries.
+  Recovery criterion interpretation:
+  ───────────────────────────────────
+  After MSTR -3% SL exit at stop_price:
+    Recov +2% → re-enter when close > stop_price × 1.02  (≈ -1% from entry)
+    Recov +5% → re-enter when close > stop_price × 1.05  (≈ +2% from entry)
 
-  RE3  Recovery +2%    — Asset must recover 2% above the SL exit price. Low bar
-                         that filters only the most immediate whipsaws. Works
-                         because a 7% trailing SL exit means price is already
-                         ~7% off the peak; another 2% up confirms a real bounce.
-
-  RE4  Recovery +5%    — Higher bar: ~12% off peak before re-entry allowed.
-                         Meaningful in BTC bear markets; may be too conservative
-                         for MSTR/MSTU (leveraged, moves faster).
-
-  RE5  MA30 Mandatory  — The U1 signal already accepts (above_ma30 OR clean_10d
-                         OR v_reversal). This tightens it post-SL: MUST be above
-                         MA30. Ensures regime has flipped back to bull. Most
-                         effective when SL fires during a genuine bear turn.
-
-  RE6  Strong U1       — Requires err_hi_ma3 > 1.2% (vs 0.7%) AND hi_breaks >= 3
-                         (vs 2). Waits for a more convincing momentum reset. Can
-                         miss moderate but genuine recoveries.
-
-  RE7  3d+MA30         — Combined: time buffer AND regime confirmation. Typically
-                         the most balanced for bear markets without sacrificing
-                         too much bull-market upside.
-
-  RE8  D2Reset+MA30    — The most patient: waits for D2 (momentum cleared) to
-                         fire at least once after the SL, then requires MA30.
-                         Best suited to MSTR/MSTU where stop-losses often fire
-                         in the middle of a correction that needs to fully
-                         exhaust before reversing.
+  After MSTU -10% SL exit at stop_price:
+    Recov +2% → re-enter when close > stop_price × 1.02  (≈ -8% from entry)
+    Recov +5% → re-enter when close > stop_price × 1.05  (≈ -5% from entry)
 
   Statistical note:
   ─────────────────
-  With 4 backtest periods and typically 5–20 trades per period, no single
-  criterion achieves classical statistical significance in isolation. The
-  scoring metric (beats RE0 on both Return AND Sharpe across N periods) is
-  a multi-period consistency check, not a p-value. Consistent improvement
-  across BOTH bull and bear periods is the strongest signal.
+  4 backtest periods with 5–25 trades each is insufficient for classical
+  statistical significance.  The scoring metric (beats RE0 on BOTH Return
+  AND Sharpe across all periods) is a multi-period consistency check.
+  The OOS period (Mar 2026 – today) carries the most weight since the model
+  had no exposure to that data during training.
 """)
     print("✓ Done.")
 
