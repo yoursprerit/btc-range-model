@@ -3103,11 +3103,8 @@ def run_full_period_backtest(end_date_iso: str,
                 ))
                 pos = "CASH"; btc_qty = 0.0; peak_px = 0.0
             else:
-                if si >= 0:
-                    should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
-                    exit_lbl    = "D3" if d3[si] else "D2 (bear)"
-                else:
-                    should_exit = False; exit_lbl = "?"
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -3121,16 +3118,15 @@ def run_full_period_backtest(end_date_iso: str,
                 else:
                     nav = cur
         else:
-            _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
-            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            if tf1_entry[i] and not _exit_at_i:
                 btc_qty = nav/price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; peak_px = price
-                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[si] and clean_10d[si]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[si]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -3389,11 +3385,8 @@ def run_mstr_backtest(end_date_iso: str,
                 ))
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0
             else:
-                if si >= 0:
-                    should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
-                    exit_lbl    = "D3" if d3[si] else "D2 (bear)"
-                else:
-                    should_exit = False; exit_lbl = "?"
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -3407,16 +3400,15 @@ def run_mstr_backtest(end_date_iso: str,
                 else:
                     nav = cur
         else:
-            _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
-            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            if tf1_entry[i] and not _exit_at_i:
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
-                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[si] and clean_10d[si]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[si]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -3681,11 +3673,8 @@ def run_mstu_backtest(end_date_iso: str,
                 ))
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0
             else:
-                if si >= 0:
-                    should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
-                    exit_lbl    = "D3" if d3[si] else "D2 (bear)"
-                else:
-                    should_exit = False; exit_lbl = "?"
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -3699,16 +3688,15 @@ def run_mstu_backtest(end_date_iso: str,
                 else:
                     nav = cur
         else:
-            _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
-            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            if tf1_entry[i] and not _exit_at_i:
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
-                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[si] and clean_10d[si]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[si]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -4004,11 +3992,8 @@ def run_mstr_options_backtest(end_date_iso: str,
                 ))
                 pos = "CASH"; n_contracts = 0.0; nav_arr[i] = nav; continue
 
-            if si >= 0:
-                should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
-                exit_lbl    = "D3" if d3[si] else "D2 (bear)"
-            else:
-                should_exit = False; exit_lbl = "?"
+            should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+            exit_lbl    = "D3" if d3[i] else "D2 (bear)"
 
             if should_exit:
                 nav = cur
@@ -4027,9 +4012,8 @@ def run_mstr_options_backtest(end_date_iso: str,
             else:
                 nav = cur
         else:
-            _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
-            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            if tf1_entry[i] and not _exit_at_i:
                 T_entry  = option_days / 365.0
                 opt_prem = _bs_call(price, price, T_entry, RF_RATE, sigma)
                 if opt_prem <= 0.01:
@@ -4039,11 +4023,11 @@ def run_mstr_options_backtest(end_date_iso: str,
                 expiry_dt   = dates[i] + pd.Timedelta(days=option_days)
                 e_price     = opt_prem; e_mstr = price
                 e_date      = dates[i]; e_nav  = nav; pos = "LONG"
-                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[si] and clean_10d[si]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[si]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -4347,11 +4331,8 @@ def run_mstu_options_backtest(end_date_iso: str,
                 ))
                 pos = "CASH"; n_contracts = 0.0; nav_arr[i] = nav; continue
 
-            if si >= 0:
-                should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
-                exit_lbl    = "D3" if d3[si] else "D2 (bear)"
-            else:
-                should_exit = False; exit_lbl = "?"
+            should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+            exit_lbl    = "D3" if d3[i] else "D2 (bear)"
 
             if should_exit:
                 nav = cur
@@ -4370,9 +4351,8 @@ def run_mstu_options_backtest(end_date_iso: str,
             else:
                 nav = cur
         else:
-            _exit_at_si = si >= 0 and (d3[si] or (d2[si] and not bull_regime[si]))
-            _exit_at_i  = d3[i] or (d2[i] and not bull_regime[i])
-            if si >= 0 and tf1_entry[si] and not _exit_at_si and not _exit_at_i:
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            if tf1_entry[i] and not _exit_at_i:
                 T_entry  = option_days / 365.0
                 opt_prem = _bs_call(price, price, T_entry, RF_RATE, sigma)
                 if opt_prem <= 0.01:
@@ -4382,11 +4362,11 @@ def run_mstu_options_backtest(end_date_iso: str,
                 expiry_dt   = dates[i] + pd.Timedelta(days=option_days)
                 e_price     = opt_prem; e_mstu = price
                 e_date      = dates[i]; e_nav  = nav; pos = "LONG"
-                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[si] and clean_10d[si]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[si]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -4605,7 +4585,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         start_date_iso: If provided, backtest starts from this date.
                         If None, defaults to ~1-year rolling (end - 400 days).
 
-    Execution: 1-bar lag — signal fires bar i, trade executes at bar i+1 close.
+    Execution: same-bar — signal fires bar i, trade executes at bar i close.
     Uses _build_ct_batch_predictions() for O(1) lookups. Cached 6 h.
 
     Returns a dict with trades, nav_series, bh_series, stats, open_pos.
@@ -4735,17 +4715,14 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         if pos == "LONG":
             cur = btc_qty * price
             # Regime-adaptive exit for TF2; fixed D2|D3 for TF1
-            if si >= 0:
-                if strategy == "TF2":
-                    # Bull regime: patience — wait for structural D3 reversal
-                    # Bear/neutral regime: defensive — exit on first D2 or D3
-                    should_exit = bool(d3[si] or (d2[si] and not bull_regime[si]))
-                    exit_lbl    = "D3" if d3[si] else "D2 (bear)"
-                else:   # TF1
-                    should_exit = bool(tf1_exit[si])
-                    exit_lbl    = "D3" if d3[si] else "D2"
-            else:
-                should_exit = False; exit_lbl = "?"
+            if strategy == "TF2":
+                # Bull regime: patience — wait for structural D3 reversal
+                # Bear/neutral regime: defensive — exit on first D2 or D3
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
+            else:   # TF1
+                should_exit = bool(tf1_exit[i])
+                exit_lbl    = "D3" if d3[i] else "D2"
             if should_exit:
                 nav = cur
                 trades.append(dict(
@@ -4762,19 +4739,17 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
             else:
                 nav = cur
         else:  # CASH
-            _tf1_exit_at_si = si >= 0 and (tf1_exit[si] if strategy != "TF2"
-                                            else (d3[si] or (d2[si] and not bull_regime[si])))
-            _tf1_exit_at_i  = (tf1_exit[i] if strategy != "TF2"
-                               else (d3[i] or (d2[i] and not bull_regime[i])))
-            if si >= 0 and tf1_entry[si] and not _tf1_exit_at_si and not _tf1_exit_at_i:
+            _tf1_exit_at_i = (tf1_exit[i] if strategy != "TF2"
+                              else (d3[i] or (d2[i] and not bull_regime[i])))
+            if tf1_entry[i] and not _tf1_exit_at_i:
                 btc_qty  = nav / price
                 e_price  = price; e_date = dates[i]
                 e_nav    = nav;   pos    = "LONG"
-                if v_recent[si] and not above_ma30[si] and not clean_10d[si]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[si] and clean_10d[si]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[si]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -5033,7 +5008,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"📍 Live Position Panel</div>"
             f"<div style='font-size:13px;'>"
             f"<b>Status:</b> <span style='color:#16a34a; font-weight:700;'>🟢 ENTRY SIGNAL ACTIVE</span> — CASH &nbsp;·&nbsp; "
-            f"Signal confirmed today → position enters at <b>next bar's close</b> &nbsp;·&nbsp; "
+            f"Entry blocked by same-day conflict &nbsp;·&nbsp; "
             f"U1 confirmed · trend gate: {_lp_gates_str}"
             f"{_entry_exit_warn}</div>"
             + _lp_sig_row +

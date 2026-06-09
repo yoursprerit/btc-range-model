@@ -49,7 +49,7 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 | `above_ma30` | `close > MA30` |
 | `clean_10d` | True if zero D1 or D2 fires in the 7 bars preceding the current bar (named `clean_10d` historically) |
 
-**Execution rule:** Signal fires on bar *i*; trade executes at bar *i+1* close (1-bar lag).
+**Execution rule:** Signal fires on bar *i*; trade executes at bar *i* close (same-bar execution).
 
 ---
 
