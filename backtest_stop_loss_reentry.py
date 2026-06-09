@@ -2,20 +2,27 @@
 """
 Stop-Loss Re-Entry Criteria Analysis
 =====================================
-Exact stop-loss levels in the current trading strategy:
+Exact stop-loss levels tested:
   BTC  : trailing stop  −7%   (fires when close drops 7% below the running peak)
   MSTR : fixed stop     −3%   (fires when MSTR close drops 3% below entry price)
   MSTU : fixed stop     −10%  (fires when MSTU close drops 10% below entry price)
 
-These tight stops capture most real downside but cause premature exits in bull
-markets — the position is stopped out during a normal consolidation, then BTC
-continues higher without us.
+IMPLEMENTED RECOMMENDATIONS (in app/btc_hourly_app.py and TRADING_STRATEGY.md):
+  BTC  : NO STOP LOSS — trailing −7% provides no consistent benefit; TF2 D2/D3
+         exits already handle adverse moves; all SL variants underperform vs B0.
+  MSTR : Fixed −3% stop + SL5 regime-adaptive re-entry
+         (bull: immediate re-entry on next signal; bear: 10-bar cooldown)
+  MSTU : Fixed −10% stop + SL1 above-exit-price re-entry
+         (re-enter only when MSTU recovers above the stop exit price)
+
+These tight stops cause premature exits in bull markets — the position is stopped
+out during a normal consolidation, then BTC continues higher without us.
 
 Question: after a stop fires, what re-entry criterion best recovers the missed
 upside while avoiding re-entering into continued downside?
 
 Baseline:
-  B0 — TF2+V-Gate, NO stop loss (current live strategy, signal-only exits)
+  B0 — TF2+V-Gate, NO stop loss (signal-only exits)
 
 Stop-loss + re-entry variants (each variant only changes what happens AFTER a SL):
   SL0 — standard re-entry     : wait for normal U1+MA30/clean7d/V-gate, no price gate
@@ -27,7 +34,7 @@ Stop-loss + re-entry variants (each variant only changes what happens AFTER a SL
                                  (signal asset confirms recovery, not execution asset)
   SL4 — 5-bar cooldown        : block re-entry for 5 bars after SL, then standard
   SL5 — regime-adaptive       : bull regime → standard re-entry; bear → 10-bar cooldown
-                                 (smart: patient in confirmed downtrend, quick in bull)
+                                 ★ RECOMMENDED for MSTR
 
 Periods:
   Bull  Sep 2024 → Sep 2025   BTC +93%   [in-sample for CT model]

@@ -358,6 +358,74 @@ TF2 automatically becomes TF1-equivalent.
 
 ---
 
+## Stop-Loss & Re-entry Criteria (MSTR and MSTU)
+
+Stop-loss criteria were backtested across 5 periods (Bull Sep24→Sep25, Bear Jun25→May26,
+OOS Sep25→May26, OOS-Recent Mar→May26, Full Jun24→May26) against 6 re-entry variants
+(SL0–SL5). BTC trailing −7% stop was found to provide **no consistent benefit** and
+is **not used**. MSTR and MSTU benefit significantly from stops and specific re-entry criteria.
+
+### BTC — No Stop Loss
+
+| Decision | Rationale |
+|----------|-----------|
+| **No stop loss** | BTC trailing −7% fires 9× over the Full period but recoveries are immediate. All SL re-entry variants underperform or equal SL0 (standard re-entry). The TF2 D2/D3 exit system already handles most adverse moves. |
+
+### MSTR — Fixed −3% Stop + SL5 Regime-Adaptive Re-entry
+
+| Parameter | Value |
+|-----------|-------|
+| Stop type | Fixed |
+| Stop level | −3% from entry price |
+| Re-entry variant | **SL5 regime-adaptive** |
+| Re-entry (BULL) | Immediate — re-enter on next valid TF2 signal |
+| Re-entry (BEAR) | 10-bar cooldown after stop, then allow next valid signal |
+
+**Rationale:** MSTR's 3% stop fires frequently in volatile sideways markets. In bull regimes,
+quick recovery means immediate re-entry captures upside. In bear regimes, a 10-bar cooldown
+prevents the cascading Jul–Aug 2025 stop pattern (3 stops in 11 days at $412→$372→$343).
+Full-period result: **+167% (SL5) vs +145% (SL0 immediate) vs +91% (B0, no stop)**.
+
+**Backtested scores (vs SL0 standard re-entry):**
+
+| Period | B0 (no SL) | SL0 | SL5 regime-adaptive |
+|--------|-----------|-----|---------------------|
+| Bull (Sep24→Sep25) | +25.0% | +19.9% | **+26.2%** ▲ |
+| Bear (Jun25→May26) | −28.4% | −8.2% | **−4.8%** ▲ |
+| OOS (Sep25→May26) | +0.1% | +6.6% | **+10.6%** ▲ |
+| OOS-Recent | +34.8% | +34.8% | **+34.8%** = |
+| Full (Jun24→May26) | +90.8% | +144.7% | **+167.3%** ▲ |
+
+### MSTU — Fixed −10% Stop + SL1 Above Exit Price Re-entry
+
+| Parameter | Value |
+|-----------|-------|
+| Stop type | Fixed |
+| Stop level | −10% from entry price |
+| Re-entry variant | **SL1 above stop exit price** |
+| Re-entry condition | Allow re-entry only when MSTU price ≥ stop exit price |
+
+**Rationale:** MSTU's 2× daily leverage amplifies volatility. The −10% stop protects against
+cascade losses. SL1 (above exit price) prevents re-entering during continued downtrends —
+key event: Jul–Aug 2025 cascade ($87→$68→$54), where SL1 exits once at $87 and waits for
+price recovery before re-entering, avoiding two more losing entries.
+Full-period result: **+269% (SL1) vs +202% (SL0 immediate) vs +97% (B0, no stop)**.
+
+**Backtested scores (vs SL0 standard re-entry):**
+
+| Period | B0 (no SL) | SL0 | SL1 above exit price |
+|--------|-----------|-----|----------------------|
+| Bull (Sep24→Sep25) | −10.7% | −4.0% | **+3.4%** ▲ |
+| Bear (Jun25→May26) | −59.9% | −38.3% | **−11.4%** ▲ |
+| OOS (Sep25→May26) | −11.6% | −11.8% | **−11.3%** ▲ |
+| OOS-Recent | +71.8% | +71.8% | **+71.8%** = |
+| Full (Jun24→May26) | +96.5% | +202.2% | **+269.1%** ▲ |
+
+*Analysis file: `backtest_stop_loss_reentry.py` — run to reproduce all 5-period comparisons.*
+*Implemented in: `app/btc_hourly_app.py` — `run_mstr_backtest()` (SL5) and `run_mstu_backtest()` (SL1).*
+
+---
+
 ## Two-Year Backtest Summary (May 2024 → May 2026)
 
 > ⚠️ **In-sample warning:** CT model was trained through Sep 17, 2025.
