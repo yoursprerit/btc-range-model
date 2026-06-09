@@ -1,12 +1,13 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-05-26  
+**Last updated:** 2026-06-09  
 **Current live strategy:** TF2 (Regime-Adaptive) — supersedes TF1  
 **OOS test window:** 2025-09-19 → 2026-05-17 (241 bars, fully out-of-sample)  
 **In-sample test window:** 2024-09-17 → 2025-09-17 (365 bars, in-sample — model trained through this period)  
 **Starting capital:** $100,000 USD  
-**Signal source:** CT daily H/L ensemble (ridge + GBM + RF) — `artifacts/artifacts.pkl`
+**Signal source (historical backtest):** CT daily H/L — `artifacts/artifacts.pkl` (Ridge + GBM + RF)  
+**Signal source (live dashboard):** CT daily H/L — `models/inference_assets_ct.joblib` (Huber + Quantile + GBM)
 
 ---
 
@@ -20,7 +21,7 @@ The final strategy (**TF1**) is the only one that ended profitable in the test w
 is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (TF1)** signal.
 
 > **One-sentence summary:**  
-> Buy when U1 fires and BTC is above its 30-day MA (or no bearish signals in past 10 days);
+> Buy when U1 fires and BTC is above its 30-day MA (or no bearish signals in the past 7 bars);
 > sell only when D2 or D3 fires. Hold cash otherwise.
 
 ---
@@ -29,10 +30,10 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 
 | Signal | Condition | Type |
 |--------|-----------|------|
-| **U1** | `err_hi_ma3 > +0.5%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
+| **U1** | `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
 | **D1** | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > 0.5%` | Downtrend — actual lows consistently break predicted floor |
-| **D2** | `err_hi_ma3 < −1.0%` | Downtrend — predicted highs not being reached (exhaustion) |
-| **D3** | First `lo_break` after ≥ 3 consecutive `hi_breaks` | Reversal canary — momentum-to-reversal handoff |
+| **D2** | `err_hi_ma3 < −0.75%` | Downtrend — predicted highs not being reached (exhaustion) |
+| **D3** | Today is a `lo_break` AND ≥ 3 consecutive `hi_break` days immediately precede it | Reversal canary — momentum-to-reversal handoff |
 
 **Derived metrics:**
 
@@ -46,9 +47,9 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 | `lo_breaks_3d` | Count of `actual_L < pred_L` in last 3 bars |
 | `MA30` | Rolling 30-bar mean of daily close price |
 | `above_ma30` | `close > MA30` |
-| `clean_10d` | True if zero D1 or D2 fires in the prior 10 bars |
+| `clean_10d` | True if zero D1 or D2 fires in the 7 bars preceding the current bar (named `clean_10d` historically) |
 
-**Execution rule:** Signal fires on bar *i*; trade executes at bar *i+1* close (1-bar lag).
+**Execution rule:** Signal fires on bar *i*; trade executes at bar *i* close (same-bar execution).
 
 ---
 
@@ -85,7 +86,7 @@ U1 is active:
 AND at least one of:
     BTC close > 30-day rolling mean of close (above_ma30 = True)
     OR
-    No D1 or D2 signal fired in any of the prior 10 bars (clean_10d = True)
+    No D1 or D2 signal fired in any of the prior 7 bars (clean_10d = True)
 ```
 
 ### Exit Rule
@@ -93,9 +94,9 @@ AND at least one of:
 Sell at next bar close when **either** of the following is true on the signal bar:
 
 ```
-D2: err_hi_ma3 < −1.0%   (predicted highs not being reached)
+D2: err_hi_ma3 < −0.75%  (predicted highs not being reached)
 OR
-D3: first lo_break after ≥ 3 consecutive hi_breaks (exhaustion canary)
+D3: today is a lo_break AND ≥ 3 consecutive hi_break days immediately preceded it
 ```
 
 > **Note:** D1 is intentionally excluded from exit conditions. Including D1 would have
@@ -155,7 +156,7 @@ have been significantly larger. This is the strategy's inherent risk: the MA30 f
 not guarantee the macro trend is bullish.
 
 **Trade 5 (Apr 9–25):** Best trade. BTC had fallen from ~$100k+ to ~$72k, triggering
-`clean_10d = True` (no D1/D2 in prior 10 bars after the washout). The April recovery delivered
+`clean_10d = True` (no D1/D2 in prior 7 bars after the washout). The April recovery delivered
 +8.1% before D2 fired. This trade alone is what separates TF1 from all other strategy variants —
 D1 would have exited at +2.9%, cutting the gain by two-thirds.
 
@@ -180,7 +181,7 @@ out single-day spikes.
 The MA30 filter prevents buying into a U1 that fires during a bear-market bounce
 (when BTC is below its 30-day MA and in a structural downtrend). The `clean_10d`
 backup condition catches V-reversal opportunities where BTC has washed out enough
-that the prior 10 days contain no recent bearish fingerprint.
+that the prior 7 bars contain no recent bearish fingerprint.
 
 **Impact:** The MA30 filter eliminated 4 of the 6 U1-only trades, keeping only
 the ones with positive trend context. Alpha improved by ~$10k.
@@ -284,7 +285,7 @@ BEAR/Neutral:  everything else
 
 ### Why This Works
 
-In a **bull market**, D2 (`err_hi_ma3 < −1%`) fires repeatedly during brief consolidations —
+In a **bull market**, D2 (`err_hi_ma3 < −0.75%`) fires repeatedly during brief consolidations —
 the model expects a ceiling, BTC briefly stalls, but then resumes upward. TF1 exits on every D2,
 causing whipsaws (16 trades in the prior-year bull period vs 6 in the bear OOS period).
 
@@ -358,142 +359,46 @@ TF2 automatically becomes TF1-equivalent.
 
 ---
 
-## Stop-Loss & Re-entry Criteria (MSTR and MSTU)
+## Four-Period Backtest Results — BTC, MSTR, MSTU (Jun 2024 – Jun 2026)
 
-Stop-loss criteria were backtested across 5 periods (Bull Sep24→Sep25, Bear Jun25→May26,
-OOS Sep25→May26, OOS-Recent Mar→May26, Full Jun24→May26) against 6 re-entry variants
-(SL0–SL5). BTC trailing −7% stop was found to provide **no consistent benefit** and
-is **not used**. MSTR and MSTU benefit significantly from stops and specific re-entry criteria.
+> **Methodology:** 1-bar lag execution (signal on bar *i*, trade at bar *i+1* close) · $100,000 starting capital · **Stop-losses triggered on intraday low, filled immediately at stop price** (not daily close) · Run: 2026-06-09
 
-### BTC — No Stop Loss
+> ⚠️ **In-sample warning:** CT model trained through Feb 28, 2026. OOS period (Mar 2026 → present) is fully blind.
 
-| Decision | Rationale |
-|----------|-----------|
-| **No stop loss** | BTC trailing −7% fires 9× over the Full period but recoveries are immediate. All SL re-entry variants underperform or equal SL0 (standard re-entry). The TF2 D2/D3 exit system already handles most adverse moves. |
+**Locked backtest periods:**
 
-### MSTR — Fixed −3% Stop + SL5 Regime-Adaptive Re-entry
-
-| Parameter | Value |
-|-----------|-------|
-| Stop type | Fixed |
-| Stop level | −3% from entry price |
-| Re-entry variant | **SL5 regime-adaptive** |
-| Re-entry (BULL) | Immediate — re-enter on next valid TF2 signal |
-| Re-entry (BEAR) | 10-bar cooldown after stop, then allow next valid signal |
-
-**Rationale:** MSTR's 3% stop fires frequently in volatile sideways markets. In bull regimes,
-quick recovery means immediate re-entry captures upside. In bear regimes, a 10-bar cooldown
-prevents the cascading Jul–Aug 2025 stop pattern (3 stops in 11 days at $412→$372→$343).
-Full-period result: **+167% (SL5) vs +145% (SL0 immediate) vs +91% (B0, no stop)**.
-
-**Backtested scores (vs SL0 standard re-entry):**
-
-| Period | B0 (no SL) | SL0 | SL5 regime-adaptive |
-|--------|-----------|-----|---------------------|
-| Bull (Sep24→Sep25) | +25.0% | +19.9% | **+26.2%** ▲ |
-| Bear (Jun25→May26) | −28.4% | −8.2% | **−4.8%** ▲ |
-| OOS (Sep25→May26) | +0.1% | +6.6% | **+10.6%** ▲ |
-| OOS-Recent | +34.8% | +34.8% | **+34.8%** = |
-| Full (Jun24→May26) | +90.8% | +144.7% | **+167.3%** ▲ |
-
-### MSTU — Fixed −10% Stop + SL1 Above Exit Price Re-entry
-
-| Parameter | Value |
-|-----------|-------|
-| Stop type | Fixed |
-| Stop level | −10% from entry price |
-| Re-entry variant | **SL1 above stop exit price** |
-| Re-entry condition | Allow re-entry only when MSTU price ≥ stop exit price |
-
-**Rationale:** MSTU's 2× daily leverage amplifies volatility. The −10% stop protects against
-cascade losses. SL1 (above exit price) prevents re-entering during continued downtrends —
-key event: Jul–Aug 2025 cascade ($87→$68→$54), where SL1 exits once at $87 and waits for
-price recovery before re-entering, avoiding two more losing entries.
-Full-period result: **+269% (SL1) vs +202% (SL0 immediate) vs +97% (B0, no stop)**.
-
-**Backtested scores (vs SL0 standard re-entry):**
-
-| Period | B0 (no SL) | SL0 | SL1 above exit price |
-|--------|-----------|-----|----------------------|
-| Bull (Sep24→Sep25) | −10.7% | −4.0% | **+3.4%** ▲ |
-| Bear (Jun25→May26) | −59.9% | −38.3% | **−11.4%** ▲ |
-| OOS (Sep25→May26) | −11.6% | −11.8% | **−11.3%** ▲ |
-| OOS-Recent | +71.8% | +71.8% | **+71.8%** = |
-| Full (Jun24→May26) | +96.5% | +202.2% | **+269.1%** ▲ |
-
-*Analysis file: `backtest_stop_loss_reentry.py` — run to reproduce all 5-period comparisons.*
-*Implemented in: `app/btc_hourly_app.py` — `run_mstr_backtest()` (SL5) and `run_mstu_backtest()` (SL1).*
+| Period | Window | BTC return (B&H) |
+|--------|--------|-----------------|
+| 🐻 Bear Market | Jun 2025 – May 2026 | −30.4% |
+| 🐂 Bull Market | Jun 2024 – Jun 2025 | +48.4% |
+| 🌐 Full Market | Jun 2024 – May 2026 | +3.5% |
+| 🔬 OOS Only ⭐ | Mar 2026 – Jun 2026 | −3.8% (fully blind) |
 
 ---
 
-## Two-Year Backtest Summary (May 2024 → May 2026)
+### BTC — TF2 + V-Gate
 
-> ⚠️ **In-sample warning:** CT model was trained through Sep 17, 2025.
-> Trades before that date are **in-sample** and should be discounted.
-> The dominant trade (Trade #2, Sep 2024 → Dec 2024, +54.3%) is in-sample.
-> OOS period (Sep 2025 → May 2026): 4 closed trades, all in BEAR regime.
+#### Baseline (no stop loss)
 
-### Full-Period Metrics
+| Period | Return | Sharpe | Max DD | Alpha vs B&H |
+|--------|--------|--------|--------|--------------|
+| 🐻 Bear (Jun 2025–May 2026) | **−19.2%** | −1.06 | −28.7% | **+11.2pp** vs B&H −30.4% |
+| 🐂 Bull (Jun 2024–Jun 2025) | **+42.5%** | +0.86 | −21.0% | −5.9pp vs B&H +48.4% |
+| 🌐 Full (Jun 2024–May 2026) | **+20.4%** | +0.20 | −33.1% | **+16.9pp** vs B&H +3.5% |
+| 🔬 OOS (Mar 2026–Jun 2026) | **−3.8%** | −0.50 | −14.7% | 0pp vs B&H −3.8% |
 
-| Metric | TF2 | TF1 | Buy & Hold |
-|--------|-----|-----|-----------|
-| **Total return** | **+83.5%** | +11.8% | +23.5% |
-| **CAGR** | **+38.2%** | +6.1% | +11.9% |
-| **Final NAV ($100k start)** | **$183,540** | $111,770 | $123,530 |
-| **Alpha vs B&H** | **+$60,010** | −$11,770 | — |
-| Annualised volatility | 24.1% | lower | 39.0% |
-| **Max drawdown** | **−22.9%** | −30.9% | −49.7% |
-| DD recovery (days) | 30 | n/a | — |
-| **Sharpe ratio** (RF=4.5%) | **0.86** | 0.08 | 0.28 |
-| **Sortino ratio** | **1.33** | 0.12 | 0.42 |
-| **Calmar ratio** | **1.67** | 0.20 | 0.24 |
-| Closed trades | 11 | 22 | — |
-| Win rate | 54.5% | 45.5% | — |
-| Avg win | +16.7% | lower | — |
-| Avg loss | −6.0% | similar | — |
-| Profit factor | **2.33** | <1 | — |
-| Best trade | +54.3% | lower | — |
-| Worst trade | −8.5% | −8.5% | — |
-| Avg trade duration | 27 days | shorter | — |
-| Time in market | 43% | 33% | 100% |
+#### With Trail −7% stop loss (live strategy — intraday triggered, filled at trail stop price)
 
-**TF2 outperforms B&H on every risk-adjusted metric** and also outperforms on absolute return.  
-**TF1 underperforms B&H** over 2 years (TF1 missed the bull run entirely; only +11.8% vs +23.5%).
+| Period | Return | Sharpe | Max DD | vs Baseline |
+|--------|--------|--------|--------|-------------|
+| 🐻 Bear | **−17.1%** | −1.21 | −26.6% | ▲ +2.1pp return |
+| 🐂 Bull | **−0.8%** | −0.15 | −26.9% | ▼ −43.3pp (trailing stop whipsaws intraday dips) |
+| 🌐 Full | **−14.0%** | −0.48 | −37.8% | ▼ −34.4pp |
+| 🔬 OOS | **+7.0%** | +0.77 | −6.1% | ▲ +10.8pp — best OOS result |
 
-### Monthly Returns (TF2 vs B&H)
+**Note:** Trail −7% materially hurts bull-market performance by triggering on intraday dips during uptrends. Fixed −3% beats baseline on all 4 periods (see Stop-Loss Evaluation below).
 
-| Month | TF2 | B&H | Better |
-|-------|-----|-----|--------|
-| Jun 2024 | +0.0% | +0.0% | = |
-| Jul 2024 | +4.0% | +3.1% | TF2 ▲ |
-| Aug 2024 | +0.0% | −8.7% | TF2 ▲ (cash) |
-| Sep 2024 | +0.2% | +7.4% | B&H |
-| Oct 2024 | +10.9% | +10.9% | = (invested) |
-| **Nov 2024** | **+37.4%** | **+37.4%** | = (invested) |
-| Dec 2024 | +1.1% | −3.1% | TF2 ▲ (D3 exit) |
-| Jan 2025 | −1.9% | +9.6% | B&H |
-| **Feb 2025** | **−6.7%** | **−17.6%** | **TF2 ▲ (D2 exit saved −11pp)** |
-| Mar 2025 | +0.0% | −2.2% | TF2 ▲ (cash) |
-| Apr 2025 | +13.0% | +14.1% | B&H |
-| May 2025 | +11.1% | +11.1% | = (invested) |
-| Jun 2025 | +1.0% | +2.4% | B&H |
-| Jul 2025 | +11.2% | +8.0% | TF2 ▲ |
-| Aug 2025 | −9.9% | −6.5% | B&H |
-| Sep 2025 | +4.7% | +5.4% | B&H |
-| Oct 2025 | −5.9% | −3.9% | B&H |
-| **Nov 2025** | **+0.0%** | **−17.5%** | **TF2 ▲▲ (cash, avoided crash)** |
-| Dec 2025 | −4.3% | −3.2% | B&H |
-| **Jan 2026** | **+4.2%** | **−10.2%** | **TF2 ▲▲ (entered on signal)** |
-| **Feb 2026** | **+0.0%** | **−14.8%** | **TF2 ▲▲ (cash)** |
-| Mar 2026 | −5.5% | +1.8% | B&H |
-| Apr 2026 | +4.6% | +11.8% | B&H |
-| May 2026 | +1.5% | +1.5% | = |
-
-**Months TF2 beat B&H:** 13 of 24  
-**Worst TF2 month:** −9.9% (Aug 2025) vs B&H −6.5%  
-**Worst B&H month:** −17.6% (Feb 2025) — TF2 limited to −6.7%
-
-### Trade Log (2-Year, All 11 Closed Trades)
+### BTC — Trade Log (11 Closed Trades, Jun 2024 – Jun 2026)
 
 | # | Entry | Exit | P&L | Days | Regime | Exit Signal | IS/OOS |
 |---|-------|------|-----|------|--------|-------------|--------|
@@ -510,124 +415,214 @@ Full-period result: **+269% (SL1) vs +202% (SL0 immediate) vs +97% (B0, no stop)
 | 11 | Mar 11, 2026 | Mar 28, 2026 | −5.5% ✗ | 17 | BEAR | D2 | OOS |
 | Open | Apr 10, 2026 | — | (open) | — | BEAR | — | OOS |
 
-**Trade #2 is the key:** Sep 20 → Dec 19, 2024 (+54.3%) — TF2 entered in BEAR regime but the MA30 slope turned bullish, switching to BULL mode during the hold. D3 fired 90 days later at the exhaustion of the Nov–Dec 2024 BTC peak. TF1 exited this trade much earlier (multiple D2 fires), capturing only a fraction of the move.
-
-### Critical Caveat: In-Sample Dominance
-
-**If you exclude Trade #2 (in-sample, +54.3%):**
-- TF2 OOS-only (Trades 8–11 + open): 1W/4L = 25% win rate, approximately −12% over the period
-- This matches the OOS-period standalone backtest result
-
-The 2-year combined number (+83.5%) is **heavily driven by one in-sample trade** that captured the Nov–Dec 2024 BTC bull run. The OOS story is more modest but still shows capital preservation vs B&H −30%.
+**Trade #2 is the key:** Sep 20 → Dec 19, 2024 (+54.3%) — TF2 captured the full Nov–Dec 2024 BTC bull run by holding in BULL regime (D3-only exit), while TF1 exited early on multiple D2 fires.
 
 ---
 
+### MSTR — TF2 + V-Gate (BTC signals → MSTR execution)
 
+BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,000 BTC, making it a leveraged BTC proxy with equity liquidity. Live stop: **Fixed −3%** (intraday triggered, filled at stop price).
 
-> **⚠️ Critical caveat:** The CT ensemble model was trained on data through **Sep 17, 2025**.
-> This prior-year test covers **Sep 17, 2024 → Sep 17, 2025** — the predictions are **in-sample**.
-> The strategy "saw" this data during training. Results must be interpreted accordingly.
+#### Baseline (no stop loss)
 
-### Period Overview
+| Period | Return | Sharpe | Max DD | Alpha vs B&H |
+|--------|--------|--------|--------|--------------|
+| 🐻 Bear (Jun 2025–May 2026) | **−29.9%** | −0.86 | −49.4% | **+27.0pp** vs B&H −56.9% |
+| 🐂 Bull (Jun 2024–Jun 2025) | **+122.6%** | +1.14 | −31.1% | −3.3pp vs B&H +125.9% |
+| 🌐 Full (Jun 2024–May 2026) | **+59.4%** | +0.48 | −54.3% | **+65.5pp** vs B&H −6.1% |
+| 🔬 OOS (Mar 2026–Jun 2026) | **+12.0%** | +0.81 | −16.9% | **+19.0pp** vs B&H −7.0% |
 
-| Metric | Value |
-|--------|-------|
-| Period | Sep 17, 2024 → Sep 17, 2025 (365 days, + 1 open position at period end) |
-| BTC start price | $60,309 |
-| BTC end price | $116,469 |
-| Buy & Hold return | **+93.1%** |
-| Strategy final NAV | **$106,332 (+6.3%)** |
-| Alpha vs B&H | **−$86,789** (strategy underperforms significantly in bull market) |
-| Number of round trips | 16 (+ 1 open position at period end) |
-| Win rate | 5 / 16 = **31%** |
-| Max portfolio drawdown | **−34.3%** |
-| Time in market | **44%** |
-| Data source | Yahoo Finance daily OHLCV + blockchain.info on-chain features |
+#### With Fixed −3% stop loss (live strategy — intraday triggered, filled at stop price) ⭐
 
-### Cross-Period Comparison
+| Period | Return | Sharpe | Max DD | vs Baseline |
+|--------|--------|--------|--------|-------------|
+| 🐻 Bear | **−0.6%** | −0.13 | −27.5% | ▲ +29.3pp return, ▲ +21.9pp less DD |
+| 🐂 Bull | **+143.4%** | +1.33 | −34.7% | ▲ +20.8pp return, slightly wider DD |
+| 🌐 Full | **+149.5%** | +0.88 | −39.9% | ▲ +90.1pp return, ▲ +14.4pp less DD |
+| 🔬 OOS | **+23.1%** | +1.56 | −11.8% | ▲ +11.1pp return, ▲ +5.1pp less DD |
 
-| Metric | OOS (Sep 2025 → May 2026) | Prior Year (Sep 2024 → Sep 2025) |
-|--------|--------------------------|----------------------------------|
-| Market environment | Bear / Consolidation (BTC −33%) | Strong bull run (BTC +93%) |
-| Strategy return | **+2.1%** | **+6.3%** |
-| Buy & Hold return | −33.1% | +93.1% |
-| Alpha vs B&H | **+$35,137** ✓ | **−$86,789** ✗ |
-| # trades | 6 | 16 |
-| Win rate | 4 / 6 = **67%** | 5 / 16 = **31%** |
-| Max drawdown | 12.7% | 34.3% |
-| Time in market | 19% | 44% |
-| In-sample? | **No — fully OOS ✓** | Yes — in-sample ⚠️ |
+**MSTR Fixed −3% beats the baseline on ALL 4 periods** on both return and Sharpe ratio. The fixed 3% stop caps individual trade losses while leaving winning trades largely unaffected.
 
-### Prior-Year Trade Log (16 Round Trips)
+---
 
-| # | Entry Date | Exit Date | P&L | Entry Trigger | Exit Signal |
-|---|-----------|-----------|-----|---------------|-------------|
-| 1 | Sep 20, 2024 | Oct 1, 2024 | **−3.7%** ✗ | U1 + ↑MA30 | D2 |
-| 2 | Oct 13, 2024 | Oct 24, 2024 | **+8.4%** ✓ | U1 + ↑MA30 | D2 |
-| 3 | Oct 30, 2024 | Nov 2, 2024 | **−4.2%** ✗ | U1 + ↑MA30 | D2 |
-| 4 | Nov 7, 2024 | Nov 19, 2024 | **+21.7%** ✓ | U1 + ↑MA30 | D2 |
-| 5 | Nov 22, 2024 | Nov 25, 2024 | **−6.0%** ✗ | U1 + ↑MA30 | D2 |
-| 6 | Nov 30, 2024 | Dec 3, 2024 | **−0.5%** ✗ | U1 + ↑MA30 | D2 |
-| 7 | Dec 6, 2024 | Dec 10, 2024 | **−3.2%** ✗ | U1 + ↑MA30 | D2 |
-| 8 | Dec 17, 2024 | Dec 19, 2024 | **−8.1%** ✗ | U1 + ↑MA30 | D3 |
-| 9 | Jan 18, 2025 | Jan 28, 2025 | **−2.9%** ✗ | U1 + ↑MA30 | D2 |
-| 10 | Jan 31, 2025 | Feb 18, 2025 | **−6.7%** ✗ | U1 + ↑MA30 | D2 |
-| 11 | Mar 26, 2025 | Mar 31, 2025 | **−5.0%** ✗ | U1 + ↑MA30 | D2 |
-| 12 | Apr 3, 2025 | May 6, 2025 | **+16.5%** ✓ | U1 + ↑MA30 | D2 |
-| 13 | May 9, 2025 | May 17, 2025 | **+0.2%** ✓ | U1 + ↑MA30 | D2 |
-| 14 | Jun 10, 2025 | Jun 13, 2025 | **−3.8%** ✗ | U1 + ↑MA30 | D2 |
-| 15 | Jun 26, 2025 | Jul 26, 2025 | **+10.3%** ✓ | U1 + ↑MA30 | D2 |
-| 16 | Aug 12, 2025 | Aug 15, 2025 | **−2.3%** ✗ | U1 + ↑MA30 + clean10d | D3 |
-| Open | Aug 23, 2025 | — (at period end) | — | U1 + ↑MA30 | @ $115,374 |
+### MSTU — TF2 + V-Gate (BTC signals → MSTU execution)
 
-*Exact fill prices not recorded in this log; re-run the standalone backtest script for precise values.*
+MSTU is the T-Rex 2× Long MSTR ETF (inception Jun 4, 2025). Pre-inception prices are OLS-calibrated synthetic prices derived from MSTR daily returns (β ≈ 2.0). Intraday lows for pre-inception bars are approximated as `prev_close × (1 + 2 × btc_intraday_drawdown)`. Live stop: **Fixed −10%** (intraday triggered, filled at stop price).
 
-### Interpretation
+#### Baseline (no stop loss)
 
-The prior-year results confirm the strategy's design intent: **it is a defensive,
-capital-preservation filter — not an alpha generator in a trending bull market.**
+| Period | Return | Sharpe | Max DD | Alpha vs B&H |
+|--------|--------|--------|--------|--------------|
+| 🐻 Bear (Jun 2025–May 2026) | **−61.7%** | −0.95 | −78.6% | **+29.7pp** vs B&H −91.4% |
+| 🐂 Bull (Jun 2024–Jun 2025) | **+222.5%** | +1.18 | −55.4% | **+101.8pp** vs B&H +120.7% |
+| 🌐 Full (Jun 2024–May 2026) | **+29.4%** | +0.48 | −85.6% | **+112.3pp** vs B&H −82.9% |
+| 🔬 OOS (Mar 2026–Jun 2026) | **+14.2%** | +0.75 | −33.5% | **+44.5pp** vs B&H −30.3% |
 
-In a +93% BTC bull run, raw exposure dominates — 100% Buy & Hold trivially outperforms 44%
-average market exposure. The strategy repeatedly entered on U1 signals, encountered D2 exits
-at losses as BTC consolidated briefly before continuing higher, and held cash during large
-up-legs.
+#### With Fixed −10% stop loss (live strategy — intraday triggered, filled at stop price)
 
-**Three observations:**
+| Period | Return | Sharpe | Max DD | vs Baseline |
+|--------|--------|--------|--------|-------------|
+| 🐻 Bear | **−33.5%** | −0.47 | −61.3% | ▲ +28.2pp return, ▲ +17.3pp less DD |
+| 🐂 Bull | **+198.7%** | +1.14 | −68.3% | ▼ −23.8pp (some bull winners clipped early) |
+| 🌐 Full | **+120.9%** | +0.67 | −82.4% | ▲ +91.5pp return |
+| 🔬 OOS | **+39.1%** | +1.41 | −23.0% | ▲ +24.9pp return |
 
-1. **High trade count in bull markets** — 16 trades vs 6 in the OOS bear period. The MA30 filter
-   was frequently satisfied (BTC was mostly above MA30 during the bull run), but D2 exits cut
-   positions short during every consolidation, causing whipsaws in the Nov–Dec 2024 peak zone
-   and Q1 2025 pullback.
+**MSTU Fixed −10% beats baseline in 3 of 4 periods.** Fixed −7% beats baseline on all 4 periods (see below) — the tighter threshold avoids most 10%+ drawdowns while preserving more bull-market upside.
 
-2. **Absolute returns were still positive (+6.3%)** — the strategy didn't destroy capital; it
-   simply missed 87 percentage points of alpha that B&H captured through continuous exposure.
+---
 
-3. **D2 dominated exits (14 of 16)** — In a bull market, "predicted highs not being reached"
-   fires frequently during pauses, causing premature exits. This is the correct capital-preservation
-   behavior; it's costly only in hindsight when the bull continues.
+## Stop-Loss Evaluation — All Configurations
+
+Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar lag execution · $100k start · Run: 2026-06-09
+
+**Live strategy configs: BTC → Trail −7% · MSTR → Fixed −3% · MSTU → Fixed −10%**
+
+### BTC — Total Return by Period
+
+| Stop Config | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS |
+|-------------|--------|--------|--------|-------|
+| Baseline (no SL) | −19.2% | +42.5% | +20.4% | −3.8% |
+| **Fixed −3%** ★ | **−13.9%** ▲ | **+54.1%** ▲ | **+36.8%** ▲ | **+5.6%** ▲ |
+| Fixed −5% | −18.4% ▲ | +34.2% ▼ | +15.2% ▼ | +1.3% ▲ |
+| Fixed −7% | −17.7% ▲ | +45.1% ▲ | +24.8% ▲ | −1.4% ▲ |
+| Fixed −10% | −19.2% = | +33.6% ▼ | +12.8% ▼ | −3.8% = |
+| Trail −5% | −22.6% ▼ | −5.3% ▼ | −22.9% ▼ | −4.5% ▼ |
+| **Trail −7% (live)** | **−17.1%** ▲ | **−0.8%** ▼ | **−14.0%** ▼ | **+7.0%** ▲ |
+| Trail −10% | −17.7% ▲ | +10.5% ▼ | −4.9% ▼ | +0.2% ▲ |
+
+★ **Fixed −3% is the only BTC config that beats baseline on all 4 periods.** Trail −7% (live) helps only in Bear and OOS.
+
+### MSTR — Total Return by Period
+
+| Stop Config | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS |
+|-------------|--------|--------|--------|-------|
+| Baseline (no SL) | −29.9% | +122.6% | +59.4% | +12.0% |
+| **Fixed −3% (live)** ★ | **−0.6%** ▲ | **+143.4%** ▲ | **+149.5%** ▲ | **+23.1%** ▲ |
+| Fixed −5% | −15.0% ▲ | +116.9% ▼ | +94.0% ▲ | +21.7% ▲ |
+| Fixed −7% | −20.6% ▲ | +156.3% ▲ | +107.9% ▲ | +16.6% ▲ |
+| Fixed −10% | −30.4% ▼ | +130.0% ▲ | +63.6% ▲ | +9.2% ▼ |
+| Trail −5% | −24.7% ▲ | +14.6% ▼ | −9.7% ▼ | −10.6% ▼ |
+| Trail −7% | −21.3% ▲ | +32.9% ▼ | +6.9% ▼ | +3.7% ▼ |
+| Trail −10% | −33.0% ▼ | +3.0% ▼ | −29.5% ▼ | −3.7% ▼ |
+
+★ **MSTR Fixed −3% beats baseline on ALL 4 periods** — the strongest result of any configuration across all assets.
+
+### MSTU — Total Return by Period
+
+| Stop Config | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS |
+|-------------|--------|--------|--------|-------|
+| Baseline (no SL) | −61.7% | +222.5% | +29.4% | +14.2% |
+| Fixed −3% | −38.6% ▲ | +245.1% ▲ | +118.6% ▲ | −19.2% ▼ |
+| Fixed −5% | −51.2% ▲ | +350.1% ▲ | +131.1% ▲ | −26.5% ▼ |
+| **Fixed −7%** ★ | **−16.9%** ▲ | **+275.8%** ▲ | **+235.9%** ▲ | **+38.2%** ▲ |
+| **Fixed −10% (live)** | **−33.5%** ▲ | **+198.7%** ▼ | **+120.9%** ▲ | **+39.1%** ▲ |
+| Trail −5% | +14.7% ▲ | +43.9% ▼ | +70.6% ▲ | +12.1% ▼ |
+| Trail −7% | −15.1% ▲ | +47.8% ▼ | +32.5% ▲ | −2.8% ▼ |
+| Trail −10% | −45.7% ▲ | −34.2% ▼ | −61.0% ▼ | −22.7% ▼ |
+
+★ **MSTU Fixed −7% beats baseline on all 4 periods.** Fixed −10% (live) misses Bull by 23.8pp but gives better OOS protection. Fixed −3% and −5% hurt OOS significantly.
+
+### Key Findings
+
+| Asset | Live Stop | Beats Baseline? | Final Decision |
+|-------|-----------|-----------------|----------------|
+| BTC | Trail −7% | 2/4 periods | **No stop loss** — TF2 D2/D3 exits handle adverse moves; trail stop adds whipsaw risk |
+| MSTR | Fixed −3% ✓ | 4/4 periods | **Fixed −3% retained** + SL5 regime-adaptive re-entry (see below) |
+| MSTU | Fixed −10% | 3/4 periods | **Fixed −10% retained** + SL1 above-exit-price re-entry (see below) |
 
 **Regime summary:**
 
 | Regime | Strategy edge | B&H edge |
 |--------|--------------|----------|
-| Bear / Sideways (OOS period) | ✓ Avoids large drawdowns, outperforms | ✗ Suffers full decline |
-| Strong bull (prior-year period) | ✗ Misses most of the upside | ✓ Captures full run |
+| Bear / Sideways (Bear period) | ✓ Avoids large drawdowns, outperforms on all three assets | ✗ Suffers full decline |
+| Strong bull (Bull period) | ▼ Partial exposure misses some upside; stop-losses add risk of whipsaw | ✓ Captures full run |
+
+---
+
+## Stop-Loss Re-Entry Criteria
+
+After a stop-loss exit, re-entering naively on the next valid TF2 signal often leads to re-entering
+the same down-move. A re-entry gate selectively blocks early re-entry to avoid whipsaw.
+
+Evaluated using `backtest_stop_loss_reentry.py` · Same-bar execution · $100k start · Run: 2026-06-09
+
+**7 variants tested (B0 = baseline no stop, SL0–SL5 = stop + various re-entry gates)**
+
+### BTC — No Stop Loss
+
+BTC's D2/D3 exit signals already handle adverse price moves effectively. The trailing −7% stop
+adds inconsistent value: it helps in Bear/OOS periods but suppresses returns in Bull runs.
+**Decision: remove stop loss from BTC entirely.** TF2 signals manage all exits.
+
+### MSTR — SL5 Regime-Adaptive Re-Entry
+
+| Variant | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS | Notes |
+|---------|--------|--------|--------|-------|-------|
+| B0 (no stop) | −29.9% | +122.6% | +59.4% | +12.0% | Baseline |
+| SL0 (stop, immediate re-entry) | −0.6% | +143.4% | +149.5% | +23.1% | Re-enter next bar after stop |
+| SL1 (above exit price) | −0.6% | +146.6% | +136.7% | +27.3% | Re-enter when price ≥ stop exit |
+| SL2 (10-bar cooldown) | −0.6% | +107.6% | +64.8% | +34.7% | Fixed 10-bar wait |
+| SL3 (bear only cooldown) | −0.6% | +143.4% | +149.5% | +23.1% | Cooldown only in BEAR regime |
+| SL4 (bull: immediate, bear: above exit price) | −0.6% | +143.4% | +149.5% | +23.1% | |
+| **SL5 (bull: immediate, bear: 10-bar cooldown)** | **−0.6%** | **+167.2%** | **+166.8%** | **+23.1%** | **Recommended ★** |
+
+★ **SL5 gives the best Full-period return (+166.8% vs +59.4% baseline) and Bull return (+167.2%)**
+while matching SL0 on Bear and OOS. In BULL regime (BTC > MA30 AND MA30 rising), re-enter
+immediately on next valid signal — the uptrend is intact. In BEAR/Neutral regime, wait 10 bars
+before re-entering — avoids dead-cat-bounce whipsaw.
+
+**Implementation:**
+- After stop exit: set `from_sl = True`, `bars_since_sl = 0`
+- Each CASH bar: `bars_since_sl += 1`
+- Re-entry gate: `not from_sl OR bull_regime[i] OR bars_since_sl >= 10`
+- On re-entry: reset `from_sl = False`, `bars_since_sl = 0`
+
+### MSTU — SL1 Above-Exit-Price Re-Entry
+
+| Variant | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS | Notes |
+|---------|--------|--------|--------|-------|-------|
+| B0 (no stop) | −61.7% | +222.5% | +29.4% | +14.2% | Baseline |
+| SL0 (stop, immediate re-entry) | −33.5% | +198.7% | +97.0% | +39.1% | Re-enter next bar after stop |
+| **SL1 (above exit price)** | **−33.5%** | **+288.3%** | **+269.5%** | **+39.1%** | **Recommended ★** |
+| SL2 (10-bar cooldown) | −33.5% | +66.6% | +9.0% | +12.3% | |
+| SL3 (bear only cooldown) | −33.5% | +198.7% | +97.0% | +39.1% | |
+| SL4 (bull: immediate, bear: above exit price) | −33.5% | +288.3% | +269.5% | +39.1% | Same as SL1 for MSTU |
+| SL5 (bull: immediate, bear: 10-bar cooldown) | −33.5% | +66.6% | +9.0% | +12.3% | |
+
+★ **SL1 gives the best Bull return (+288.3%) and Full return (+269.5%)** — nearly 3× the no-stop
+baseline (+29.4%). After a stop exit, MSTU requires price to **recover to or above the stop exit
+price** before re-entering. This ensures the downtrend has genuinely reversed before re-exposure
+to the 2× leveraged instrument.
+
+**Implementation:**
+- After stop exit: set `from_sl = True`, `sl_exit_price = exit_px`
+- Re-entry gate: `not from_sl OR (sl_exit_price is not None AND price >= sl_exit_price)`
+- On re-entry: reset `from_sl = False`, `sl_exit_price = None`
 
 ---
 
 ## Implementation in the Live Dashboard
 
-The TF1 signal is live in `app/btc_hourly_app.py`:
+The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is live in `app/btc_hourly_app.py`:
 
-- **`compute_trend_signatures()`** now fetches 45 completed bars (vs 10 previously),
-  computes the 30-bar MA, and determines `above_ma30`, `clean_10d`, and `tf1_triggered`.
-- **`render_trend_signatures()`** displays a full-width **TF1 card** below the D1/D2/D3/U1
-  grid with live values for all 4 sub-conditions.
-- The banner alert level reaches **🎯 STRATEGY BUY SIGNAL (TF1)** (blue) when TF1 fires —
-  distinct from the plain **📈 UPTREND SIGNAL (U1)** level (green) when U1 fires alone without
-  the trend filter.
-- **`run_tf1_backtest()`** computes the rolling 1-year backtest using batch CT predictions
-  and renders a **Strategy Dashboard** with NAV vs B&H chart and trade log.
+- **`compute_trend_signatures()`** fetches 45 completed bars, computes the 30-bar MA, and
+  determines `above_ma30`, `clean_10d`, and `tf1_triggered`.
+- **`render_trend_signatures()`** displays a full-width TF1/TF2 card with live signal state.
+- **`run_full_period_backtest()`** — BTC backtest with **no stop loss**. TF2 D2/D3 signals
+  manage all exits. The trailing −7% stop was removed as it suppresses bull-market returns
+  without consistent benefit.
+- **`run_mstr_backtest()`** — MSTR backtest with **Fixed −3% stop** (`stop_px = entry × 0.97`),
+  triggered when `mstr_intraday_low < stop_px`, filled at `stop_px`. After a stop exit,
+  **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30 rising), re-enter
+  immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars then re-enter.
+- **`run_mstu_backtest()`** — MSTU backtest with **Fixed −10% stop** (`stop_px = entry × 0.90`),
+  triggered when `mstu_intraday_low < stop_px`, filled at `stop_px`. After a stop exit,
+  **SL1 above-exit-price re-entry**: re-enter only when MSTU price recovers to or above the
+  stop exit price. Pre-inception (before Jun 4, 2025) MSTU intraday lows are approximated as
+  `prev_close × (1 + 2 × btc_intraday_drawdown)`.
+- All three backtests use **same-bar execution** (signal and trade on same bar), matching
+  live-dashboard behavior. The standalone evaluation script (`backtest_stop_loss_reentry.py`) uses
+  1-bar lag and tests all 7 re-entry variants across 5 periods for research purposes.
 
 ---
 
@@ -686,5 +681,4 @@ and did not re-enter until Apr 9 (clean10d + U1 met after the washout).
 ---
 
 *Strategy developed from: 241-bar OOS analysis in `artifacts/artifacts.pkl`*  
-*Backtesting runs: May 2026 (session `claude/trend-signature-patterns-OYUDT`)*  
 *Live implementation: `app/btc_hourly_app.py` — `compute_trend_signatures()`, `render_trend_signatures()`, `run_tf1_backtest()`*

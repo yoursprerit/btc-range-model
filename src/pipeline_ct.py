@@ -674,24 +674,24 @@ if DEPLOY_MODE:
                f"(1−{best_red:.2f}×trend) direction-head, "
                f"ensemble huber+quant_lin+gbm_quant (q={ALPHA_QUANT}) + GBC direction) "
                f"[deploy-retrain: trained on full dataset, metrics from val proxy]"),
-        MAPE_H=float(rel_h.mean() * 100), MAPE_L=float(rel_l.mean() * 100),
-        MAPE_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
-        hit05_H=float((rel_h <= 0.005).mean() * 100), hit05_L=float((rel_l <= 0.005).mean() * 100),
-        hit1_H=float((rel_h <= 0.01).mean() * 100),   hit1_L=float((rel_l <= 0.01).mean() * 100),
-        hit2_H=float((rel_h <= 0.02).mean() * 100),   hit2_L=float((rel_l <= 0.02).mean() * 100),
-        hit5_H=float((rel_h <= 0.05).mean() * 100),   hit5_L=float((rel_l <= 0.05).mean() * 100),
-        MAE_H_USD=float(mean_absolute_error(hi_true_va, pred_hi_va)),
-        MAE_L_USD=float(mean_absolute_error(lo_true_va, pred_lo_va)),
-        RMSE_H_USD=float(np.sqrt(mean_squared_error(hi_true_va, pred_hi_va))),
-        RMSE_L_USD=float(np.sqrt(mean_squared_error(lo_true_va, pred_lo_va))),
-        direction_hit_rate=float(hit_va_dir),
-        direction_hit_rate_baseline=float(mh_base_va2),
+        mape_h=float(rel_h.mean() * 100), mape_l=float(rel_l.mean() * 100),
+        mape_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
+        hit05_h=float((rel_h <= 0.005).mean() * 100), hit05_l=float((rel_l <= 0.005).mean() * 100),
+        hit1_h=float((rel_h <= 0.01).mean() * 100),   hit1_l=float((rel_l <= 0.01).mean() * 100),
+        hit2_h=float((rel_h <= 0.02).mean() * 100),   hit2_l=float((rel_l <= 0.02).mean() * 100),
+        hit5_h=float((rel_h <= 0.05).mean() * 100),   hit5_l=float((rel_l <= 0.05).mean() * 100),
+        mae_h_usd=float(mean_absolute_error(hi_true_va, pred_hi_va)),
+        mae_l_usd=float(mean_absolute_error(lo_true_va, pred_lo_va)),
+        rmse_h_usd=float(np.sqrt(mean_squared_error(hi_true_va, pred_hi_va))),
+        rmse_l_usd=float(np.sqrt(mean_squared_error(lo_true_va, pred_lo_va))),
+        direction_hit=float(hit_va_dir),
+        direction_hit_baseline=float(mh_base_va2),
         direction_classifier_acc=float(((dir_clf.predict_proba(X_va)[:, 1] > 0.5).astype(int)
                                         == label_va).mean()),
     )
     clf_acc = final["direction_classifier_acc"]
-    hit_best = final["direction_hit_rate"]
-    hit_base = final["direction_hit_rate_baseline"]
+    hit_best = final["direction_hit"]
+    hit_base = final["direction_hit_baseline"]
 else:
     # Final UNBIASED evaluation on TEST using tuned (α, β, r).
     mh_best, ml_best, hit_best, beta_eff_te = _eval_on_test(best_beta, best_red)
@@ -715,18 +715,18 @@ else:
         model=(f"blend(α={alpha_use:.2f} climatology, β_base={best_beta:.2f} × "
                f"(1−{best_red:.2f}×trend) direction-head, "
                f"ensemble huber+quant_lin+gbm_quant (q={ALPHA_QUANT}) + GBC direction)"),
-        MAPE_H=float(rel_h.mean() * 100), MAPE_L=float(rel_l.mean() * 100),
-        MAPE_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
-        hit05_H=float((rel_h <= 0.005).mean() * 100), hit05_L=float((rel_l <= 0.005).mean() * 100),
-        hit1_H=float((rel_h <= 0.01).mean() * 100), hit1_L=float((rel_l <= 0.01).mean() * 100),
-        hit2_H=float((rel_h <= 0.02).mean() * 100), hit2_L=float((rel_l <= 0.02).mean() * 100),
-        hit5_H=float((rel_h <= 0.05).mean() * 100), hit5_L=float((rel_l <= 0.05).mean() * 100),
-        MAE_H_USD=float(mean_absolute_error(hi_true, pred_hi)),
-        MAE_L_USD=float(mean_absolute_error(lo_true, pred_lo)),
-        RMSE_H_USD=float(np.sqrt(mean_squared_error(hi_true, pred_hi))),
-        RMSE_L_USD=float(np.sqrt(mean_squared_error(lo_true, pred_lo))),
-        direction_hit_rate=float(hit_best),
-        direction_hit_rate_baseline=float(hit_base),
+        mape_h=float(rel_h.mean() * 100), mape_l=float(rel_l.mean() * 100),
+        mape_avg=float((rel_h.mean() + rel_l.mean()) / 2 * 100),
+        hit05_h=float((rel_h <= 0.005).mean() * 100), hit05_l=float((rel_l <= 0.005).mean() * 100),
+        hit1_h=float((rel_h <= 0.01).mean() * 100), hit1_l=float((rel_l <= 0.01).mean() * 100),
+        hit2_h=float((rel_h <= 0.02).mean() * 100), hit2_l=float((rel_l <= 0.02).mean() * 100),
+        hit5_h=float((rel_h <= 0.05).mean() * 100), hit5_l=float((rel_l <= 0.05).mean() * 100),
+        mae_h_usd=float(mean_absolute_error(hi_true, pred_hi)),
+        mae_l_usd=float(mean_absolute_error(lo_true, pred_lo)),
+        rmse_h_usd=float(np.sqrt(mean_squared_error(hi_true, pred_hi))),
+        rmse_l_usd=float(np.sqrt(mean_squared_error(lo_true, pred_lo))),
+        direction_hit=float(hit_best),
+        direction_hit_baseline=float(hit_base),
         direction_classifier_acc=float(clf_acc),
     )
     res_hi = yhi_te.values - final_ph

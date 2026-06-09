@@ -1,6 +1,5 @@
 # Trend Signature Pattern Analysis
-**Branch:** `claude/trend-signature-patterns-OYUDT`  
-**Analysis Date:** 2026-05-26  
+**Last updated:** 2026-06-08  
 **Data window:** Test set 2025-09-19 → 2026-05-17 (241 bars) + bookmarked events  
 
 ---
@@ -8,8 +7,8 @@
 ## Executive Summary
 
 After mining all historical model predictions vs actual values, band-cross patterns,
-and prediction divergences across the CT daily H/L model (ridge + gbm + rf ensemble),
-7-day cone, 14-day cone, and 3-class day-type classifier, **four conclusive early-warning
+and prediction divergences across the CT daily H/L model (Huber + Quantile + GBM ensemble),
+7-day cone, and 3-class day-type classifier, **four conclusive early-warning
 signatures were identified — three for downtrends (strong, statistically significant)
 and one for uptrends (moderate, context-dependent).**
 
@@ -29,8 +28,8 @@ coming large move is cleaner on the downside.
 (`lo_breaks_3d ≥ 2`) AND the 3-day moving average of low-side error (`err_lo_ma3`) exceeds +0.5%.
 
 **What it means mechanically:**  
-The ensemble of three regressors (Huber, Quantile-GBM, RF) is consistently OVER-predicting
-where the floor is. The actual daily low keeps punching through the predicted floor, signalling
+The ensemble of three regressors (HuberRegressor, QuantileRegressor, GradientBoostingRegressor)
+is consistently OVER-predicting where the floor is. The actual daily low keeps punching through the predicted floor, signalling
 the models' "downside cushion" assumption is wrong — price is in a structural downtrend the
 models haven't fully absorbed.
 
@@ -58,7 +57,7 @@ models haven't fully absorbed.
 ### 🔴 DOWNTREND Signature B — "Predicted-High Collapse" (p < 0.001)
 
 **Definition:**  
-The 3-day MA of high-side error (`err_hi_ma3`) turns **sharply negative** (< −1%).
+The 3-day MA of high-side error (`err_hi_ma3`) turns **sharply negative** (< −0.75%).
 Actual daily highs are *below* what the model predicted. The model was forecasting
 upside potential, but price failed to reach those predicted highs.
 
@@ -80,36 +79,49 @@ a structural reversal.
 
 ---
 
-### 🔴 DOWNTREND Signature C — "Reversal After Prolonged Under-prediction" (contextual)
+### 🔴 DOWNTREND Signature C — "Exhaustion Canary" (contextual)
 
-**Context:** Applicable specifically after multi-day uptrends (streak ≥ 4).
+**Context:** Applicable specifically after multi-day uptrends where actual highs have
+consistently exceeded predicted highs for ≥ 3 consecutive bars.
 
-**Pattern:**  
-The model's ensemble has been **under-predicting** the close (`err_close_ma3 < −0.3%`)
-for 3–5 days during an uptrend (the models lag the momentum). Then, on the day
-the actual high STOPS breaking the predicted high (`hi_band_break` flips from 1 to 0),
-the reversal is imminent.
+**Exact trigger condition (D3):**  
+Today's bar is a `lo_break` (actual low < predicted low) **AND** the immediately
+preceding N days were ALL `hi_break` days with N ≥ 3. The look-back counts backward
+from yesterday and stops at the first non-`hi_break` bar — if that count reaches 3 or
+more, D3 fires on the first `lo_break` today.
+
+```python
+# Pseudocode matching the live implementation
+consec_hi = count_consecutive_hi_breaks_ending_yesterday()  # stops at first non-hi_break
+d3 = (consec_hi >= 3) and lo_break_today
+```
+
+**What it means:**  
+After ≥ 3 consecutive sessions where price punches through the model's predicted ceiling,
+the first session where price instead breaks through the predicted floor signals that upside
+momentum has exhausted. The model was consistently under-predicting the ceiling; now it is
+over-predicting the floor — a structural handoff from uptrend to reversal.
 
 **Oct 7 drop: the textbook case:**
 ```
-2025-10-04 [PRE-EVENT]: streak=+4,  err_close_ma3=−0.390,  hiBreak3d=2,  ↓score=0.272
-2025-10-05 [PRE-EVENT]: streak=+5,  err_close_ma3=−0.383,  hiBreak3d=2,  ↓score=0.244
-2025-10-06 [PRE-EVENT]: streak=+6,  err_close_ma3=−0.312,  hiBreak3d=2,  loBreak3d=1 ← lo break appears
-2025-10-07 ◄ EVENT:    ret=−2.6%,  err_hi_pct=+0.14 (high barely exceeded),  streak resets
+2025-10-04 [PRE-EVENT]: hi_break=1, streak=+4, hiBreak3d=2, ↓score=0.272
+2025-10-05 [PRE-EVENT]: hi_break=1, streak=+5, hiBreak3d=2, ↓score=0.244
+2025-10-06 [PRE-EVENT]: hi_break=1, streak=+6, hiBreak3d=2, loBreak3d=1 ← lo break appears
+2025-10-07 ◄ EVENT:    ret=−2.6%, err_hi_pct=+0.14 (barely exceeded), streak resets
 2025-10-08–10:         lo_breaks accelerate → −6.9% on Oct 10
 ```
 
-The **"exhaustion canary"** is the first appearance of a `lo_band_break` (lo_breaks_3d ≥ 1)
-after ≥ 3 consecutive `hi_band_break` days during a strong streak. This marks the exact
-moment when price can no longer maintain its upside momentum.
+On Oct 6, the first `lo_break` appeared after 6 consecutive `hi_break` days — D3 fired,
+marking the exact moment price lost its upside momentum.
 
 ---
 
 ### 🟢 UPTREND Signature — "High-Band Breakout Persistence" (moderate, 1.68× lift)
 
 **Definition:**  
-The 3-day MA of high-side error (`err_hi_ma3`) turns **persistently positive** (> +0.5%):
-actual daily highs consistently exceed the model's predicted high for 3+ days.
+The 3-day MA of high-side error (`err_hi_ma3`) turns **persistently positive** (> +0.7%)
+AND at least 2 of the last 3 days had actual daily high exceed the predicted high
+(`hi_breaks_3d ≥ 2`). Both conditions must hold simultaneously (U1 = AND gate).
 
 **What it means:**  
 The models (all three regressors) are under-predicting the upside. The market is
@@ -119,10 +131,14 @@ macro, and on-chain — has not yet fully captured the strength of the upward mo
 **Evidence:**
 | Signal | Triggers | Hit Rate (big-up within 3d) | Base Rate | Lift |
 |--------|----------|------------------------------|-----------|------|
-| `err_hi_ma3 > +0.5` | 50 | 16.0% | 9.5% | **1.68×** |
-| `hi_breaks_3d ≥ 2` | 70 | 10.0% | 9.5% | 1.05× |
+| `err_hi_ma3 > +0.7` AND `hi_breaks_3d ≥ 2` (U1) | ~40 | 16.0% | 9.5% | **1.68×** |
+| `err_hi_ma3 > +0.5` alone | 50 | 16.0% | 9.5% | **1.68×** |
+| `hi_breaks_3d ≥ 2` alone | 70 | 10.0% | 9.5% | 1.05× |
 
 **Statistically significant:** `err_hi_pct` PRE_UP mean = **+1.34** vs NORMAL = −0.22 (Δ = +1.56, p = 0.022)
+
+> The live U1 threshold (`err_hi_ma3 > 0.7`) is tighter than the original analysis threshold
+> (`> 0.5`) to reduce false positives at the cost of slightly fewer triggers.
 
 **Real event confirmations:**
 - **2026-05-04 Gradual Climb:** `hiBreak3d = 2`, `↑score = 0.685–0.751` in days before event
@@ -210,29 +226,30 @@ CT ensemble uses raw 103-feature matrix).
 ## 6. Complete Composite Signal Checklist
 
 ### DOWNTREND Early Warning (check before each day's close)
-| # | Condition | Statistical Support | Importance |
-|---|-----------|--------------------|-----------| 
-| 1 | `lo_breaks_3d ≥ 2` (actual low broke predicted low 2+ of last 3 days) | p = 0.0095 | **Primary** |
-| 2 | `err_lo_ma3 > +0.5%` (3d avg low-side error > 0.5%) | p < 0.001 | **Primary** |
-| 3 | `err_hi_ma3 < −1.0%` (predicted highs not being reached) | p < 0.0001 | **Primary** |
-| 4 | `lo_band_break = 1` on current day | p = 0.0006 | Confirming |
-| 5 | 3-class predicts `BigLower` with p ≥ 0.55 | 69.2% accuracy | Confirming |
-| 6 | Regime = High-vol (range_ma30 > 2.38%) | Contextual | Amplifying |
-| 7 | `model_disagree` low (all models agree on downside) | p = 0.74 (absence of disagreement) | Contextual |
+| # | Signal | Condition | Statistical Support | Importance |
+|---|--------|-----------|--------------------|-----------| 
+| 1 | D1 | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > +0.5%` | p = 0.0095 | **Primary** |
+| 2 | D2 | `err_hi_ma3 < −0.75%` (predicted highs not being reached) | p < 0.0001 | **Primary** |
+| 3 | D3 | First `lo_break` today after ≥ 3 consecutive `hi_break` days | contextual | **Primary** |
+| 4 | — | `lo_band_break = 1` on current day | p = 0.0006 | Confirming |
+| 5 | — | 3-class predicts `BigLower` with p ≥ 0.55 | 69.2% accuracy | Confirming |
+| 6 | — | Regime = High-vol (range_ma30 > 2.38%) | Contextual | Amplifying |
+| 7 | — | `model_disagree` low (all models agree on downside) | p = 0.74 (absence) | Contextual |
 
-**Trigger:** Any 3 of conditions 1–4 simultaneously = high-confidence downtrend alert.
+**Trigger:** Any 2 of D1/D2/D3 simultaneously = HIGH_DN alert. Any 1 of D1/D2/D3 = WATCH_DN.
 
 ### UPTREND Early Warning  
-| # | Condition | Statistical Support | Importance |
-|---|-----------|--------------------|-----------| 
-| 1 | `err_hi_ma3 > +0.5%` (actual highs exceeding predicted for 3d) | p = 0.022 | **Primary** |
-| 2 | `hi_band_break = 1` on current day | p = 0.033 | Confirming |
-| 3 | `hi_breaks_3d ≥ 2` (2+ breaks in last 3 days) | p = 0.081 (*) | Confirming |
-| 4 | `model_disagree` elevated (> 1.2) | p = 0.023 | Context (regime transition) |
-| 5 | 3-class predicts `BigUpper` with p ≥ 0.55 | 69.2% accuracy | Confirming |
+| # | Signal | Condition | Statistical Support | Importance |
+|---|--------|-----------|--------------------|-----------| 
+| 1 | U1 | `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2` | p = 0.022 | **Primary** |
+| 2 | — | `hi_band_break = 1` on current day | p = 0.033 | Confirming |
+| 3 | — | `model_disagree` elevated (> 1.2) | p = 0.023 | Context (regime transition) |
+| 4 | — | 3-class predicts `BigUpper` with p ≥ 0.55 | 69.2% accuracy | Confirming |
 
-**V-reversal special case:** After `lo_breaks_3d = 3` AND single-day `err_lo_pct > 5%`
-(capitulation undershoot), expect high-probability bounce within 1-2 days.
+**Strategy entry (TF1/TF2):** U1 fires AND (`close > MA30` OR no D1/D2 in prior 7 bars OR V-reversal gate).
+
+**V-reversal special case:** After `lo_breaks_3d = 3` AND single-day `err_lo_pct > 3%`
+(dn_score > 0.8 + large undershoot), expect high-probability bounce within 1-2 days.
 
 ---
 
@@ -277,37 +294,54 @@ Strategy underperforms in bull regimes — by design it minimises exposure, whic
 
 ---
 
-## 9. Implementation Recommendation
+## 9. Implementation
 
-A daily signal dashboard should compute and display:
+The live implementation in `app/btc_hourly_app.py → compute_trend_signatures()` computes
+these signals daily after each 12:00 UTC bar closes.
 
 ```python
-# Daily signal computation (after each bar closes at 12:00 UTC)
-signal_dn = (
-    lo_breaks_3d >= 2             # binary: 1 or 0
-    + (err_lo_ma3 > 0.5)          # binary
-    + (err_hi_ma3 < -1.0)         # binary  
-    + (lo_band_break)             # binary today
-)
-# signal_dn ∈ {0, 1, 2, 3, 4}
-# ≥ 3 → HIGH CONFIDENCE DOWNTREND ALERT
-# 2   → ELEVATED DOWNTREND RISK
+# ── Raw per-bar errors ──────────────────────────────────────────────────────
+err_hi  = (actual_high - pred_high) / close * 100   # + = bullish overshoot
+err_lo  = (pred_low - actual_low)   / close * 100   # + = bearish undershoot
 
-signal_up = (
-    err_hi_ma3 > 0.5              # binary
-    + hi_band_break               # binary
-    + (hi_breaks_3d >= 2)         # binary
-)
-# signal_up ∈ {0, 1, 2, 3}
-# = 3 → UPTREND MOMENTUM BUILDING
-# = 2 → MODERATE UPTREND SIGNAL
+# ── 3-bar rolling metrics ───────────────────────────────────────────────────
+err_hi_ma3   = mean(err_hi[-3:])          # 3d avg high-side error
+err_lo_ma3   = mean(err_lo[-3:])          # 3d avg low-side error
+hi_breaks_3d = sum(actual_H > pred_H for last 3 bars)
+lo_breaks_3d = sum(actual_L < pred_L for last 3 bars)
+
+# ── Signal trigger conditions (exact live thresholds) ───────────────────────
+D1 = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)    # Low-Band Accumulation
+D2 = (err_hi_ma3 < -0.75)                            # Predicted-High Collapse
+D3 = (consec_hi_breaks_ending_yesterday >= 3)        # Exhaustion Canary
+     and lo_break_today                              #   (first lo_break after streak)
+U1 = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)     # High-Band Breakout Persistence
+
+# ── Strategy entry gate ──────────────────────────────────────────────────────
+MA30       = mean(close[-30:])
+above_ma30 = close_today > MA30
+clean_7d   = no D1 or D2 fired in the 7 bars preceding today   # named clean_10d in code
+v_gate     = dn_score > 0.8 and err_lo_today > 3%              # capitulation reversal
+
+TF1_entry = U1 and (above_ma30 or clean_7d or v_gate)
+
+# ── Alert level ──────────────────────────────────────────────────────────────
+dn_count = D1 + D2 + D3
+# dn_count >= 2 → HIGH_DN
+# dn_count == 1 → WATCH_DN
+# TF1_entry     → STRATEGY_BUY
+# U1 only       → WATCH_UP
 ```
 
-This should be added to the Streamlit dashboard as a "Trend Alert" card alongside
-the existing H/L band, 7-day cone, and 3-class outputs.
+> **Note on `clean_10d` naming:** The variable is named `clean_10d` throughout the codebase
+> for historical reasons but the actual look-back is **7 bars** (indices `i-7` to `i-1`).
+
+The Streamlit dashboard renders a "Trend Alert" card with live values for all conditions
+alongside the H/L band, 7-day cone, and 3-class outputs.
 
 ---
 
 *Analysis performed by: `src/trend_signature_analysis.py`*  
-*Models used: CT daily H/L (inference_assets_ct.joblib), ridge+gbm+rf ensemble (artifacts.pkl)*  
-*Ground truth: artifacts/artifacts.pkl test_index + high_true + low_true + close_te*
+*Historical analysis: `artifacts/artifacts.pkl` (Ridge + GBM + RF test-period predictions)*  
+*Live signal: `models/inference_assets_ct.joblib` (Huber + Quantile + GBM ensemble)*  
+*Ground truth: `artifacts/artifacts.pkl` — test_index, high_true, low_true, close_te*
