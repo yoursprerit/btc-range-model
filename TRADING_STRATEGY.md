@@ -524,11 +524,11 @@ Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar
 
 ### Key Findings
 
-| Asset | Live Stop | Beats Baseline? | Recommended Config |
-|-------|-----------|-----------------|-------------------|
-| BTC | Trail −7% | 2/4 periods | Fixed −3% (4/4) |
-| MSTR | Fixed −3% ✓ | 4/4 periods | Fixed −3% confirmed |
-| MSTU | Fixed −10% | 3/4 periods | Fixed −7% (4/4) |
+| Asset | Live Stop | Beats Baseline? | Final Decision |
+|-------|-----------|-----------------|----------------|
+| BTC | Trail −7% | 2/4 periods | **No stop loss** — TF2 D2/D3 exits handle adverse moves; trail stop adds whipsaw risk |
+| MSTR | Fixed −3% ✓ | 4/4 periods | **Fixed −3% retained** + SL5 regime-adaptive re-entry (see below) |
+| MSTU | Fixed −10% | 3/4 periods | **Fixed −10% retained** + SL1 above-exit-price re-entry (see below) |
 
 **Regime summary:**
 
@@ -539,23 +539,90 @@ Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar
 
 ---
 
+## Stop-Loss Re-Entry Criteria
+
+After a stop-loss exit, re-entering naively on the next valid TF2 signal often leads to re-entering
+the same down-move. A re-entry gate selectively blocks early re-entry to avoid whipsaw.
+
+Evaluated using `backtest_stop_loss_reentry.py` · Same-bar execution · $100k start · Run: 2026-06-09
+
+**7 variants tested (B0 = baseline no stop, SL0–SL5 = stop + various re-entry gates)**
+
+### BTC — No Stop Loss
+
+BTC's D2/D3 exit signals already handle adverse price moves effectively. The trailing −7% stop
+adds inconsistent value: it helps in Bear/OOS periods but suppresses returns in Bull runs.
+**Decision: remove stop loss from BTC entirely.** TF2 signals manage all exits.
+
+### MSTR — SL5 Regime-Adaptive Re-Entry
+
+| Variant | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS | Notes |
+|---------|--------|--------|--------|-------|-------|
+| B0 (no stop) | −29.9% | +122.6% | +59.4% | +12.0% | Baseline |
+| SL0 (stop, immediate re-entry) | −0.6% | +143.4% | +149.5% | +23.1% | Re-enter next bar after stop |
+| SL1 (above exit price) | −0.6% | +146.6% | +136.7% | +27.3% | Re-enter when price ≥ stop exit |
+| SL2 (10-bar cooldown) | −0.6% | +107.6% | +64.8% | +34.7% | Fixed 10-bar wait |
+| SL3 (bear only cooldown) | −0.6% | +143.4% | +149.5% | +23.1% | Cooldown only in BEAR regime |
+| SL4 (bull: immediate, bear: above exit price) | −0.6% | +143.4% | +149.5% | +23.1% | |
+| **SL5 (bull: immediate, bear: 10-bar cooldown)** | **−0.6%** | **+167.2%** | **+166.8%** | **+23.1%** | **Recommended ★** |
+
+★ **SL5 gives the best Full-period return (+166.8% vs +59.4% baseline) and Bull return (+167.2%)**
+while matching SL0 on Bear and OOS. In BULL regime (BTC > MA30 AND MA30 rising), re-enter
+immediately on next valid signal — the uptrend is intact. In BEAR/Neutral regime, wait 10 bars
+before re-entering — avoids dead-cat-bounce whipsaw.
+
+**Implementation:**
+- After stop exit: set `from_sl = True`, `bars_since_sl = 0`
+- Each CASH bar: `bars_since_sl += 1`
+- Re-entry gate: `not from_sl OR bull_regime[i] OR bars_since_sl >= 10`
+- On re-entry: reset `from_sl = False`, `bars_since_sl = 0`
+
+### MSTU — SL1 Above-Exit-Price Re-Entry
+
+| Variant | 🐻 Bear | 🐂 Bull | 🌐 Full | 🔬 OOS | Notes |
+|---------|--------|--------|--------|-------|-------|
+| B0 (no stop) | −61.7% | +222.5% | +29.4% | +14.2% | Baseline |
+| SL0 (stop, immediate re-entry) | −33.5% | +198.7% | +97.0% | +39.1% | Re-enter next bar after stop |
+| **SL1 (above exit price)** | **−33.5%** | **+288.3%** | **+269.5%** | **+39.1%** | **Recommended ★** |
+| SL2 (10-bar cooldown) | −33.5% | +66.6% | +9.0% | +12.3% | |
+| SL3 (bear only cooldown) | −33.5% | +198.7% | +97.0% | +39.1% | |
+| SL4 (bull: immediate, bear: above exit price) | −33.5% | +288.3% | +269.5% | +39.1% | Same as SL1 for MSTU |
+| SL5 (bull: immediate, bear: 10-bar cooldown) | −33.5% | +66.6% | +9.0% | +12.3% | |
+
+★ **SL1 gives the best Bull return (+288.3%) and Full return (+269.5%)** — nearly 3× the no-stop
+baseline (+29.4%). After a stop exit, MSTU requires price to **recover to or above the stop exit
+price** before re-entering. This ensures the downtrend has genuinely reversed before re-exposure
+to the 2× leveraged instrument.
+
+**Implementation:**
+- After stop exit: set `from_sl = True`, `sl_exit_price = exit_px`
+- Re-entry gate: `not from_sl OR (sl_exit_price is not None AND price >= sl_exit_price)`
+- On re-entry: reset `from_sl = False`, `sl_exit_price = None`
+
+---
+
 ## Implementation in the Live Dashboard
 
-The TF2 + V-Gate strategy with per-asset stop losses is live in `app/btc_hourly_app.py`:
+The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is live in `app/btc_hourly_app.py`:
 
 - **`compute_trend_signatures()`** fetches 45 completed bars, computes the 30-bar MA, and
   determines `above_ma30`, `clean_10d`, and `tf1_triggered`.
 - **`render_trend_signatures()`** displays a full-width TF1/TF2 card with live signal state.
-- **`run_full_period_backtest()`** — BTC backtest with **Trailing −7% stop**, triggered when
-  `intraday_low < peak_price × 0.93`, filled at the trail stop price (not daily close).
+- **`run_full_period_backtest()`** — BTC backtest with **no stop loss**. TF2 D2/D3 signals
+  manage all exits. The trailing −7% stop was removed as it suppresses bull-market returns
+  without consistent benefit.
 - **`run_mstr_backtest()`** — MSTR backtest with **Fixed −3% stop** (`stop_px = entry × 0.97`),
-  triggered when `mstr_intraday_low < stop_px`, filled at `stop_px`.
+  triggered when `mstr_intraday_low < stop_px`, filled at `stop_px`. After a stop exit,
+  **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30 rising), re-enter
+  immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars then re-enter.
 - **`run_mstu_backtest()`** — MSTU backtest with **Fixed −10% stop** (`stop_px = entry × 0.90`),
-  triggered when `mstu_intraday_low < stop_px`, filled at `stop_px`. Pre-inception (before Jun 4,
-  2025) MSTU intraday lows are approximated as `prev_close × (1 + 2 × btc_intraday_drawdown)`.
+  triggered when `mstu_intraday_low < stop_px`, filled at `stop_px`. After a stop exit,
+  **SL1 above-exit-price re-entry**: re-enter only when MSTU price recovers to or above the
+  stop exit price. Pre-inception (before Jun 4, 2025) MSTU intraday lows are approximated as
+  `prev_close × (1 + 2 × btc_intraday_drawdown)`.
 - All three backtests use **same-bar execution** (signal and trade on same bar), matching
-  live-dashboard behavior. The standalone evaluation script (`backtest_stop_loss.py`) uses
-  1-bar lag and may show slightly different absolute returns.
+  live-dashboard behavior. The standalone evaluation script (`backtest_stop_loss_reentry.py`) uses
+  1-bar lag and tests all 7 re-entry variants across 5 periods for research purposes.
 
 ---
 

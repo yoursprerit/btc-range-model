@@ -3104,7 +3104,6 @@ def run_full_period_backtest(end_date_iso: str,
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
-    peak_px = 0.0
     trades  = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -3112,41 +3111,26 @@ def run_full_period_backtest(end_date_iso: str,
         if i < _bt0:
             nav_arr[i] = initial_capital; continue
         if pos == "LONG":
-            peak_px    = max(peak_px, act_hi[i])   # intraday high tightens trailing stop
-            trail_stop = peak_px * 0.93
-            cur        = btc_qty * price
-            if act_lo[i] < trail_stop:             # triggered intraday if low breaches stop
-                exit_px  = trail_stop              # fill at stop level
-                exit_nav = btc_qty * exit_px
-                nav = exit_nav
+            cur = btc_qty * price
+            should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+            exit_lbl    = "D3" if d3[i] else "D2 (bear)"
+            if should_exit:
+                nav = cur
                 trades.append(dict(
                     entry_date=e_date, entry_price=e_price, entry_nav=e_nav,
-                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
-                    exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav, exit_signal="SL-trail-7%",
-                    duration_days=(dates[i]-e_date).days, stop_triggered=True,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
+                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    pnl_abs=nav-e_nav, exit_signal=exit_lbl,
+                    duration_days=(dates[i]-e_date).days, stop_triggered=False,
                 ))
-                pos = "CASH"; btc_qty = 0.0; peak_px = 0.0
+                pos = "CASH"; btc_qty = 0.0
             else:
-                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
-                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
-                if should_exit:
-                    nav = cur
-                    trades.append(dict(
-                        entry_date=e_date, entry_price=e_price, entry_nav=e_nav,
-                        entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
-                        exit_nav=nav, pnl_pct=(price/e_price-1)*100,
-                        pnl_abs=nav-e_nav, exit_signal=exit_lbl,
-                        duration_days=(dates[i]-e_date).days, stop_triggered=False,
-                    ))
-                    pos = "CASH"; btc_qty = 0.0; peak_px = 0.0
-                else:
-                    nav = cur
+                nav = cur
         else:
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             if tf1_entry[i] and not _exit_at_i:
                 btc_qty = nav/price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; peak_px = price
+                e_nav = nav; pos = "LONG"
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
@@ -3205,9 +3189,7 @@ def run_full_period_backtest(end_date_iso: str,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
-                          entry_trigger=e_trigger,
-                          stop_price=round(peak_px * 0.93, 2),
-                          peak_price=round(peak_px, 2)) if pos == "LONG" else None),
+                          entry_trigger=e_trigger) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2",
@@ -3395,6 +3377,8 @@ def run_mstr_backtest(end_date_iso: str,
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
     stop_px  = 0.0
+    # SL5 regime-adaptive re-entry state
+    from_sl = False; bars_since_sl = 0
     trades  = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -3419,6 +3403,7 @@ def run_mstr_backtest(end_date_iso: str,
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                 ))
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0
+                from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
                 exit_lbl    = "D3" if d3[i] else "D2 (bear)"
@@ -3435,10 +3420,17 @@ def run_mstr_backtest(end_date_iso: str,
                 else:
                     nav = cur
         else:
+            if from_sl:
+                bars_since_sl += 1
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
-            if tf1_entry[i] and not _exit_at_i:
+            # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
+            _sl_reentry_ok = (not from_sl
+                              or bool(bull_regime[i])
+                              or bars_since_sl >= 10)
+            if tf1_entry[i] and not _exit_at_i and _sl_reentry_ok:
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
+                from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
@@ -3732,6 +3724,8 @@ def run_mstu_backtest(end_date_iso: str,
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
     stop_px  = 0.0
+    # SL1 above-exit-price re-entry state
+    from_sl = False; sl_exit_price = None
     trades  = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -3756,6 +3750,7 @@ def run_mstu_backtest(end_date_iso: str,
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                 ))
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0
+                from_sl = True; sl_exit_price = exit_px   # SL1: remember stop exit price
             else:
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
                 exit_lbl    = "D3" if d3[i] else "D2 (bear)"
@@ -3773,9 +3768,13 @@ def run_mstu_backtest(end_date_iso: str,
                     nav = cur
         else:
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
-            if tf1_entry[i] and not _exit_at_i:
+            # SL1: after stop exit, only re-enter when price recovers to or above stop exit price
+            _sl_reentry_ok = (not from_sl
+                              or (sl_exit_price is not None and price >= sl_exit_price))
+            if tf1_entry[i] and not _exit_at_i and _sl_reentry_ok:
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.90
+                from_sl = False; sl_exit_price = None   # reset SL1 state on re-entry
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
@@ -5022,9 +5021,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         oe     = _lp_bt["open_entry"]
         unr    = (float(_lp_bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
         oe_col = "#16a34a" if unr >= 0 else "#dc2626"
-        _sl_px = oe.get("stop_price"); _pk_px = oe.get("peak_price")
-        _sl_str = (f"<br><b>Trail stop:</b> ${_sl_px:,.0f} &nbsp;(peak ${_pk_px:,.0f})"
-                   if _sl_px else "")
+        _sl_str = ""  # BTC: no stop loss
         _exit_warn = (
             f"<br><span style='color:#dc2626; font-weight:600;'>⚠️ Exit signal now active — "
             f"consider closing position</span>"
@@ -5872,6 +5869,45 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
 
+  <!-- STOP-LOSS & RE-ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fef9c3; color:#713f12; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>Stop trigger</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Fixed <b>−3%</b> from entry price — triggers intraday when MSTR low breaches stop
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Re-enter <b>immediately</b> on next valid TF2+V-Gate signal (BTC above MA30 &amp; MA30 rising)
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Wait <b>10-bar cooldown</b> then re-enter on next valid TF2+V-Gate signal
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
+
   <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
     ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTR trade at bar <i>i+1</i> close
     &nbsp;·&nbsp;
@@ -6381,6 +6417,12 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         has_p = bt["open_pos"]
         rows  = []
         for i, t in enumerate(bt["trades"], 1):
+            if t.get("stop_triggered"):
+                result = "🛑 SL EXIT"
+            elif t["pnl_pct"] > 0:
+                result = "✓ WIN"
+            else:
+                result = "✗ LOSS"
             rows.append({
                 "#":           i,
                 "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
@@ -6389,7 +6431,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
                 "Sell MSTR @": f"${t['exit_price']:,.2f}",
                 "P&L":         f"{t['pnl_pct']:+.1f}%",
-                "Result":      "✓ WIN" if t["pnl_pct"] > 0 else "✗ LOSS",
+                "Result":      result,
                 "Days":        t["duration_days"],
                 "BTC Signal":  t["exit_signal"],
                 "NAV After":   f"${t['exit_nav']:,.0f}",
@@ -6542,6 +6584,36 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
           BTC below MA30 or MA30 flat → exit MSTU on <b>D2 or D3</b> (defensive)
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
+
+  <!-- STOP-LOSS & RE-ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL1 Above-Exit-Price)</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fef9c3; color:#713f12; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>Stop trigger</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Fixed <b>−10%</b> from entry price — triggers intraday when MSTU low breaches stop
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#e0f2fe; color:#0c4a6e; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>Re-entry gate</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Re-enter only when MSTU price <b>recovers to or above the stop-exit price</b>
+          — ensures positive price momentum before re-exposure
         </td>
       </tr>
     </table>
@@ -7056,6 +7128,12 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         has_p = bt["open_pos"]
         rows  = []
         for i, t in enumerate(bt["trades"], 1):
+            if t.get("stop_triggered"):
+                result = "🛑 SL EXIT"
+            elif t["pnl_pct"] > 0:
+                result = "✓ WIN"
+            else:
+                result = "✗ LOSS"
             rows.append({
                 "#":           i,
                 "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
@@ -7064,7 +7142,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
                 "Sell MSTU @": f"${t['exit_price']:,.2f}",
                 "P&L":         f"{t['pnl_pct']:+.1f}%",
-                "Result":      "✓ WIN" if t["pnl_pct"] > 0 else "✗ LOSS",
+                "Result":      result,
                 "Days":        t["duration_days"],
                 "BTC Signal":  t["exit_signal"],
                 "NAV After":   f"${t['exit_nav']:,.0f}",
@@ -8783,6 +8861,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 _px_s = "—"; _unr_s = "—"
 
             _stop_s = _fmt(_sl_px) if (_sl_px and _sl_px > 0) else "—"
+            _stop_row = (
+                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Stop ({_stype})</td>"
+                f"<td>{_stop_s}</td></tr>"
+                if _stype and _stype != "none" else ""
+            )
 
             _lp_cards.append(
                 f"<div style='flex:1;min-width:200px;background:#f0fdf4;"
@@ -8800,8 +8883,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"<td>{_days}d</td></tr>"
                 f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Live price</td>"
                 f"<td>{_px_s}</td></tr>"
-                f"<tr><td style='color:#64748b;padding:1px 6px 1px 0'>Stop ({_stype})</td>"
-                f"<td>{_stop_s}</td></tr>"
+                + _stop_row +
                 f"</table></div>"
             )
 
@@ -9525,7 +9607,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 entry      = (_bt_full_oos or {}).get("open_entry"),
                 live_price = _btc_panel_px,
                 asset_label= "BTC",
-                stop_type  = "trail-7%",
+                stop_type  = "none",
                 nav        = (_bt_full_oos or {}).get("stats", {}).get("final_nav"),
                 last_trade = _last_closed_trade(_bt_full_oos),
             ),
