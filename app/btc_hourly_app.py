@@ -342,59 +342,68 @@ def fetch_equity_prices():
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _fetch_equity_price_at_datetime(ticker: str, dt_str: str) -> float | None:
-    """Return price of `ticker` at or before `dt_str` (UTC ISO, tz-naive) using 1h bars.
+def _fetch_equity_hourly_series(ticker: str, date_str: str) -> "pd.Series | None":
+    """Fetch a UTC-tz-naive 1h Close series for `ticker` covering `date_str` ± 2 days.
 
-    Uses ``yf.download(interval="60m")`` — the same API the rest of the app
-    relies on for hourly bars — rather than ``yf.Ticker().history()``, which is
-    markedly flakier / more rate-limited on hosted environments and silently
-    degrades to a constant daily close.  ``auto_adjust=True`` keeps the returned
-    price on the same split-adjusted scale as the backtest entry prices
-    (which also use ``yf.download(auto_adjust=True)``), so intraday P&L is sound.
+    Cached by (ticker, date_str) so one fetch covers the whole day regardless of
+    how many slider positions the user visits.  The caller looks up the exact price
+    in-memory via ``_equity_price_at(series, ts)``.
 
-    Falls back to a daily close when the hourly window returns nothing (e.g. a
-    date older than yfinance's ~730-day 1h retention).
+    Uses ``yf.download(interval="60m", auto_adjust=True)`` — the same call the
+    rest of the app uses for hourly bars, on the same split-adjusted scale as the
+    backtest entry prices.  Falls back to daily bars if hourly is unavailable.
     """
-    def _flatten(frame):
+    def _norm(frame):
         if isinstance(frame.columns, pd.MultiIndex):
             frame.columns = [c[0] for c in frame.columns]
         if frame.index.tzinfo is not None:
             frame.index = frame.index.tz_convert("UTC").tz_localize(None)
         return frame
 
+    d = pd.Timestamp(date_str)
     try:
-        dt = pd.Timestamp(dt_str)
         hist = yf.download(
             ticker,
-            start=(dt - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
-            end=(dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            start=(d - pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            end=(d + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
             interval="60m", progress=False, auto_adjust=True,
         )
-        if hist.empty:
-            raise ValueError("empty")
-        hist = _flatten(hist)
-        mask = hist.index <= dt
-        if mask.any():
-            return float(hist["Close"][mask].iloc[-1])
-        return float(hist["Close"].iloc[0])
+        if not hist.empty:
+            return _norm(hist)["Close"].sort_index()
     except Exception:
-        # Fall back to daily close (e.g. date > 730 days ago or hourly empty)
-        try:
-            d = pd.Timestamp(dt_str)
-            hist = yf.download(
-                ticker,
-                start=(d - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
-                end=(d + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                interval="1d", progress=False, auto_adjust=True,
-            )
-            if hist.empty:
-                return None
-            hist = _flatten(hist)
+        pass
+    # Fall back to daily bars
+    try:
+        hist = yf.download(
+            ticker,
+            start=(d - pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
+            end=(d + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            interval="1d", progress=False, auto_adjust=True,
+        )
+        if not hist.empty:
+            hist = _norm(hist)
             hist.index = hist.index.normalize()
-            mask = hist.index <= d.normalize()
-            return float(hist["Close"][mask].iloc[-1]) if mask.any() else None
-        except Exception:
-            return None
+            return hist["Close"].sort_index()
+    except Exception:
+        pass
+    return None
+
+
+def _equity_price_at(series: "pd.Series | None", ts: "pd.Timestamp") -> "float | None":
+    """Look up the last known close at or before `ts` from a pre-fetched series."""
+    if series is None or series.empty:
+        return None
+    mask = series.index <= ts
+    if mask.any():
+        return float(series[mask].iloc[-1])
+    return float(series.iloc[0])
+
+
+def _fetch_equity_price_at_datetime(ticker: str, dt_str: str) -> "float | None":
+    """Thin compatibility wrapper used elsewhere in the file."""
+    dt = pd.Timestamp(dt_str)
+    date_str = dt.strftime("%Y-%m-%d")
+    return _equity_price_at(_fetch_equity_hourly_series(ticker, date_str), dt)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -9497,12 +9506,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _mstr_panel_px = mstr_price
             _mstu_panel_px = mstu_price
         else:
-            _hist_dt_s     = latest_t.isoformat()  # full UTC timestamp for hourly lookup
             _btc_panel_px  = latest_close
-            # Use hourly yf.Ticker.history prices so the panel price updates as
-            # the intraday slider moves through hours within the same date.
-            _mstr_panel_px = _fetch_equity_price_at_datetime("MSTR", _hist_dt_s)
-            _mstu_panel_px = _fetch_equity_price_at_datetime("MSTU", _hist_dt_s)
+            # Fetch the full day's hourly series once (cached by date).
+            # Price lookup is then pure in-memory on latest_t, so moving the
+            # intraday slider never triggers a new network request and always
+            # returns a different price for each market-hours slider position.
+            _date_str      = target_date.strftime("%Y-%m-%d")
+            _mstr_series   = _fetch_equity_hourly_series("MSTR", _date_str)
+            _mstu_series   = _fetch_equity_hourly_series("MSTU", _date_str)
+            _mstr_panel_px = _equity_price_at(_mstr_series, latest_t)
+            _mstu_panel_px = _equity_price_at(_mstu_series, latest_t)
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
