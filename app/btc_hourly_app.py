@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v11"  # Historical Replay signals from backtest (yfinance); live signals from Binance
+_BT_LOGIC_VERSION = "sl5-sl5-v12"  # MSTR/MSTU same-bar entry/exit (after-hours execution, no 1-bar lag)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3689,9 +3689,9 @@ def run_mstr_backtest(end_date_iso: str,
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                # 1-bar lag: exit signal from prior bar (matches research script timing)
-                should_exit = bool(d3[i-1] or (d2[i-1] and not bull_regime[i-1]))
-                exit_lbl    = "D3" if d3[i-1] else "D2 (bear)"
+                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -3709,25 +3709,25 @@ def run_mstr_backtest(end_date_iso: str,
         else:
             if from_sl:
                 bars_since_sl += 1
-            # 1-bar lag: use prior bar's signals (matches research script timing)
-            _exit_at_i = d3[i-1] or (d2[i-1] and not bull_regime[i-1])
+            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
-                              or bool(bull_regime[i-1])
+                              or bool(bull_regime[i])
                               or bars_since_sl >= 10)
             # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
             # almost every bar; blocking on it would permanently prevent re-entry).
-            # Fresh entries still require no exit signal on the prior bar.
-            if i > 0 and tf1_entry[i-1] and _sl_reentry_ok and (from_sl or not _exit_at_i):
+            # Fresh entries still require no exit signal on the same bar.
+            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
-                if v_recent[i-1] and not above_ma30[i-1] and not clean_10d[i-1]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i-1] and clean_10d[i-1]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[i-1]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -4010,9 +4010,9 @@ def run_mstu_backtest(end_date_iso: str,
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                # 1-bar lag: exit signal from prior bar (matches research script timing)
-                should_exit = bool(d3[i-1] or (d2[i-1] and not bull_regime[i-1]))
-                exit_lbl    = "D3" if d3[i-1] else "D2 (bear)"
+                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -4030,25 +4030,25 @@ def run_mstu_backtest(end_date_iso: str,
         else:
             if from_sl:
                 bars_since_sl += 1
-            # 1-bar lag: use prior bar's signals (matches research script timing)
-            _exit_at_i = d3[i-1] or (d2[i-1] and not bull_regime[i-1])
+            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
-                              or bool(bull_regime[i-1])
+                              or bool(bull_regime[i])
                               or bars_since_sl >= 10)
             # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
             # almost every bar; blocking on it would permanently prevent re-entry).
-            # Fresh entries still require no exit signal on the prior bar.
-            if i > 0 and tf1_entry[i-1] and _sl_reentry_ok and (from_sl or not _exit_at_i):
+            # Fresh entries still require no exit signal on the same bar.
+            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.93
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
-                if v_recent[i-1] and not above_ma30[i-1] and not clean_10d[i-1]:
+                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i-1] and clean_10d[i-1]:
+                elif above_ma30[i] and clean_10d[i]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[i-1]:
+                elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -5324,7 +5324,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         _cl_trig  = _lp_closed_today.get("entry_trigger", "—")
         _cl_next  = (
             f"<br><span style='color:#16a34a; font-weight:600;'>🟢 Entry signal active — "
-            f"new position will enter at next bar's close</span>"
+            f"new position will enter at today's close (after-hours)</span>"
             if _lp_entry_signal else ""
         )
         st.markdown(
