@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl1-v4"   # SL5/MSTR, SL1/MSTU(-7%stop), no BTC stop; re-entry bypass _exit_at_i
+_BT_LOGIC_VERSION = "sl5-sl1-v5"   # SL5/MSTR(-3%close), SL1/MSTU(-7%close), no BTC stop
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3302,13 +3302,13 @@ def run_mstr_backtest(end_date_iso: str,
     ).ffill()
     mstr_px = mstr_all.reindex(dates).ffill().bfill().values.astype(float)
 
-    # MSTR intraday lows — used to trigger the 3% fixed stop intraday
+    # MSTR intraday lows — kept for display/annotation only; stop is triggered on close
     mstr_lo_raw = d_mstr["Low"].sort_index() if "Low" in d_mstr.columns else mstr_raw
     mstr_lo_all = mstr_lo_raw.reindex(
         pd.date_range(mstr_lo_raw.index[0],
                       max(mstr_lo_raw.index[-1], end_dt), freq="D")
     ).ffill()
-    mstr_lo = mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)
+    mstr_lo = mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)  # noqa: F841
 
     # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
     c_asof  = comp["close_asof"].values.astype(float)
@@ -3396,8 +3396,8 @@ def run_mstr_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstr_qty * price
-            if mstr_lo[i] < stop_px:              # triggered intraday if low breaches stop
-                exit_px  = stop_px                 # fill at stop level
+            if price < stop_px:                    # triggered on close (matches research evaluation)
+                exit_px  = price                   # fill at close price
                 exit_nav = mstr_qty * exit_px
                 nav = exit_nav
                 trades.append(dict(
@@ -3630,7 +3630,7 @@ def run_mstu_backtest(end_date_iso: str,
     act_hi  = comp["actual_high"].values.astype(float)
     act_lo  = comp["actual_low"].values.astype(float)
 
-    # ── MSTU intraday lows for stop-loss intraday triggering ──────────────────
+    # ── MSTU intraday lows — kept for display only; stop now triggers on close ──
     # Real MSTU (post-inception): use yfinance daily Low.
     # Synthetic MSTU (pre-inception): approximate from 2× BTC intraday drawdown.
     mstu_lo = np.full(N, np.nan)
@@ -3755,8 +3755,8 @@ def run_mstu_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstu_qty * price
-            if mstu_lo[i] < stop_px:              # triggered intraday if low breaches stop
-                exit_px  = stop_px                 # fill at stop level
+            if price < stop_px:                    # triggered on close (matches research evaluation)
+                exit_px  = price                   # fill at close price
                 exit_nav = mstu_qty * exit_px
                 nav = exit_nav
                 trades.append(dict(
@@ -5906,7 +5906,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                padding:2px 8px; font-size:11px;'>Stop trigger</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−3%</b> from entry price — triggers intraday when MSTR low breaches stop
+          Fixed <b>−3%</b> from entry price — triggers on daily close below stop level
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
@@ -6636,7 +6636,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>Stop trigger</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−7%</b> from entry price — triggers intraday when MSTU low breaches stop
+          Fixed <b>−7%</b> from entry price — triggers on daily close below stop level
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>

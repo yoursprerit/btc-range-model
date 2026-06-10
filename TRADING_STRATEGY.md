@@ -421,7 +421,7 @@ TF2 automatically becomes TF1-equivalent.
 
 ### MSTR — TF2 + V-Gate (BTC signals → MSTR execution)
 
-BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,000 BTC, making it a leveraged BTC proxy with equity liquidity. Live stop: **Fixed −3%** (intraday triggered, filled at stop price).
+BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,000 BTC, making it a leveraged BTC proxy with equity liquidity. Live stop: **Fixed −3%** (close-price triggered, filled at close price).
 
 #### Baseline (no stop loss)
 
@@ -432,22 +432,24 @@ BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,0
 | 🌐 Full (Jun 2024–May 2026) | **+59.4%** | +0.48 | −54.3% | **+65.5pp** vs B&H −6.1% |
 | 🔬 OOS (Mar 2026–Jun 2026) | **+12.0%** | +0.81 | −16.9% | **+19.0pp** vs B&H −7.0% |
 
-#### With Fixed −3% stop loss (live strategy — intraday triggered, filled at stop price) ⭐
+#### With Fixed −3% stop loss + SL5 regime-adaptive re-entry (live strategy — close-price trigger) ⭐
+
+*Note: Research evaluated with close-price stop trigger (not intraday). MSTR's high daily ATR means intraday triggers would fire on normal consolidation, causing false exits.*
 
 | Period | Return | Sharpe | Max DD | vs Baseline |
 |--------|--------|--------|--------|-------------|
 | 🐻 Bear | **−0.6%** | −0.13 | −27.5% | ▲ +29.3pp return, ▲ +21.9pp less DD |
-| 🐂 Bull | **+143.4%** | +1.33 | −34.7% | ▲ +20.8pp return, slightly wider DD |
-| 🌐 Full | **+149.5%** | +0.88 | −39.9% | ▲ +90.1pp return, ▲ +14.4pp less DD |
-| 🔬 OOS | **+23.1%** | +1.56 | −11.8% | ▲ +11.1pp return, ▲ +5.1pp less DD |
+| 🐂 Bull | **+167.2%** | +1.50 | −32.0% | ▲ +44.6pp return |
+| 🌐 Full | **+166.8%** | +1.05 | −37.0% | ▲ +107.4pp return |
+| 🔬 OOS | **+23.1%** | +1.56 | −11.8% | ▲ +11.1pp return |
 
-**MSTR Fixed −3% beats the baseline on ALL 4 periods** on both return and Sharpe ratio. The fixed 3% stop caps individual trade losses while leaving winning trades largely unaffected.
+**MSTR Fixed −3% close-price stop + SL5 re-entry beats the baseline on ALL 4 periods.** Close-price triggering avoids false stops on intraday volatility; SL5 regime-adaptive re-entry captures +44.6pp extra return in bull vs the no-stop baseline.
 
 ---
 
 ### MSTU — TF2 + V-Gate (BTC signals → MSTU execution)
 
-MSTU is the T-Rex 2× Long MSTR ETF (inception Jun 4, 2025). Pre-inception prices are OLS-calibrated synthetic prices derived from MSTR daily returns (β ≈ 2.0). Intraday lows for pre-inception bars are approximated as `prev_close × (1 + 2 × btc_intraday_drawdown)`. Live stop: **Fixed −7%** (intraday triggered, filled at stop price).
+MSTU is the T-Rex 2× Long MSTR ETF (inception Jun 4, 2025). Pre-inception prices are OLS-calibrated synthetic prices derived from MSTR daily returns (β ≈ 2.0). Live stop: **Fixed −7%** (close-price triggered, filled at close price).
 
 #### Baseline (no stop loss)
 
@@ -458,22 +460,25 @@ MSTU is the T-Rex 2× Long MSTR ETF (inception Jun 4, 2025). Pre-inception price
 | 🌐 Full (Jun 2024–May 2026) | **+29.4%** | +0.48 | −85.6% | **+112.3pp** vs B&H −82.9% |
 | 🔬 OOS (Mar 2026–Jun 2026) | **+14.2%** | +0.75 | −33.5% | **+44.5pp** vs B&H −30.3% |
 
-#### With Fixed −7% stop loss (live strategy — intraday triggered, filled at stop price) ⭐
+#### With Fixed −7% stop loss + SL1 re-entry (live strategy — close-price trigger) ⭐
+
+*Note: Research evaluated SL1 with −10% close-price stop. Live uses −7% close-price stop with SL1; −7% produces better bull return (+275.8%) while −10% produced +198.7% with intraday triggers.*
 
 | Period | Return | Sharpe | Max DD | vs Baseline |
 |--------|--------|--------|--------|-------------|
 | 🐻 Bear | **−16.9%** | −0.25 | −45.0% | ▲ +44.8pp return, ▲ +33.6pp less DD |
-| 🐂 Bull | **+275.8%** | +1.38 | −58.0% | ▲ +53.3pp return |
-| 🌐 Full | **+235.9%** | +0.96 | −65.0% | ▲ +206.5pp return |
-| 🔬 OOS | **+38.2%** | +1.38 | −24.0% | ▲ +24.0pp return |
+| 🐂 Bull | **+288.3%** | +1.45 | −55.0% | ▲ +65.8pp return |
+| 🌐 Full | **+269.5%** | +1.05 | −62.0% | ▲ +240.1pp return |
+| 🔬 OOS | **+39.1%** | +1.41 | −23.0% | ▲ +24.9pp return |
 
-**MSTU Fixed −7% beats baseline on ALL 4 periods** — upgraded from −10% which missed bull-market upside by 23.8pp. The −7% threshold allows normal 2× leveraged volatility breathing room while still catching genuine reversals.
+**MSTU Fixed −7% close-price stop + SL1 re-entry beats baseline on ALL 4 periods** — upgraded from −10% intraday (which missed bull by 23.8pp). Close-price triggering combined with price-recovery re-entry gate delivers nearly 3× the no-stop baseline in bull and full periods.
 
 ---
 
 ## Stop-Loss Evaluation — All Configurations
 
 Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar lag execution · $100k start · Run: 2026-06-09
+*(Historical reference — live strategy now uses close-price triggers per `backtest_stop_loss_reentry.py` evaluation)*
 
 **Live strategy configs: BTC → No stop · MSTR → Fixed −3% · MSTU → Fixed −7%**
 
@@ -616,14 +621,15 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
   manage all exits. The trailing −7% stop was removed as it suppresses bull-market returns
   without consistent benefit.
 - **`run_mstr_backtest()`** — MSTR backtest with **Fixed −3% stop** (`stop_px = entry × 0.97`),
-  triggered when `mstr_intraday_low < stop_px`, filled at `stop_px`. After a stop exit,
-  **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30 rising), re-enter
-  immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars then re-enter.
+  triggered when `mstr_close[i] < stop_px` (daily close, not intraday), filled at close price.
+  After a stop exit, **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30
+  rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
+  Close-price triggering avoids false stops on intraday noise (MSTR's daily ATR is 5–10%).
 - **`run_mstu_backtest()`** — MSTU backtest with **Fixed −7% stop** (`stop_px = entry × 0.93`),
-  triggered when `mstu_intraday_low < stop_px`, filled at `stop_px`. After a stop exit,
-  **SL1 above-exit-price re-entry**: re-enter only when MSTU price recovers to or above the
-  stop exit price. Pre-inception (before Jun 4, 2025) MSTU intraday lows are approximated as
-  `prev_close × (1 + 2 × btc_intraday_drawdown)`.
+  triggered when `mstu_close[i] < stop_px` (daily close, not intraday), filled at close price.
+  After a stop exit, **SL1 above-exit-price re-entry**: re-enter only when MSTU price recovers
+  to or above the stop exit price. Pre-inception (before Jun 4, 2025) MSTU synthetic prices are
+  derived from MSTR via OLS-calibrated log-return mapping (β ≈ 2.0).
 - All three backtests use **same-bar execution** (signal and trade on same bar), matching
   live-dashboard behavior. The standalone evaluation script (`backtest_stop_loss_reentry.py`) uses
   1-bar lag and tests all 7 re-entry variants across 5 periods for research purposes.
