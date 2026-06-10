@@ -9403,7 +9403,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         ("Prior hi-break streak",
          f"{sigs.get('consec_hi', 0)} consecutive hi-breaks",
          "≥ 3 consecutive immediately prior (ending yesterday)",
-         sigs.get('consec_hi', 0) >= 3, False),
+         sigs.get('consec_hi', 0) >= 3, True),
         ("Current streak",
          d3_streak_str,
          "stronger signal when streak was ≥ +4 before D3 fired",
