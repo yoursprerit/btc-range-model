@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v8"   # MSTU uses real yfinance prices (Sep 2024+); bfill pre-inception
+_BT_LOGIC_VERSION = "sl5-sl5-v9"   # MSTR/MSTU backtests use yfinance daily data (match research script)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3230,6 +3230,217 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime=model_mtime, data_end=data_end)
 
 
+@st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
+def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
+                          model_mtime: float = 0.0) -> "tuple | None":
+    """Build CT predictions for MSTR/MSTU backtests using yfinance DAILY BTC data.
+
+    Matches backtest_stop_loss_reentry.py (research script) exactly:
+      - yfinance daily BTC-USD bars (midnight UTC close) — NOT 12:00-UTC Binance bars
+      - No direction_head classifier adjustment (beta=0 in the model would override ML predictions)
+      - Same feature engineering, same ensemble prediction
+
+    Returns (preds_df, raw_df) where preds_df has target_date index with
+    close_asof/pred_high/pred_low and raw_df has btc_close/btc_high/btc_low/btc_volume.
+    Returns None on failure.
+    """
+    import math as _math
+    import time as _time
+    try:
+        AD_bt = joblib.load(str(DAILY_MODEL_CT))
+    except Exception:
+        return None
+
+    # ── 1. BTC daily (yfinance, same source as research script) ──────────────
+    try:
+        d_btc = yf.download("BTC-USD", start=fetch_start_iso, end=fetch_end_iso,
+                             progress=False, auto_adjust=True)
+        if isinstance(d_btc.columns, pd.MultiIndex):
+            d_btc.columns = [c[0] for c in d_btc.columns]
+        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
+    except Exception:
+        return None
+    if d_btc.empty or "Close" not in d_btc.columns:
+        return None
+
+    df = pd.DataFrame({
+        "btc_close":  d_btc["Close"],
+        "btc_high":   d_btc["High"],
+        "btc_low":    d_btc["Low"],
+        "btc_volume": d_btc.get("Volume", pd.Series(dtype=float)),
+    })
+    raw_df = df[["btc_close","btc_high","btc_low","btc_volume"]].copy()
+
+    # ── 2. Macro data (yfinance) ─────────────────────────────────────────────
+    _MACRO = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
+              "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
+    for nm, sym in _MACRO.items():
+        try:
+            _d = yf.download(sym, start=fetch_start_iso, end=fetch_end_iso,
+                             progress=False, auto_adjust=True)
+            if isinstance(_d.columns, pd.MultiIndex):
+                _d.columns = [c[0] for c in _d.columns]
+            _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+            df[f"{nm}_close"] = _d["Close"].reindex(df.index).ffill(limit=7)
+        except Exception:
+            pass
+
+    # ── 3. On-chain (blockchain.info) ────────────────────────────────────────
+    _ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
+                "n-unique-addresses","transaction-fees-usd","mempool-size",
+                "estimated-transaction-volume-usd","market-cap",
+                "avg-block-size","cost-per-transaction"]
+    for _m in _ONCHAIN:
+        try:
+            _r = requests.get(
+                f"https://api.blockchain.info/charts/{_m}",
+                params={"timespan":"3years","format":"json","sampled":"true"},
+                timeout=20)
+            _vals = _r.json().get("values", [])
+            _s = pd.Series(
+                {pd.Timestamp(_v["x"], unit="s").normalize(): _v["y"] for _v in _vals},
+                name=f"oc_{_m.replace('-','_')}", dtype=float)
+            _s = _s[~_s.index.duplicated(keep="last")].sort_index()
+            _s.index = pd.DatetimeIndex(_s.index).tz_localize(None)
+            df[_s.name] = _s.reindex(df.index).ffill(limit=7)
+        except Exception:
+            pass
+
+    # ── 4. Coinbase premium ──────────────────────────────────────────────────
+    _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    _cb_rows: list = []
+    _cb_cur = pd.Timestamp(fetch_start_iso)
+    _cb_end = pd.Timestamp(fetch_end_iso)
+    while _cb_cur <= _cb_end:
+        _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
+        try:
+            _r2 = requests.get(_CB_URL, params={
+                "granularity":86400,
+                "start":_cb_cur.strftime("%Y-%m-%dT00:00:00Z"),
+                "end":(_cb_chunk + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z"),
+            }, timeout=30)
+            if _r2.status_code == 200:
+                _cb_rows.extend(_r2.json())
+        except Exception:
+            pass
+        _cb_cur = _cb_chunk + pd.Timedelta(days=1)
+        _time.sleep(0.1)
+    if _cb_rows:
+        _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
+        _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
+        _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
+        _cb_close = _cb_df["close"].reindex(df.index).astype(float)
+        c_ref = df["btc_close"]
+        _prem = (_cb_close - c_ref) / c_ref * 100
+        df["cb_premium"]     = _prem
+        df["cb_premium_ma3"] = _prem.rolling(3).mean()
+        df["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
+    else:
+        df["cb_premium"] = df["cb_premium_ma3"] = df["cb_premium_z7"] = 0.0
+
+    # ── 5. Feature engineering (identical to research script build_ct_preds) ─
+    c   = df["btc_close"]; h = df["btc_high"]
+    l_  = df["btc_low"];   v = df["btc_volume"]
+    ret = np.log(c).diff()
+    feat = pd.DataFrame(index=df.index)
+    for k in [1,3,5,7,14,30]: feat[f"ret_{k}"] = ret.rolling(k).sum()
+    for k in [5,10,20,30]:    feat[f"vol_{k}"] = ret.rolling(k).std()
+    prev_c = c.shift(1)
+    tr = pd.concat([(h-l_),(h-prev_c).abs(),(l_-prev_c).abs()], axis=1).max(axis=1)
+    for k in [7,14,30]: feat[f"atr_{k}"] = tr.rolling(k).mean()/c
+    feat["range_today"] = (h-l_)/c
+    feat["range_ma7"]   = ((h-l_)/c).rolling(7).mean()
+    feat["range_ma30"]  = ((h-l_)/c).rolling(30).mean()
+    feat["range_std30"] = ((h-l_)/c).rolling(30).std()
+    gain = c.diff().clip(lower=0).rolling(14).mean()
+    loss = (-c.diff().clip(upper=0)).rolling(14).mean()
+    feat["rsi_14"] = 100 - 100/(1 + gain/loss.replace(0, np.nan))
+    e12 = c.ewm(span=12,adjust=False).mean(); e26 = c.ewm(span=26,adjust=False).mean()
+    macd = e12 - e26
+    feat["macd"]      = macd/c
+    feat["macd_sig"]  = macd.ewm(span=9,adjust=False).mean()/c
+    feat["macd_hist"] = (macd - macd.ewm(span=9,adjust=False).mean())/c
+    ma20 = c.rolling(20).mean(); sd20 = c.rolling(20).std()
+    feat["bb_width"]   = (4*sd20)/ma20
+    feat["dist_hi_30"] = c/c.rolling(30).max() - 1
+    feat["dist_lo_30"] = c/c.rolling(30).min() - 1
+    feat["dist_hi_90"] = c/c.rolling(90).max() - 1
+    feat["vol_chg_1"]    = np.log(v).diff()
+    feat["vol_z_20"]     = (np.log(v)-np.log(v).rolling(20).mean())/np.log(v).rolling(20).std()
+    feat["vol_ma_ratio"] = v/v.rolling(20).mean()
+    dow = df.index.dayofweek
+    for i in range(6): feat[f"dow_{i}"] = (dow==i).astype(float)
+    for nm in ["spx","ndx","vix","gold","dxy","tnx","eth"]:
+        col = f"{nm}_close"
+        if col not in df.columns: continue
+        s = df[col]; lr = np.log(s).diff()
+        for k in [1,5,20]: feat[f"{nm}_ret_{k}"] = lr.rolling(k).sum()
+        feat[f"{nm}_vol_20"] = lr.rolling(20).std()
+    for corr_nm, corr_col in [("spx","spx_close"),("ndx","ndx_close"),
+                                ("gold","gold_close"),("dxy","dxy_close")]:
+        if corr_col in df.columns:
+            feat[f"btc_{corr_nm}_corr_30"] = ret.rolling(30).corr(np.log(df[corr_col]).diff())
+    for col in [x for x in df.columns if x.startswith("oc_")]:
+        s = df[col].astype(float); sl = np.log(s.replace(0, np.nan))
+        feat[f"{col}_d1"]  = sl.diff(1); feat[f"{col}_d7"] = sl.diff(7)
+        feat[f"{col}_z30"] = (sl - sl.rolling(30).mean())/sl.rolling(30).std()
+    nh = h.shift(-1); nl = l_.shift(-1)
+    y_hi = (nh-c)/c; y_lo = (c-nl)/c
+    feat["y_hi_ema3"] = y_hi.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_lo_ema3"] = y_lo.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_hi_ema7"] = y_hi.shift(1).ewm(span=7,adjust=False).mean()
+    feat["y_lo_ema7"] = y_lo.shift(1).ewm(span=7,adjust=False).mean()
+    p3h = h.shift(1).rolling(3).max(); p3l = l_.shift(1).rolling(3).min()
+    feat["above_3d_high"]  = (c > p3h).astype(float)
+    feat["below_3d_low"]   = (c < p3l).astype(float)
+    feat["bo_strength_up"] = (c/p3h - 1).clip(lower=0)
+    feat["bo_strength_dn"] = (1 - c/p3l).clip(lower=0)
+    yhl = y_hi.shift(1); yll = y_lo.shift(1)
+    feat["y_hi_surprise"] = yhl - yhl.ewm(span=7,adjust=False).mean()
+    feat["y_lo_surprise"] = yll - yll.ewm(span=7,adjust=False).mean()
+    nr = ret.clip(upper=0)
+    feat["dn_vol_5"]  = nr.rolling(5).std()
+    feat["dn_vol_20"] = nr.rolling(20).std()
+    sma50 = c.rolling(50).mean()
+    feat["below_sma50"]    = (c < sma50).astype(float)
+    feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
+    for _cb_col in ["cb_premium","cb_premium_ma3","cb_premium_z7"]:
+        feat[_cb_col] = df[_cb_col].fillna(0.0)
+
+    # ── 6. Predictions (ensemble, NO direction_head — matches research script) ─
+    fc = AD_bt["feat_cols"]
+    feat = feat.replace([np.inf, -np.inf], np.nan)
+    for col in fc:
+        if col not in feat.columns: feat[col] = np.nan
+    F = feat[fc].dropna()
+    if F.empty:
+        return None
+
+    if AD_bt.get("ensemble") and AD_bt.get("constituents"):
+        yhi = np.mean([con["m_hi"].predict(F) for con in AD_bt["constituents"]], axis=0)
+        ylo = np.mean([con["m_lo"].predict(F) for con in AD_bt["constituents"]], axis=0)
+        if AD_bt.get("blended") and float(AD_bt.get("alpha", 1.0)) < 1.0:
+            a = float(AD_bt["alpha"])
+            yhi = a*yhi + (1-a)*float(AD_bt.get("mu_hi", 0))
+            ylo = a*ylo + (1-a)*float(AD_bt.get("mu_lo", 0))
+    else:
+        yhi = AD_bt["hi_model"].predict(F)
+        ylo = AD_bt["lo_model"].predict(F)
+
+    c_vals = c.reindex(F.index).values
+    ph = c_vals * (1 + np.clip(yhi, 0, None))
+    pl = c_vals * (1 - np.clip(ylo, 0, None))
+    idx_arr = np.asarray(F.index, dtype="datetime64[ns]")
+    nd = np.empty(len(F), dtype="datetime64[ns]")
+    nd[:-1] = idx_arr[1:]; nd[-1] = idx_arr[-1] + np.timedelta64(1,"D")
+    preds_df = pd.DataFrame(
+        {"close_asof": c_vals, "pred_high": ph, "pred_low": pl},
+        index=pd.DatetimeIndex(nd, name="target_date"),
+    )
+    preds_df = preds_df[~preds_df.index.duplicated(keep="last")]
+    return preds_df, raw_df
+
+
 @st.cache_data(show_spinner="Running MSTR backtest …")
 def run_mstr_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-05-26",
@@ -3243,11 +3454,19 @@ def run_mstr_backtest(end_date_iso: str,
     run_full_period_backtest) but executes trades in MSTR stock instead of BTC.
     MSTR daily closes (split-adjusted) are fetched from yfinance and forward-filled
     across weekends/holidays so each BTC signal date has a valid execution price.
-    data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
+    Uses yfinance daily BTC data (matching backtest_stop_loss_reentry.py) so UI numbers
+    are consistent with the research script.
     """
     WARMUP = 35
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=60)
+    # Fetch 90 days extra pre-period for warmup (matches research script fetch_start)
+    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3256,10 +3475,7 @@ def run_mstr_backtest(end_date_iso: str,
     btc_highs  = raw_df["btc_high"]
     btc_lows   = raw_df["btc_low"]
 
-    end_dt   = pd.Timestamp(end_date_iso)
-    start_dt = pd.Timestamp(backtest_start_iso)
-    pre_dt   = start_dt - pd.Timedelta(days=60)
-    preds    = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    preds = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
         return None
 
@@ -3558,14 +3774,20 @@ def run_mstu_backtest(end_date_iso: str,
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
-    (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  For start dates
-    before Jun 4 2025 (MSTU inception), synthetic MSTU prices are derived from
-    MSTR via OLS-calibrated log-return mapping.  data_end is forwarded to
-    _build_ct_predictions_extended as a cache-bust key.
+    (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU started trading
+    Sep 18 2024; earlier dates are backward-filled with the Sep 18 opening price.
+    Uses yfinance daily BTC data (matching backtest_stop_loss_reentry.py) so UI
+    numbers are consistent with the research script.
     """
     WARMUP = 35
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=60)
+    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3574,10 +3796,7 @@ def run_mstu_backtest(end_date_iso: str,
     btc_highs  = raw_df["btc_high"]
     btc_lows   = raw_df["btc_low"]
 
-    end_dt   = pd.Timestamp(end_date_iso)
-    start_dt = pd.Timestamp(backtest_start_iso)
-    pre_dt   = start_dt - pd.Timedelta(days=60)
-    preds    = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    preds = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
         return None
 
@@ -3892,15 +4111,20 @@ def run_mstr_options_backtest(end_date_iso: str,
     Strike = MSTR spot at entry (at-the-money).  Exit triggered by the same
     BTC D2/D3 regime-adaptive rules as the stock strategy.
     B&H benchmark tracks MSTR stock (for fair comparison against the unleveraged
-    alternative).  data_end is forwarded to _build_ct_predictions_extended as a
-    cache-bust key.
+    alternative).  Uses yfinance daily BTC data (matching research script).
     """
     import math
     WARMUP  = 35
     RF_RATE = 0.045
     HV_WINDOW = 60
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=90)
+    fetch_start = (start_dt - pd.Timedelta(days=120)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3909,10 +4133,7 @@ def run_mstr_options_backtest(end_date_iso: str,
     btc_highs  = raw_df["btc_high"]
     btc_lows   = raw_df["btc_low"]
 
-    end_dt   = pd.Timestamp(end_date_iso)
-    start_dt = pd.Timestamp(backtest_start_iso)
-    pre_dt   = start_dt - pd.Timedelta(days=90)
-    preds    = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    preds = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
         return None
 
@@ -4223,16 +4444,21 @@ def run_mstu_options_backtest(end_date_iso: str,
     priced via Black-Scholes with 60-day rolling historical MSTU volatility.
     Strike = MSTU spot at entry (at-the-money).  Exit triggered by the same
     BTC D2/D3 regime-adaptive rules.  B&H benchmark tracks MSTU stock.
-    For start dates before Jun 4 2025 (MSTU inception), synthetic MSTU prices
-    are derived from MSTR via OLS-calibrated log-return mapping.
-    data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
+    MSTU started trading Sep 18 2024; earlier dates are bfilled.
+    Uses yfinance daily BTC data (matching research script).
     """
     import math
     WARMUP    = 35
     RF_RATE   = 0.045
     HV_WINDOW = 60
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=60)
+    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -4241,10 +4467,7 @@ def run_mstu_options_backtest(end_date_iso: str,
     btc_highs  = raw_df["btc_high"]
     btc_lows   = raw_df["btc_low"]
 
-    end_dt   = pd.Timestamp(end_date_iso)
-    start_dt = pd.Timestamp(backtest_start_iso)
-    pre_dt   = start_dt - pd.Timedelta(days=60)
-    preds    = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    preds = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
         return None
 
