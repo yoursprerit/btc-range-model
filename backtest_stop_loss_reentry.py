@@ -12,8 +12,8 @@ IMPLEMENTED RECOMMENDATIONS (in app/btc_hourly_app.py and TRADING_STRATEGY.md):
          exits already handle adverse moves; all SL variants underperform vs B0.
   MSTR : Fixed −3% stop + SL5 regime-adaptive re-entry
          (bull: immediate re-entry on next signal; bear: 10-bar cooldown)
-  MSTU : Fixed −7% stop + SL1 above-exit-price re-entry
-         (re-enter only when MSTU recovers above the stop exit price)
+  MSTU : Fixed −7% stop + SL5 regime-adaptive re-entry
+         (bull: immediate re-entry on next signal; bear: 10-bar cooldown)
 
 These tight stops cause premature exits in bull markets — the position is stopped
 out during a normal consolidation, then BTC continues higher without us.
