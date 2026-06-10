@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl1-v5"   # SL5/MSTR(-3%close), SL1/MSTU(-7%close), no BTC stop
+_BT_LOGIC_VERSION = "sl5-sl1-v6"   # SL5/MSTR(-3%close), SL1/MSTU(-7%close), 1-bar lag signals
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3396,7 +3396,7 @@ def run_mstr_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstr_qty * price
-            if price < stop_px:                    # triggered on close (matches research evaluation)
+            if price <= stop_px:                   # triggered on close (matches research evaluation)
                 exit_px  = price                   # fill at close price
                 exit_nav = mstr_qty * exit_px
                 nav = exit_nav
@@ -3411,8 +3411,9 @@ def run_mstr_backtest(end_date_iso: str,
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
-                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
+                # 1-bar lag: exit signal from prior bar (matches research script timing)
+                should_exit = bool(d3[i-1] or (d2[i-1] and not bull_regime[i-1]))
+                exit_lbl    = "D3" if d3[i-1] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -3424,29 +3425,31 @@ def run_mstr_backtest(end_date_iso: str,
                         was_reentry=e_reentry,
                     ))
                     pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
+                    from_sl = False              # reset SL state on clean exit
                 else:
                     nav = cur
         else:
             if from_sl:
                 bars_since_sl += 1
-            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            # 1-bar lag: use prior bar's signals (matches research script timing)
+            _exit_at_i = d3[i-1] or (d2[i-1] and not bull_regime[i-1])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
-                              or bool(bull_regime[i])
+                              or bool(bull_regime[i-1])
                               or bars_since_sl >= 10)
             # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
             # almost every bar; blocking on it would permanently prevent re-entry).
-            # Fresh entries still require no exit signal on the same bar.
-            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
+            # Fresh entries still require no exit signal on the prior bar.
+            if i > 0 and tf1_entry[i-1] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i-1] and not above_ma30[i-1] and not clean_10d[i-1]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
+                elif above_ma30[i-1] and clean_10d[i-1]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[i]:
+                elif above_ma30[i-1]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
@@ -3755,7 +3758,7 @@ def run_mstu_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstu_qty * price
-            if price < stop_px:                    # triggered on close (matches research evaluation)
+            if price <= stop_px:                   # triggered on close (matches research evaluation)
                 exit_px  = price                   # fill at close price
                 exit_nav = mstu_qty * exit_px
                 nav = exit_nav
@@ -3770,8 +3773,9 @@ def run_mstu_backtest(end_date_iso: str,
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; sl_exit_price = exit_px   # SL1: remember stop exit price
             else:
-                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
-                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
+                # 1-bar lag: exit signal from prior bar (matches research script timing)
+                should_exit = bool(d3[i-1] or (d2[i-1] and not bull_regime[i-1]))
+                exit_lbl    = "D3" if d3[i-1] else "D2 (bear)"
                 if should_exit:
                     nav = cur
                     trades.append(dict(
@@ -3783,25 +3787,27 @@ def run_mstu_backtest(end_date_iso: str,
                         was_reentry=e_reentry,
                     ))
                     pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
+                    from_sl = False; sl_exit_price = None  # reset SL state on clean exit
                 else:
                     nav = cur
         else:
-            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            # 1-bar lag: use prior bar's signals (matches research script timing)
+            _exit_at_i = d3[i-1] or (d2[i-1] and not bull_regime[i-1])
             # SL1: after stop exit, only re-enter when price recovers to or above stop exit price
             _sl_reentry_ok = (not from_sl
                               or (sl_exit_price is not None and price >= sl_exit_price))
             # Post-SL re-entries bypass the _exit_at_i gate (same rationale as MSTR SL5).
-            # Fresh entries still require no exit signal on the same bar.
-            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
+            # Fresh entries still require no exit signal on the prior bar.
+            if i > 0 and tf1_entry[i-1] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.93
                 from_sl = False; sl_exit_price = None   # reset SL1 state on re-entry
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i-1] and not above_ma30[i-1] and not clean_10d[i-1]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
+                elif above_ma30[i-1] and clean_10d[i-1]:
                     e_trigger = "U1 + ↑MA30 + clean10d"
-                elif above_ma30[i]:
+                elif above_ma30[i-1]:
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + clean10d"
