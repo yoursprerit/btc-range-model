@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v9"   # MSTR/MSTU backtests use yfinance daily data (match research script)
+_BT_LOGIC_VERSION = "sl5-sl5-v10"  # All backtests (BTC+MSTR+MSTU) use yfinance daily; consistent positions panel
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -2987,17 +2987,23 @@ def run_full_period_backtest(end_date_iso: str,
                              initial_capital: float = 100_000.0,
                              model_mtime: float = 0.0,
                              data_end: str = ""):
-    """Full-period TF2 backtest using Binance 12:00-UTC daily data.
+    """Full-period TF2 backtest using yfinance daily BTC data.
 
-    Uses _fetch_daily_raw() (same source as compute_daily_forecast) so backtest
-    predictions are identical to historical-replay signals — fixing the discrepancy
-    where entries appeared in the trade log but not in historical replay.
+    Uses _build_backtest_preds() (same source as run_mstr_backtest / run_mstu_backtest)
+    so BTC, MSTR, and MSTU positions in the Historical Replay panel all derive from
+    identical predictions — preventing the discrepancy where MSTR/MSTU show an open
+    position on a day when the BTC position panel shows nothing (caused by the two
+    pipelines using different close prices: Binance 12:00-UTC vs yfinance midnight-UTC).
     Returns the same dict structure as run_tf1_backtest.
-    data_end is forwarded to _build_ct_predictions_extended as a cache-bust key.
     """
     WARMUP = 35
 
-    ext = _build_ct_predictions_extended(model_mtime=model_mtime, data_end=data_end)
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3006,8 +3012,6 @@ def run_full_period_backtest(end_date_iso: str,
     highs  = raw_df["btc_high"]
     lows   = raw_df["btc_low"]
 
-    end_dt   = pd.Timestamp(end_date_iso)
-    start_dt = pd.Timestamp(backtest_start_iso)
     # Load 60 extra calendar days before start so MA30/clean10d/dn_score are
     # fully warm by the time the backtest window actually begins.
     pre_dt   = start_dt - pd.Timedelta(days=60)
