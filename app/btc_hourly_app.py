@@ -654,9 +654,10 @@ def _fetch_binance_hourly(days_back=None):
 
 
 @st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
-def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = ""):
-    """Implementation of the daily-bar fetch.  Neither `_bar_start_iso` nor
-    `_hourly_end_iso` is used inside the function body — both are cache-busting keys.
+def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = "", _utc_hour: str = ""):
+    """Implementation of the daily-bar fetch.  None of `_bar_start_iso`,
+    `_hourly_end_iso`, or `_utc_hour` is used inside the function body —
+    all three are cache-busting keys only.
 
     `_bar_start_iso` equals the ISO date of the 12:00-UTC bar currently open
     (i.e. floor((now_utc − 12h).date())).  It changes at exactly 12:00 UTC each day,
@@ -669,6 +670,14 @@ def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = ""):
     Without this second key, a cache miss at 12:00 UTC can populate the daily cache
     with incomplete data (missing the newest completed bar) and hold it stale for the
     full 6-hour TTL — causing today's and yesterday's err_hi_ma3 to show the same value.
+
+    `_utc_hour` equals the current UTC hour string (e.g. "2026-06-10T12").  It changes
+    every hour, guaranteeing a fresh fetch within 1 hour of the 12:00 UTC bar boundary
+    even when `_hourly_end_iso` is stuck — which happens when Binance is rate-limited
+    on Streamlit Cloud and the Yahoo Finance fallback returns the same stale hourly
+    timestamp across multiple 10-minute refresh cycles.  Without this third key, the
+    bad cache entry (built while yesterday's bar was incomplete) would persist for the
+    full 6-hour TTL, causing flat predictions and missing actual H/L for yesterday.
 
     Build the daily-bar DataFrame anchored at 12:00 UTC.
 
@@ -769,18 +778,22 @@ def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = ""):
 
 
 def _fetch_daily_raw():
-    """Public wrapper — calls _fetch_daily_raw_inner with two cache-busting keys:
-    the current bar-start ISO date (changes at 12:00 UTC) and the latest hourly
-    candle ISO timestamp (changes whenever _fetch_binance_hourly() picks up new data).
-    The second key prevents a 6-hour stale window when the hourly cache hasn't yet
-    delivered the final candle of the just-closed daily bar at the time of bar rollover."""
+    """Public wrapper — calls _fetch_daily_raw_inner with three cache-busting keys:
+    1. bar-start ISO date (changes at 12:00 UTC daily)
+    2. latest hourly candle ISO timestamp (changes when _fetch_binance_hourly picks up
+       new data — prevents a stale window when the 11:00 UTC candle hasn't arrived yet)
+    3. current UTC hour string (changes every hour — failsafe for when key 2 is stuck
+       because Binance is rate-limited and the Yahoo Finance fallback keeps returning the
+       same stale max timestamp; without this, the bad daily-raw entry could persist for
+       the full 6-hour TTL causing flat predictions and missing yesterday's actual H/L)"""
     _bar_start_iso = (
         (datetime.now(timezone.utc) - timedelta(hours=ANCHOR_HOUR_UTC))
         .date().isoformat()
     )
     _hourly = _fetch_binance_hourly()
     _hourly_end_iso = _hourly.index.max().isoformat() if not _hourly.empty else ""
-    return _fetch_daily_raw_inner(_bar_start_iso, _hourly_end_iso)
+    _utc_hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    return _fetch_daily_raw_inner(_bar_start_iso, _hourly_end_iso, _utc_hour)
 
 
 @st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
