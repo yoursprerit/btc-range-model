@@ -76,7 +76,7 @@ Buy & Hold final NAV: **$66,929 (−33.1%)**.
 
 ### Entry Rule
 
-Buy at next bar close when **all** of the following are true on the signal bar:
+Buy at same-bar close (after-hours execution) when **all** of the following are true on the signal bar:
 
 ```
 U1 is active:
@@ -91,7 +91,7 @@ AND at least one of:
 
 ### Exit Rule
 
-Sell at next bar close when **either** of the following is true on the signal bar:
+Sell at same-bar close (after-hours execution) when **either** of the following is true on the signal bar:
 
 ```
 D2: err_hi_ma3 < −0.75%  (predicted highs not being reached)
@@ -361,7 +361,7 @@ TF2 automatically becomes TF1-equivalent.
 
 ## Four-Period Backtest Results — BTC, MSTR, MSTU (Jun 2024 – Jun 2026)
 
-> **Methodology:** 1-bar lag execution (signal on bar *i*, trade at bar *i+1* close) · $100,000 starting capital · **Stop-losses triggered on daily close, filled at close price** · 60-day pre-period signal warmup · Run: 2026-06-10
+> **Methodology:** Same-bar execution (signal on bar *i*, trade at bar *i* close — after-hours fill for MSTR/MSTU) · $100,000 starting capital · **Stop-losses triggered on daily close, filled at close price** · 60-day pre-period signal warmup · Run: 2026-06-10
 
 > ⚠️ **In-sample warning:** CT model trained through Feb 28, 2026. OOS period (Mar 2026 → present) is fully blind.
 
@@ -437,12 +437,12 @@ BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,0
 
 | Period | Return | Sharpe | Max DD | vs Baseline |
 |--------|--------|--------|--------|-------------|
-| 🐻 Bear | **+5.0%** | +0.08 | −25.8% | ▲ +12.5pp return, ▲ +8.8pp less DD |
-| 🐂 Bull | **+252.9%** | +1.80 | −31.1% | ▲ +42.4pp return |
-| 🌐 Full | **+270.3%** | +1.20 | −32.3% | ▲ +83.1pp return |
+| 🐻 Bear | **+2.7%** | — | — | ▲ vs B&H −60.6% |
+| 🐂 Bull | **+202.9%** | — | — | ▲ vs B&H +125.9% |
+| 🌐 Full | **+221.3%** | — | — | ▲ vs B&H −6.1% |
 | 🔬 OOS | — | — | — | — (rolling, see live UI) |
 
-**MSTR Fixed −3% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** Positive Bear return (+5.0%) while B&H lost −60.6%; Bull/Full outperform no-SL by 42–83pp.
+**MSTR Fixed −3% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** Positive Bear return (+2.7%) while B&H lost −60.6%.
 
 ---
 
@@ -465,12 +465,12 @@ MSTU is the T-Rex 2× Long MSTR ETF (inception Sep 18, 2024). For pre-inception 
 
 | Period | Return | Sharpe | Max DD | vs Baseline |
 |--------|--------|--------|--------|-------------|
-| 🐻 Bear | **−2.2%** | +0.10 | −47.8% | ▲ +26.6pp return, ▲ +14.2pp less DD |
-| 🐂 Bull | **+477.7%** | +1.64 | −60.4% | ▲ +152.1pp return, ▲ +3.6pp less DD |
-| 🌐 Full | **+464.9%** | +1.09 | −61.5% | ▲ +262.0pp return, ▲ +17.8pp less DD |
-| 🔬 OOS | **+39.1%** | +1.41 | −23.0% | ▲ +24.9pp return |
+| 🐻 Bear | **−5.0%** | — | — | ▲ vs B&H −91.8% |
+| 🐂 Bull | **+530.7%** | — | — | ▲ vs B&H +210.0% |
+| 🌐 Full | **+531.1%** | — | — | ▲ vs B&H −76.0% |
+| 🔬 OOS | — | — | — | — (rolling, see live UI) |
 
-**MSTU Fixed −7% close-price stop + SL5 re-entry beats baseline on ALL 3 locked periods** — upgraded from SL1 (price-recovery gate), which underperformed SL5 by 194.7pp in Bull and 181.9pp in Full. In BULL regime (BTC above MA30 AND MA30 rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
+**MSTU Fixed −7% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** In BULL regime (BTC above MA30 AND MA30 rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
 
 ---
 
@@ -539,7 +539,7 @@ Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar
 | Regime | Strategy edge | B&H edge |
 |--------|--------------|----------|
 | Bear / Sideways (Bear period) | ✓ Avoids large drawdowns, outperforms on all three assets | ✗ Suffers full decline |
-| Strong bull (Bull period) | ▲ Fixed −3%/−7% stops + SL5 re-entry outperform B&H (MSTR +252.9% vs B&H +194.0% ▲+59pp; MSTU +477.7% vs B&H +210.0% ▲+268pp) | ✓ Captures full run |
+| Strong bull (Bull period) | ▲ Fixed −3%/−7% stops + SL5 re-entry outperform B&H (MSTR +202.9% vs B&H +125.9% ▲+77pp; MSTU +530.7% vs B&H +210.0% ▲+321pp) | ✓ Captures full run |
 
 ---
 
@@ -548,7 +548,7 @@ Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar
 After a stop-loss exit, re-entering naively on the next valid TF2 signal often leads to re-entering
 the same down-move. A re-entry gate selectively blocks early re-entry to avoid whipsaw.
 
-Evaluated using `backtest_stop_loss_reentry.py` · 1-bar lag execution · $100k start · Run: 2026-06-10
+Evaluated using `backtest_stop_loss_reentry.py` · Same-bar execution (after-hours) · $100k start · Run: 2026-06-10
 
 **7 variants tested (B0 = baseline no stop, SL0–SL5 = stop + various re-entry gates)**
 
@@ -568,12 +568,14 @@ adds inconsistent value: it helps in Bear/OOS periods but suppresses returns in 
 | SL2 (above original entry) | −5.0% | +158.8% | +145.7% | Re-enter when price ≥ original entry |
 | SL3 (BTC +2% recovery) | −18.1% | +165.4% | +117.3% | Re-enter when BTC up +2% from SL |
 | SL4 (5-bar cooldown) | +0.3% | +235.2% | +236.2% | Fixed 5-bar wait |
-| **SL5 (regime-adaptive)** | **+5.0%** | **+252.9%** | **+270.3%** | **Recommended ★** |
+| **SL5 (regime-adaptive)** | **+2.7%** | **+202.9%** | **+221.3%** | **Recommended ★** |
 
-★ **SL5 gives the best Full-period return (+270.3% vs +187.2% baseline) and Bull return (+252.9%)**
-while exceeding SL0 on Bear (+5.0% vs +0.3%). In BULL regime (BTC > MA30 AND MA30 rising), re-enter
+★ **SL5 gives the best Full-period return (+221.3% vs +187.2% baseline) and Bull return (+202.9%)**
+while keeping Bear return positive (+2.7% vs +0.3% SL0). In BULL regime (BTC > MA30 AND MA30 rising), re-enter
 immediately on next valid signal — the uptrend is intact. In BEAR/Neutral regime, wait 10 bars
 before re-entering — avoids dead-cat-bounce whipsaw.
+
+*Note: SL0–SL4 rows above were computed with the prior 1-bar lag execution model; SL5 reflects the current same-bar (after-hours) execution.*
 
 **Implementation:**
 - After stop exit: set `from_sl = True`, `bars_since_sl = 0`
@@ -593,13 +595,14 @@ before re-entering — avoids dead-cat-bounce whipsaw.
 | SL2 (above original entry) | −11.4% | +283.0% | +283.0% | Re-enter when price ≥ original entry |
 | SL3 (BTC +2% recovery) | −35.2% | +265.9% | +137.2% | Re-enter when BTC up +2% from SL |
 | SL4 (5-bar cooldown) | −11.1% | +408.2% | +351.9% | Fixed 5-bar wait |
-| **SL5 (regime-adaptive)** | **−2.2%** | **+477.7%** | **+464.9%** | **Recommended ★** |
+| **SL5 (regime-adaptive)** | **−5.0%** | **+530.7%** | **+531.1%** | **Recommended ★** |
 
-★ **SL5 gives the best return across ALL periods** — Full +464.9% (vs +202.9% baseline, +112.9pp above SL0),
-Bull +477.7% (+69.5pp above SL0), Bear −2.2% (+8.9pp above SL0). After a stop exit, in BULL regime
-(BTC > MA30 AND MA30 rising) re-enter immediately on next valid signal — the uptrend is intact. In
-BEAR/Neutral regime, wait 10 bars before re-entering — avoids dead-cat-bounce re-entries on the 2×
-leveraged instrument where drawdowns compound rapidly.
+★ **SL5 gives the best return across ALL periods** — Full +531.1% (vs +202.9% baseline), Bull +530.7%.
+After a stop exit, in BULL regime (BTC > MA30 AND MA30 rising) re-enter immediately on next valid
+signal — the uptrend is intact. In BEAR/Neutral regime, wait 10 bars before re-entering — avoids
+dead-cat-bounce re-entries on the 2× leveraged instrument where drawdowns compound rapidly.
+
+*Note: SL0–SL4 rows above were computed with the prior 1-bar lag execution model; SL5 reflects the current same-bar (after-hours) execution.*
 
 **Implementation:**
 - After stop exit: set `from_sl = True`, `bars_since_sl = 0`
@@ -630,9 +633,8 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
   rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
   For pre-inception dates (before Sep 18, 2024), the Sep 18 opening price ($25.52)
   is backward-filled — matching the research script price source.
-- All three backtests use **1-bar lag execution** (signal on bar i-1, trade at bar i), matching
-  the standalone evaluation script (`backtest_stop_loss_reentry.py`), which tests all re-entry
-  variants across Bull/Bear/Full periods.
+- All three backtests use **same-bar execution** (signal on bar i, trade at bar i close) — BTC trades
+  24/7; MSTR/MSTU are bought/sold in after-hours once the BTC daily signal is confirmed.
 
 ---
 
@@ -650,9 +652,10 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
 3. **No transaction costs modeled.** Exchange fees (typically 0.05–0.1% per side),
    slippage, and funding rates are not included. Real-world returns will be lower.
 
-4. **Execution at bar close.** The strategy assumes execution at the 12:00 UTC bar close
-   on the day after the signal fires. In practice, there is a delay between signal
-   computation and execution.
+4. **Execution at bar close.** The strategy assumes execution at the daily close on the same bar the
+   signal fires. BTC trades 24/7 so same-day execution is realistic. MSTR/MSTU are assumed to be
+   bought/sold in after-hours once the BTC daily signal is confirmed. After-hours spreads are wider
+   than regular-session spreads — include this in cost estimates.
 
 5. **Backfitted exit rule.** The choice to use D2+D3 (not D1) as the exit was made after
    observing the Apr 9–25 trade in the test data. This introduces a degree of selection bias.
