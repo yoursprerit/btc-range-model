@@ -94,12 +94,11 @@ REENTRY_LABELS = {
     "SL5": "SL + regime-adaptive",
 }
 
+# Period dates aligned with UI app backtesting setup (Cause 1 fix)
 PERIODS = {
-    "Bull (Sep24→Sep25)":     ("2024-09-17", "2025-09-17", "2024-06-01"),
-    "Bear (Jun25→May26)":     ("2025-06-01", "2026-05-26", "2025-03-01"),
-    "OOS (Sep25→May26)":      ("2025-09-19", "2026-05-26", "2025-06-01"),
-    "OOS-Recent (Mar→May26)": ("2026-03-01", "2026-05-26", "2025-12-01"),
-    "Full (Jun24→May26)":     ("2024-06-01", "2026-05-26", "2024-03-01"),
+    "Bull (Jun24→Jun25)":  ("2024-06-05", "2025-06-14", "2024-03-01"),
+    "Bear (Jun25→May26)":  ("2025-06-01", "2026-05-31", "2025-03-01"),
+    "Full (Jun24→May26)":  ("2024-06-01", "2026-05-31", "2024-03-01"),
 }
 
 INITIAL_CAPITAL = 100_000.0
@@ -418,6 +417,7 @@ def run_backtest(
     sl_type:    str   = "fixed",  # "trailing" | "fixed"
     sl_pct:     float = 0.10,
     cap:        float = 100_000.0,
+    bt_start:   "pd.Timestamp | None" = None,  # Cause 2: trading start date
 ) -> dict:
     """
     Execute one backtest variant.
@@ -437,6 +437,12 @@ def run_backtest(
     d2        = sigs["d2"]; d3 = sigs["d3"]
     bull      = sigs["bull_regime"]
     tf2_entry = sigs["tf2_entry"]
+
+    # Cause 2: compute first tradeable bar — max of internal warmup and period start
+    if bt_start is not None:
+        _bt0 = max(WARMUP, int(pd.DatetimeIndex(dates).searchsorted(bt_start)))
+    else:
+        _bt0 = WARMUP
 
     nav   = cap; pos = "CASH"; qty = 0.0
     e_asset_price = None   # asset entry price
@@ -459,7 +465,7 @@ def run_backtest(
         si    = i - 1
         price = asset_px[i]   # today's asset close
 
-        if i < WARMUP:
+        if i < _bt0:
             nav_arr[i] = cap
             continue
 
@@ -543,9 +549,9 @@ def run_backtest(
                         allow = True
 
                     elif variant == "SL1":
-                        # Re-enter only when asset has recovered above stop exit price
+                        # Cause 3 fix: use current bar's price (matches app logic)
                         allow = (sl_exit_asset_px is not None and
-                                 a_now >= sl_exit_asset_px)
+                                 price >= sl_exit_asset_px)
 
                     elif variant == "SL2":
                         # Re-enter only when asset has fully recovered above original entry
@@ -593,9 +599,9 @@ def run_backtest(
     if pos == "LONG" and np.isfinite(asset_px[N - 1]):
         nav_arr[N - 1] = qty * asset_px[N - 1]
 
-    nav_s = pd.Series(nav_arr[WARMUP:], index=dates[WARMUP:]).ffill()
+    nav_s = pd.Series(nav_arr[_bt0:], index=dates[_bt0:]).ffill()
     bh_s  = pd.Series(
-        cap * asset_px[WARMUP:] / asset_px[WARMUP], index=dates[WARMUP:])
+        cap * asset_px[_bt0:] / asset_px[_bt0], index=dates[_bt0:])
     return dict(trades=trades, nav=nav_s, bh=bh_s,
                 open_pos=(pos == "LONG"),
                 open_entry=dict(price=e_asset_price, date=e_date) if pos == "LONG" else None)
@@ -646,6 +652,8 @@ def metrics(res: dict, cap: float = INITIAL_CAPITAL) -> dict:
 # Period runner
 # ─────────────────────────────────────────────────────────────────────────────
 def _prep_comp(df_raw, preds, start_iso, end_iso):
+    # Cause 2 fix: keep 60 days of pre-period data for signal warmup, matching the
+    # app's approach. Trading still starts from start_iso (via bt_start in run_backtest).
     sd, ed = pd.Timestamp(start_iso), pd.Timestamp(end_iso)
     p = preds.loc[
         (preds.index >= sd - pd.Timedelta(days=60)) & (preds.index <= ed)
@@ -654,7 +662,8 @@ def _prep_comp(df_raw, preds, start_iso, end_iso):
     p["actual_low"]   = df_raw["btc_low"].reindex(p.index).values
     p["actual_close"] = df_raw["btc_close"].reindex(p.index).values
     comp = p.dropna(subset=["actual_high","actual_low","actual_close"]).reset_index()
-    comp = comp[comp["target_date"] >= sd].reset_index(drop=True)
+    # NOTE: do NOT filter to >= sd here; keep pre-period rows so signals are
+    # pre-warmed when trading begins at sd (run_backtest uses bt_start for this).
     return comp
 
 
@@ -676,6 +685,7 @@ def run_period(period_name, start_iso, end_iso, fetch_start, df_raw_cache):
     mstu_px_raw = cached["mstu_px"]
 
     comp = _prep_comp(df_raw, preds, start_iso, end_iso)
+    sd   = pd.Timestamp(start_iso)
     if len(comp) < WARMUP + 3:
         print(f"  [SKIP] {period_name}: insufficient bars ({len(comp)})")
         return {}
@@ -684,10 +694,13 @@ def run_period(period_name, start_iso, end_iso, fetch_start, df_raw_cache):
     N     = sigs["N"]
     btc_px = comp["actual_close"].values.astype(float)
 
+    # Cause 2: estimate _bt0 for asset validity checks (mirrors run_backtest logic)
+    _bt0_est = max(WARMUP, int(dates.searchsorted(sd)))
+
     def align_asset(px_series):
         if px_series.empty: return None
         a = px_series.reindex(dates).ffill().bfill().values.astype(float)
-        if np.sum(np.isfinite(a) & (a > 0)) < WARMUP + 3: return None
+        if np.sum(np.isfinite(a) & (a > 0)) < _bt0_est + 3: return None
         return a
 
     asset_arrays = {
@@ -705,7 +718,7 @@ def run_period(period_name, start_iso, end_iso, fetch_start, df_raw_cache):
             continue
         if asset_name == "MSTU":
             first_valid = int(np.argmax(np.isfinite(asset_px) & (asset_px > 0)))
-            if first_valid > WARMUP + 10:
+            if first_valid > _bt0_est + 10:
                 print(f"  [SKIP] MSTU: data starts too late (bar {first_valid}/{N})")
                 continue
 
@@ -718,7 +731,7 @@ def run_period(period_name, start_iso, end_iso, fetch_start, df_raw_cache):
             try:
                 res = run_backtest(dates, asset_px, btc_px, sigs,
                                    variant=variant, sl_type=sl_t, sl_pct=sl_pct,
-                                   cap=INITIAL_CAPITAL)
+                                   cap=INITIAL_CAPITAL, bt_start=sd)
                 period_results[asset_name][variant] = metrics(res, INITIAL_CAPITAL)
             except Exception as e:
                 print(f"  [ERR] {asset_name}/{variant}: {e}")
@@ -965,9 +978,9 @@ def print_recommendation(all_results):
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("\n" + "═" * 88)
-    print("  STOP-LOSS RE-ENTRY CRITERIA ANALYSIS")
-    print("  BTC (trail −7%) | MSTR (fixed −3%) | MSTU (fixed −10%)")
-    print("  TF2+V-Gate entry/exit signals; stop on execution-asset price")
+    print("  STOP-LOSS RE-ENTRY CRITERIA ANALYSIS  [UI-aligned setup]")
+    print("  BTC (trail −7%) | MSTR (fixed −3%) | MSTU (fixed −7%)")
+    print("  Periods, warmup, and SL1 logic all match the UI app backtesting setup")
     print("═" * 88)
     print("\nStop-loss levels in current strategy:")
     for asset, cfg in ASSET_CONFIG.items():
@@ -998,8 +1011,7 @@ if __name__ == "__main__":
     print(f"\n{'═'*88}")
     print("  STOP-LOSS EVENT DETAIL — what happens after each stop fires")
     print(f"{'═'*88}")
-    for pname in ["Bull (Sep24→Sep25)", "Bear (Jun25→May26)",
-                  "OOS (Sep25→May26)", "Full (Jun24→May26)"]:
+    for pname in ["Bull (Jun24→Jun25)", "Bear (Jun25→May26)", "Full (Jun24→May26)"]:
         if pname not in all_results: continue
         for asset in ["BTC", "MSTR", "MSTU"]:
             if asset in all_results[pname]:
