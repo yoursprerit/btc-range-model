@@ -2418,8 +2418,8 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # Look for ≥ 3 consecutive hi_break days ending at some point,
     # followed by the first lo_break.
     exhaustion_active = False
+    consec_hi = 0
     if n >= 4:
-        consec_hi = 0
         for k in range(n - 2, -1, -1):
             if hi_break[k]:
                 consec_hi += 1
@@ -2583,6 +2583,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         v_recent_gate        = v_recent_gate,
         v_recent_gate_age    = v_recent_gate_age,
         exhaustion_active    = exhaustion_active,
+        consec_hi            = consec_hi,
         # Composite alert
         alert_level  = alert_level,
         dn_count     = dn_count,
@@ -3211,6 +3212,10 @@ def run_full_period_backtest(end_date_iso: str,
     _hi5 = int(np.sum(hi_brk[max(0, _L-4):_L+1]))
     _lo5 = int(np.sum(lo_brk[max(0, _L-4):_L+1]))
     _d1_t = bool(d1[_L]); _d2_t = bool(d2[_L]); _d3_t = bool(d3[_L])
+    _consec_hi = 0
+    for _ck in range(_L - 1, -1, -1):
+        if hi_brk[_ck]: _consec_hi += 1
+        else: break
     _u1_t = bool(u1[_L]); _tf1_t = bool(tf1_entry[_L])
     _dn_c = int(_d1_t) + int(_d2_t) + int(_d3_t); _up_c = int(_u1_t)
     _v_rev_l = bool(v_rev_bar[_L])
@@ -3255,6 +3260,7 @@ def run_full_period_backtest(end_date_iso: str,
         capitulation_signal=_cap_l, v_reversal_likely=_v_rev_l,
         v_recent_gate=bool(v_recent[_L]), v_recent_gate_age=_v_recent_age,
         exhaustion_active=_d3_t,
+        consec_hi=_consec_hi,
         alert_level=_alert_l, dn_count=_dn_c, up_count=_up_c,
         detail_rows=_detail, n_bars=N, as_of_date=dates[_L],
     )
@@ -9395,9 +9401,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          "= YES  (lo-break two bars ago)",
          False, False),
         ("Prior hi-break streak",
-         f"{sigs['hi_breaks_3d']}/3 recent hi-breaks",
-         "≥ 3 consecutive immediately prior",
-         sigs['hi_breaks_3d'] >= 3, False),
+         f"{sigs.get('consec_hi', 0)} consecutive hi-breaks",
+         "≥ 3 consecutive immediately prior (ending yesterday)",
+         sigs.get('consec_hi', 0) >= 3, False),
         ("Current streak",
          d3_streak_str,
          "stronger signal when streak was ≥ +4 before D3 fired",
