@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v10"  # All backtests (BTC+MSTR+MSTU) use yfinance daily; consistent positions panel
+_BT_LOGIC_VERSION = "sl5-sl5-v11"  # Historical Replay signals from backtest (yfinance); live signals from Binance
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3189,6 +3189,63 @@ def run_full_period_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
+    # ── Last-bar signal state (same format as compute_trend_signatures) ──────
+    # Lets the Historical Replay panel show signals derived from the SAME
+    # yfinance daily predictions that drive position entries, eliminating the
+    # "position open but no signal visible" discrepancy caused by the Binance
+    # vs yfinance data-source split.
+    _L  = N - 1
+    _hi5 = int(np.sum(hi_brk[max(0, _L-4):_L+1]))
+    _lo5 = int(np.sum(lo_brk[max(0, _L-4):_L+1]))
+    _d1_t = bool(d1[_L]); _d2_t = bool(d2[_L]); _d3_t = bool(d3[_L])
+    _u1_t = bool(u1[_L]); _tf1_t = bool(tf1_entry[_L])
+    _dn_c = int(_d1_t) + int(_d2_t) + int(_d3_t); _up_c = int(_u1_t)
+    _v_rev_l = bool(v_rev_bar[_L])
+    _cap_l   = bool(dn_score_arr[_L] > 0.7 and err_lo[_L] > 3.0)
+    _v_recent_age = next((k for k in range(min(3, _L+1)) if v_rev_bar[_L - k]), None)
+    _streak = 0
+    if N >= 2:
+        for _k in range(N - 1, 0, -1):
+            _sd = int(np.sign(c_asof[_k] - c_asof[_k - 1]))
+            if _k == N - 1: _streak = _sd
+            elif _sd == int(np.sign(_streak)) and _streak != 0: _streak += _sd
+            else: break
+    _detail: list = []
+    for _di in range(max(0, N - 5), N):
+        _detail.append(dict(
+            date=dates[_di], close=float(c_asof[_di]),
+            pred_hi=float(pred_hi[_di]), pred_lo=float(pred_lo[_di]),
+            actual_hi=float(act_hi[_di]), actual_lo=float(act_lo[_di]),
+            err_hi_pct=float(err_hi[_di]), err_lo_pct=float(err_lo[_di]),
+            hi_break=bool(hi_brk[_di]), lo_break=bool(lo_brk[_di]),
+        ))
+    if _dn_c >= 3 or (_dn_c >= 2 and _v_rev_l):  _alert_l = "HIGH_DN"
+    elif _dn_c == 2:                              _alert_l = "ELEVATED_DN"
+    elif _dn_c == 1 and not _u1_t:               _alert_l = "WATCH_DN"
+    elif _tf1_t:                                  _alert_l = "STRATEGY_BUY"
+    elif _up_c >= 1 and _dn_c == 0:              _alert_l = "WATCH_UP"
+    else:                                         _alert_l = "NEUTRAL"
+    last_bar_sigs = dict(
+        err_hi_ma3=float(ehma3[_L]),    err_lo_ma3=float(elma3[_L]),
+        hi_breaks_3d=int(hb3[_L]),      lo_breaks_3d=int(lb3[_L]),
+        hi_breaks_5d=_hi5,              lo_breaks_5d=_lo5,
+        streak=_streak,
+        last_lo_err=float(err_lo[_L]),  last_hi_err=float(err_hi[_L]),
+        dn_score_raw=float(dn_score_arr[_L]),
+        ma30_value=float(ma30[_L]),
+        ma30_5d_ago=float(ma30[_L - 5]) if _L >= 5 else float(ma30[_L]),
+        current_close_sig=float(c_asof[_L]),
+        above_ma30=bool(above_ma30[_L]),        ma30_slope_pos=bool(ma30_slope_pos[_L]),
+        bull_regime=bool(bull_regime[_L]),       clean_10d=bool(clean_10d[_L]),
+        d1_triggered=_d1_t,  d2_triggered=_d2_t,  d3_triggered=_d3_t,
+        u1_triggered=_u1_t,  tf1_triggered=_tf1_t,
+        capitulation_signal=_cap_l, v_reversal_likely=_v_rev_l,
+        v_recent_gate=bool(v_recent[_L]), v_recent_gate_age=_v_recent_age,
+        exhaustion_active=_d3_t,
+        alert_level=_alert_l, dn_count=_dn_c, up_count=_up_c,
+        detail_rows=_detail, n_bars=N, as_of_date=dates[_L],
+    )
+
     return dict(
         strategy   = "TF2",
         trades     = trades,
@@ -3198,6 +3255,7 @@ def run_full_period_backtest(end_date_iso: str,
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
                           entry_trigger=e_trigger) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
+        last_bar_sigs = last_bar_sigs,
         stats = dict(
             strategy        = "TF2",
             initial_capital = initial_capital,
@@ -9671,7 +9729,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
-    sigs         = compute_trend_signatures(_bt_end, data_end=_data_end)
+    # In historical mode use backtest-derived signals (yfinance daily, no direction_head)
+    # so the signal panel matches exactly which bars the position entries fired on.
+    # In live mode use compute_trend_signatures (Binance data, includes today's bar).
+    if is_live:
+        sigs = compute_trend_signatures(_bt_end, data_end=_data_end)
+    else:
+        sigs = (_bt_full_oos or {}).get("last_bar_sigs") or compute_trend_signatures(_bt_end, data_end=_data_end)
 
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
