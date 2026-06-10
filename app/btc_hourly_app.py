@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl1-v3"   # SL5 for MSTR, SL1 for MSTU, no BTC stop; re-entry bypass _exit_at_i
+_BT_LOGIC_VERSION = "sl5-sl1-v4"   # SL5/MSTR, SL1/MSTU(-7%stop), no BTC stop; re-entry bypass _exit_at_i
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3763,7 +3763,7 @@ def run_mstu_backtest(end_date_iso: str,
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
                     entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-10%",
+                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-7%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                     was_reentry=e_reentry,
                 ))
@@ -3795,7 +3795,7 @@ def run_mstu_backtest(end_date_iso: str,
             if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * 0.90
+                e_nav = nav; pos = "LONG"; stop_px = price * 0.93
                 from_sl = False; sl_exit_price = None   # reset SL1 state on re-entry
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
@@ -6636,7 +6636,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>Stop trigger</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−10%</b> from entry price — triggers intraday when MSTU low breaches stop
+          Fixed <b>−7%</b> from entry price — triggers intraday when MSTU low breaches stop
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
@@ -8812,8 +8812,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         # Exit-signal display config: icon, readable label, bg, border, text
         _SIG_CFG = {
             "SL-trail-7%": ("🛑", "Stop Loss hit — Trailing −7%", "#fef2f2", "#dc2626", "#991b1b"),
-            "SL-fixed-3%": ("🛑", "Stop Loss hit — Fixed −3%",    "#fef2f2", "#dc2626", "#991b1b"),
+            "SL-fixed-3%":  ("🛑", "Stop Loss hit — Fixed −3%",   "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-5%":  ("🛑", "Stop Loss hit — Fixed −5%",   "#fef2f2", "#dc2626", "#991b1b"),
+            "SL-fixed-7%":  ("🛑", "Stop Loss hit — Fixed −7%",   "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-10%": ("🛑", "Stop Loss hit — Fixed −10%",  "#fef2f2", "#dc2626", "#991b1b"),
             "D3":          ("📉", "D3 Downtrend Signature",        "#fff7ed", "#ea580c", "#9a3412"),
             "D2 (bear)":   ("📉", "D2 + Bear Regime Exit",         "#fff7ed", "#ea580c", "#9a3412"),
@@ -9667,7 +9668,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 entry      = (_bt_mstu_oos or {}).get("open_entry"),
                 live_price = _mstu_panel_px,
                 asset_label= "MSTU",
-                stop_type  = "fixed-10%",
+                stop_type  = "fixed-7%",
                 nav        = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
                 last_trade = _last_closed_trade(_bt_mstu_oos),
             ),

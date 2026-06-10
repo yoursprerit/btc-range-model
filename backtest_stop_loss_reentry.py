@@ -5,14 +5,14 @@ Stop-Loss Re-Entry Criteria Analysis
 Exact stop-loss levels tested:
   BTC  : trailing stop  −7%   (fires when close drops 7% below the running peak)
   MSTR : fixed stop     −3%   (fires when MSTR close drops 3% below entry price)
-  MSTU : fixed stop     −10%  (fires when MSTU close drops 10% below entry price)
+  MSTU : fixed stop     −7%   (fires when MSTU close drops 7% below entry price)
 
 IMPLEMENTED RECOMMENDATIONS (in app/btc_hourly_app.py and TRADING_STRATEGY.md):
   BTC  : NO STOP LOSS — trailing −7% provides no consistent benefit; TF2 D2/D3
          exits already handle adverse moves; all SL variants underperform vs B0.
   MSTR : Fixed −3% stop + SL5 regime-adaptive re-entry
          (bull: immediate re-entry on next signal; bear: 10-bar cooldown)
-  MSTU : Fixed −10% stop + SL1 above-exit-price re-entry
+  MSTU : Fixed −7% stop + SL1 above-exit-price re-entry
          (re-enter only when MSTU recovers above the stop exit price)
 
 These tight stops cause premature exits in bull markets — the position is stopped
@@ -79,7 +79,7 @@ ASSET_CONFIG = {
     "MSTU": {
         "ticker":    "MSTU",
         "sl_type":   "fixed",      # fixed from entry price
-        "sl_pct":    0.10,         # fire when MSTU < entry × 0.90
+        "sl_pct":    0.07,         # fire when MSTU < entry × 0.93  (upgraded from 0.10)
         "name":      "T-Rex 2X Long MSTR (2×)",
     },
 }
