@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v7"   # MSTR/MSTU both SL5 regime-adaptive; 1-bar lag signals
+_BT_LOGIC_VERSION = "sl5-sl5-v8"   # MSTU uses real yfinance prices (Sep 2024+); bfill pre-inception
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3595,89 +3595,45 @@ def run_mstu_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices (synthetic pre-Jun 2025 + actual) ──────────────────
-    _MSTU_INCEPTION = pd.Timestamp("2025-06-04")
-    if start_dt < _MSTU_INCEPTION:
-        mstu_all = _build_synthetic_mstu_prices(
-            pre_dt.strftime("%Y-%m-%d"),
-            (end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+    # ── Fetch MSTU prices (real from Sep 2024 inception; bfill for earlier dates) ────
+    # MSTU started trading Sep 18, 2024. For pre-inception dates (Jun–Sep 2024),
+    # the Sep 18 price is backward-filled, matching the research script approach.
+    try:
+        d_mstu = yf.download(
+            "MSTU",
+            start=pre_dt.strftime("%Y-%m-%d"),
+            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            progress=False, auto_adjust=True,
         )
-        if mstu_all is None or len(mstu_all) < 10:
-            return None
-    else:
-        try:
-            d_mstu = yf.download(
-                "MSTU",
-                start=pre_dt.strftime("%Y-%m-%d"),
-                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-                progress=False, auto_adjust=True,
-            )
-            if isinstance(d_mstu.columns, pd.MultiIndex):
-                d_mstu.columns = [c[0] for c in d_mstu.columns]
-            d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
-        except Exception:
-            return None
-        if d_mstu.empty or "Close" not in d_mstu.columns:
-            return None
-        mstu_raw = d_mstu["Close"].sort_index()
-        mstu_all = mstu_raw.reindex(
-            pd.date_range(mstu_raw.index[0],
-                          max(mstu_raw.index[-1], end_dt), freq="D")
-        ).ffill()
+        if isinstance(d_mstu.columns, pd.MultiIndex):
+            d_mstu.columns = [c[0] for c in d_mstu.columns]
+        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+    except Exception:
+        return None
+    if d_mstu.empty or "Close" not in d_mstu.columns:
+        return None
+    mstu_raw = d_mstu["Close"].sort_index()
+    mstu_all = mstu_raw.reindex(
+        pd.date_range(mstu_raw.index[0], max(mstu_raw.index[-1], end_dt), freq="D")
+    ).ffill()
     mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
 
-    # ── BTC signal arrays (identical to run_full_period_backtest) ─────────────
+    # ── BTC signal arrays (identical to run_full_period_backtest) ────────────────────────────────────────────────────────────────────────
     c_asof  = comp["close_asof"].values.astype(float)
     pred_hi = comp["pred_high"].values.astype(float)
     pred_lo = comp["pred_low"].values.astype(float)
     act_hi  = comp["actual_high"].values.astype(float)
     act_lo  = comp["actual_low"].values.astype(float)
 
-    # ── MSTU intraday lows — kept for display only; stop now triggers on close ──
-    # Real MSTU (post-inception): use yfinance daily Low.
-    # Synthetic MSTU (pre-inception): approximate from 2× BTC intraday drawdown.
-    mstu_lo = np.full(N, np.nan)
-    if start_dt < _MSTU_INCEPTION:
-        # Fetch real MSTU Low for the post-inception portion
-        _mstu_real_lo = None
-        try:
-            _d_mstu_lo = yf.download(
-                "MSTU",
-                start=_MSTU_INCEPTION.strftime("%Y-%m-%d"),
-                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-                progress=False, auto_adjust=True,
-            )
-            if isinstance(_d_mstu_lo.columns, pd.MultiIndex):
-                _d_mstu_lo.columns = [c[0] for c in _d_mstu_lo.columns]
-            _d_mstu_lo.index = pd.DatetimeIndex(_d_mstu_lo.index).tz_localize(None).normalize()
-            if not _d_mstu_lo.empty and "Low" in _d_mstu_lo.columns:
-                _lo_raw  = _d_mstu_lo["Low"].sort_index()
-                _lo_all  = _lo_raw.reindex(
-                    pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
-                ).ffill()
-                _mstu_real_lo = _lo_all.reindex(dates).values.astype(float)
-        except Exception:
-            pass
-        for _j in range(N):
-            if (_mstu_real_lo is not None
-                    and dates[_j] >= _MSTU_INCEPTION
-                    and np.isfinite(_mstu_real_lo[_j])):
-                mstu_lo[_j] = _mstu_real_lo[_j]
-            else:
-                # Approximate: 2× BTC intraday drawdown applied to prior MSTU close
-                prev_px = mstu_px[_j - 1] if _j > 0 else mstu_px[_j]
-                btc_dd  = min(0.0, (act_lo[_j] - c_asof[_j]) / max(c_asof[_j], 1.0))
-                mstu_lo[_j] = max(0.01, prev_px * (1.0 + 2.0 * btc_dd))
+    # MSTU intraday lows — for display only; stop triggers on close price
+    if "Low" in d_mstu.columns:
+        _lo_raw = d_mstu["Low"].sort_index()
+        _lo_all = _lo_raw.reindex(
+            pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
+        ).ffill()
+        mstu_lo = _lo_all.reindex(dates).ffill().bfill().values.astype(float)
     else:
-        # Real MSTU only; d_mstu fetched above
-        if "Low" in d_mstu.columns:
-            _lo_raw  = d_mstu["Low"].sort_index()
-            _lo_all  = _lo_raw.reindex(
-                pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
-            ).ffill()
-            mstu_lo = _lo_all.reindex(dates).ffill().bfill().values.astype(float)
-        else:
-            mstu_lo = mstu_px.copy()
+        mstu_lo = mstu_px.copy()
 
     err_hi = (act_hi - pred_hi) / c_asof * 100
     err_lo = (pred_lo - act_lo) / c_asof * 100
@@ -4306,37 +4262,27 @@ def run_mstu_options_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices (synthetic pre-Jun 2025 + actual) ──────────────────
-    _MSTU_INCEPTION = pd.Timestamp("2025-06-04")
-    if start_dt < _MSTU_INCEPTION:
-        mstu_all = _build_synthetic_mstu_prices(
-            pre_dt.strftime("%Y-%m-%d"),
-            (end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+    # ── Fetch MSTU prices (real from Sep 2024 inception; bfill for earlier dates) ────
+    # MSTU started trading Sep 18, 2024. For pre-inception dates, Sep 18 price is bfilled.
+    try:
+        d_mstu = yf.download(
+            "MSTU",
+            start=pre_dt.strftime("%Y-%m-%d"),
+            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+            progress=False, auto_adjust=True,
         )
-        if mstu_all is None or len(mstu_all) < 10:
-            return None
-        mstu_trading = mstu_all.dropna()
-    else:
-        try:
-            d_mstu = yf.download(
-                "MSTU",
-                start=pre_dt.strftime("%Y-%m-%d"),
-                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-                progress=False, auto_adjust=True,
-            )
-            if isinstance(d_mstu.columns, pd.MultiIndex):
-                d_mstu.columns = [c[0] for c in d_mstu.columns]
-            d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
-        except Exception:
-            return None
-        if d_mstu.empty or "Close" not in d_mstu.columns:
-            return None
-        mstu_raw = d_mstu["Close"].sort_index()
-        mstu_all = mstu_raw.reindex(
-            pd.date_range(mstu_raw.index[0],
-                          max(mstu_raw.index[-1], end_dt), freq="D")
-        ).ffill()
-        mstu_trading = mstu_raw
+        if isinstance(d_mstu.columns, pd.MultiIndex):
+            d_mstu.columns = [c[0] for c in d_mstu.columns]
+        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+    except Exception:
+        return None
+    if d_mstu.empty or "Close" not in d_mstu.columns:
+        return None
+    mstu_raw = d_mstu["Close"].sort_index()
+    mstu_trading = mstu_raw
+    mstu_all = mstu_raw.reindex(
+        pd.date_range(mstu_raw.index[0], max(mstu_raw.index[-1], end_dt), freq="D")
+    ).ffill()
     mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
 
     # ── 60-day rolling historical volatility of MSTU (annualised) ────────────

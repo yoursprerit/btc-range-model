@@ -448,7 +448,7 @@ BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,0
 
 ### MSTU — TF2 + V-Gate (BTC signals → MSTU execution)
 
-MSTU is the T-Rex 2× Long MSTR ETF (inception Jun 4, 2025). Pre-inception prices are OLS-calibrated synthetic prices derived from MSTR daily returns (β ≈ 2.0). Live stop: **Fixed −7%** (close-price triggered, filled at close price).
+MSTU is the T-Rex 2× Long MSTR ETF (inception Sep 18, 2024). For pre-inception dates (Jun–Sep 2024), the Sep 18 opening price is backward-filled (same as research script). Live stop: **Fixed −7%** (close-price triggered, filled at close price).
 
 #### Baseline (no stop loss)
 
@@ -628,8 +628,8 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
   triggered when `mstu_close[i] <= stop_px` (daily close, not intraday), filled at close price.
   After a stop exit, **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30
   rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
-  Pre-inception (before Jun 4, 2025) MSTU synthetic prices are derived from MSTR via
-  OLS-calibrated log-return mapping (β ≈ 2.0).
+  For pre-inception dates (before Sep 18, 2024), the Sep 18 opening price ($25.52)
+  is backward-filled — matching the research script price source.
 - All three backtests use **1-bar lag execution** (signal on bar i-1, trade at bar i), matching
   the standalone evaluation script (`backtest_stop_loss_reentry.py`), which tests all re-entry
   variants across Bull/Bear/Full periods.
