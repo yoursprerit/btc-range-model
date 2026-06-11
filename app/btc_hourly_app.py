@@ -257,9 +257,12 @@ def fetch_data():
     for name, sym in SYMS.items():
         # yfinance caps 1-hour bars at 730 days; "2y" sits right at that edge
         # and returns empty on Streamlit Cloud.  Try progressively shorter
-        # windows until we get data.
+        # windows until we get data.  Fine-grained steps prevent a large gap:
+        # if "729d" fails the next stop is "548d" (~18 months), then "365d",
+        # etc., rather than jumping straight to "180d" (which would push the
+        # historical-replay min_date forward to only ~6 months ago).
         raw = pd.DataFrame()
-        for period in ("729d", "180d", "59d"):
+        for period in ("729d", "548d", "365d", "270d", "180d", "59d"):
             try:
                 raw = yf.download(sym, period=period, interval="60m",
                                   progress=False, auto_adjust=False)
