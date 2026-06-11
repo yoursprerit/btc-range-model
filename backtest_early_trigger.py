@@ -1,41 +1,55 @@
 #!/usr/bin/env python3
 """
-Early U1 Trigger Analysis
-==========================
-Question: When the pre-conditions for U1 are already partially met —
-  • err_hi_ma3 > 0.7%  (3-day avg high-side error already elevated)
-  • hi_breaks_3d == 1  (only 1 of last 3 bars has broken pred_high)
-...and today's INTRADAY price breaks through today's pred_high, does entering
-EARLY (intraday, at the breakout level) outperform waiting for the bar to close
-and executing at next day's close (standard TF1/TF2 convention)?
+Early U1 Trigger Analysis  (v2 — corrected framing)
+=====================================================
+Question: When the pre-conditions for U1 are partially met at yesterday's close —
+  • err_hi_ma3 > 0.7%   (3-day avg high-side error already elevated)
+  • hi_breaks_3d == 1   (only 1 of last 3 bars has broken pred_high)
+...and today's INTRADAY price breaks through pred_high, does entering EARLY
+(at the breakout level, intraday) outperform the standard convention of waiting
+for today's bar to close and executing at next-day's close?
 
-Three entry modes compared
---------------------------
-  STANDARD : Signal fires at bar-T close (hi_breaks_3d becomes 2).
-             Execute at bar T+1 close. (current live strategy)
-
-  EARLY-ALL : Trigger fires intraday on bar T whenever:
-              prev_ehma3 > 0.7 AND prev_hb3 == 1 AND high_T > pred_high_T
-              Enter at max(open_T, pred_high_T) — the breakout-level proxy.
-              Includes BOTH confirmed breaks (close_T > pred_high_T) and
-              false intraday breaks (close_T ≤ pred_high_T).
-
-  EARLY-CONF: Same intraday trigger but only accepted when close_T > pred_high_T
-              (bar closes above the ceiling — same bars as STANDARD but 1 bar earlier
-              in execution time). Enter at max(open_T, pred_high_T).
-
-Exits: D2 or D3 fires at bar close → execute at next bar close (unchanged for all modes).
-
-Additional diagnostics
+CORRECTED framing (v2)
 -----------------------
-  • False-break rate: how often does intraday break NOT survive to close?
-  • Forward-return profile: 1d / 3d / 5d after early vs standard entry
-  • Per-trade comparison on confirmed-break days
+hi_break is computed from actual_high (the bar's intraday peak), NOT from close.
+So any intraday breach of pred_high makes hi_brk[T] = 1 regardless of where the
+bar settles. This means the relevant split is NOT "close > pred_hi vs close ≤ pred_hi"
+but instead:
 
-Periods tested
---------------
-  OOS Bear   Sep 2025 → May 2026  (BTC −33%)
-  Bull IS    Sep 2024 → Sep 2025  (BTC +93%)
+  CASE A/B  (SYNC cases): The intraday break causes hb3[T] to reach 2 (because the
+            prior single break was within T-2 or T-1). Standard U1 fires at bar-T close
+            (u1[T] = True). Both EARLY and STANDARD take this trade — question is purely
+            about execution price.
+
+  CASE C    (EXTRA cases): The intraday break causes hb3[T] to stay at 1 (prior break
+            was at T-3, now rolled off). Standard U1 does NOT fire. EARLY would take
+            a trade that STANDARD never takes.
+
+Four modes compared
+-------------------
+  STANDARD    : u1[T] fires at bar-T close → execute T+1 close.  (baseline)
+
+  EARLY-SYNC  : Fires early ONLY for CASE A/B (where u1[T] is True at close).
+                Entry at max(open_T, pred_high_T) — the breakout price proxy.
+                Same set of trades as STANDARD, 1 bar earlier execution.
+                Pure "does earlier entry price improve performance?" test.
+
+  EARLY-EXTRA : Fires early ONLY for CASE C (where u1[T] would NOT fire at close).
+                Takes trades that STANDARD misses entirely.
+
+  EARLY-ALL   : Combines EARLY-SYNC + EARLY-EXTRA.
+
+Exit logic is identical across all modes: D2 or D3 fires at bar close → exit next bar.
+
+Diagnostic
+----------
+Per candidate bar: whether STANDARD also fires (SYNC vs EXTRA), entry price advantage
+vs T+1 close, and forward returns from both entry points.
+
+Periods
+-------
+  OOS Bear   Sep 2025 → May 2026  (BTC −33%, fully out-of-sample)
+  Bull IS    Sep 2024 → Sep 2025  (BTC +93%, in-sample — directional cross-check only)
 """
 
 import sys, os, warnings, joblib, requests
@@ -66,7 +80,6 @@ _ONCHAIN_METRICS = [
     "estimated-transaction-volume-usd", "market-cap",
     "avg-block-size", "cost-per-transaction",
 ]
-
 _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
 
@@ -100,7 +113,6 @@ def _fetch_onchain(metric):
 
 
 def _fetch_coinbase_daily(start_str, end_str):
-    """Coinbase Exchange daily candles → close price Series."""
     import time as _time
     rows = []
     cur = pd.Timestamp(start_str)
@@ -116,7 +128,7 @@ def _fetch_coinbase_daily(start_str, end_str):
             if r.status_code == 200:
                 rows.extend(r.json())
         except Exception as e:
-            print(f"    [warn] coinbase chunk: {e}")
+            print(f"    [warn] coinbase: {e}")
         cur = chunk_end + pd.Timedelta(days=1)
         _time.sleep(0.35)
     if not rows:
@@ -128,7 +140,6 @@ def _fetch_coinbase_daily(start_str, end_str):
 
 
 def fetch_daily_data(fetch_start, fetch_end):
-    """Daily OHLCV (BTC open included) + macro + on-chain + Coinbase premium."""
     print(f"  Fetching {fetch_start} → {fetch_end} …")
     btc = _yf_single("BTC-USD", fetch_start, fetch_end)
     frames = {
@@ -161,11 +172,9 @@ def fetch_daily_data(fetch_start, fetch_end):
     cb = _fetch_coinbase_daily(fetch_start, fetch_end)
     if not cb.empty:
         df["coinbase_close"] = cb.reindex(df.index).ffill(limit=3)
-        n_ok = df["coinbase_close"].notna().sum()
-        print(f"{n_ok} rows")
+        print(f"{df['coinbase_close'].notna().sum()} rows")
     else:
-        print("unavailable (will zero-fill)")
-
+        print("unavailable (zero-fill)")
     return df
 
 
@@ -239,7 +248,7 @@ def build_ct_predictions(df):
     f["below_sma50"]    = (c < sma50).astype(float)
     f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
 
-    # Coinbase premium (required by model; zero-fill when unavailable)
+    # Coinbase premium — required by model; zero-fill when unavailable
     if "coinbase_close" in df.columns and df["coinbase_close"].notna().any():
         _cb   = df["coinbase_close"]
         _prem = (_cb - c) / c * 100
@@ -249,15 +258,16 @@ def build_ct_predictions(df):
             (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
         )
     else:
-        f["cb_premium"]     = 0.0
-        f["cb_premium_ma3"] = 0.0
-        f["cb_premium_z7"]  = 0.0
+        f["cb_premium"] = f["cb_premium_ma3"] = f["cb_premium_z7"] = 0.0
 
     fc = AD["feat_cols"]
     f  = f.replace([np.inf,-np.inf], np.nan)
     for col in fc:
         if col not in f.columns: f[col] = np.nan
     F = f[fc].dropna()
+
+    if F.empty:
+        raise RuntimeError("Feature matrix empty after dropna — check data quality")
 
     if AD.get("ensemble") and AD.get("constituents"):
         yhi = np.mean([co["m_hi"].predict(F) for co in AD["constituents"]], axis=0)
@@ -291,6 +301,7 @@ def compute_signals(comp):
     act_hi  = comp["actual_high"].values.astype(float)
     act_lo  = comp["actual_low"].values.astype(float)
 
+    # hi_break uses actual_high (intraday peak), NOT close
     err_hi = (act_hi - pred_hi) / c_asof * 100
     err_lo = (pred_lo - act_lo) / c_asof * 100
     hi_brk = (act_hi > pred_hi).astype(int)
@@ -305,7 +316,7 @@ def compute_signals(comp):
         hb3[i]   = int(np.sum(hi_brk[s:i+1]))
         lb3[i]   = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)   # live threshold
+    u1 = (ehma3 > 0.7) & (hb3 >= 2)   # fires at bar close; uses actual_high for hb3
     d1 = (lb3 >= 2) & (elma3 > 0.5)
     d2 = ehma3 < -0.75
     d3 = np.zeros(N, dtype=bool)
@@ -334,10 +345,10 @@ def compute_signals(comp):
         lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
-    # Early-trigger pre-state: at end of bar i-1, is the setup partially met?
-    # prev_ehma3 > 0.7 AND prev_hb3 == 1
-    # → if today's high also breaks pred_high, early U1 fires
-    early_setup = np.zeros(N, dtype=bool)
+    # Pre-state for early trigger: at end of bar i-1, setup is partially met.
+    # If today's actual_high > pred_hi[i], the early trigger fires intraday.
+    # We classify by whether STANDARD also fires at bar i close (u1[i]).
+    early_setup = np.zeros(N, dtype=bool)   # pre-state satisfied
     for i in range(1, N):
         early_setup[i] = (ehma3[i-1] > 0.7) and (hb3[i-1] == 1)
 
@@ -353,32 +364,26 @@ def compute_signals(comp):
 
 
 # ─── Backtest engine ──────────────────────────────────────────────────────────
-_MODES = ("STANDARD", "EARLY-CONF", "EARLY-ALL")
+# EARLY-SYNC  : pre-state met + intraday break + STANDARD also fires at close
+#               → same trade as STANDARD but entered at breakout price on bar T
+# EARLY-EXTRA : pre-state met + intraday break + STANDARD does NOT fire at close
+#               → Case C: extra trade that STANDARD misses
+# EARLY-ALL   : EARLY-SYNC ∪ EARLY-EXTRA
+_MODES = ("STANDARD", "EARLY-SYNC", "EARLY-EXTRA", "EARLY-ALL")
+
 
 def run_backtest(df_raw, preds, start_iso, end_iso,
                  mode="STANDARD", initial_capital=100_000.0):
-    """
-    mode = "STANDARD"   : signal at bar-T close → execute T+1 close
-    mode = "EARLY-CONF" : intraday entry at max(open_T, pred_high_T) when
-                          prev_ehma3>0.7, prev_hb3==1, high_T>pred_hi_T,
-                          AND close_T>pred_hi_T (confirmed break).
-    mode = "EARLY-ALL"  : same but includes false intraday breaks (close_T ≤ pred_hi_T).
-    """
     WARMUP = 35
     start_dt = pd.Timestamp(start_iso)
     end_dt   = pd.Timestamp(end_iso)
 
     p = preds.loc[(preds.index >= start_dt - pd.Timedelta(days=45)) &
                   (preds.index <= end_dt)].copy()
-    closes = df_raw["btc_close"]
-    highs  = df_raw["btc_high"]
-    lows   = df_raw["btc_low"]
-    opens  = df_raw["btc_open"]
-
-    p["actual_high"]  = highs.reindex(p.index).values
-    p["actual_low"]   = lows.reindex(p.index).values
-    p["actual_close"] = closes.reindex(p.index).values
-    p["actual_open"]  = opens.reindex(p.index).values
+    p["actual_high"]  = df_raw["btc_high"].reindex(p.index).values
+    p["actual_low"]   = df_raw["btc_low"].reindex(p.index).values
+    p["actual_close"] = df_raw["btc_close"].reindex(p.index).values
+    p["actual_open"]  = df_raw["btc_open"].reindex(p.index).values
     comp = (p.dropna(subset=["actual_high","actual_low","actual_close","actual_open"])
              .reset_index())
     comp = comp[comp["target_date"] >= start_dt].reset_index(drop=True)
@@ -388,27 +393,22 @@ def run_backtest(df_raw, preds, start_iso, end_iso,
 
     dates   = pd.DatetimeIndex(comp["target_date"])
     sigs    = compute_signals(comp)
-
     u1          = sigs["u1"]
-    d1          = sigs["d1"]
-    d2          = sigs["d2"]
-    d3          = sigs["d3"]
+    d1          = sigs["d1"]; d2 = sigs["d2"]; d3 = sigs["d3"]
     above_ma30  = sigs["above_ma30"]
-    bull_regime = sigs["bull_regime"]
     clean_10d   = sigs["clean_10d"]
     early_setup = sigs["early_setup"]
     pred_hi     = sigs["pred_hi"]
 
-    act_hi  = comp["actual_high"].values.astype(float)
-    act_cl  = comp["actual_close"].values.astype(float)
-    act_op  = comp["actual_open"].values.astype(float)
+    act_hi = comp["actual_high"].values.astype(float)
+    act_cl = comp["actual_close"].values.astype(float)
+    act_op = comp["actual_open"].values.astype(float)
 
-    # Early entry price proxy: max(open, pred_high)
-    # If open already above ceiling → gapped up, enter at open
-    # If open below ceiling → enter exactly at breakout level
+    # Early entry price proxy: max(open_T, pred_high_T)
+    # Rationale: if open already above pred_hi → gapped through, enter at open;
+    # otherwise enter exactly at the breakout threshold level.
     early_px = np.maximum(act_op, pred_hi)
 
-    # Entry/exit logic varies by mode
     nav     = initial_capital
     pos     = "CASH"
     btc_qty = 0.0
@@ -417,71 +417,64 @@ def run_backtest(df_raw, preds, start_iso, end_iso,
     nav_arr = np.full(N, np.nan)
 
     for i in range(N):
-        price = act_cl[i]   # default exec price (close of bar i)
-
         if i < WARMUP:
             nav_arr[i] = initial_capital
             continue
 
-        si = i - 1  # signal bar index (previous close)
+        si = i - 1  # prior bar index for signal read
 
-        # ── Determine entry/exit signals at bar i ────────────────────────────
+        # ── Signals ──────────────────────────────────────────────────────────
+        std_signal = bool(u1[si] and (above_ma30[si] or clean_10d[si])) if si >= 0 else False
+        std_exit   = bool(d2[si] or d3[si]) if si >= 0 else False
+
         if mode == "STANDARD":
-            # Signal from prior bar (si), execute at current close
-            _enter = bool(u1[si] and (above_ma30[si] or clean_10d[si])) if si >= 0 else False
-            _exit  = bool(d2[si] or d3[si]) if si >= 0 else False
+            _enter = std_signal
+            _exit  = std_exit
             exec_price = act_cl[i]
+            trig_label = "STD-U1"
 
         else:
-            # Early modes: check if THIS bar fires early trigger
-            # Early entry: the current bar is the "trigger bar"
-            # - pre-state from bar i-1: early_setup[i] = True
-            # - today's intraday: act_hi[i] > pred_hi[i]
-            intraday_break = bool(act_hi[i] > pred_hi[i])
-            close_confirms = bool(act_cl[i] > pred_hi[i])
+            intraday_break  = bool(act_hi[i] > pred_hi[i])
+            gate_ok         = bool(above_ma30[i] or clean_10d[i])
+            # SYNC: same trade as STANDARD would take at bar-T close (u1 + gate both True)
+            early_std_fires  = bool(early_setup[i] and intraday_break and u1[i] and gate_ok)
+            # EXTRA: early fires but STANDARD would NOT fire at bar-T close (u1 or gate fails)
+            early_std_misses = bool(early_setup[i] and intraday_break and not (u1[i] and gate_ok))
 
-            if mode == "EARLY-CONF":
-                fire_early = bool(early_setup[i] and intraday_break and close_confirms)
+            if mode == "EARLY-SYNC":
+                fire_early = early_std_fires
+            elif mode == "EARLY-EXTRA":
+                fire_early = early_std_misses
             else:  # EARLY-ALL
-                fire_early = bool(early_setup[i] and intraday_break)
+                fire_early = early_std_fires or early_std_misses
 
-            # Standard entry from prior bar (si) — might also fire on the same day
-            std_enter = bool(u1[si] and (above_ma30[si] or clean_10d[si])) if si >= 0 else False
-
-            # Combined: early fire takes priority on current bar
-            _enter = fire_early or std_enter
+            _enter = fire_early or (std_signal and not fire_early)
+            _exit  = std_exit
             exec_price = early_px[i] if fire_early else act_cl[i]
+            trig_label = "EARLY" if fire_early else "STD-U1"
 
-            # Exit: standard (from prior bar's signal)
-            _exit = bool(d2[si] or d3[si]) if si >= 0 else False
-
-        # ── Update position ──────────────────────────────────────────────────
+        # ── Position update ───────────────────────────────────────────────────
         if pos == "LONG":
-            cur = btc_qty * act_cl[i]   # mark-to-market at close
             if _exit:
-                exit_px = act_cl[i]
-                nav = btc_qty * exit_px
+                nav = btc_qty * act_cl[i]
                 trades.append(dict(
                     entry_date=e_date, entry_price=e_price, entry_nav=e_nav,
                     entry_trigger=e_trigger,
-                    exit_date=dates[i], exit_price=exit_px, exit_nav=nav,
-                    pnl_pct=(exit_px/e_price - 1)*100,
+                    exit_date=dates[i], exit_price=act_cl[i], exit_nav=nav,
+                    pnl_pct=(act_cl[i]/e_price - 1)*100,
                     pnl_abs=nav - e_nav,
-                    exit_signal="D3" if d3[si] else "D2",
+                    exit_signal="D3" if (si >= 0 and d3[si]) else "D2",
                     duration_days=(dates[i]-e_date).days,
                 ))
                 pos = "CASH"; btc_qty = 0.0
             else:
-                nav = cur
+                nav = btc_qty * act_cl[i]
         else:
             if _enter and not _exit:
                 btc_qty = nav / exec_price
-                e_price = exec_price
-                e_date  = dates[i]
-                e_nav   = nav
-                pos     = "LONG"
-                e_trigger = "EARLY" if (mode != "STANDARD" and
-                             early_setup[i] and act_hi[i] > pred_hi[i]) else "STD-U1"
+                e_price = exec_price; e_date = dates[i]
+                e_nav = nav; pos = "LONG"
+                e_trigger = trig_label
 
         nav_arr[i] = btc_qty * act_cl[i] if pos == "LONG" else nav
 
@@ -515,29 +508,24 @@ def run_backtest(df_raw, preds, start_iso, end_iso,
     )
 
 
-# ─── Early-trigger diagnostic ─────────────────────────────────────────────────
+# ─── Per-event diagnostic ─────────────────────────────────────────────────────
 def early_trigger_diagnostics(df_raw, preds, start_iso, end_iso):
     """
-    For each candidate bar where early trigger fires (pre-state met + intraday break),
-    compute:
-      • Whether close confirmed the break (close > pred_high)
-      • Entry price advantage vs next-day close
-      • 1d / 3d / 5d forward returns from early vs standard entry
+    For each bar where early trigger fires, shows:
+      • Whether STANDARD also fires (SYNC) or not (EXTRA)
+      • Entry price: early (max(open_T, pred_hi_T)) vs standard (close_T+1)
+      • Price advantage: + means early gets cheaper price
+      • Forward returns: 1d/3d/5d from each entry point
     """
     start_dt = pd.Timestamp(start_iso)
     end_dt   = pd.Timestamp(end_iso)
 
     p = preds.loc[(preds.index >= start_dt - pd.Timedelta(days=45)) &
                   (preds.index <= end_dt)].copy()
-    closes = df_raw["btc_close"]
-    highs  = df_raw["btc_high"]
-    lows   = df_raw["btc_low"]
-    opens  = df_raw["btc_open"]
-
-    p["actual_high"]  = highs.reindex(p.index).values
-    p["actual_low"]   = lows.reindex(p.index).values
-    p["actual_close"] = closes.reindex(p.index).values
-    p["actual_open"]  = opens.reindex(p.index).values
+    p["actual_high"]  = df_raw["btc_high"].reindex(p.index).values
+    p["actual_low"]   = df_raw["btc_low"].reindex(p.index).values
+    p["actual_close"] = df_raw["btc_close"].reindex(p.index).values
+    p["actual_open"]  = df_raw["btc_open"].reindex(p.index).values
     comp = (p.dropna(subset=["actual_high","actual_low","actual_close","actual_open"])
              .reset_index())
     comp = comp[comp["target_date"] >= start_dt].reset_index(drop=True)
@@ -546,51 +534,54 @@ def early_trigger_diagnostics(df_raw, preds, start_iso, end_iso):
     sigs = compute_signals(comp)
     early_setup = sigs["early_setup"]
     pred_hi     = sigs["pred_hi"]
+    u1          = sigs["u1"]
+    above_ma30  = sigs["above_ma30"]
+    clean_10d   = sigs["clean_10d"]
 
     act_hi = comp["actual_high"].values.astype(float)
     act_cl = comp["actual_close"].values.astype(float)
     act_op = comp["actual_open"].values.astype(float)
     dates  = pd.DatetimeIndex(comp["target_date"])
 
-    rows = []
     WARMUP = 35
+    rows = []
     for i in range(WARMUP, N-5):
         if not early_setup[i]:
             continue
-        intraday_break = bool(act_hi[i] > pred_hi[i])
-        if not intraday_break:
+        if not (act_hi[i] > pred_hi[i]):   # no intraday break → early trigger can't fire
             continue
 
-        close_confirmed = bool(act_cl[i] > pred_hi[i])
-        early_entry     = max(act_op[i], pred_hi[i])
-        std_entry       = act_cl[i+1]  # next bar's close (standard execution)
+        gate_ok   = bool(above_ma30[i] or clean_10d[i])
+        std_fires = bool(u1[i] and gate_ok)   # same gate as STANDARD strategy
+        case      = "SYNC" if std_fires else "EXTRA"
+        early_entry  = max(act_op[i], pred_hi[i])
+        # Standard execution price: T+1 close (same as what STANDARD strategy uses)
+        std_entry    = act_cl[i+1]
 
-        # Forward returns from both entry points
-        fwd_ret_1d_early  = (act_cl[i+1]/early_entry - 1)*100
-        fwd_ret_3d_early  = (act_cl[min(i+3, N-1)]/early_entry - 1)*100
-        fwd_ret_5d_early  = (act_cl[min(i+5, N-1)]/early_entry - 1)*100
-        fwd_ret_1d_std    = (act_cl[min(i+2, N-1)]/std_entry - 1)*100
-        fwd_ret_3d_std    = (act_cl[min(i+4, N-1)]/std_entry - 1)*100
-        fwd_ret_5d_std    = (act_cl[min(i+6, N-1)]/std_entry - 1)*100
+        # Price advantage: positive = early entry is cheaper (better)
+        px_adv = (std_entry / early_entry - 1) * 100
 
-        # Entry price advantage (positive = early gets better price)
-        px_advantage_pct  = (std_entry/early_entry - 1)*100
+        # Forward returns from early entry: measured from early_entry price
+        fwd_e = {h: (act_cl[min(i+h, N-1)] / early_entry - 1) * 100 for h in [1,3,5]}
+        # Forward returns from standard entry: measured from std_entry price
+        fwd_s = {h: (act_cl[min(i+1+h, N-1)] / std_entry - 1) * 100 for h in [1,3,5]}
 
         rows.append(dict(
             date=str(dates[i].date()),
-            close_confirmed=close_confirmed,
-            early_entry=round(early_entry, 1),
-            std_entry=round(std_entry, 1),
-            px_advantage_pct=round(px_advantage_pct, 3),
-            fwd_1d_early=round(fwd_ret_1d_early, 2),
-            fwd_3d_early=round(fwd_ret_3d_early, 2),
-            fwd_5d_early=round(fwd_ret_5d_early, 2),
-            fwd_1d_std=round(fwd_ret_1d_std, 2),
-            fwd_3d_std=round(fwd_ret_3d_std, 2),
-            fwd_5d_std=round(fwd_ret_5d_std, 2),
-            open_T=round(act_op[i], 1),
-            pred_hi_T=round(pred_hi[i], 1),
-            close_T=round(act_cl[i], 1),
+            case=case,
+            std_entry_gate=f"{'↑MA30' if above_ma30[i] else ''}{'c10d' if clean_10d[i] else ''}".strip() or "none",
+            open_T=round(act_op[i], 0),
+            pred_hi_T=round(pred_hi[i], 0),
+            close_T=round(act_cl[i], 0),
+            early_entry=round(early_entry, 0),
+            std_entry=round(std_entry, 0),
+            px_adv=round(px_adv, 2),
+            fwd_1d_early=round(fwd_e[1], 2),
+            fwd_1d_std=round(fwd_s[1], 2),
+            fwd_3d_early=round(fwd_e[3], 2),
+            fwd_3d_std=round(fwd_s[3], 2),
+            fwd_5d_early=round(fwd_e[5], 2),
+            fwd_5d_std=round(fwd_s[5], 2),
         ))
 
     return pd.DataFrame(rows)
@@ -622,143 +613,130 @@ for period_name, pcfg in PERIODS.items():
     preds  = build_ct_predictions(df_raw)
     print(f"→ {len(preds)} bars")
 
-    # ── Run all three modes ────────────────────────────────────────────────
     period_res = {}
     for mode in _MODES:
         r = run_backtest(df_raw, preds, pcfg["start"], pcfg["end"], mode=mode)
         period_res[mode] = r
-
     all_results[period_name] = period_res
 
     # ── Performance table ──────────────────────────────────────────────────
-    print(f"\n  {'─'*80}")
+    print(f"\n  {'─'*82}")
     print(f"  {'Mode':<14} {'NAV':>10} {'Ret%':>8} {'B&H%':>8} {'Alpha$':>12} "
-          f"{'Trades':>7} {'Win%':>7} {'MaxDD%':>8} {'TiM%':>6}")
-    print(f"  {'─'*80}")
+          f"{'Trd':>5} {'Win%':>6} {'MaxDD%':>8} {'TiM%':>6}")
+    print(f"  {'─'*82}")
     for mode, r in period_res.items():
         if r is None:
             print(f"  {mode:<14}  ERROR"); continue
+        flag = " ◄ BEST" if r["alpha_abs"] == max(
+            rv["alpha_abs"] for rv in period_res.values() if rv) else ""
         print(
             f"  {mode:<14} ${r['final_nav']:>9,.0f} {r['strat_ret']:>+7.1f}% "
             f"{r['bh_ret']:>+7.1f}% ${r['alpha_abs']:>+11,.0f} "
-            f"{r['n_trades']:>6}  {r['win_rate']:>5.0f}% {r['max_dd']:>+7.1f}% "
-            f"{r['time_in']:>5.0f}%"
+            f"{r['n_trades']:>4}  {r['win_rate']:>5.0f}% {r['max_dd']:>+7.1f}% "
+            f"{r['time_in']:>5.0f}%{flag}"
         )
 
-    # ── Early trigger diagnostics ──────────────────────────────────────────
-    print(f"\n  ── Early Trigger Diagnostic ({period_name}) ──")
+    # ── Candidate event diagnostic ─────────────────────────────────────────
+    print(f"\n  ── Early Trigger Candidates ({period_name}) ──")
     diag = early_trigger_diagnostics(df_raw, preds, pcfg["start"], pcfg["end"])
 
     if diag.empty:
-        print("  No early trigger candidates found in this period.")
+        print("  No candidates found.")
     else:
-        n_total      = len(diag)
-        n_confirmed  = diag["close_confirmed"].sum()
-        n_false      = n_total - n_confirmed
-        false_rate   = n_false / n_total * 100
+        sync  = diag[diag["case"] == "SYNC"]
+        extra = diag[diag["case"] == "EXTRA"]
+        print(f"\n  Total candidates: {len(diag)}  │  "
+              f"SYNC (Standard also fires): {len(sync)}  │  "
+              f"EXTRA (Standard misses): {len(extra)}")
 
-        print(f"\n  Early trigger candidates : {n_total}")
-        print(f"  Close confirmed (high bar): {n_confirmed} ({100-false_rate:.0f}%)")
-        print(f"  False intraday breaks     : {n_false} ({false_rate:.0f}%)")
+        # Entry price advantage summary
+        adv = diag["px_adv"]
+        sadv = sync["px_adv"]
+        print(f"\n  Entry price advantage (std_entry/early_entry − 1, + = early cheaper):")
+        print(f"    ALL  : mean {adv.mean():+.2f}%  median {adv.median():+.2f}%  "
+              f">0 (early cheaper): {(adv>0).sum()}/{len(diag)}")
+        if not sync.empty:
+            print(f"    SYNC : mean {sadv.mean():+.2f}%  median {sadv.median():+.2f}%  "
+                  f">0: {(sadv>0).sum()}/{len(sync)}")
 
-        # Entry price advantage
-        adv = diag["px_advantage_pct"]
-        print(f"\n  Entry price advantage (std_entry/early_entry − 1) :")
-        print(f"    Mean  : {adv.mean():+.3f}% (+ = early gets cheaper price)")
-        print(f"    Median: {adv.median():+.3f}%")
-        print(f"    >0 (early cheaper): {(adv > 0).sum()}/{n_total} days "
-              f"({100*(adv>0).mean():.0f}%)")
-
-        # Forward returns — confirmed breaks only
-        conf = diag[diag["close_confirmed"]]
-        false_b = diag[~diag["close_confirmed"]]
-        if not conf.empty:
-            print(f"\n  Forward returns — CONFIRMED breaks (n={len(conf)}):")
-            print(f"  {'Horizon':<10} {'Early mean':>11} {'Std mean':>11} {'Delta':>9}")
+        # Forward-return breakdown by case
+        for case_label, sub in [("SYNC  (same trades, earlier entry)", sync),
+                                  ("EXTRA (Case C — extra trades only)", extra)]:
+            if sub.empty: continue
+            print(f"\n  Forward returns — {case_label} (n={len(sub)}):")
+            print(f"  {'Horizon':<8} {'Early mean':>11} {'Std mean':>11} "
+                  f"{'Delta':>9}  {'Early>Std':>10}")
             for h in [1, 3, 5]:
-                em = conf[f"fwd_{h}d_early"].mean()
-                sm = conf[f"fwd_{h}d_std"].mean()
-                print(f"  {h}d          {em:>+10.2f}% {sm:>+10.2f}% {em-sm:>+8.2f}%")
-
-        if not false_b.empty:
-            print(f"\n  Forward returns — FALSE intraday breaks (n={len(false_b)}):")
-            print(f"  {'Horizon':<10} {'Early mean':>11} {'Std mean':>11}")
-            for h in [1, 3, 5]:
-                em = false_b[f"fwd_{h}d_early"].mean()
-                sm = false_b[f"fwd_{h}d_std"].mean()
-                print(f"  {h}d          {em:>+10.2f}% {sm:>+10.2f}%")
+                em  = sub[f"fwd_{h}d_early"].mean()
+                sm  = sub[f"fwd_{h}d_std"].mean()
+                win = (sub[f"fwd_{h}d_early"] > sub[f"fwd_{h}d_std"]).sum()
+                print(f"  {h}d       {em:>+10.2f}% {sm:>+10.2f}% "
+                      f"{em-sm:>+8.2f}%  {win}/{len(sub)}")
 
         # Per-event table
-        print(f"\n  Per-event table:")
-        print(f"  {'Date':12} {'Conf':5} {'EarlyPx':>10} {'StdPx':>10} "
-              f"{'Adv%':>7} {'1d-E%':>7} {'1d-S%':>7} {'3d-E%':>7} {'3d-S%':>7}")
-        print(f"  {'─'*82}")
+        print(f"\n  Per-event table (entry price: EARLY = max(open,pred_hi), STD = close_T+1):")
+        print(f"  {'Date':12} {'Case':5} {'OpenT':>8} {'PredHi':>8} {'CloseT':>8} "
+              f"{'EarlyPx':>9} {'StdPx':>9} {'Adv%':>6} "
+              f"{'1d-E%':>7} {'1d-S%':>7} {'3d-E%':>7} {'3d-S%':>7}")
+        print(f"  {'─'*96}")
         for _, row in diag.iterrows():
-            conf_str = "YES" if row["close_confirmed"] else "no"
             print(
-                f"  {row['date']:12} {conf_str:5} "
-                f"{row['early_entry']:>10,.0f} {row['std_entry']:>10,.0f} "
-                f"{row['px_advantage_pct']:>+6.2f}% "
+                f"  {row['date']:12} {row['case']:5} "
+                f"{row['open_T']:>8,.0f} {row['pred_hi_T']:>8,.0f} {row['close_T']:>8,.0f} "
+                f"{row['early_entry']:>9,.0f} {row['std_entry']:>9,.0f} "
+                f"{row['px_adv']:>+5.2f}% "
                 f"{row['fwd_1d_early']:>+6.2f}% {row['fwd_1d_std']:>+6.2f}% "
                 f"{row['fwd_3d_early']:>+6.2f}% {row['fwd_3d_std']:>+6.2f}%"
             )
 
-    # ── Trade log ──────────────────────────────────────────────────────────
+    # ── Trade logs ─────────────────────────────────────────────────────────
     for mode, r in period_res.items():
         if r is None or not r["trades"]: continue
         print(f"\n  Trade log — {mode}")
-        print(f"  {'#':>2}  {'Entry':12} {'Exit':12} {'Trigger':10} "
-              f"{'EntryPx':>10} {'ExitPx':>10} {'P&L%':>7} {'Days':>5}")
+        print(f"  {'#':>2}  {'Entry':12} {'Exit':12} {'Trig':10} "
+              f"{'EntryPx':>9} {'ExitPx':>9} {'P&L%':>7} {'Days':>5}")
         for j, t in enumerate(r["trades"], 1):
             mk = "✓" if t["pnl_pct"] > 0 else "✗"
             print(
                 f"  {j:>2}  {str(t['entry_date'].date()):12} "
                 f"{str(t['exit_date'].date()):12} "
                 f"{t.get('entry_trigger','?'):<10} "
-                f"{t['entry_price']:>10,.0f} {t['exit_price']:>10,.0f} "
-                f"{mk}{t['pnl_pct']:>+6.1f}% {t['duration_days']:>5}d"
+                f"{t['entry_price']:>9,.0f} {t['exit_price']:>9,.0f} "
+                f"{mk}{t['pnl_pct']:>+5.1f}% {t['duration_days']:>5}d"
             )
         if r["open_pos"]:
-            print(f"  [open position at period end]")
+            print("  [open position at period end]")
 
 # ─── Cross-period summary ──────────────────────────────────────────────────────
 print(f"\n{'═'*72}")
-print("CROSS-PERIOD SUMMARY — Does early trigger help?")
+print("CROSS-PERIOD SUMMARY — Does early trigger improve performance?")
 print(f"{'═'*72}\n")
 
 pnames = list(all_results.keys())
-print(f"  {'Mode':<14}  ", end="")
-for pn in pnames:
-    short = "OOS-Bear" if "Bear" in pn else "Bull-IS"
-    print(f"  {short} Alpha$  {short} NAV%", end="")
-print()
-print(f"  {'─'*90}")
+short  = ["OOS-Bear", "Bull-IS"]
+hdr    = "  " + f"{'Mode':<14}"
+for sn in short:
+    hdr += f"  {sn+' Alpha$':>15}  {sn+' NAV%':>9}"
+print(hdr)
+print("  " + "─"*70)
 
 for mode in _MODES:
-    print(f"  {mode:<14}", end="")
+    row = f"  {mode:<14}"
     for pn in pnames:
         r = all_results[pn].get(mode)
-        if r:
-            print(f"  ${r['alpha_abs']:>+11,.0f}  {r['strat_ret']:>+8.1f}%", end="")
-        else:
-            print(f"  {'N/A':>13}  {'N/A':>8}", end="")
-    print()
+        row += f"  ${r['alpha_abs']:>+14,.0f}  {r['strat_ret']:>+8.1f}%" if r else f"  {'N/A':>15}  {'N/A':>9}"
+    print(row)
 
-print(f"\n  Verdict:")
-for pn in pnames:
+print(f"\n  {'─'*70}")
+print("  Verdict by period:")
+for pn, sn in zip(pnames, short):
     rs = {m: all_results[pn].get(m) for m in _MODES}
-    if not all(rs.values()):
-        continue
-    alphas = {m: rs[m]["alpha_abs"] for m in _MODES}
-    best   = max(alphas, key=alphas.get)
-    std_a  = alphas["STANDARD"]
-    ec_a   = alphas["EARLY-CONF"]
-    ea_a   = alphas["EARLY-ALL"]
-    print(f"\n  {pn}:")
-    print(f"    EARLY-CONF vs STANDARD : ${ec_a - std_a:>+,.0f} alpha delta "
-          f"({'BETTER' if ec_a > std_a else 'WORSE'})")
-    print(f"    EARLY-ALL  vs STANDARD : ${ea_a - std_a:>+,.0f} alpha delta "
-          f"({'BETTER' if ea_a > std_a else 'WORSE'})")
-    print(f"    Best mode: {best}")
+    std = rs["STANDARD"]["alpha_abs"]
+    print(f"\n  {sn}:")
+    for mode in _MODES[1:]:
+        r = rs[mode]
+        delta = r["alpha_abs"] - std
+        verdict = "BETTER" if delta > 0 else "WORSE"
+        print(f"    {mode:<14} vs STANDARD: ${delta:>+,.0f} alpha  ({verdict})")
 
 print("\n✓ Done.")
