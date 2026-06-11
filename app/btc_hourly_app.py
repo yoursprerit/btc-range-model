@@ -9908,14 +9908,36 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _mstu_panel_px = mstu_price
         else:
             _btc_panel_px  = latest_close
-            # Use the backtest's own daily yf.download() prices so entry price and
-            # live price are always on the same split-adjusted scale.  A separate
-            # yf.download(interval="60m") call applies split adjustments differently
-            # from interval="1d", producing a false ×10 mismatch for MSTU that
-            # causes the panel to show an incorrect ~-90% P&L while the position
-            # is open.
-            _mstr_panel_px = (_bt_mstr_oos or {}).get("last_price")
-            _mstu_panel_px = (_bt_mstu_oos or {}).get("last_price")
+            # In historical replay, derive the intraday panel price by scaling the
+            # hourly series to the backtest's daily close.  This achieves both:
+            #   (a) correct split-adjusted scale — yf.download(interval="60m") and
+            #       interval="1d" apply split adjustments differently for MSTU,
+            #       producing a ×10 mismatch that caused a false ~-90% P&L;
+            #   (b) slider responsiveness — price updates as the user moves the
+            #       intraday hour slider.
+            # Scale factor = daily_close (from backtest, correct scale)
+            #              / last hourly close of the day (same raw data, may be ×10 off)
+            # Applying the factor to every intraday price corrects the scale while
+            # preserving intraday relative movements.
+            _date_str = target_date.strftime("%Y-%m-%d")
+
+            def _scaled_equity_px(ticker: str, bt_last_price: "float | None") -> "float | None":
+                if bt_last_price is None:
+                    return None
+                series = _fetch_equity_hourly_series(ticker, _date_str)
+                if series is None or series.empty:
+                    return bt_last_price
+                # Last hourly close on the target date — used as the EOD anchor.
+                _day_end = pd.Timestamp(_date_str) + pd.Timedelta(hours=23)
+                eod_px = _equity_price_at(series, _day_end)
+                if not eod_px or eod_px <= 0:
+                    return bt_last_price
+                scale = bt_last_price / eod_px
+                intraday_px = _equity_price_at(series, latest_t)
+                return float(intraday_px * scale) if intraday_px else bt_last_price
+
+            _mstr_panel_px = _scaled_equity_px("MSTR", (_bt_mstr_oos or {}).get("last_price"))
+            _mstu_panel_px = _scaled_equity_px("MSTU", (_bt_mstu_oos or {}).get("last_price"))
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
