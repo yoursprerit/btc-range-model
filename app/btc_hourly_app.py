@@ -9905,15 +9905,14 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _mstu_panel_px = mstu_price
         else:
             _btc_panel_px  = latest_close
-            # Fetch the full day's hourly series once (cached by date).
-            # Price lookup is then pure in-memory on latest_t, so moving the
-            # intraday slider never triggers a new network request and always
-            # returns a different price for each market-hours slider position.
-            _date_str      = target_date.strftime("%Y-%m-%d")
-            _mstr_series   = _fetch_equity_hourly_series("MSTR", _date_str)
-            _mstu_series   = _fetch_equity_hourly_series("MSTU", _date_str)
-            _mstr_panel_px = _equity_price_at(_mstr_series, latest_t)
-            _mstu_panel_px = _equity_price_at(_mstu_series, latest_t)
+            # Use the backtest's own daily yf.download() prices so entry price and
+            # live price are always on the same split-adjusted scale.  A separate
+            # yf.download(interval="60m") call applies split adjustments differently
+            # from interval="1d", producing a false ×10 mismatch for MSTU that
+            # causes the panel to show an incorrect ~-90% P&L while the position
+            # is open.
+            _mstr_panel_px = (_bt_mstr_oos or {}).get("last_price")
+            _mstu_panel_px = (_bt_mstu_oos or {}).get("last_price")
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
