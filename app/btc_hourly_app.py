@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v12"  # MSTR/MSTU same-bar entry/exit (after-hours execution, no 1-bar lag)
+_BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is warm at backtest start
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3014,7 +3014,11 @@ def run_full_period_backtest(end_date_iso: str,
 
     end_dt   = pd.Timestamp(end_date_iso)
     start_dt = pd.Timestamp(backtest_start_iso)
-    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    # 200 calendar days (~143 trading days) ensures dist_hi_90 (the longest
+    # rolling feature, needing 90 trading-day lookback) is fully warm before
+    # start_dt, so _bt0 = searchsorted(start_dt) >= 35 and the backtest truly
+    # starts at start_dt rather than being pushed 35 bars into the period.
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
     ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
@@ -3543,8 +3547,8 @@ def run_mstr_backtest(end_date_iso: str,
     end_dt   = pd.Timestamp(end_date_iso)
     start_dt = pd.Timestamp(backtest_start_iso)
     pre_dt   = start_dt - pd.Timedelta(days=60)
-    # Fetch 90 days extra pre-period for warmup (matches research script fetch_start)
-    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    # 200 calendar days ensures dist_hi_90 is fully warm before start_dt.
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
     ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
@@ -3865,7 +3869,8 @@ def run_mstu_backtest(end_date_iso: str,
     end_dt   = pd.Timestamp(end_date_iso)
     start_dt = pd.Timestamp(backtest_start_iso)
     pre_dt   = start_dt - pd.Timedelta(days=60)
-    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    # 200 calendar days ensures dist_hi_90 is fully warm before start_dt.
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
     ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
@@ -4202,7 +4207,8 @@ def run_mstr_options_backtest(end_date_iso: str,
     end_dt   = pd.Timestamp(end_date_iso)
     start_dt = pd.Timestamp(backtest_start_iso)
     pre_dt   = start_dt - pd.Timedelta(days=90)
-    fetch_start = (start_dt - pd.Timedelta(days=120)).strftime("%Y-%m-%d")
+    # 200 calendar days ensures dist_hi_90 is fully warm before start_dt.
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
     ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
@@ -4536,7 +4542,8 @@ def run_mstu_options_backtest(end_date_iso: str,
     end_dt   = pd.Timestamp(end_date_iso)
     start_dt = pd.Timestamp(backtest_start_iso)
     pre_dt   = start_dt - pd.Timedelta(days=60)
-    fetch_start = (start_dt - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    # 200 calendar days ensures dist_hi_90 is fully warm before start_dt.
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
     ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
@@ -9546,7 +9553,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
                 "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
                 "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️): +68% vs B&amp;H +73% — 87% of bull captured."
+                "Bull period (in-sample ⚠️, Jun 2024–Jun 2025): B&amp;H +48%. Strategy captures ~90–95% of bull."
             ),
             conf_txt=(
                 "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
