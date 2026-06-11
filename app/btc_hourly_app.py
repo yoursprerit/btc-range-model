@@ -9550,10 +9550,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
             prob_txt=(
-                "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
-                "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
-                "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️, Jun 2024–Jun 2025): B&amp;H +48%. Strategy captures ~90–95% of bull."
+                "See the backtest table below for live-computed returns across all periods. "
+                "Bull period (in-sample ⚠️, Jun 2024–Jun 2025): strategy captures ~65–70% of B&amp;H "
+                "due to exits during the Aug 2024 and Feb–May 2025 corrections. "
+                "Bear period (OOS, Jun 2025–May 2026): strategy outperforms B&amp;H significantly "
+                "by exiting early in the downturn."
             ),
             conf_txt=(
                 "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
