@@ -21,6 +21,12 @@ Periods match the locked UI backtests:
   Bear  Jun 2025 – May 2026
   Bull  Jun 2024 – Jun 2025
   Full  Jun 2024 – May 2026
+
+NOTE: Trigger classification is sensitive to Coinbase premium API precision on
+borderline D1/D2 dates (e.g. Apr 12 2026 D1). The app's cached predictions are
+fixed; this script fetches live data so may see minor per-run variation on
+boundary bars. Results validated against UI observation: April 14 2026 entry
+in MSTR/MSTU Bear period is "U1+↑MA30" (not combined) — confirmed correct.
 """
 
 import sys, warnings, joblib, requests, time as _time
