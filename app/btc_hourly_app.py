@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is warm at backtest start
+_BT_LOGIC_VERSION = "sl5-sl5-v14"  # add: spx/vix in preds_df + TF3 filtered-entry variant
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3526,6 +3526,10 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
         index=pd.DatetimeIndex(nd, name="target_date"),
     )
     preds_df = preds_df[~preds_df.index.duplicated(keep="last")]
+    # Carry macro closes forward so TF3 equity-guard filter can access them
+    for _mc in ["spx_close", "vix_close"]:
+        if _mc in df.columns:
+            preds_df[_mc] = df[_mc].reindex(preds_df.index).ffill(limit=5)
     return preds_df, raw_df
 
 
@@ -3535,8 +3539,9 @@ def run_mstr_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
+                      strategy_variant: str = "TF2",
                       logic_version: str = _BT_LOGIC_VERSION):
-    """MSTR backtest driven by BTC TF2+V-Gate signals.
+    """MSTR backtest driven by BTC TF2+V-Gate signals (or TF3 filtered variant).
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
     run_full_period_backtest) but executes trades in MSTR stock instead of BTC.
@@ -3682,6 +3687,41 @@ def run_mstr_backtest(end_date_iso: str,
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
+    # ── TF3: additional entry-quality filters (research variant) ─────────────
+    if strategy_variant == "TF3":
+        # F1: Quantitative MA30 slope — require >0.2% rise over 5 bars (vs binary pos/neg)
+        ma30_slope_q = np.zeros(N, dtype=bool)
+        for i in range(5, N):
+            if np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]) and ma30[i-5] > 0:
+                ma30_slope_q[i] = (ma30[i] / ma30[i-5] - 1) > 0.002
+
+        # F2: err_hi_ma3 momentum — must be accelerating (today > yesterday)
+        ehma3_accel = np.zeros(N, dtype=bool)
+        for i in range(1, N):
+            ehma3_accel[i] = ehma3[i] > ehma3[i-1]
+
+        # F3: Extended hi-break window — require 3 of last 5 bars (vs 2 of 3)
+        hb5 = np.zeros(N, dtype=int)
+        for i in range(N):
+            hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
+        hb5_ok = hb5 >= 3
+
+        # F4: Equity-market guard — VIX < 25 AND SPX above its 20-bar MA
+        # V-reversal entries bypass F4 (capitulation inherently breaches these levels)
+        spx_c = comp["spx_close"].values.astype(float) if "spx_close" in comp.columns else np.full(N, np.nan)
+        vix_c = comp["vix_close"].values.astype(float) if "vix_close" in comp.columns else np.full(N, np.nan)
+        spx_ma20_arr = np.full(N, np.nan)
+        for i in range(N):
+            w = spx_c[max(0, i-19):i+1]; w = w[np.isfinite(w)]
+            if len(w) >= 10:
+                spx_ma20_arr[i] = np.mean(w)
+        equity_ok = np.ones(N, dtype=bool)
+        for i in range(N):
+            if np.isfinite(vix_c[i]) and np.isfinite(spx_c[i]) and np.isfinite(spx_ma20_arr[i]):
+                equity_ok[i] = (vix_c[i] < 25.0) and (spx_c[i] > spx_ma20_arr[i])
+
+        tf1_entry = tf1_entry & ma30_slope_q & ehma3_accel & hb5_ok & (equity_ok | v_recent)
+
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -3799,8 +3839,9 @@ def run_mstr_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
+    _strat_lbl = f"{strategy_variant}+V-Gate (MSTR)"
     return dict(
-        strategy   = "TF2+V-Gate (MSTR)",
+        strategy   = _strat_lbl,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -3813,7 +3854,7 @@ def run_mstr_backtest(end_date_iso: str,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
         stats = dict(
-            strategy        = "TF2+V-Gate (MSTR)",
+            strategy        = _strat_lbl,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -3849,6 +3890,17 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                              logic_version=logic_version)
 
 
+@st.cache_data(show_spinner="Loading fixed-period MSTR TF3 backtest …")
+def _run_fixed_period_mstr_backtest_tf3(end_date_iso: str, backtest_start_iso: str,
+                                        model_mtime: float = 0.0,
+                                        data_end: str = "",
+                                        logic_version: str = _BT_LOGIC_VERSION):
+    """Cached wrapper for fixed-period MSTR TF3 (filtered-entry) backtests."""
+    return run_mstr_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             strategy_variant="TF3", logic_version=logic_version)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MSTU Backtesting  (T-Rex 2× Long MSTR Daily Target ETF)
 # ═══════════════════════════════════════════════════════════════════
@@ -3859,8 +3911,9 @@ def run_mstu_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
+                      strategy_variant: str = "TF2",
                       logic_version: str = _BT_LOGIC_VERSION):
-    """MSTU backtest driven by BTC TF2+V-Gate signals.
+    """MSTU backtest driven by BTC TF2+V-Gate signals (or TF3 filtered variant).
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
     (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU started trading
@@ -4005,6 +4058,41 @@ def run_mstu_backtest(end_date_iso: str,
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
+    # ── TF3: additional entry-quality filters (research variant) ─────────────
+    if strategy_variant == "TF3":
+        # F1: Quantitative MA30 slope — require >0.2% rise over 5 bars (vs binary pos/neg)
+        ma30_slope_q = np.zeros(N, dtype=bool)
+        for i in range(5, N):
+            if np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]) and ma30[i-5] > 0:
+                ma30_slope_q[i] = (ma30[i] / ma30[i-5] - 1) > 0.002
+
+        # F2: err_hi_ma3 momentum — must be accelerating (today > yesterday)
+        ehma3_accel = np.zeros(N, dtype=bool)
+        for i in range(1, N):
+            ehma3_accel[i] = ehma3[i] > ehma3[i-1]
+
+        # F3: Extended hi-break window — require 3 of last 5 bars (vs 2 of 3)
+        hb5 = np.zeros(N, dtype=int)
+        for i in range(N):
+            hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
+        hb5_ok = hb5 >= 3
+
+        # F4: Equity-market guard — VIX < 25 AND SPX above its 20-bar MA
+        # V-reversal entries bypass F4 (capitulation inherently breaches these levels)
+        spx_c = comp["spx_close"].values.astype(float) if "spx_close" in comp.columns else np.full(N, np.nan)
+        vix_c = comp["vix_close"].values.astype(float) if "vix_close" in comp.columns else np.full(N, np.nan)
+        spx_ma20_arr = np.full(N, np.nan)
+        for i in range(N):
+            w = spx_c[max(0, i-19):i+1]; w = w[np.isfinite(w)]
+            if len(w) >= 10:
+                spx_ma20_arr[i] = np.mean(w)
+        equity_ok = np.ones(N, dtype=bool)
+        for i in range(N):
+            if np.isfinite(vix_c[i]) and np.isfinite(spx_c[i]) and np.isfinite(spx_ma20_arr[i]):
+                equity_ok[i] = (vix_c[i] < 25.0) and (spx_c[i] > spx_ma20_arr[i])
+
+        tf1_entry = tf1_entry & ma30_slope_q & ehma3_accel & hb5_ok & (equity_ok | v_recent)
+
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -4122,8 +4210,9 @@ def run_mstu_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
+    _strat_lbl = f"{strategy_variant}+V-Gate (MSTU)"
     return dict(
-        strategy   = "TF2+V-Gate (MSTU)",
+        strategy   = _strat_lbl,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -4136,7 +4225,7 @@ def run_mstu_backtest(end_date_iso: str,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
         stats = dict(
-            strategy        = "TF2+V-Gate (MSTU)",
+            strategy        = _strat_lbl,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -4171,6 +4260,17 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version)
+
+
+@st.cache_data(show_spinner="Loading fixed-period MSTU TF3 backtest …")
+def _run_fixed_period_mstu_backtest_tf3(end_date_iso: str, backtest_start_iso: str,
+                                        model_mtime: float = 0.0,
+                                        data_end: str = "",
+                                        logic_version: str = _BT_LOGIC_VERSION):
+    """Cached wrapper for fixed-period MSTU TF3 (filtered-entry) backtests."""
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             strategy_variant="TF3", logic_version=logic_version)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -13464,6 +13564,7 @@ with tab_mstr:
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstr_raw      = _fetch_daily_raw()
     _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
+    # ── TF2 (current strategy) ────────────────────────────────────────────────
     _mstr_bear     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
@@ -13472,10 +13573,106 @@ with tab_mstr:
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end)  # OOS ends prior day (rolling)
     _mstr_full     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
+    # ── TF3 (filtered-entry research variant) ────────────────────────────────
+    _mstr_bear_tf3 = _run_fixed_period_mstr_backtest_tf3(
+        "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
+    _mstr_bull_tf3 = _run_fixed_period_mstr_backtest_tf3(
+        "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
+    _mstr_full_oos_tf3 = run_mstr_backtest(
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
+        strategy_variant="TF3")
+    _mstr_full_tf3 = _run_fixed_period_mstr_backtest_tf3(
+        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
+
+    # ── TF2 vs TF3 comparison table ───────────────────────────────────────────
+    st.markdown("### 🔬 Entry Signal Filter Research: TF2 vs TF3")
+    st.markdown(
+        "**TF3** adds four entry filters on top of TF2: "
+        "(F1) quantitative MA30 slope >0.2% · "
+        "(F2) err_hi_ma3 must be accelerating · "
+        "(F3) 3-of-5 day hi-break confirmation · "
+        "(F4) VIX <25 and SPX above 20-bar MA. "
+        "V-reversal entries bypass F4 (capitulation happens during market stress). "
+        "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
+    )
+    def _tf3_cmp_row(lbl, bt2, bt3):
+        def _c(bt):
+            if bt is None: return ("—", "—", "—", "—")
+            s = bt["stats"]
+            ret  = f"{s['strat_ret']:+.1f}%"
+            wr   = f"{s['win_rate']:.0f}%"
+            n    = str(s['n_trades'])
+            tim  = f"{s['time_in_mkt']:.0f}%"
+            return ret, wr, n, tim
+        r2, wr2, n2, t2 = _c(bt2)
+        r3, wr3, n3, t3 = _c(bt3)
+        delta = ""
+        if bt2 and bt3:
+            try:
+                delta_v = bt3["stats"]["strat_ret"] - bt2["stats"]["strat_ret"]
+                delta = f"{'▲' if delta_v >= 0 else '▼'}{abs(delta_v):.1f}pp"
+            except Exception:
+                delta = "—"
+        return (lbl, r2, wr2, n2, t2, r3, wr3, n3, t3, delta)
+    _cmp_rows = [
+        _tf3_cmp_row("🐻 Bear (Jun 25–May 26)", _mstr_bear, _mstr_bear_tf3),
+        _tf3_cmp_row("🐂 Bull (Jun 24–May 25)", _mstr_bull, _mstr_bull_tf3),
+        _tf3_cmp_row("🔬 OOS (rolling blind)",  _mstr_full_oos, _mstr_full_oos_tf3),
+        _tf3_cmp_row("📈 Full (Jun 24–May 26)", _mstr_full, _mstr_full_tf3),
+    ]
+    _cmp_html = """
+<table style='width:100%;border-collapse:collapse;font-size:12px;font-family:sans-serif;'>
+<thead>
+  <tr style='background:#1e3a5f;color:white;'>
+    <th style='padding:6px 8px;text-align:left;'>Period</th>
+    <th colspan='4' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
+    <th colspan='4' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
+    <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
+  </tr>
+  <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
+    <th style='padding:4px 8px;'></th>
+    <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
+    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
+    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'></th>
+  </tr>
+</thead>
+<tbody>"""
+    for _i, (_lbl, _r2, _wr2, _n2, _t2, _r3, _wr3, _n3, _t3, _d) in enumerate(_cmp_rows):
+        _bg = "#f8fafc" if _i % 2 == 0 else "#f1f5f9"
+        _dc = "#16a34a" if _d.startswith("▲") else ("#dc2626" if _d.startswith("▼") else "#64748b")
+        _cmp_html += (
+            f"<tr style='background:{_bg};'>"
+            f"<td style='padding:5px 8px;font-weight:600;color:#1e293b;'>{_lbl}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#1e40af;'>{_r2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_wr2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_n2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#7c3aed;font-weight:600;'>{_r3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_wr3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_n3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;font-weight:700;color:{_dc};'>{_d}</td>"
+            f"</tr>"
+        )
+    _cmp_html += "</tbody></table>"
+    st.markdown(_cmp_html, unsafe_allow_html=True)
+    st.caption("Δ Return = TF3 minus TF2 strategy return for that period. Fewer trades in TF3 = higher entry bar.")
+
+    st.markdown("---")
+    # ── Strategy variant selector ─────────────────────────────────────────────
+    _mstr_variant = st.radio(
+        "View detailed backtest results for:",
+        ["TF2 — Current Strategy", "TF3 — Signal Filter Research"],
+        horizontal=True, key="mstr_strategy_variant",
+    )
+    _show_tf3_mstr = "TF3" in _mstr_variant
     render_mstr_trading_strategy_dashboard(
-        _mstr_bear, _mstr_bull,
-        bt_full_oos=_mstr_full_oos,
-        bt_full=_mstr_full,
+        _mstr_bear_tf3  if _show_tf3_mstr else _mstr_bear,
+        _mstr_bull_tf3  if _show_tf3_mstr else _mstr_bull,
+        bt_full_oos=_mstr_full_oos_tf3 if _show_tf3_mstr else _mstr_full_oos,
+        bt_full=_mstr_full_tf3         if _show_tf3_mstr else _mstr_full,
         key_suffix="mstr_tab",
     )
 
@@ -13494,6 +13691,7 @@ with tab_mstu:
     _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstu_raw      = _fetch_daily_raw()
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
+    # ── TF2 (current strategy) ────────────────────────────────────────────────
     _mstu_bear     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
@@ -13502,11 +13700,106 @@ with tab_mstu:
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
     _mstu_full     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)     # Full: Jun 2024–May 2026 (synthetic+actual)
+    # ── TF3 (filtered-entry research variant) ────────────────────────────────
+    _mstu_bear_tf3 = _run_fixed_period_mstu_backtest_tf3(
+        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
+    _mstu_bull_tf3 = _run_fixed_period_mstu_backtest_tf3(
+        "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)
+    _mstu_full_oos_tf3 = run_mstu_backtest(
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
+        strategy_variant="TF3")
+    _mstu_full_tf3 = _run_fixed_period_mstu_backtest_tf3(
+        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
+
+    # ── TF2 vs TF3 comparison table ───────────────────────────────────────────
+    st.markdown("### 🔬 Entry Signal Filter Research: TF2 vs TF3")
+    st.markdown(
+        "**TF3** adds four entry filters on top of TF2: "
+        "(F1) quantitative MA30 slope >0.2% · "
+        "(F2) err_hi_ma3 must be accelerating · "
+        "(F3) 3-of-5 day hi-break confirmation · "
+        "(F4) VIX <25 and SPX above 20-bar MA. "
+        "V-reversal entries bypass F4 (capitulation happens during market stress). "
+        "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
+    )
+    def _tf3_cmp_row_mstu(lbl, bt2, bt3):
+        def _c(bt):
+            if bt is None: return ("—", "—", "—", "—")
+            s = bt["stats"]
+            ret  = f"{s['strat_ret']:+.1f}%"
+            wr   = f"{s['win_rate']:.0f}%"
+            n    = str(s['n_trades'])
+            tim  = f"{s['time_in_mkt']:.0f}%"
+            return ret, wr, n, tim
+        r2, wr2, n2, t2 = _c(bt2)
+        r3, wr3, n3, t3 = _c(bt3)
+        delta = ""
+        if bt2 and bt3:
+            try:
+                delta_v = bt3["stats"]["strat_ret"] - bt2["stats"]["strat_ret"]
+                delta = f"{'▲' if delta_v >= 0 else '▼'}{abs(delta_v):.1f}pp"
+            except Exception:
+                delta = "—"
+        return (lbl, r2, wr2, n2, t2, r3, wr3, n3, t3, delta)
+    _cmp_rows_mstu = [
+        _tf3_cmp_row_mstu("🐻 Bear (Jun 25–May 26)", _mstu_bear, _mstu_bear_tf3),
+        _tf3_cmp_row_mstu("🐂 Bull (Jun 24–May 25)", _mstu_bull, _mstu_bull_tf3),
+        _tf3_cmp_row_mstu("🔬 OOS (rolling blind)",  _mstu_full_oos, _mstu_full_oos_tf3),
+        _tf3_cmp_row_mstu("📈 Full (Jun 24–May 26)", _mstu_full, _mstu_full_tf3),
+    ]
+    _cmp_html_mstu = """
+<table style='width:100%;border-collapse:collapse;font-size:12px;font-family:sans-serif;'>
+<thead>
+  <tr style='background:#1e3a5f;color:white;'>
+    <th style='padding:6px 8px;text-align:left;'>Period</th>
+    <th colspan='4' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
+    <th colspan='4' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
+    <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
+  </tr>
+  <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
+    <th style='padding:4px 8px;'></th>
+    <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
+    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
+    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'></th>
+  </tr>
+</thead>
+<tbody>"""
+    for _i, (_lbl, _r2, _wr2, _n2, _t2, _r3, _wr3, _n3, _t3, _d) in enumerate(_cmp_rows_mstu):
+        _bg = "#f8fafc" if _i % 2 == 0 else "#f1f5f9"
+        _dc = "#16a34a" if _d.startswith("▲") else ("#dc2626" if _d.startswith("▼") else "#64748b")
+        _cmp_html_mstu += (
+            f"<tr style='background:{_bg};'>"
+            f"<td style='padding:5px 8px;font-weight:600;color:#1e293b;'>{_lbl}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#1e40af;'>{_r2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_wr2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_n2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#7c3aed;font-weight:600;'>{_r3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_wr3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;'>{_n3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;font-weight:700;color:{_dc};'>{_d}</td>"
+            f"</tr>"
+        )
+    _cmp_html_mstu += "</tbody></table>"
+    st.markdown(_cmp_html_mstu, unsafe_allow_html=True)
+    st.caption("Δ Return = TF3 minus TF2 strategy return for that period. Fewer trades in TF3 = higher entry bar.")
+
+    st.markdown("---")
+    # ── Strategy variant selector ─────────────────────────────────────────────
+    _mstu_variant = st.radio(
+        "View detailed backtest results for:",
+        ["TF2 — Current Strategy", "TF3 — Signal Filter Research"],
+        horizontal=True, key="mstu_strategy_variant",
+    )
+    _show_tf3_mstu = "TF3" in _mstu_variant
     render_mstu_trading_strategy_dashboard(
-        _mstu_bear,
-        bt_bull=_mstu_bull,
-        bt_full_oos=_mstu_full_oos,
-        bt_full=_mstu_full,
+        _mstu_bear_tf3  if _show_tf3_mstu else _mstu_bear,
+        bt_bull=_mstu_bull_tf3  if _show_tf3_mstu else _mstu_bull,
+        bt_full_oos=_mstu_full_oos_tf3 if _show_tf3_mstu else _mstu_full_oos,
+        bt_full=_mstu_full_tf3         if _show_tf3_mstu else _mstu_full,
         key_suffix="mstu_tab",
     )
 
