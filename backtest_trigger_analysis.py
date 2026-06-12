@@ -355,7 +355,8 @@ def compute_signals(comp):
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_7d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_7d) | v_recent)
 
     return dict(
         N=N, ca=ca, u1=u1, d1=d1, d2=d2, d3=d3,
@@ -575,12 +576,13 @@ for period_name, (start_iso, end_iso) in PERIODS.items():
         ).ffill()
         asset_px = px_all.reindex(dates).ffill().bfill().values.astype(float)
 
-        # Version A: current logic (allows combined, labels combined separately)
+        # Version A: pre-change logic (allows combined — kept for reference comparison only)
         trades_a, nav_a = run_asset_backtest(
             dates, asset_px, sigs, bt_start=start_dt,
             sl_pct=sl_pct, cap=INITIAL_CAPITAL, exclude_combined=False,
         )
-        # Version C: block entries when BOTH above_ma30 AND clean_7d simultaneously
+        # Version C (LIVE): block entries when BOTH above_ma30 AND clean_7d simultaneously
+        # This is now the live strategy — combined (MA30-up+clean7d) is blocked
         trades_c, nav_c = run_asset_backtest(
             dates, asset_px, sigs, bt_start=start_dt,
             sl_pct=sl_pct, cap=INITIAL_CAPITAL, exclude_combined=True,

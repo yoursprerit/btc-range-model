@@ -2520,7 +2520,8 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
     # not an entry gate, to keep live signal consistent with backtest behaviour.
     v_gate_ok     = v_recent_gate
-    tf1_triggered = u1_triggered and (above_ma30 or clean_10d or v_gate_ok)
+    # Block combined MA30-up+clean7d: enter only when exactly one fires (XOR) or V-reversal
+    tf1_triggered = u1_triggered and ((above_ma30 != clean_10d) or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -3128,7 +3129,8 @@ def run_full_period_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -3159,10 +3161,8 @@ def run_full_period_backtest(end_date_iso: str,
             if tf1_entry[i] and not _exit_at_i:
                 btc_qty = nav/price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
@@ -3679,7 +3679,8 @@ def run_mstr_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -3749,10 +3750,8 @@ def run_mstr_backtest(end_date_iso: str,
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.97
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
@@ -4001,7 +4000,8 @@ def run_mstu_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -4071,10 +4071,8 @@ def run_mstu_backtest(end_date_iso: str,
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * 0.93
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
@@ -4340,7 +4338,8 @@ def run_mstr_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR call options ──────────────────────────
     nav      = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -4410,10 +4409,8 @@ def run_mstr_options_backtest(end_date_iso: str,
                 expiry_dt   = dates[i] + pd.Timedelta(days=option_days)
                 e_price     = opt_prem; e_mstr = price
                 e_date      = dates[i]; e_nav  = nav; pos = "LONG"
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
@@ -4673,7 +4670,8 @@ def run_mstu_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU call options ──────────────────────────
     nav        = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -4742,10 +4740,8 @@ def run_mstu_options_backtest(end_date_iso: str,
                 expiry_dt   = dates[i] + pd.Timedelta(days=option_days)
                 e_price     = opt_prem; e_mstu = price
                 e_date      = dates[i]; e_nav  = nav; pos = "LONG"
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
@@ -5073,7 +5069,8 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
     tf1_exit  = d2 | d3   # TF1 always exits D2|D3
 
     # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
@@ -5125,10 +5122,8 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
                 btc_qty  = nav / price
                 e_price  = price; e_date = dates[i]
                 e_nav    = nav;   pos    = "LONG"
-                if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
+                if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
@@ -5260,7 +5255,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     if sigs is not None:
         _lp_bull       = sigs.get("bull_regime", False)
         _lp_vgate      = sigs.get("v_recent_gate", False)
-        _lp_trend      = sigs["above_ma30"] or sigs["clean_10d"] or _lp_vgate
+        _lp_trend      = (sigs["above_ma30"] != sigs["clean_10d"]) or _lp_vgate
         _lp_entry_signal = bool(sigs["u1_triggered"] and _lp_trend)
         _lp_exit_signal  = bool(
             sigs.get("exhaustion_active", False)
@@ -9000,7 +8995,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
     _v_gate_ok    = sigs.get("v_recent_gate", False)
-    _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
+    _trend_ok     = (sigs["above_ma30"] != sigs["clean_10d"]) or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3       = sigs.get("exhaustion_active", False)
     _exit_d2       = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
@@ -9514,11 +9509,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
           else "○ not active — no capitulation spike in last 3 bars (dn_score < 0.8 or err_lo < 3%)"),
          "= ACTIVE  (entry gate — alt. to ↑MA30)",
          sigs.get("v_recent_gate", False), True),
-        ("Entry filter (↑MA30 OR clean7d OR V-rev)",
-         "PASS ✅" if (sigs["above_ma30"] or sigs["clean_10d"] or sigs.get("v_recent_gate"))
-         else "FAIL ✗",
-         "= PASS  (U1 + this gate = full entry signal)",
-         sigs["above_ma30"] or sigs["clean_10d"] or sigs.get("v_recent_gate", False), True),
+        ("Entry filter (↑MA30 XOR clean7d; or V-rev)",
+         ("BLOCKED ⚠️ combined" if (sigs["above_ma30"] and sigs["clean_10d"] and not sigs.get("v_recent_gate"))
+          else ("PASS ✅" if ((sigs["above_ma30"] != sigs["clean_10d"]) or sigs.get("v_recent_gate"))
+                else "FAIL ✗")),
+         "= PASS when exactly one of ↑MA30 / clean7d fires, or V-reversal; BLOCKED when both fire simultaneously",
+         (sigs["above_ma30"] != sigs["clean_10d"]) or sigs.get("v_recent_gate", False), True),
         ("MA30 slope (5-bar)",
          f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
          f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",

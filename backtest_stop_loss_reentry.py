@@ -394,7 +394,8 @@ def compute_signals(comp: pd.DataFrame) -> dict:
     # EMA10 of BTC close (for SL3 variant)
     ema10 = pd.Series(c_asof).ewm(span=10, adjust=False).mean().values
 
-    tf2_entry = u1 & (above_ma30 | clean_7d | v_recent)
+    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
+    tf2_entry = u1 & ((above_ma30 ^ clean_7d) | v_recent)
 
     return dict(
         N=N, c_asof=c_asof,
@@ -585,10 +586,8 @@ def run_backtest(
                     from_sl       = False
                     bars_since_sl = 0
                     abv = sigs["above_ma30"]; c7d = sigs["clean_7d"]; vr = sigs["v_recent"]
-                    if vr[si] and not abv[si] and not c7d[si]:
+                    if vr[si]:
                         e_trigger = "U1+V-reversal"
-                    elif abv[si] and c7d[si]:
-                        e_trigger = "U1+↑MA30+clean7d"
                     elif abv[si]:
                         e_trigger = "U1+↑MA30"
                     else:

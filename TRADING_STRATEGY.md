@@ -1,7 +1,7 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-06-10  
+**Last updated:** 2026-06-12  
 **Current live strategy:** TF2 (Regime-Adaptive) — supersedes TF1  
 **OOS test window:** 2025-09-19 → 2026-05-17 (241 bars, fully out-of-sample)  
 **In-sample test window:** 2024-09-17 → 2025-09-17 (365 bars, in-sample — model trained through this period)  
@@ -47,7 +47,7 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 | `lo_breaks_3d` | Count of `actual_L < pred_L` in last 3 bars |
 | `MA30` | Rolling 30-bar mean of daily close price |
 | `above_ma30` | `close > MA30` |
-| `clean_10d` | True if zero D1 or D2 fires in the 7 bars preceding the current bar (named `clean_10d` historically) |
+| `clean_10d` | True if zero D1 or D2 fires in the 7 bars preceding the current bar (named `clean_10d` historically) — **entry is blocked when both `above_ma30` AND `clean_10d` are True simultaneously** (see combined-filter rule below) |
 
 **Execution rule:** Signal fires on bar *i*; trade executes at bar *i* close (same-bar execution).
 
@@ -83,10 +83,14 @@ U1 is active:
     err_hi_ma3 > +0.5%
     hi_breaks_3d ≥ 2
 
-AND at least one of:
+AND exactly one of the following (XOR — combined is blocked):
     BTC close > 30-day rolling mean of close (above_ma30 = True)
     OR
     No D1 or D2 signal fired in any of the prior 7 bars (clean_10d = True)
+    — but NOT both simultaneously (see Combined-Filter Rule below)
+
+OR the V-reversal gate fires (overrides the combined block):
+    V-reversal within the last 3 bars (dn_score > 0.8 AND err_lo > 3%)
 ```
 
 ### Exit Rule
@@ -198,6 +202,38 @@ a Mar 25 entry triggered by D1-exit-then-U1-reentry that lost −7.0% in 2 days.
 
 **Impact:** Removing D1 from exits improved alpha by ~$7k and eliminated 1 bad trade.
 
+### Combined MA30+clean7d filter (entry blocked when both gates fire simultaneously)
+
+When U1 fires and **both** `above_ma30` AND `clean_10d` are True at the same time, entry is now blocked (unless V-reversal gate also fires).
+
+**Rationale:** Backtesting across Bear, Bull, and Full periods (Jun 2024 – May 2026) showed that when both conditions are simultaneously active, BTC has already been running a clean multi-week uptrend with no bearish signals for 7+ bars AND is trading above its 30-day MA. This is a **late-cycle momentum entry** — not a fresh breakout. Analysis across MSTR and MSTU showed:
+
+| Trigger | n trades | Win rate | Avg P&L |
+|---------|---------|----------|---------|
+| U1+↑MA30+clean7d (combined — OLD) | 10 | **0%** | −4.1% |
+| U1+↑MA30 only | 17 | 35% | +21.6% |
+| U1+clean7d only | 2 | 100% | +4.0% |
+| U1+V-reversal | 4 | 50% | +7.9% |
+
+Pooled statistical test: combined vs MA30-only win rate difference is significant at **p = 0.033** (one-sided proportion z-test). All 10 combined trades resulted in stop-loss exits or breakeven D2/D3 exits with zero positive P&L.
+
+**Why the combined condition signals late-cycle risk:** When the market is above MA30 AND has had no D1/D2 for 7 bars, it has already extended through a clean window. Any new U1 at that point is likely chasing a move that has been running for 1–2 weeks. The entry has poor risk/reward: limited upside (trend is mature) vs full stop-loss downside.
+
+By contrast, a pure `U1+↑MA30` entry can fire after a brief consolidation (recent D1/D2 cleared), and a pure `U1+clean7d` fires when BTC is below MA30 but showing a fresh thrust after a washout — both are earlier-cycle with better entry timing.
+
+**Implementation:** `tf1_entry = U1 AND ((above_ma30 XOR clean_10d) OR v_recent)`
+
+**Impact (MSTR/MSTU, Jun 2024 – May 2026):**
+
+| Period | Before | After (combined blocked) | Δ |
+|--------|--------|--------------------------|---|
+| 🐻 Bear MSTR | +2.7% | **+9.8%** | +7.1pp |
+| 🐻 Bear MSTU | −5.0% | **+11.9%** | +16.9pp |
+| 🐂 Bull MSTR | +198.7% | **+232.0%** | +33.3pp |
+| 🐂 Bull MSTU | +532.1% | +532.1% | neutral |
+| 🌐 Full MSTR | +219.4% | **+276.4%** | +57.0pp |
+| 🌐 Full MSTU | +532.5% | **+644.8%** | +112.3pp |
+
 ---
 
 ## NAV Trajectory (OOS)
@@ -273,7 +309,7 @@ The **only change** from TF1 is the exit logic:
 
 | | TF1 | TF2 |
 |--|-----|-----|
-| **Entry** | U1 + (↑MA30 OR clean_10d) | Same ✓ |
+| **Entry** | U1 + (↑MA30 XOR clean_10d, or V-rev) | Same ✓ |
 | **Exit (Bear/Neutral regime)** | D2 or D3 | Same ✓ |
 | **Exit (Bull regime)** | D2 or D3 | **D3 only** ← key change |
 
@@ -361,7 +397,7 @@ TF2 automatically becomes TF1-equivalent.
 
 ## Four-Period Backtest Results — BTC, MSTR, MSTU (Jun 2024 – Jun 2026)
 
-> **Methodology:** Same-bar execution (signal on bar *i*, trade at bar *i* close — after-hours fill for MSTR/MSTU) · $100,000 starting capital · **Stop-losses triggered on daily close, filled at close price** · 60-day pre-period signal warmup · Run: 2026-06-10
+> **Methodology:** Same-bar execution (signal on bar *i*, trade at bar *i* close — after-hours fill for MSTR/MSTU) · $100,000 starting capital · **Stop-losses triggered on daily close, filled at close price** · 60-day pre-period signal warmup · **Combined MA30+clean7d entry blocked (XOR filter)** · Run: 2026-06-12
 
 > ⚠️ **In-sample warning:** CT model trained through Feb 28, 2026. OOS period (Mar 2026 → present) is fully blind.
 
@@ -437,12 +473,12 @@ BTC trend signals drive MSTR stock entries and exits. MicroStrategy holds ~580,0
 
 | Period | Return | Sharpe | Max DD | vs Baseline |
 |--------|--------|--------|--------|-------------|
-| 🐻 Bear | **+2.7%** | — | — | ▲ vs B&H −60.6% |
-| 🐂 Bull | **+202.9%** | — | — | ▲ vs B&H +125.9% |
-| 🌐 Full | **+221.3%** | — | — | ▲ vs B&H −6.1% |
+| 🐻 Bear | **+9.8%** | — | — | ▲ vs B&H −60.6% |
+| 🐂 Bull | **+232.0%** | — | — | ▲ vs B&H +125.9% |
+| 🌐 Full | **+276.4%** | — | — | ▲ vs B&H −6.1% |
 | 🔬 OOS | — | — | — | — (rolling, see live UI) |
 
-**MSTR Fixed −3% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** Positive Bear return (+2.7%) while B&H lost −60.6%.
+**MSTR Fixed −3% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** Positive Bear return (+9.8%) while B&H lost −60.6%. *(Updated 2026-06-12: combined MA30+clean7d entry filter applied — see "Combined MA30+clean7d filter" above)*
 
 ---
 
@@ -465,12 +501,12 @@ MSTU is the T-Rex 2× Long MSTR ETF (inception Sep 18, 2024). For pre-inception 
 
 | Period | Return | Sharpe | Max DD | vs Baseline |
 |--------|--------|--------|--------|-------------|
-| 🐻 Bear | **−5.0%** | — | — | ▲ vs B&H −91.8% |
-| 🐂 Bull | **+530.7%** | — | — | ▲ vs B&H +210.0% |
-| 🌐 Full | **+531.1%** | — | — | ▲ vs B&H −76.0% |
+| 🐻 Bear | **+11.9%** | — | — | ▲ vs B&H −91.8% |
+| 🐂 Bull | **+532.1%** | — | — | ▲ vs B&H +210.0% |
+| 🌐 Full | **+644.8%** | — | — | ▲ vs B&H −76.0% |
 | 🔬 OOS | — | — | — | — (rolling, see live UI) |
 
-**MSTU Fixed −7% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** In BULL regime (BTC above MA30 AND MA30 rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
+**MSTU Fixed −7% close-price stop + SL5 re-entry beats the no-stop baseline on ALL 3 locked periods.** In BULL regime (BTC above MA30 AND MA30 rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars. *(Updated 2026-06-12: combined MA30+clean7d entry filter applied)*
 
 ---
 
@@ -539,7 +575,7 @@ Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar
 | Regime | Strategy edge | B&H edge |
 |--------|--------------|----------|
 | Bear / Sideways (Bear period) | ✓ Avoids large drawdowns, outperforms on all three assets | ✗ Suffers full decline |
-| Strong bull (Bull period) | ▲ Fixed −3%/−7% stops + SL5 re-entry outperform B&H (MSTR +202.9% vs B&H +125.9% ▲+77pp; MSTU +530.7% vs B&H +210.0% ▲+321pp) | ✓ Captures full run |
+| Strong bull (Bull period) | ▲ Fixed −3%/−7% stops + SL5 re-entry outperform B&H (MSTR +232.0% vs B&H +125.9% ▲+106pp; MSTU +532.1% vs B&H +210.0% ▲+322pp) | ✓ Captures full run |
 
 ---
 
