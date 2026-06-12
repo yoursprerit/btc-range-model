@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
 """
-Entry-Trigger Analysis: U1+MA30+clean10d vs Separate Triggers (MSTR & MSTU)
-=============================================================================
+Entry-Trigger Analysis: U1+MA30+clean7d combined vs separate triggers (MSTR & MSTU)
+=====================================================================================
 
 Questions answered:
-1. Is "U1+MA30+clean10d" (both filters simultaneously) statistically more
+1. Is "U1+↑MA30+clean7d" (both above_ma30 AND clean_7d simultaneously) more
    prone to loss than the single-filter triggers for MSTR / MSTU?
 
-2. Would restricting entries to three strict, non-overlapping triggers
-   (U1+MA30, U1+V-Reversal, U1+clean10d) improve backtesting results?
+2. Would blocking entries where BOTH above_ma30 AND clean_7d fire improve results?
 
-The "strict" alternative classifies each trade by whichever single condition
-is the PRIMARY reason for entry (priority: V-reversal > MA30 > clean10d).
-This does NOT change the entry condition — the union rule is kept exactly as
-in the live strategy.  The "exclude-combined" variant DOES change the entry
-condition by blocking trades where both above_ma30 AND clean_10d fire.
+Uses the EXACT same data pipeline as the app's run_mstr_backtest() /
+run_mstu_backtest():
+  - yfinance daily BTC-USD (same as _build_backtest_preds)
+  - 200-day pre-period warmup (ensures dist_hi_90 is fully warm at bt start)
+  - Real Coinbase premium from API
+  - Same-bar execution (after-hours for MSTR/MSTU)
+  - Fixed -3% stop (MSTR) / -7% stop (MSTU) + SL5 regime-adaptive re-entry
 
-Periods tested (matching UI locked backtests):
+Periods match the locked UI backtests:
   Bear  Jun 2025 – May 2026
   Bull  Jun 2024 – Jun 2025
   Full  Jun 2024 – May 2026
-
-Assets: MSTR (fixed -3% stop), MSTU (fixed -7% stop) — same as live.
 """
 
 import sys, warnings, joblib, requests, time as _time
@@ -36,23 +35,28 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-# ── Config ────────────────────────────────────────────────────────────────────
-INITIAL_CAPITAL = 100_000.0
-WARMUP = 35
-
+# ── Model (same path as app's DAILY_MODEL_CT) ────────────────────────────────
 _MODEL_PATH = _ROOT / "models" / "inference_assets_ct.joblib"
 if not _MODEL_PATH.exists():
     _MODEL_PATH = _ROOT / "artifacts" / "artifacts.pkl"
 
+print(f"Loading CT model from: {_MODEL_PATH}")
+AD = joblib.load(str(_MODEL_PATH))
+print(f"  model keys: {list(AD.keys())[:6]}\n")
+
+INITIAL_CAPITAL = 100_000.0
+WARMUP = 35
+
+# Locked periods matching UI — note: 200-day pre-fetch warmup computed per-period
 PERIODS = {
-    "Bear (Jun25→May26)":  ("2025-06-01", "2026-05-31", "2025-03-01"),
-    "Bull (Jun24→Jun25)":  ("2024-06-05", "2025-06-14", "2024-03-01"),
-    "Full (Jun24→May26)":  ("2024-06-01", "2026-05-31", "2024-03-01"),
+    "Bear (Jun25→May26)":  ("2025-06-01", "2026-05-31"),
+    "Bull (Jun24→Jun25)":  ("2024-06-05", "2025-06-14"),
+    "Full (Jun24→May26)":  ("2024-06-01", "2026-05-31"),
 }
 
 ASSETS = {
-    "MSTR": {"ticker": "MSTR", "sl_pct": 0.03, "stop_label": "Fixed -3%"},
-    "MSTU": {"ticker": "MSTU", "sl_pct": 0.07, "stop_label": "Fixed -7%"},
+    "MSTR": {"ticker": "MSTR",  "sl_pct": 0.03, "stop_label": "Fixed -3%"},
+    "MSTU": {"ticker": "MSTU",  "sl_pct": 0.07, "stop_label": "Fixed -7%"},
 }
 
 _MACRO_SYMS = {
@@ -66,13 +70,8 @@ _ONCHAIN = [
     "avg-block-size", "cost-per-transaction",
 ]
 
-# ── Model loading ─────────────────────────────────────────────────────────────
-print(f"Loading CT model from: {_MODEL_PATH}")
-AD = joblib.load(str(_MODEL_PATH))
-print(f"  keys: {list(AD.keys())[:6]}\n")
 
-
-# ── Data fetching ─────────────────────────────────────────────────────────────
+# ── Data helpers ──────────────────────────────────────────────────────────────
 def _yf_dl(ticker, start, end):
     d = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
     if isinstance(d.columns, pd.MultiIndex):
@@ -84,25 +83,47 @@ def _yf_dl(ticker, start, end):
 _DATA_CACHE: dict = {}
 
 
-def fetch_data(fetch_start, fetch_end):
-    cache_key = f"{fetch_start}_{fetch_end}"
+def _build_backtest_preds(fetch_start, fetch_end):
+    """Exact replica of app's _build_backtest_preds() — yfinance BTC + Coinbase premium."""
+    cache_key = (fetch_start, fetch_end)
     if cache_key in _DATA_CACHE:
         return _DATA_CACHE[cache_key]
 
-    print(f"  Fetching BTC+macro {fetch_start} → {fetch_end} …")
-    d = _yf_dl("BTC-USD", fetch_start, fetch_end)
-    frames = {
-        "btc_close": d["Close"], "btc_high": d["High"],
-        "btc_low":   d["Low"],   "btc_volume": d["Volume"],
-    }
+    print(f"  Fetching {fetch_start} → {fetch_end} …")
+
+    # 1. BTC daily (yfinance, same source as research script)
+    try:
+        d_btc = yf.download("BTC-USD", start=fetch_start, end=fetch_end,
+                             progress=False, auto_adjust=True)
+        if isinstance(d_btc.columns, pd.MultiIndex):
+            d_btc.columns = [c[0] for c in d_btc.columns]
+        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
+    except Exception as e:
+        print(f"  [ERR] BTC fetch: {e}"); return None
+    if d_btc.empty or "Close" not in d_btc.columns:
+        print("  [ERR] BTC data empty"); return None
+
+    df = pd.DataFrame({
+        "btc_close":  d_btc["Close"],
+        "btc_high":   d_btc["High"],
+        "btc_low":    d_btc["Low"],
+        "btc_volume": d_btc.get("Volume", pd.Series(dtype=float)),
+    })
+    raw_df = df[["btc_close", "btc_high", "btc_low", "btc_volume"]].copy()
+
+    # 2. Macro data
     for nm, sym in _MACRO_SYMS.items():
         try:
-            frames[f"{nm}_close"] = _yf_dl(sym, fetch_start, fetch_end)["Close"]
+            _d = yf.download(sym, start=fetch_start, end=fetch_end,
+                              progress=False, auto_adjust=True)
+            if isinstance(_d.columns, pd.MultiIndex):
+                _d.columns = [c[0] for c in _d.columns]
+            _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+            df[f"{nm}_close"] = _d["Close"].reindex(df.index).ffill(limit=7)
         except Exception:
             pass
-    df = pd.DataFrame(frames).sort_index().ffill(limit=5)
-    df.index.name = "date"
 
+    # 3. On-chain (blockchain.info)
     print("    On-chain …", end=" ", flush=True)
     ok = 0
     for m in _ONCHAIN:
@@ -123,96 +144,117 @@ def fetch_data(fetch_start, fetch_end):
             pass
     print(f"{ok}/{len(_ONCHAIN)} OK")
 
-    _DATA_CACHE[cache_key] = df
-    return df
+    # 4. Coinbase premium (same as _build_backtest_preds in app)
+    _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    _cb_rows: list = []
+    _cb_cur = pd.Timestamp(fetch_start)
+    _cb_end = pd.Timestamp(fetch_end)
+    while _cb_cur <= _cb_end:
+        _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
+        try:
+            _r2 = requests.get(_CB_URL, params={
+                "granularity": 86400,
+                "start": _cb_cur.strftime("%Y-%m-%dT00:00:00Z"),
+                "end": (_cb_chunk + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z"),
+            }, timeout=30)
+            if _r2.status_code == 200:
+                _cb_rows.extend(_r2.json())
+        except Exception:
+            pass
+        _cb_cur = _cb_chunk + pd.Timedelta(days=1)
+        _time.sleep(0.1)
+    if _cb_rows:
+        _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
+        _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
+        _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
+        _cb_close = _cb_df["close"].reindex(df.index).astype(float)
+        c_ref = df["btc_close"]
+        _prem = (_cb_close - c_ref) / c_ref * 100
+        df["cb_premium"]     = _prem
+        df["cb_premium_ma3"] = _prem.rolling(3).mean()
+        df["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
+        print(f"    Coinbase premium: {int(_prem.notna().sum())} days")
+    else:
+        df["cb_premium"] = df["cb_premium_ma3"] = df["cb_premium_z7"] = 0.0
+        print("    Coinbase premium: unavailable (set to 0)")
 
-
-def fetch_asset_px(ticker, fetch_start, fetch_end):
-    try:
-        d = _yf_dl(ticker, fetch_start, fetch_end)
-        px = d["Close"].sort_index()
-        all_days = pd.date_range(px.index[0], max(px.index[-1], pd.Timestamp(fetch_end)), freq="D")
-        return px.reindex(all_days).ffill()
-    except Exception as e:
-        print(f"    [WARN] {ticker}: {e}")
-        return pd.Series(dtype=float)
-
-
-# ── CT predictions ────────────────────────────────────────────────────────────
-def build_ct_preds(df):
-    c, h, l_, v = df["btc_close"], df["btc_high"], df["btc_low"], df["btc_volume"]
+    # 5. Feature engineering (identical to app's _build_backtest_preds)
+    c   = df["btc_close"]; h = df["btc_high"]
+    l_  = df["btc_low"];   v = df["btc_volume"]
     ret = np.log(c).diff()
-    f = pd.DataFrame(index=df.index)
-    for k in [1, 3, 5, 7, 14, 30]: f[f"ret_{k}"] = ret.rolling(k).sum()
-    for k in [5, 10, 20, 30]:       f[f"vol_{k}"] = ret.rolling(k).std()
+    feat = pd.DataFrame(index=df.index)
+    for k in [1,3,5,7,14,30]: feat[f"ret_{k}"] = ret.rolling(k).sum()
+    for k in [5,10,20,30]:    feat[f"vol_{k}"] = ret.rolling(k).std()
     prev_c = c.shift(1)
-    tr = pd.concat([(h-l_), (h-prev_c).abs(), (l_-prev_c).abs()], axis=1).max(axis=1)
-    for k in [7, 14, 30]: f[f"atr_{k}"] = tr.rolling(k).mean() / c
-    f["range_today"] = (h - l_) / c; f["range_ma7"] = ((h-l_)/c).rolling(7).mean()
-    f["range_ma30"]  = ((h - l_) / c).rolling(30).mean()
-    f["range_std30"] = ((h - l_) / c).rolling(30).std()
-    g  = c.diff().clip(lower=0).rolling(14).mean()
-    ls = (-c.diff().clip(upper=0)).rolling(14).mean()
-    f["rsi_14"] = 100 - 100 / (1 + g / ls.replace(0, np.nan))
-    e12 = c.ewm(span=12, adjust=False).mean(); e26 = c.ewm(span=26, adjust=False).mean()
+    tr = pd.concat([(h-l_),(h-prev_c).abs(),(l_-prev_c).abs()], axis=1).max(axis=1)
+    for k in [7,14,30]: feat[f"atr_{k}"] = tr.rolling(k).mean()/c
+    feat["range_today"] = (h-l_)/c
+    feat["range_ma7"]   = ((h-l_)/c).rolling(7).mean()
+    feat["range_ma30"]  = ((h-l_)/c).rolling(30).mean()
+    feat["range_std30"] = ((h-l_)/c).rolling(30).std()
+    gain = c.diff().clip(lower=0).rolling(14).mean()
+    loss = (-c.diff().clip(upper=0)).rolling(14).mean()
+    feat["rsi_14"] = 100 - 100/(1 + gain/loss.replace(0, np.nan))
+    e12 = c.ewm(span=12,adjust=False).mean(); e26 = c.ewm(span=26,adjust=False).mean()
     macd = e12 - e26
-    f["macd"] = macd/c; f["macd_sig"] = macd.ewm(span=9, adjust=False).mean()/c
-    f["macd_hist"] = (macd - macd.ewm(span=9, adjust=False).mean()) / c
+    feat["macd"]      = macd/c
+    feat["macd_sig"]  = macd.ewm(span=9,adjust=False).mean()/c
+    feat["macd_hist"] = (macd - macd.ewm(span=9,adjust=False).mean())/c
     ma20 = c.rolling(20).mean(); sd20 = c.rolling(20).std()
-    f["bb_width"]   = (4 * sd20) / ma20
-    f["dist_hi_30"] = c / c.rolling(30).max() - 1
-    f["dist_lo_30"] = c / c.rolling(30).min() - 1
-    f["dist_hi_90"] = c / c.rolling(90).max() - 1
-    f["vol_chg_1"]  = np.log(v).diff()
-    f["vol_z_20"]   = (np.log(v)-np.log(v).rolling(20).mean()) / np.log(v).rolling(20).std()
-    f["vol_ma_ratio"] = v / v.rolling(20).mean()
+    feat["bb_width"]   = (4*sd20)/ma20
+    feat["dist_hi_30"] = c/c.rolling(30).max() - 1
+    feat["dist_lo_30"] = c/c.rolling(30).min() - 1
+    feat["dist_hi_90"] = c/c.rolling(90).max() - 1
+    feat["vol_chg_1"]    = np.log(v).diff()
+    feat["vol_z_20"]     = (np.log(v)-np.log(v).rolling(20).mean())/np.log(v).rolling(20).std()
+    feat["vol_ma_ratio"] = v/v.rolling(20).mean()
     dow = df.index.dayofweek
-    for i in range(6): f[f"dow_{i}"] = (dow == i).astype(float)
+    for i in range(6): feat[f"dow_{i}"] = (dow==i).astype(float)
     for nm in ["spx","ndx","vix","gold","dxy","tnx","eth"]:
         col = f"{nm}_close"
         if col not in df.columns: continue
         s = df[col]; lr = np.log(s).diff()
-        for k in [1, 5, 20]: f[f"{nm}_ret_{k}"] = lr.rolling(k).sum()
-        f[f"{nm}_vol_20"] = lr.rolling(20).std()
+        for k in [1,5,20]: feat[f"{nm}_ret_{k}"] = lr.rolling(k).sum()
+        feat[f"{nm}_vol_20"] = lr.rolling(20).std()
     for corr_nm, corr_col in [("spx","spx_close"),("ndx","ndx_close"),
                                ("gold","gold_close"),("dxy","dxy_close")]:
         if corr_col in df.columns:
-            f[f"btc_{corr_nm}_corr_30"] = ret.rolling(30).corr(np.log(df[corr_col]).diff())
+            feat[f"btc_{corr_nm}_corr_30"] = ret.rolling(30).corr(np.log(df[corr_col]).diff())
     for col in [x for x in df.columns if x.startswith("oc_")]:
-        s = df[col].astype(float); sl = np.log(s.replace(0, np.nan))
-        f[f"{col}_d1"] = sl.diff(1); f[f"{col}_d7"] = sl.diff(7)
-        f[f"{col}_z30"] = (sl - sl.rolling(30).mean()) / sl.rolling(30).std()
-    nh, nl_ = h.shift(-1), l_.shift(-1)
-    y_hi = (nh - c) / c; y_lo = (c - nl_) / c
-    f["y_hi_ema3"] = y_hi.shift(1).ewm(span=3, adjust=False).mean()
-    f["y_lo_ema3"] = y_lo.shift(1).ewm(span=3, adjust=False).mean()
-    f["y_hi_ema7"] = y_hi.shift(1).ewm(span=7, adjust=False).mean()
-    f["y_lo_ema7"] = y_lo.shift(1).ewm(span=7, adjust=False).mean()
+        s = df[col].astype(float); sl2 = np.log(s.replace(0, np.nan))
+        feat[f"{col}_d1"]  = sl2.diff(1); feat[f"{col}_d7"] = sl2.diff(7)
+        feat[f"{col}_z30"] = (sl2 - sl2.rolling(30).mean())/sl2.rolling(30).std()
+    nh = h.shift(-1); nl = l_.shift(-1)
+    y_hi = (nh-c)/c; y_lo = (c-nl)/c
+    feat["y_hi_ema3"] = y_hi.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_lo_ema3"] = y_lo.shift(1).ewm(span=3,adjust=False).mean()
+    feat["y_hi_ema7"] = y_hi.shift(1).ewm(span=7,adjust=False).mean()
+    feat["y_lo_ema7"] = y_lo.shift(1).ewm(span=7,adjust=False).mean()
     p3h = h.shift(1).rolling(3).max(); p3l = l_.shift(1).rolling(3).min()
-    f["above_3d_high"]  = (c > p3h).astype(float)
-    f["below_3d_low"]   = (c < p3l).astype(float)
-    f["bo_strength_up"] = (c / p3h - 1).clip(lower=0)
-    f["bo_strength_dn"] = (1 - c / p3l).clip(lower=0)
-    ya = y_hi.shift(1); yb = y_lo.shift(1)
-    f["y_hi_surprise"] = ya - ya.ewm(span=7, adjust=False).mean()
-    f["y_lo_surprise"] = yb - yb.ewm(span=7, adjust=False).mean()
-    neg_ret = ret.clip(upper=0)
-    f["dn_vol_5"]  = neg_ret.rolling(5).std()
-    f["dn_vol_20"] = neg_ret.rolling(20).std()
+    feat["above_3d_high"]  = (c > p3h).astype(float)
+    feat["below_3d_low"]   = (c < p3l).astype(float)
+    feat["bo_strength_up"] = (c/p3h - 1).clip(lower=0)
+    feat["bo_strength_dn"] = (1 - c/p3l).clip(lower=0)
+    yhl = y_hi.shift(1); yll = y_lo.shift(1)
+    feat["y_hi_surprise"] = yhl - yhl.ewm(span=7,adjust=False).mean()
+    feat["y_lo_surprise"] = yll - yll.ewm(span=7,adjust=False).mean()
+    nr = ret.clip(upper=0)
+    feat["dn_vol_5"]  = nr.rolling(5).std()
+    feat["dn_vol_20"] = nr.rolling(20).std()
     sma50 = c.rolling(50).mean()
-    f["below_sma50"]    = (c < sma50).astype(float)
-    f["below_sma50_5d"] = f["below_sma50"].rolling(5).min().fillna(0)
+    feat["below_sma50"]    = (c < sma50).astype(float)
+    feat["below_sma50_5d"] = feat["below_sma50"].rolling(5).min().fillna(0)
+    for _cb_col in ["cb_premium","cb_premium_ma3","cb_premium_z7"]:
+        feat[_cb_col] = df[_cb_col].fillna(0.0)
 
-    f["cb_premium"] = f["cb_premium_ma3"] = f["cb_premium_z7"] = 0.0
-
+    # 6. Predictions (ensemble, no direction_head — matches app)
     fc = AD["feat_cols"]
-    f  = f.replace([np.inf, -np.inf], np.nan)
+    feat = feat.replace([np.inf, -np.inf], np.nan)
     for col in fc:
-        if col not in f.columns: f[col] = np.nan
-
-    F = f[fc].dropna()
+        if col not in feat.columns: feat[col] = np.nan
+    F = feat[fc].dropna()
     if F.empty:
-        raise RuntimeError("Feature matrix empty")
+        print("  [ERR] feature matrix empty"); return None
     print(f"    CT predictions: {len(F)} rows")
 
     if AD.get("ensemble") and AD.get("constituents"):
@@ -220,8 +262,8 @@ def build_ct_preds(df):
         ylo = np.mean([con["m_lo"].predict(F) for con in AD["constituents"]], axis=0)
         if AD.get("blended") and float(AD.get("alpha", 1.0)) < 1.0:
             a = float(AD["alpha"])
-            yhi = a * yhi + (1 - a) * float(AD.get("mu_hi", 0))
-            ylo = a * ylo + (1 - a) * float(AD.get("mu_lo", 0))
+            yhi = a*yhi + (1-a)*float(AD.get("mu_hi", 0))
+            ylo = a*ylo + (1-a)*float(AD.get("mu_lo", 0))
     else:
         yhi = AD["hi_model"].predict(F)
         ylo = AD["lo_model"].predict(F)
@@ -229,16 +271,20 @@ def build_ct_preds(df):
     c_vals = c.reindex(F.index).values
     ph = c_vals * (1 + np.clip(yhi, 0, None))
     pl = c_vals * (1 - np.clip(ylo, 0, None))
-    idx = np.asarray(F.index, dtype="datetime64[ns]")
-    nd  = np.empty(len(F), dtype="datetime64[ns]")
-    nd[:-1] = idx[1:]; nd[-1] = idx[-1] + np.timedelta64(1, "D")
-    res = pd.DataFrame(
+    idx_arr = np.asarray(F.index, dtype="datetime64[ns]")
+    nd = np.empty(len(F), dtype="datetime64[ns]")
+    nd[:-1] = idx_arr[1:]; nd[-1] = idx_arr[-1] + np.timedelta64(1,"D")
+    preds_df = pd.DataFrame(
         {"close_asof": c_vals, "pred_high": ph, "pred_low": pl},
-        index=pd.DatetimeIndex(nd, name="target_date"))
-    return res[~res.index.duplicated(keep="last")]
+        index=pd.DatetimeIndex(nd, name="target_date"),
+    )
+    preds_df = preds_df[~preds_df.index.duplicated(keep="last")]
+
+    _DATA_CACHE[cache_key] = (preds_df, raw_df)
+    return preds_df, raw_df
 
 
-# ── Signal computation ────────────────────────────────────────────────────────
+# ── Signal computation (identical to app) ────────────────────────────────────
 def compute_signals(comp):
     N  = len(comp)
     ca = comp["close_asof"].values.astype(float)
@@ -255,7 +301,7 @@ def compute_signals(comp):
     ehma3 = np.zeros(N); elma3 = np.zeros(N)
     hb3   = np.zeros(N, dtype=int); lb3 = np.zeros(N, dtype=int)
     for i in range(N):
-        s = max(0, i - 2)
+        s = max(0, i-2)
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
@@ -265,7 +311,7 @@ def compute_signals(comp):
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
-        for k in range(i - 1, -1, -1):
+        for k in range(i-1, -1, -1):
             if hi_brk[k]: consec += 1
             else: break
         if consec >= 3 and lo_brk[i]:
@@ -273,19 +319,20 @@ def compute_signals(comp):
 
     ma30 = np.full(N, np.nan)
     for i in range(N):
-        w = min(30, i + 1)
-        ma30[i] = np.mean(ca[max(0, i - w + 1):i + 1])
+        w = min(30, i+1)
+        ma30[i] = np.mean(ca[max(0, i-w+1):i+1])
     above_ma30     = ca > ma30
     ma30_slope_pos = np.zeros(N, dtype=bool)
     for i in range(5, N):
-        if np.isfinite(ma30[i]) and np.isfinite(ma30[i - 5]):
-            ma30_slope_pos[i] = ma30[i] > ma30[i - 5]
+        if np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
+            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
     bull_regime = above_ma30 & ma30_slope_pos
 
-    clean_10d = np.zeros(N, dtype=bool)
+    # clean_10d: variable name from app (but checks 7 bars — named clean_7d in research script)
+    clean_7d = np.zeros(N, dtype=bool)
     for i in range(N):
-        lo_i = max(0, i - 7)
-        clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
+        lo_i = max(0, i-7)
+        clean_7d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
     roll_norm = np.array([float(np.mean(err_hi[max(0, i-29):i+1])) for i in range(N)])
     dn_score  = np.zeros(N)
@@ -300,55 +347,25 @@ def compute_signals(comp):
     v_rev_bar = (dn_score > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i - 2):i + 1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    tf1_entry = u1 & (above_ma30 | clean_10d | v_recent)
+    tf1_entry = u1 & (above_ma30 | clean_7d | v_recent)
 
     return dict(
         N=N, ca=ca, u1=u1, d1=d1, d2=d2, d3=d3,
         above_ma30=above_ma30, bull_regime=bull_regime,
-        clean_10d=clean_10d, v_recent=v_recent,
+        clean_7d=clean_7d, v_recent=v_recent,
         tf1_entry=tf1_entry,
     )
 
 
-# ── Trigger labelling helpers ─────────────────────────────────────────────────
-def _label_current(v_recent_i, above_ma30_i, clean_10d_i):
-    """Current live labelling logic (from btc_hourly_app.py)."""
-    if v_recent_i and not above_ma30_i and not clean_10d_i:
-        return "U1 + V-reversal"
-    elif above_ma30_i and clean_10d_i:
-        return "U1 + MA30 + clean10d"   # COMBINED
-    elif above_ma30_i:
-        return "U1 + MA30"
-    else:
-        return "U1 + clean10d"
-
-
-def _label_strict(v_recent_i, above_ma30_i, clean_10d_i):
-    """Strict single-trigger labelling: V-reversal > MA30 > clean10d priority.
-    The COMBINED case is absorbed into MA30 (above_ma30 takes priority).
-    Entry conditions unchanged — same tf1_entry gate."""
-    if v_recent_i:
-        return "U1 + V-reversal"
-    elif above_ma30_i:
-        return "U1 + MA30"
-    else:
-        return "U1 + clean10d"
-
-
-# ── Core backtest loop ────────────────────────────────────────────────────────
-def run_asset_backtest(
-    dates, asset_px, sigs, bt_start,
-    sl_pct, cap,
-    labeller,           # function(v_recent_i, above_ma30_i, clean_10d_i) → str
-    exclude_combined,   # bool: block entries where BOTH above_ma30 AND clean_10d
-):
+# ── Backtest loop — same-bar execution matching app's run_mstr/mstu_backtest ─
+def run_asset_backtest(dates, asset_px, sigs, bt_start, sl_pct, cap, exclude_combined):
     N          = len(dates)
     d2         = sigs["d2"]; d3 = sigs["d3"]
     bull       = sigs["bull_regime"]
     above_ma30 = sigs["above_ma30"]
-    clean_10d  = sigs["clean_10d"]
+    clean_7d   = sigs["clean_7d"]
     v_recent   = sigs["v_recent"]
     tf1_entry  = sigs["tf1_entry"]
 
@@ -384,6 +401,7 @@ def run_asset_backtest(
                 pos = "CASH"; qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0
             else:
+                # Same-bar TF2 regime-adaptive exit (matching app logic exactly)
                 should_exit = bool(d3[i] or (d2[i] and not bull[i]))
                 if should_exit:
                     nav = cur
@@ -403,19 +421,29 @@ def run_asset_backtest(
         else:
             if from_sl:
                 bars_since_sl += 1
-            _exit_at_i   = d3[i] or (d2[i] and not bull[i])
-            _sl_ok       = not from_sl or bool(bull[i]) or bars_since_sl >= 10
-            _combined    = bool(above_ma30[i]) and bool(clean_10d[i])
-            _can_enter   = tf1_entry[i] and _sl_ok and (from_sl or not _exit_at_i)
+            _exit_at_i = d3[i] or (d2[i] and not bull[i])
+            # SL5: bull regime → re-enter immediately; bear → 10-bar cooldown
+            _sl_ok     = not from_sl or bool(bull[i]) or bars_since_sl >= 10
+            _combined  = bool(above_ma30[i]) and bool(clean_7d[i])
+            _can_enter = tf1_entry[i] and _sl_ok and (from_sl or not _exit_at_i)
+            # Version C: block entries where BOTH above_ma30 AND clean_7d fire (unless V-rev)
             if exclude_combined and _combined and not v_recent[i]:
-                _can_enter = False   # block when BOTH MA30 and clean10d fire (unless V-rev)
+                _can_enter = False
 
             if _can_enter:
                 e_reentry = bool(from_sl)
                 qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; stop_px = price * (1 - sl_pct)
                 from_sl = False; bars_since_sl = 0
-                e_trigger = labeller(bool(v_recent[i]), bool(above_ma30[i]), bool(clean_10d[i]))
+                # Trigger label — same logic as app
+                if v_recent[i] and not above_ma30[i] and not clean_7d[i]:
+                    e_trigger = "U1+V-reversal"
+                elif above_ma30[i] and clean_7d[i]:
+                    e_trigger = "U1+↑MA30+clean7d"   # COMBINED — what user is asking about
+                elif above_ma30[i]:
+                    e_trigger = "U1+↑MA30"
+                else:
+                    e_trigger = "U1+clean7d"
 
         nav_arr[i] = qty * price if pos == "LONG" else nav
 
@@ -425,13 +453,9 @@ def run_asset_backtest(
     return trades, nav_arr
 
 
-# ── Aggregate per-trigger stats ───────────────────────────────────────────────
-TRIGGERS_ORDER = [
-    "U1 + MA30",
-    "U1 + MA30 + clean10d",
-    "U1 + clean10d",
-    "U1 + V-reversal",
-]
+# ── Formatting helpers ────────────────────────────────────────────────────────
+def fmt_pnl(v):
+    return f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%"
 
 
 def trigger_stats(trades):
@@ -446,278 +470,204 @@ def trigger_stats(trades):
             n=len(pnls), wins=len(wins), losses=len(losses),
             win_rate=100*len(wins)/len(pnls) if pnls else 0,
             avg_pnl=float(np.mean(pnls)) if pnls else 0,
-            median_pnl=float(np.median(pnls)) if pnls else 0,
             best=float(max(pnls)) if pnls else 0,
             worst=float(min(pnls)) if pnls else 0,
-            total_pnl=float(sum(pnls)),
         )
     return out
 
 
-def overall_stats(trades, nav_arr, bt0_nav, asset_px, bt0_idx, cap):
-    closed = [t for t in trades if "exit_date" in t]
-    all_pnls = [t["pnl_pct"] for t in closed]
-    final_nav = nav_arr[np.isfinite(nav_arr)][-1] if np.any(np.isfinite(nav_arr)) else cap
-    wins = [p for p in all_pnls if p > 0]
-    return dict(
-        n=len(closed),
-        win_rate=100*len(wins)/len(closed) if closed else 0,
-        avg_pnl=float(np.mean(all_pnls)) if all_pnls else 0,
-        strat_ret=(final_nav/cap-1)*100,
-        final_nav=final_nav,
-    )
-
-
-# ── Statistical significance (Fisher's exact, one-sided) ─────────────────────
-def fishers_p(n_wins_a, n_a, n_wins_b, n_b):
-    """Two-sample proportion test via continuity-corrected z. Returns p-value."""
-    if n_a == 0 or n_b == 0:
-        return float("nan")
-    p_a = n_wins_a / n_a; p_b = n_wins_b / n_b
-    p_pool = (n_wins_a + n_wins_b) / (n_a + n_b)
-    if p_pool in (0, 1):
-        return float("nan")
-    se = np.sqrt(p_pool * (1 - p_pool) * (1/n_a + 1/n_b))
-    if se == 0:
-        return float("nan")
-    z = (p_a - p_b) / se
-    from scipy.stats import norm
-    return float(2 * norm.sf(abs(z)))
-
-
-# ── Main analysis ─────────────────────────────────────────────────────────────
-def fmt_pnl(v):
-    return f"+{v:.1f}%" if v > 0 else f"{v:.1f}%"
+TRIGGER_ORDER = ["U1+↑MA30", "U1+↑MA30+clean7d", "U1+clean7d", "U1+V-reversal"]
 
 
 def print_trigger_table(stats_dict):
-    header = f"  {'Trigger':<28} {'n':>4} {'W/L':>6} {'Win%':>6} {'AvgP&L':>8} {'Best':>8} {'Worst':>8}"
-    print(header)
-    print("  " + "-" * (len(header)-2))
-    for trig in TRIGGERS_ORDER + [k for k in stats_dict if k not in TRIGGERS_ORDER]:
+    hdr = f"  {'Trigger':<26} {'n':>4} {'W/L':>6} {'Win%':>6} {'AvgP&L':>8} {'Best':>8} {'Worst':>8}"
+    print(hdr)
+    print("  " + "-" * (len(hdr)-2))
+    for trig in TRIGGER_ORDER + [k for k in stats_dict if k not in TRIGGER_ORDER]:
         if trig not in stats_dict:
             continue
         s = stats_dict[trig]
         wl = f"{s['wins']}/{s['losses']}"
-        print(f"  {trig:<28} {s['n']:>4} {wl:>6} {s['win_rate']:>5.0f}% "
-              f" {fmt_pnl(s['avg_pnl']):>8} {fmt_pnl(s['best']):>8} {fmt_pnl(s['worst']):>8}")
+        print(f"  {trig:<26} {s['n']:>4} {wl:>6} {s['win_rate']:>5.0f}%"
+              f"  {fmt_pnl(s['avg_pnl']):>8} {fmt_pnl(s['best']):>8} {fmt_pnl(s['worst']):>8}")
 
 
-def run_period(period_name, start_iso, end_iso, pre_iso):
-    print(f"\n{'='*70}")
+def fishers_p(n_wins_a, n_a, n_wins_b, n_b):
+    if n_a < 2 or n_b < 2:
+        return float("nan")
+    p_a = n_wins_a / n_a; p_b = n_wins_b / n_b
+    p_pool = (n_wins_a + n_wins_b) / (n_a + n_b)
+    if p_pool in (0.0, 1.0):
+        return float("nan")
+    se = (p_pool * (1 - p_pool) * (1/n_a + 1/n_b)) ** 0.5
+    if se == 0:
+        return float("nan")
+    from scipy.stats import norm
+    return float(2 * norm.sf(abs((p_a - p_b) / se)))
+
+
+# ── Main analysis loop ────────────────────────────────────────────────────────
+pooled_trades: dict = {"MSTR": defaultdict(list), "MSTU": defaultdict(list)}
+
+for period_name, (start_iso, end_iso) in PERIODS.items():
+    print(f"\n{'='*72}")
     print(f"  PERIOD: {period_name}")
-    print(f"{'='*70}")
+    print(f"{'='*72}")
 
     start_dt = pd.Timestamp(start_iso)
     end_dt   = pd.Timestamp(end_iso)
-    pre_dt   = pd.Timestamp(pre_iso)
+    # 200-day pre-fetch warmup — ensures dist_hi_90 is fully warm at bt start
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt   + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    fetch_start = pre_iso
-    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+    ext = _build_backtest_preds(fetch_start, fetch_end)
+    if ext is None:
+        print("  [SKIP] data fetch failed"); continue
+    preds_df, raw_df = ext
 
-    df = fetch_data(fetch_start, fetch_end)
-
-    btc_hi  = df["btc_high"]
-    btc_lo  = df["btc_low"]
-    btc_cl  = df["btc_close"]
-
-    preds = build_ct_preds(df)
-
-    # Align actual OHLC to preds (target_date index)
-    preds["actual_high"]  = btc_hi.reindex(preds.index).values
-    preds["actual_low"]   = btc_lo.reindex(preds.index).values
-    preds["actual_close"] = btc_cl.reindex(preds.index).values
-
-    comp = preds.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
+    # Filter preds to 60-day pre-period (for signal warmup) + backtest period
+    pre_dt = start_dt - pd.Timedelta(days=60)
+    preds  = preds_df.loc[(preds_df.index >= pre_dt) & (preds_df.index <= end_dt)].copy()
+    preds["actual_high"]  = raw_df["btc_high"].reindex(preds.index).values
+    preds["actual_low"]   = raw_df["btc_low"].reindex(preds.index).values
+    preds["actual_close"] = raw_df["btc_close"].reindex(preds.index).values
+    comp = preds.dropna(subset=["actual_high","actual_low","actual_close"]).reset_index()
     if len(comp) < WARMUP + 3:
-        print("  [SKIP] not enough data"); return
+        print("  [SKIP] insufficient bars"); continue
 
     dates = pd.DatetimeIndex(comp["target_date"])
     sigs  = compute_signals(comp)
-
-    results = {}
 
     for asset_name, acfg in ASSETS.items():
         ticker  = acfg["ticker"]
         sl_pct  = acfg["sl_pct"]
         sl_lbl  = acfg["stop_label"]
 
-        px_series = fetch_asset_px(ticker, pre_iso, fetch_end)
-        if px_series.empty:
-            print(f"  [SKIP] {asset_name} — price unavailable"); continue
+        # Fetch asset prices
+        try:
+            d_asset = yf.download(ticker, start=fetch_start,
+                                  end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                                  progress=False, auto_adjust=True)
+            if isinstance(d_asset.columns, pd.MultiIndex):
+                d_asset.columns = [c[0] for c in d_asset.columns]
+            d_asset.index = pd.DatetimeIndex(d_asset.index).tz_localize(None).normalize()
+        except Exception as e:
+            print(f"  [SKIP] {asset_name}: {e}"); continue
+        if d_asset.empty or "Close" not in d_asset.columns:
+            print(f"  [SKIP] {asset_name}: empty"); continue
 
-        # Handle MSTU inception (Sep 18, 2024): backward-fill with inception open
+        px_raw = d_asset["Close"].sort_index()
+        # MSTU backward-fill for pre-inception dates
         if ticker == "MSTU":
             INCEPTION = pd.Timestamp("2024-09-18")
-            first_real = px_series.loc[px_series.index >= INCEPTION].iloc[0] if len(px_series.loc[px_series.index >= INCEPTION]) > 0 else None
-            if first_real is not None:
-                px_series.loc[px_series.index < INCEPTION] = first_real
+            real_px = px_raw.loc[px_raw.index >= INCEPTION]
+            if len(real_px):
+                first_real_val = float(real_px.iloc[0])
+                px_raw.loc[px_raw.index < INCEPTION] = first_real_val
+        px_all = px_raw.reindex(
+            pd.date_range(px_raw.index[0], max(px_raw.index[-1], end_dt), freq="D")
+        ).ffill()
+        asset_px = px_all.reindex(dates).ffill().bfill().values.astype(float)
 
-        asset_px = px_series.reindex(dates).ffill().bfill().values.astype(float)
-
-        # ── Version A: current system (4 trigger labels) ──────────────────────
+        # Version A: current logic (allows combined, labels combined separately)
         trades_a, nav_a = run_asset_backtest(
             dates, asset_px, sigs, bt_start=start_dt,
-            sl_pct=sl_pct, cap=INITIAL_CAPITAL,
-            labeller=_label_current, exclude_combined=False,
+            sl_pct=sl_pct, cap=INITIAL_CAPITAL, exclude_combined=False,
         )
-
-        # ── Version B: strict (3 non-overlapping trigger labels; same entries) ─
-        trades_b, nav_b = run_asset_backtest(
-            dates, asset_px, sigs, bt_start=start_dt,
-            sl_pct=sl_pct, cap=INITIAL_CAPITAL,
-            labeller=_label_strict, exclude_combined=False,
-        )
-
-        # ── Version C: exclude combined entries (true entry-rule change) ───────
+        # Version C: block entries when BOTH above_ma30 AND clean_7d simultaneously
         trades_c, nav_c = run_asset_backtest(
             dates, asset_px, sigs, bt_start=start_dt,
-            sl_pct=sl_pct, cap=INITIAL_CAPITAL,
-            labeller=_label_strict, exclude_combined=True,
+            sl_pct=sl_pct, cap=INITIAL_CAPITAL, exclude_combined=True,
         )
 
-        bt0_idx = max(WARMUP, int(dates.searchsorted(start_dt)))
-        bh_px0  = asset_px[bt0_idx] if np.isfinite(asset_px[bt0_idx]) else 1
-        bh_final = INITIAL_CAPITAL * asset_px[-1] / bh_px0 if bh_px0 > 0 else INITIAL_CAPITAL
-        bh_ret   = (bh_final / INITIAL_CAPITAL - 1) * 100
+        bh_idx  = max(WARMUP, int(dates.searchsorted(start_dt)))
+        bh_px0  = asset_px[bh_idx] if np.isfinite(asset_px[bh_idx]) else 1
+        bh_ret  = (asset_px[-1]/bh_px0 - 1)*100 if bh_px0 > 0 else 0
 
-        # Compute final NAVs from nav arrays
-        nav_a_final = next((nav_a[j] for j in range(len(nav_a)-1,-1,-1) if np.isfinite(nav_a[j])), INITIAL_CAPITAL)
-        nav_b_final = next((nav_b[j] for j in range(len(nav_b)-1,-1,-1) if np.isfinite(nav_b[j])), INITIAL_CAPITAL)
-        nav_c_final = next((nav_c[j] for j in range(len(nav_c)-1,-1,-1) if np.isfinite(nav_c[j])), INITIAL_CAPITAL)
-        ret_a = (nav_a_final/INITIAL_CAPITAL-1)*100
-        ret_b = (nav_b_final/INITIAL_CAPITAL-1)*100  # same as A — labelling only
-        ret_c = (nav_c_final/INITIAL_CAPITAL-1)*100
+        ret_a   = (next((nav_a[j] for j in range(len(nav_a)-1,-1,-1) if np.isfinite(nav_a[j])), INITIAL_CAPITAL) / INITIAL_CAPITAL - 1)*100
+        ret_c   = (next((nav_c[j] for j in range(len(nav_c)-1,-1,-1) if np.isfinite(nav_c[j])), INITIAL_CAPITAL) / INITIAL_CAPITAL - 1)*100
 
-        print(f"\n  ── {asset_name} ({sl_lbl} stop + SL5 re-entry) ──────────────")
-        print(f"  B&H return this period: {fmt_pnl(bh_ret)}")
-        print(f"  Strategy return  (A: current labels):  {fmt_pnl(ret_a)}   ({len(trades_a)} trades)")
-        print(f"  Strategy return  (C: exclude combined): {fmt_pnl(ret_c)}   ({len(trades_c)} trades)")
-
-        # ── Per-trigger breakdown (Version A — current labelling) ──────────────
         ts_a = trigger_stats(trades_a)
-        combined_lbl = "U1 + MA30 + clean10d"
-        ma30_lbl     = "U1 + MA30"
-        c10d_lbl     = "U1 + clean10d"
-        vrev_lbl     = "U1 + V-reversal"
+        COMBINED = "U1+↑MA30+clean7d"
+        MA30_ONLY = "U1+↑MA30"
 
-        print(f"\n  PER-TRIGGER BREAKDOWN (Version A — current labelling):")
+        print(f"\n  ── {asset_name} ({sl_lbl} stop + SL5)  ──────────────────────────")
+        print(f"  B&H return:           {fmt_pnl(bh_ret)}")
+        print(f"  Strategy (current):   {fmt_pnl(ret_a)}   ({len(trades_a)} closed trades)")
+        print(f"  Strategy (no-combined): {fmt_pnl(ret_c)}   ({len(trades_c)} closed trades)")
+
+        print(f"\n  TRIGGER BREAKDOWN (current labelling):")
         print_trigger_table(ts_a)
 
-        # ── Statistical significance: combined vs MA30-only ───────────────────
-        if combined_lbl in ts_a and ma30_lbl in ts_a:
-            s_comb = ts_a[combined_lbl]
-            s_ma30 = ts_a[ma30_lbl]
-            p = fishers_p(s_comb["wins"], s_comb["n"], s_ma30["wins"], s_ma30["n"])
-            print(f"\n  STAT TEST — Combined vs MA30-only win-rate difference:")
-            print(f"    Combined : {s_comb['wins']}/{s_comb['n']} wins  ({s_comb['win_rate']:.0f}%)")
-            print(f"    MA30-only: {s_ma30['wins']}/{s_ma30['n']} wins  ({s_ma30['win_rate']:.0f}%)")
-            if not np.isnan(p):
-                sig = "YES (p<0.05)" if p < 0.05 else ("marginal (p<0.10)" if p < 0.10 else "NO")
-                print(f"    Two-sided p-value: {p:.4f}  → Statistically significant: {sig}")
-            else:
-                print(f"    p-value: N/A (sample too small for z-test)")
+        # Per-trigger trade details
+        if COMBINED in ts_a:
+            combined_trades = [t for t in trades_a if t["entry_trigger"] == COMBINED]
+            print(f"\n  COMBINED trigger trades (U1+↑MA30+clean7d)  n={len(combined_trades)}:")
+            for t in combined_trades:
+                outcome = "WIN ✓" if t["pnl_pct"] > 0 else "LOSS ✗"
+                print(f"    {t['entry_date'].date()} → {t['exit_date'].date()}"
+                      f"  {fmt_pnl(t['pnl_pct']):>7}  {outcome}  exit={t['exit_signal']}"
+                      f"  dur={t['duration_days']}d"
+                      + ("  [re-entry]" if t.get("was_reentry") else ""))
+        else:
+            print(f"\n  No combined trigger trades in this period.")
 
-        # ── Impact of excluding combined entries ───────────────────────────────
-        print(f"\n  IMPACT OF EXCLUDING 'MA30+clean10d' ENTRIES (Version C):")
-        # Which trades in A are "combined" that would be excluded in C?
-        combined_trades_a = [t for t in trades_a if t["entry_trigger"] == combined_lbl]
-        print(f"    Trades excluded: {len(combined_trades_a)}")
-        if combined_trades_a:
-            for t in combined_trades_a:
-                print(f"      {t['entry_date'].date()}  {fmt_pnl(t['pnl_pct'])}  "
-                      f"({t['exit_signal']})  dur={t['duration_days']}d")
-        print(f"    Return with exclusion:  {fmt_pnl(ret_c)}  vs current {fmt_pnl(ret_a)}")
+        # Statistical test
+        if COMBINED in ts_a and MA30_ONLY in ts_a:
+            sc = ts_a[COMBINED]; sm = ts_a[MA30_ONLY]
+            p  = fishers_p(sc["wins"], sc["n"], sm["wins"], sm["n"])
+            print(f"\n  STAT TEST — combined vs MA30-only win rate:")
+            print(f"    U1+↑MA30+clean7d: {sc['wins']}/{sc['n']} wins ({sc['win_rate']:.0f}%)")
+            print(f"    U1+↑MA30 only:    {sm['wins']}/{sm['n']} wins ({sm['win_rate']:.0f}%)")
+            pstr = f"{p:.4f}" if not np.isnan(p) else "N/A (too few samples)"
+            sig  = "YES p<0.05" if (not np.isnan(p) and p < 0.05) else ("marginal p<0.10" if (not np.isnan(p) and p < 0.10) else "NO")
+            print(f"    p-value: {pstr}  →  Statistically significant: {sig}")
+
+        # Impact of blocking combined
+        print(f"\n  IMPACT of blocking combined entries:")
+        blocked = [t for t in trades_a if t["entry_trigger"] == COMBINED]
+        print(f"    Trades blocked: {len(blocked)}")
+        for t in blocked:
+            print(f"      {t['entry_date'].date()}  {fmt_pnl(t['pnl_pct'])}  ({t['exit_signal']})")
         delta = ret_c - ret_a
-        print(f"    Delta: {'+' if delta >= 0 else ''}{delta:.1f}pp  "
-              f"({'BETTER' if delta > 0 else 'WORSE' if delta < 0 else 'NO CHANGE'})")
+        print(f"    Return: {fmt_pnl(ret_c)} vs current {fmt_pnl(ret_a)}"
+              f"  Δ={'+' if delta>=0 else ''}{delta:.1f}pp  "
+              f"({'BETTER' if delta > 1 else 'WORSE' if delta < -1 else 'NEUTRAL'})")
 
-        # ── Per-trigger breakdown (Version B — strict labels, same entries) ────
-        ts_b = trigger_stats(trades_b)
-        print(f"\n  PER-TRIGGER BREAKDOWN (Version B — strict labels, same entries):")
-        print_trigger_table(ts_b)
+        # Accumulate for pooled analysis
+        for t in trades_a:
+            pooled_trades[asset_name][t["entry_trigger"]].append(t["pnl_pct"])
 
-        results[(period_name, asset_name)] = dict(
-            trades_a=trades_a, trades_b=trades_b, trades_c=trades_c,
-            ts_a=ts_a, ts_b=ts_b,
-            ret_a=ret_a, ret_c=ret_c, bh_ret=bh_ret,
-        )
-
-    return results
-
-
-# ── Run all periods ───────────────────────────────────────────────────────────
-all_results = {}
-for pname, (s, e, pre) in PERIODS.items():
-    r = run_period(pname, s, e, pre)
-    if r:
-        all_results.update(r)
-
-# ── Final cross-period summary ────────────────────────────────────────────────
-print(f"\n\n{'='*70}")
-print("  CROSS-PERIOD TRIGGER SUMMARY — COMBINED TRADES POOL")
-print(f"{'='*70}")
+# ── Cross-period pooled summary ───────────────────────────────────────────────
+print(f"\n\n{'='*72}")
+print("  CROSS-PERIOD POOLED — ALL TRIGGER TRADES COMBINED")
+print(f"{'='*72}")
 
 for asset_name in ASSETS:
-    all_combined = []
-    all_ma30     = []
-    all_c10d     = []
-    all_vrev     = []
-
-    for pname in PERIODS:
-        key = (pname, asset_name)
-        if key not in all_results:
+    print(f"\n  {asset_name}:")
+    hdr = f"  {'Trigger':<26} {'n':>4} {'W/L':>6} {'Win%':>6} {'AvgP&L':>8} {'Best':>8} {'Worst':>8}"
+    print(hdr)
+    print("  " + "-" * (len(hdr)-2))
+    all_trigs = pooled_trades[asset_name]
+    for trig in TRIGGER_ORDER + [k for k in all_trigs if k not in TRIGGER_ORDER]:
+        pnls = all_trigs.get(trig, [])
+        if not pnls:
             continue
-        ts = all_results[key]["ts_a"]
-        for lbl, lst in [
-            ("U1 + MA30 + clean10d", all_combined),
-            ("U1 + MA30",            all_ma30),
-            ("U1 + clean10d",        all_c10d),
-            ("U1 + V-reversal",      all_vrev),
-        ]:
-            if lbl in ts:
-                lst.append(ts[lbl])
+        wins = [p for p in pnls if p > 0]
+        loss = [p for p in pnls if p <= 0]
+        wl = f"{len(wins)}/{len(loss)}"
+        print(f"  {trig:<26} {len(pnls):>4} {wl:>6} {100*len(wins)/len(pnls):>5.0f}%"
+              f"  {fmt_pnl(np.mean(pnls)):>8} {fmt_pnl(max(pnls)):>8} {fmt_pnl(min(pnls)):>8}")
 
-    def pool(dicts, key):
-        return [d[key] for d in dicts]
+    COMBINED  = "U1+↑MA30+clean7d"
+    MA30_ONLY = "U1+↑MA30"
+    if COMBINED in all_trigs and MA30_ONLY in all_trigs:
+        pc = all_trigs[COMBINED]; pm = all_trigs[MA30_ONLY]
+        wc = len([p for p in pc if p > 0]); wm = len([p for p in pm if p > 0])
+        p  = fishers_p(wc, len(pc), wm, len(pm))
+        pstr = f"{p:.4f}" if not np.isnan(p) else "N/A"
+        print(f"\n  Pooled stat test — combined vs MA30-only: p={pstr}")
+        if not np.isnan(p):
+            print(f"  {'Statistically significant (p<0.05)' if p < 0.05 else 'NOT statistically significant'}")
 
-    def combine(dicts):
-        if not dicts:
-            return None
-        n    = sum(d["n"]    for d in dicts)
-        wins = sum(d["wins"] for d in dicts)
-        pnls_all = []  # approximate from stats only — not raw
-        return dict(
-            n=n, wins=wins,
-            win_rate=100*wins/n if n else 0,
-            avg_pnl=float(np.mean([d["avg_pnl"] for d in dicts])) if dicts else 0,
-            best=float(max(d["best"] for d in dicts)) if dicts else 0,
-            worst=float(min(d["worst"] for d in dicts)) if dicts else 0,
-        )
-
-    print(f"\n  {asset_name}  (all three periods pooled — approximate):")
-    header = f"  {'Trigger':<28} {'n':>4} {'W/L':>6} {'Win%':>6} {'AvgP&L':>8} {'Best':>8} {'Worst':>8}"
-    print(header)
-    print("  " + "-" * (len(header)-2))
-    for lbl, lst in [
-        ("U1 + MA30",            all_ma30),
-        ("U1 + MA30 + clean10d", all_combined),
-        ("U1 + clean10d",        all_c10d),
-        ("U1 + V-reversal",      all_vrev),
-    ]:
-        c = combine(lst)
-        if not c:
-            continue
-        wl = f"{c['wins']}/{c['n']-c['wins']}"
-        print(f"  {lbl:<28} {c['n']:>4} {wl:>6} {c['win_rate']:>5.0f}% "
-              f" {fmt_pnl(c['avg_pnl']):>8} {fmt_pnl(c['best']):>8} {fmt_pnl(c['worst']):>8}")
-
-    if all_combined and all_ma30:
-        flat_c = combine(all_combined)
-        flat_m = combine(all_ma30)
-        if flat_c and flat_m:
-            p = fishers_p(flat_c["wins"], flat_c["n"], flat_m["wins"], flat_m["n"])
-            print(f"\n  Combined vs MA30-only: p={p:.4f}" if not np.isnan(p)
-                  else "\n  Combined vs MA30-only: p=N/A (too few samples)")
-
-print("\n\nDONE.\n")
+print("\nDONE.\n")
