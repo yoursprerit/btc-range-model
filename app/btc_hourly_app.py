@@ -3805,11 +3805,13 @@ def run_mstr_backtest(end_date_iso: str,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
-        open_pos   = pos == "LONG",
-        last_price = float(mstr_px[N-1]) if N > 0 and np.isfinite(mstr_px[N-1]) else None,
-        open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
-                          entry_trigger=e_trigger,
-                          stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+        open_pos      = pos == "LONG",
+        last_price    = float(mstr_px[N-1]) if N > 0 and np.isfinite(mstr_px[N-1]) else None,
+        open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
+                             entry_trigger=e_trigger,
+                             stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+        from_sl       = from_sl,
+        bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2+V-Gate (MSTR)",
@@ -4127,11 +4129,13 @@ def run_mstu_backtest(end_date_iso: str,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
-        open_pos   = pos == "LONG",
-        last_price = float(mstu_px[N-1]) if N > 0 and np.isfinite(mstu_px[N-1]) else None,
-        open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
-                          entry_trigger=e_trigger,
-                          stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+        open_pos      = pos == "LONG",
+        last_price    = float(mstu_px[N-1]) if N > 0 and np.isfinite(mstu_px[N-1]) else None,
+        open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
+                             entry_trigger=e_trigger,
+                             stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+        from_sl       = from_sl,
+        bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2+V-Gate (MSTU)",
@@ -9005,56 +9009,56 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         unsafe_allow_html=True,
     )
 
-    # ── ACTION SIGNAL banner — synthesised top-level indicator ────────────
+    # ── ACTION SIGNAL banners — Row 1: BTC  /  Row 2: MSTR & MSTU ───────────
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
     _v_gate_ok    = sigs.get("v_recent_gate", False)
     _trend_ok     = sigs["above_ma30"] or sigs["clean_10d"] or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
-    _exit_d3       = sigs.get("exhaustion_active", False)
-    _exit_d2       = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
-    _exit_signal   = _exit_d3 or _exit_d2
-    _d3_label      = "D3 exhaustion fired today — exit signal active"
+    _exit_d3      = sigs.get("exhaustion_active", False)
+    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
+    _exit_signal  = _exit_d3 or _exit_d2
 
+    # ── Row 1: BTC (no stop loss) ─────────────────────────────────────────
     if _exit_signal and _entry_signal:
-        _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
-        _action_label = "EXIT OVERRIDES ENTRY — CONFLICTING SIGNALS"
-        _action_sub   = (
+        _btc_bg, _btc_brd, _btc_emoji = "#fef2f2", "#dc2626", "🔴"
+        _btc_label = "EXIT OVERRIDES ENTRY — CONFLICTING SIGNALS"
+        _btc_sub   = (
             f"D3={'FIRED' if _exit_d3 else 'clear'}, "
             f"D2 (bear-only)={'FIRED' if _exit_d2 else 'clear'}  |  "
             f"U1 entry also met — but exit takes priority; new entry BLOCKED in backtest"
         )
     elif _exit_signal:
-        _action_bg    = "#fef2f2"; _action_brd = "#dc2626"; _action_emoji = "🔴"
-        _action_label = "EXIT SIGNAL ACTIVE"
-        _exit_parts   = []
-        if _exit_d3: _exit_parts.append(_d3_label)
+        _btc_bg, _btc_brd, _btc_emoji = "#fef2f2", "#dc2626", "🔴"
+        _btc_label = "EXIT SIGNAL ACTIVE"
+        _exit_parts = []
+        if _exit_d3: _exit_parts.append("D3 exhaustion fired today — exit signal active")
         if _exit_d2: _exit_parts.append(f"D2 hi-band collapse in {_regime_label} regime → defensive exit")
-        _action_sub   = " · ".join(_exit_parts)
+        _btc_sub   = " · ".join(_exit_parts)
     elif _entry_signal:
-        _action_bg    = "#f0fdf4"; _action_brd = "#16a34a"; _action_emoji = "🟢"
-        _action_label = "ENTRY SIGNAL ACTIVE"
-        _entry_gates  = []
+        _btc_bg, _btc_brd, _btc_emoji = "#f0fdf4", "#16a34a", "🟢"
+        _btc_label = "ENTRY SIGNAL ACTIVE"
+        _entry_gates = []
         if sigs["above_ma30"]: _entry_gates.append("↑MA30")
         if sigs["clean_10d"]:  _entry_gates.append("Clean 7d")
         if _v_gate_ok:         _entry_gates.append("⚡V-reversal")
-        _action_sub   = (
+        _btc_sub   = (
             f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
             f"Regime: {_regime_label}"
         )
     elif sigs["u1_triggered"] and not _trend_ok:
-        _action_bg    = "#fefce8"; _action_brd = "#ca8a04"; _action_emoji = "🟡"
-        _action_label = "U1 ACTIVE — TREND GATE BLOCKED"
-        _action_sub   = (
+        _btc_bg, _btc_brd, _btc_emoji = "#fefce8", "#ca8a04", "🟡"
+        _btc_label = "U1 ACTIVE — TREND GATE BLOCKED"
+        _btc_sub   = (
             "U1 fired but entry requires ↑MA30 OR Clean 7d OR ⚡V-reversal. "
             f"BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
             f"Clean 7d={'YES' if sigs['clean_10d'] else 'NO'}, "
             f"V-rev={'YES' if _v_gate_ok else 'NO'} — watch for reversal"
         )
     else:
-        _action_bg    = "#f8fafc"; _action_brd = "#94a3b8"; _action_emoji = "⬜"
-        _action_label = "NO ACTIVE SIGNAL — NEUTRAL / WATCH"
-        _action_sub   = (
+        _btc_bg, _btc_brd, _btc_emoji = "#f8fafc", "#94a3b8", "⬜"
+        _btc_label = "NO ACTIVE SIGNAL — NEUTRAL / WATCH"
+        _btc_sub   = (
             f"U1={'active' if sigs['u1_triggered'] else 'inactive'}, "
             f"Trend={'pass' if _trend_ok else 'blocked'}, "
             f"Exit={'none' if not _exit_signal else 'active'}  |  "
@@ -9063,25 +9067,113 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 
     st.markdown(
         f"""
-        <div style="background:{_action_bg}; border:2.5px solid {_action_brd};
-            border-radius:12px; padding:14px 20px; margin:8px 0 4px 0;
+        <div style="background:{_btc_bg}; border:2.5px solid {_btc_brd};
+            border-radius:12px; padding:14px 20px; margin:8px 0 2px 0;
             display:flex; align-items:center; gap:14px;">
-          <div style="font-size:28px; line-height:1;">{_action_emoji}</div>
+          <div style="font-size:28px; line-height:1;">{_btc_emoji}</div>
           <div>
-            <div style="font-size:16px; font-weight:800; color:{_action_brd};
-                letter-spacing:0.5px;">{_action_label}</div>
+            <div style="font-size:10px; font-weight:700; color:#64748b;
+                text-transform:uppercase; letter-spacing:0.9px; margin-bottom:2px;">
+              🪙 BTC — No Stop Loss
+            </div>
+            <div style="font-size:16px; font-weight:800; color:{_btc_brd};
+                letter-spacing:0.5px;">{_btc_label}</div>
             <div style="font-size:12px; color:#334155; margin-top:3px;
-                line-height:1.5;">{_action_sub}</div>
+                line-height:1.5;">{_btc_sub}</div>
           </div>
           <div style="margin-left:auto; font-size:11px; color:#64748b;
               text-align:right; line-height:1.6;">
-            <b>TF2 + V-Gate Strategy</b><br>
-            Signal as of today's close
+            <b>TF2 + V-Gate Strategy</b><br>Signal as of today's close
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    # ── Row 2: MSTR / MSTU with SL5 cooldown awareness ───────────────────
+    if open_positions:
+        def _sl5_chip(pos_data: dict):
+            """Return (label, note, bg, brd, col) for one asset's current gate state."""
+            is_open  = pos_data.get("open_pos", False)
+            from_sl  = pos_data.get("from_sl", False)
+            bars     = pos_data.get("bars_since_sl", 0)
+            gate_ok  = (not from_sl) or _bull_regime or (bars >= 10)
+
+            if is_open:
+                return "📍 LONG", "", "#f0fdf4", "#16a34a", "#15803d"
+            if from_sl and not gate_ok:
+                remaining = 10 - bars
+                note = f"{remaining} bar{'s' if remaining != 1 else ''} remaining"
+                return "⏳ SL COOLDOWN", note, "#fefce8", "#ca8a04", "#713f12"
+            if _exit_signal:
+                return "🔴 EXIT SIGNAL", "", "#fef2f2", "#dc2626", "#991b1b"
+            if _entry_signal and gate_ok:
+                if from_sl and _bull_regime:
+                    return "🟢 RE-ENTRY READY", "BULL bypass", "#f0fdf4", "#16a34a", "#15803d"
+                if from_sl and bars >= 10:
+                    return "🟢 RE-ENTRY READY", "cooldown expired", "#f0fdf4", "#16a34a", "#15803d"
+                return "🟢 ENTRY READY", "", "#f0fdf4", "#16a34a", "#15803d"
+            if sigs["u1_triggered"] and not _trend_ok:
+                return "🟡 TREND BLOCKED", "U1 active, gate not met", "#fefce8", "#ca8a04", "#713f12"
+            return "⬜ NO SIGNAL", "", "#f8fafc", "#94a3b8", "#475569"
+
+        _mstr_lbl, _mstr_note, _mstr_bg, _mstr_brd, _mstr_col = _sl5_chip(open_positions.get("mstr", {}))
+        _mstu_lbl, _mstu_note, _mstu_bg, _mstu_brd, _mstu_col = _sl5_chip(open_positions.get("mstu", {}))
+
+        # Overall panel border: driven by the most urgent state across both assets
+        _both = {_mstr_lbl, _mstu_lbl}
+        if any("ENTRY" in s or "LONG" in s for s in _both):
+            _eq_bg, _eq_brd = "#f0fdf4", "#16a34a"
+        elif any("COOLDOWN" in s for s in _both):
+            _eq_bg, _eq_brd = "#fefce8", "#ca8a04"
+        elif any("EXIT" in s for s in _both):
+            _eq_bg, _eq_brd = "#fef2f2", "#dc2626"
+        else:
+            _eq_bg, _eq_brd = "#f8fafc", "#94a3b8"
+
+        # BTC signal context
+        if _entry_signal:
+            _gate_parts = []
+            if sigs["above_ma30"]: _gate_parts.append("↑MA30")
+            if sigs["clean_10d"]:  _gate_parts.append("Clean 7d")
+            if _v_gate_ok:         _gate_parts.append("⚡V-reversal")
+            _eq_sub = f"BTC U1 confirmed · gate: {' + '.join(_gate_parts)}  |  Regime: {_regime_label}"
+        elif _exit_signal:
+            _eq_sub = f"BTC exit signal active  |  Regime: {_regime_label}"
+        elif sigs["u1_triggered"]:
+            _eq_sub = f"BTC U1 active — trend gate not met  |  Regime: {_regime_label}"
+        else:
+            _eq_sub = f"No BTC entry signal  |  Regime: {_regime_label}"
+
+        def _chip_html(label, note, bg, brd, col, asset_name):
+            inner = (
+                f"<b>{asset_name}</b> &nbsp; {label}"
+                + (f"<br><span style='font-size:10px;font-weight:400;color:#64748b;'>{note}</span>"
+                   if note else "")
+            )
+            return (
+                f"<div style='background:{bg};border:1.5px solid {brd};border-radius:8px;"
+                f"padding:6px 14px;font-size:12px;font-weight:700;color:{col};line-height:1.5;'>"
+                f"{inner}</div>"
+            )
+
+        st.markdown(
+            f"""
+            <div style="background:{_eq_bg}; border:2.5px solid {_eq_brd};
+                border-radius:12px; padding:14px 20px; margin:2px 0 4px 0;">
+              <div style="font-size:10px; font-weight:700; color:#64748b;
+                  text-transform:uppercase; letter-spacing:0.9px; margin-bottom:8px;">
+                📈 MSTR / MSTU — Fixed SL + SL5 Regime-Adaptive Re-Entry
+              </div>
+              <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:7px; align-items:flex-start;">
+                {_chip_html(_mstr_lbl, _mstr_note, _mstr_bg, _mstr_brd, _mstr_col, "MSTR")}
+                {_chip_html(_mstu_lbl, _mstu_note, _mstu_bg, _mstu_brd, _mstu_col, "MSTU")}
+              </div>
+              <div style="font-size:12px; color:#334155; line-height:1.5;">{_eq_sub}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # ── Live Position Panel — always rendered for all 3 assets ─────────────
     if open_positions:
@@ -9961,22 +10053,26 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 last_trade = _last_closed_trade(_bt_full_oos),
             ),
             "mstr": dict(
-                open_pos   = bool(_bt_mstr_oos and _bt_mstr_oos.get("open_pos")),
-                entry      = (_bt_mstr_oos or {}).get("open_entry"),
-                live_price = _mstr_panel_px,
-                asset_label= "MSTR",
-                stop_type  = "fixed-3%",
-                nav        = (_bt_mstr_oos or {}).get("stats", {}).get("final_nav"),
-                last_trade = _last_closed_trade(_bt_mstr_oos),
+                open_pos      = bool(_bt_mstr_oos and _bt_mstr_oos.get("open_pos")),
+                entry         = (_bt_mstr_oos or {}).get("open_entry"),
+                live_price    = _mstr_panel_px,
+                asset_label   = "MSTR",
+                stop_type     = "fixed-3%",
+                nav           = (_bt_mstr_oos or {}).get("stats", {}).get("final_nav"),
+                last_trade    = _last_closed_trade(_bt_mstr_oos),
+                from_sl       = (_bt_mstr_oos or {}).get("from_sl", False),
+                bars_since_sl = (_bt_mstr_oos or {}).get("bars_since_sl", 0),
             ),
             "mstu": dict(
-                open_pos   = bool(_bt_mstu_oos and _bt_mstu_oos.get("open_pos")),
-                entry      = (_bt_mstu_oos or {}).get("open_entry"),
-                live_price = _mstu_panel_px,
-                asset_label= "MSTU",
-                stop_type  = "fixed-7%",
-                nav        = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
-                last_trade = _last_closed_trade(_bt_mstu_oos),
+                open_pos      = bool(_bt_mstu_oos and _bt_mstu_oos.get("open_pos")),
+                entry         = (_bt_mstu_oos or {}).get("open_entry"),
+                live_price    = _mstu_panel_px,
+                asset_label   = "MSTU",
+                stop_type     = "fixed-7%",
+                nav           = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
+                last_trade    = _last_closed_trade(_bt_mstu_oos),
+                from_sl       = (_bt_mstu_oos or {}).get("from_sl", False),
+                bars_since_sl = (_bt_mstu_oos or {}).get("bars_since_sl", 0),
             ),
         }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
