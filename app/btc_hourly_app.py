@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v14"  # add: spx/vix in preds_df + TF3 filtered-entry variant
+_BT_LOGIC_VERSION = "sl5-sl5-v15"  # TF3 trimmed to Tier-1 only (F2 accel + F3 hb5)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3687,14 +3687,8 @@ def run_mstr_backtest(end_date_iso: str,
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
-    # ── TF3: additional entry-quality filters (research variant) ─────────────
+    # ── TF3: Tier-1 entry-quality filters (research variant) ─────────────────
     if strategy_variant == "TF3":
-        # F1: Quantitative MA30 slope — require >0.2% rise over 5 bars (vs binary pos/neg)
-        ma30_slope_q = np.zeros(N, dtype=bool)
-        for i in range(5, N):
-            if np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]) and ma30[i-5] > 0:
-                ma30_slope_q[i] = (ma30[i] / ma30[i-5] - 1) > 0.002
-
         # F2: err_hi_ma3 momentum — must be accelerating (today > yesterday)
         ehma3_accel = np.zeros(N, dtype=bool)
         for i in range(1, N):
@@ -3706,21 +3700,7 @@ def run_mstr_backtest(end_date_iso: str,
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
 
-        # F4: Equity-market guard — VIX < 25 AND SPX above its 20-bar MA
-        # V-reversal entries bypass F4 (capitulation inherently breaches these levels)
-        spx_c = comp["spx_close"].values.astype(float) if "spx_close" in comp.columns else np.full(N, np.nan)
-        vix_c = comp["vix_close"].values.astype(float) if "vix_close" in comp.columns else np.full(N, np.nan)
-        spx_ma20_arr = np.full(N, np.nan)
-        for i in range(N):
-            w = spx_c[max(0, i-19):i+1]; w = w[np.isfinite(w)]
-            if len(w) >= 10:
-                spx_ma20_arr[i] = np.mean(w)
-        equity_ok = np.ones(N, dtype=bool)
-        for i in range(N):
-            if np.isfinite(vix_c[i]) and np.isfinite(spx_c[i]) and np.isfinite(spx_ma20_arr[i]):
-                equity_ok[i] = (vix_c[i] < 25.0) and (spx_c[i] > spx_ma20_arr[i])
-
-        tf1_entry = tf1_entry & ma30_slope_q & ehma3_accel & hb5_ok & (equity_ok | v_recent)
+        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -4058,14 +4038,8 @@ def run_mstu_backtest(end_date_iso: str,
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
-    # ── TF3: additional entry-quality filters (research variant) ─────────────
+    # ── TF3: Tier-1 entry-quality filters (research variant) ─────────────────
     if strategy_variant == "TF3":
-        # F1: Quantitative MA30 slope — require >0.2% rise over 5 bars (vs binary pos/neg)
-        ma30_slope_q = np.zeros(N, dtype=bool)
-        for i in range(5, N):
-            if np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]) and ma30[i-5] > 0:
-                ma30_slope_q[i] = (ma30[i] / ma30[i-5] - 1) > 0.002
-
         # F2: err_hi_ma3 momentum — must be accelerating (today > yesterday)
         ehma3_accel = np.zeros(N, dtype=bool)
         for i in range(1, N):
@@ -4077,21 +4051,7 @@ def run_mstu_backtest(end_date_iso: str,
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
 
-        # F4: Equity-market guard — VIX < 25 AND SPX above its 20-bar MA
-        # V-reversal entries bypass F4 (capitulation inherently breaches these levels)
-        spx_c = comp["spx_close"].values.astype(float) if "spx_close" in comp.columns else np.full(N, np.nan)
-        vix_c = comp["vix_close"].values.astype(float) if "vix_close" in comp.columns else np.full(N, np.nan)
-        spx_ma20_arr = np.full(N, np.nan)
-        for i in range(N):
-            w = spx_c[max(0, i-19):i+1]; w = w[np.isfinite(w)]
-            if len(w) >= 10:
-                spx_ma20_arr[i] = np.mean(w)
-        equity_ok = np.ones(N, dtype=bool)
-        for i in range(N):
-            if np.isfinite(vix_c[i]) and np.isfinite(spx_c[i]) and np.isfinite(spx_ma20_arr[i]):
-                equity_ok[i] = (vix_c[i] < 25.0) and (spx_c[i] > spx_ma20_arr[i])
-
-        tf1_entry = tf1_entry & ma30_slope_q & ehma3_accel & hb5_ok & (equity_ok | v_recent)
+        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -13587,12 +13547,9 @@ with tab_mstr:
     # ── TF2 vs TF3 comparison table ───────────────────────────────────────────
     st.markdown("### 🔬 Entry Signal Filter Research: TF2 vs TF3")
     st.markdown(
-        "**TF3** adds four entry filters on top of TF2: "
-        "(F1) quantitative MA30 slope >0.2% · "
-        "(F2) err_hi_ma3 must be accelerating · "
-        "(F3) 3-of-5 day hi-break confirmation · "
-        "(F4) VIX <25 and SPX above 20-bar MA. "
-        "V-reversal entries bypass F4 (capitulation happens during market stress). "
+        "**TF3** adds two Tier-1 entry-quality filters on top of TF2: "
+        "(F2) err_hi_ma3 must be accelerating today vs yesterday — blocks entries when breakout momentum is already fading · "
+        "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
         "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
     )
     def _tf3_cmp_row(lbl, bt2, bt3):
@@ -13714,12 +13671,9 @@ with tab_mstu:
     # ── TF2 vs TF3 comparison table ───────────────────────────────────────────
     st.markdown("### 🔬 Entry Signal Filter Research: TF2 vs TF3")
     st.markdown(
-        "**TF3** adds four entry filters on top of TF2: "
-        "(F1) quantitative MA30 slope >0.2% · "
-        "(F2) err_hi_ma3 must be accelerating · "
-        "(F3) 3-of-5 day hi-break confirmation · "
-        "(F4) VIX <25 and SPX above 20-bar MA. "
-        "V-reversal entries bypass F4 (capitulation happens during market stress). "
+        "**TF3** adds two Tier-1 entry-quality filters on top of TF2: "
+        "(F2) err_hi_ma3 must be accelerating today vs yesterday — blocks entries when breakout momentum is already fading · "
+        "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
         "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
     )
     def _tf3_cmp_row_mstu(lbl, bt2, bt3):
