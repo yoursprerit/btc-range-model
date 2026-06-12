@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v16"  # OOS hardcoded to 2026-03-01 everywhere
+_BT_LOGIC_VERSION = "sl5-sl5-v17"  # TF3 promoted to live strategy
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3541,7 +3541,7 @@ def run_mstr_backtest(end_date_iso: str,
                       data_end: str = "",
                       strategy_variant: str = "TF2",
                       logic_version: str = _BT_LOGIC_VERSION):
-    """MSTR backtest driven by BTC TF2+V-Gate signals (or TF3 filtered variant).
+    """MSTR backtest driven by BTC TF3+V-Gate signals (live strategy; pass strategy_variant="TF2" for comparison).
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
     run_full_period_backtest) but executes trades in MSTR stock instead of BTC.
@@ -3687,7 +3687,7 @@ def run_mstr_backtest(end_date_iso: str,
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
-    # ── TF3: Tier-1 entry-quality filters (research variant) ─────────────────
+    # ── TF3: Tier-1 entry-quality filters (live strategy) ────────────────────
     if strategy_variant == "TF3":
         # F2: err_hi_ma3 momentum — must be accelerating (today > yesterday)
         ehma3_accel = np.zeros(N, dtype=bool)
@@ -3867,7 +3867,7 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
     """
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
-                             logic_version=logic_version)
+                             strategy_variant="TF2", logic_version=logic_version)
 
 
 @st.cache_data(show_spinner="Loading fixed-period MSTR TF3 backtest …")
@@ -3893,7 +3893,7 @@ def run_mstu_backtest(end_date_iso: str,
                       data_end: str = "",
                       strategy_variant: str = "TF2",
                       logic_version: str = _BT_LOGIC_VERSION):
-    """MSTU backtest driven by BTC TF2+V-Gate signals (or TF3 filtered variant).
+    """MSTU backtest driven by BTC TF3+V-Gate signals (live strategy; pass strategy_variant="TF2" for comparison).
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
     (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU started trading
@@ -4038,7 +4038,7 @@ def run_mstu_backtest(end_date_iso: str,
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
-    # ── TF3: Tier-1 entry-quality filters (research variant) ─────────────────
+    # ── TF3: Tier-1 entry-quality filters (live strategy) ────────────────────
     if strategy_variant == "TF3":
         # F2: err_hi_ma3 momentum — must be accelerating (today > yesterday)
         ehma3_accel = np.zeros(N, dtype=bool)
@@ -4219,7 +4219,7 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
     """
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
-                             logic_version=logic_version)
+                             strategy_variant="TF2", logic_version=logic_version)
 
 
 @st.cache_data(show_spinner="Loading fixed-period MSTU TF3 backtest …")
@@ -6132,7 +6132,8 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
       • B&H comparison uses MSTR rather than BTC
     """
     st.markdown("---")
-    st.subheader("📊 MSTR — BTC Signal-Driven Backtest (TF2 + V-Gate)")
+    _mstr_variant_lbl = "TF3" if "TF3" in ((bt_bear or bt_bull or bt_full or {}).get("strategy") or "TF3") else "TF2"
+    st.subheader(f"📊 MSTR — BTC Signal-Driven Backtest ({_mstr_variant_lbl} + V-Gate)")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTR backtest computing … fetching MSTR data and building signals. "
@@ -6146,7 +6147,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
   <div style='font-size:14px; font-weight:700; color:#4c1d95; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    📊 TF2 + V-Gate on MSTR &nbsp;—&nbsp; BTC Signals · MSTR Execution
+    📊 """ + _mstr_variant_lbl + """ + V-Gate on MSTR &nbsp;—&nbsp; BTC Signals · MSTR Execution
   </div>
 
   <div style='background:#ede9fe; border-radius:8px; padding:10px 14px;
@@ -6193,7 +6194,19 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
       </tr>
     </table>
   </div>
-
+""" + ("""
+  <div style='background:#ede9fe; border-radius:8px; padding:8px 14px; margin-bottom:10px;
+       font-size:12px; color:#4c1d95;'>
+    <b>⑤ TF3 entry-quality filters (both must pass):</b>
+    <div style='margin:6px 0 0 8px; line-height:2.0;'>
+      <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>F2 Acceleration</span>
+      &nbsp; err_hi_ma3 today &gt; err_hi_ma3 yesterday — prediction-error momentum is increasing
+      <br>
+      <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>F3 Extended window</span>
+      &nbsp; ≥ 3 of last 5 days had hi-breaks (vs TF2's 2-of-3) — requires a sustained breakout pattern
+    </div>
+  </div>
+""" if _mstr_variant_lbl == "TF3" else "") + """
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
 
   <!-- EXIT -->
@@ -6246,7 +6259,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Re-enter <b>immediately</b> on next valid TF2+V-Gate signal (BTC above MA30 &amp; MA30 rising)
+          Re-enter <b>immediately</b> on next valid TF3+V-Gate signal (BTC above MA30 &amp; MA30 rising)
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
@@ -6256,7 +6269,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Wait <b>10-bar cooldown</b> then re-enter on next valid TF2+V-Gate signal
+          Wait <b>10-bar cooldown</b> then re-enter on next valid TF3+V-Gate signal
         </td>
       </tr>
     </table>
@@ -6480,8 +6493,8 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     else:
         lbl_full = "🌐 Full Market (Jun 2024 – May 2026)"
 
-    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (MSTR)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+    _sub4 = (f"<th style='padding:5px 8px; text-align:center;'>📊 {_mstr_variant_lbl}+V-Gate (MSTR)</th>"
+             f"<th style='padding:5px 8px; text-align:center;'>🧾 {_mstr_variant_lbl}+V-Gate (35% STCG)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTR (0% unrealised)</th>"
              "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H MSTR (15% LTCG)</th>")
     sub_hdr = (
@@ -6622,9 +6635,9 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold MSTR</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate (MSTR)",
+            x=nav_s.index, y=nav_s.values, name=f"{_mstr_variant_lbl}+V-Gate (MSTR)",
             line=dict(color="#7c3aed", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTR)</extra>",
+            hovertemplate=f"%{{x|%b %d, %Y}}: $%{{y:,.0f}}<extra>{_mstr_variant_lbl}+V-Gate (MSTR)</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -6722,7 +6735,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 sr = bt_bear["stats"]
                 fig_r = _make_mstr_chart(
                     bt_bear,
-                    f"TF2+V-Gate (MSTR) vs B&H MSTR — Bear Market  "
+                    f"{_mstr_variant_lbl}+V-Gate (MSTR) vs B&H MSTR — Bear Market  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -6735,7 +6748,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 sf = bt_bull["stats"]
                 fig_f = _make_mstr_chart(
                     bt_bull,
-                    f"TF2+V-Gate (MSTR) vs B&H MSTR — Bull Market  "
+                    f"{_mstr_variant_lbl}+V-Gate (MSTR) vs B&H MSTR — Bull Market  "
                     f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -6748,7 +6761,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_mstr_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTR) vs B&H MSTR — OOS Period (Fully Blind)  "
+                    f"{_mstr_variant_lbl}+V-Gate (MSTR) vs B&H MSTR — OOS Period (Fully Blind)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -6761,7 +6774,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 sfl = bt_full["stats"]
                 fig_fl = _make_mstr_chart(
                     bt_full,
-                    f"TF2+V-Gate (MSTR) vs B&H MSTR — Full Market  "
+                    f"{_mstr_variant_lbl}+V-Gate (MSTR) vs B&H MSTR — Full Market  "
                     f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -6840,7 +6853,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                     st.info("No trades in this period — strategy was in cash throughout.")
                 caption = (
                     "💡 P&L at MSTR execution prices (1-day lag from BTC signal). "
-                    "Entry/exit triggered by BTC TF2+V-Gate. MSTR prices split-adjusted. "
+                    f"Entry/exit triggered by BTC {_mstr_variant_lbl}+V-Gate. MSTR prices split-adjusted. "
                 )
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
@@ -6854,7 +6867,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
 def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=None,
                                            bt_full=None, key_suffix: str = "") -> None:
-    """Render the MSTU backtesting dashboard (BTC TF2+V-Gate signals → MSTU execution).
+    """Render the MSTU backtesting dashboard (BTC TF3+V-Gate signals → MSTU execution; TF2 shown when selected).
 
     Four-period layout: Bear (Jun 2025–May 2026) · Bull (Jun 2024–May 2025 synthetic) ·
     OOS (rolling) · Full (Jun 2024–May 2026, synthetic+actual):
@@ -6863,7 +6876,8 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
       • B&H comparison uses MSTU rather than BTC or MSTR
     """
     st.markdown("---")
-    st.subheader("📈 MSTU — BTC Signal-Driven Backtest (TF2 + V-Gate)")
+    _mstu_variant_lbl = "TF3" if "TF3" in ((bt_bear or bt_bull or bt_full or {}).get("strategy") or "TF3") else "TF2"
+    st.subheader(f"📈 MSTU — BTC Signal-Driven Backtest ({_mstu_variant_lbl} + V-Gate)")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTU backtest computing … fetching MSTU data and building signals. "
@@ -6877,7 +6891,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
 
   <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    📈 TF2 + V-Gate on MSTU &nbsp;—&nbsp; BTC Signals · MSTU Execution
+    📈 """ + _mstu_variant_lbl + """ + V-Gate on MSTU &nbsp;—&nbsp; BTC Signals · MSTU Execution
   </div>
 
   <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
@@ -6924,7 +6938,19 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
       </tr>
     </table>
   </div>
-
+""" + ("""
+  <div style='background:#ccfbf1; border-radius:8px; padding:8px 14px; margin-bottom:10px;
+       font-size:12px; color:#134e4a;'>
+    <b>⑤ TF3 entry-quality filters (both must pass):</b>
+    <div style='margin:6px 0 0 8px; line-height:2.0;'>
+      <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>F2 Acceleration</span>
+      &nbsp; err_hi_ma3 today &gt; err_hi_ma3 yesterday — prediction-error momentum is increasing
+      <br>
+      <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>F3 Extended window</span>
+      &nbsp; ≥ 3 of last 5 days had hi-breaks (vs TF2's 2-of-3) — requires a sustained breakout pattern
+    </div>
+  </div>
+""" if _mstu_variant_lbl == "TF3" else "") + """
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
 
   <!-- EXIT -->
@@ -6977,7 +7003,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Re-enter <b>immediately</b> on next valid TF2+V-Gate signal (BTC above MA30 &amp; MA30 rising)
+          Re-enter <b>immediately</b> on next valid TF3+V-Gate signal (BTC above MA30 &amp; MA30 rising)
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
@@ -6987,7 +7013,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Wait <b>10-bar cooldown</b> then re-enter on next valid TF2+V-Gate signal
+          Wait <b>10-bar cooldown</b> then re-enter on next valid TF3+V-Gate signal
         </td>
       </tr>
     </table>
@@ -7208,8 +7234,8 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     else:
         lbl_full = "📈 Full (Since Inception)"
 
-    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (MSTU)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+    _sub4 = (f"<th style='padding:5px 8px; text-align:center;'>📊 {_mstu_variant_lbl}+V-Gate (MSTU)</th>"
+             f"<th style='padding:5px 8px; text-align:center;'>🧾 {_mstu_variant_lbl}+V-Gate (35% STCG)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTU (0% unrealised)</th>"
              "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H MSTU (15% LTCG)</th>")
     sub_hdr = (
@@ -7351,9 +7377,9 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold MSTU</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate (MSTU)",
+            x=nav_s.index, y=nav_s.values, name=f"{_mstu_variant_lbl}+V-Gate (MSTU)",
             line=dict(color="#0d9488", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTU)</extra>",
+            hovertemplate=f"%{{x|%b %d, %Y}}: $%{{y:,.0f}}<extra>{_mstu_variant_lbl}+V-Gate (MSTU)</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -7451,7 +7477,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 sr = bt_bear["stats"]
                 fig_r = _make_mstu_chart(
                     bt_bear,
-                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Bear Market  "
+                    f"{_mstu_variant_lbl}+V-Gate (MSTU) vs B&H MSTU — Bear Market  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -7464,7 +7490,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 sb = bt_bull["stats"]
                 fig_b = _make_mstu_chart(
                     bt_bull,
-                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Bull Market 🧪 Synthetic  "
+                    f"{_mstu_variant_lbl}+V-Gate (MSTU) vs B&H MSTU — Bull Market 🧪 Synthetic  "
                     f"({pd.Timestamp(sb['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sb['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -7477,7 +7503,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 so = bt_oos["stats"]
                 fig_o = _make_mstu_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTU) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"{_mstu_variant_lbl}+V-Gate (MSTU) vs B&H MSTU — OOS Period (Fully Blind)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -7490,7 +7516,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 sfl = bt_full["stats"]
                 fig_fl = _make_mstu_chart(
                     bt_full,
-                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Full (Since Inception)  "
+                    f"{_mstu_variant_lbl}+V-Gate (MSTU) vs B&H MSTU — Full (Since Inception)  "
                     f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -10058,8 +10084,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # Compute MSTR/MSTU OOS positions for the live position tracker.
         # Uses _bt_oos_end (slider date in historical mode, yesterday in live mode)
         # so last_price and open_pos reflect the selected date's state.
-        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
-        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
+        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", strategy_variant="TF3")
+        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", strategy_variant="TF3")
 
         def _last_closed_trade(bt: dict | None) -> dict | None:
             _tl = (bt or {}).get("trades") or []
@@ -12127,7 +12153,7 @@ def render_retrain_dashboard():
         )
     else:
         st.success(
-            "🟢  **Models are current** — All TF2 strategy models are within their maintenance "
+            "🟢  **Models are current** — All TF3 strategy models are within their maintenance "
             "window and performance metrics are on target."
         )
 
@@ -12136,7 +12162,7 @@ def render_retrain_dashboard():
     # ── 2. Model cards (3 columns) ────────────────────────────────────────────
     st.markdown("#### Model Freshness & Performance")
     st.caption(
-        "Only the three models used by the TF2 strategy are shown.  "
+        "Only the three models used by the TF3 strategy are shown.  "
         "Hourly close model and 14-day cone are **not** included — they are not used for "
         "trading signals.  Age limit = mandatory retrain by.  Warn = start planning."
     )
@@ -12378,7 +12404,7 @@ def render_retrain_dashboard():
     st.markdown("---")
 
     # ── 4. Live signal state ──────────────────────────────────────────────────
-    st.markdown("#### TF2 Signal State — Current Values vs Thresholds")
+    st.markdown("#### TF3 Signal State — Current Values vs Thresholds")
     st.caption(
         "Computed from the last 3–5 completed daily H/L bars.  "
         "Signal reliability degrades when MAPE-H exceeds ~2.5%."
@@ -13512,9 +13538,10 @@ with tab_retrain:
 with tab_mstr:
     st.markdown("## 📊 MSTR — BTC Signal-Driven Backtesting")
     st.markdown(
-        "This tab runs the **same TF2 + V-Gate strategy** used for Bitcoin but executes "
-        "trades in **MSTR (MicroStrategy) stock** instead of BTC. All entry/exit signals "
-        "are computed from the BTC CT model predictions — only the traded asset changes. "
+        "This tab runs the **TF3 + V-Gate strategy** (current live) using Bitcoin CT model signals "
+        "to execute trades in **MSTR (MicroStrategy) stock**. TF3 adds F2 (prediction-error "
+        "acceleration) and F3 (3-of-5 hi-break confirmation) filters on top of TF2's base signal — "
+        "all entry/exit signals are derived from BTC CT model predictions, only the traded asset changes. "
         "MSTR holds ~580,000 BTC on its balance sheet and behaves as a leveraged Bitcoin "
         "proxy with equity-market tax treatment."
     )
@@ -13523,16 +13550,17 @@ with tab_mstr:
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstr_raw      = _fetch_daily_raw()
     _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
-    # ── TF2 (current strategy) ────────────────────────────────────────────────
+    # ── TF2 (previous strategy — comparison only) ────────────────────────────
     _mstr_bear     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
         "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
     _mstr_full_oos = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end)  # OOS ends prior day (rolling)
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
+        strategy_variant="TF2")    # explicit TF2 OOS for comparison table
     _mstr_full     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
-    # ── TF3 (filtered-entry research variant) ────────────────────────────────
+    # ── TF3 (current live strategy) ──────────────────────────────────────────
     _mstr_bear_tf3 = _run_fixed_period_mstr_backtest_tf3(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
     _mstr_bull_tf3 = _run_fixed_period_mstr_backtest_tf3(
@@ -13544,12 +13572,12 @@ with tab_mstr:
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
 
     # ── TF2 vs TF3 comparison table ───────────────────────────────────────────
-    st.markdown("### 🔬 Entry Signal Filter Research: TF2 vs TF3")
+    st.markdown("### 🔬 Strategy Comparison: TF3 (Current Live) vs TF2 (Previous)")
     st.markdown(
-        "**TF3** adds two Tier-1 entry-quality filters on top of TF2: "
+        "**TF3 (live)** adds two Tier-1 entry-quality filters on top of TF2's base signal: "
         "(F2) err_hi_ma3 must be accelerating today vs yesterday — blocks entries when breakout momentum is already fading · "
-        "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
-        "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
+        "(F3) 3-of-5 day hi-break confirmation (vs TF2's 2-of-3) — requires a more sustained breakout pattern. "
+        "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged in both variants."
     )
     # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
     _MSTR_OOS_START = pd.Timestamp("2026-03-01")
@@ -13610,8 +13638,8 @@ with tab_mstr:
 <thead>
   <tr style='background:#1e3a5f;color:white;'>
     <th style='padding:6px 8px;text-align:left;'>Period</th>
-    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
-    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Previous</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Current ★</th>
     <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
   </tr>
   <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
@@ -13645,13 +13673,13 @@ with tab_mstr:
         )
     _cmp_html += "</tbody></table>"
     st.markdown(_cmp_html, unsafe_allow_html=True)
-    st.caption("OOS period sliced at model test_start boundary. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
+    st.caption("TF3 is the current live strategy. OOS from Mar 1, 2026. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
 
     st.markdown("---")
     # ── Strategy variant selector ─────────────────────────────────────────────
     _mstr_variant = st.radio(
         "View detailed backtest results for:",
-        ["TF2 — Current Strategy", "TF3 — Signal Filter Research"],
+        ["TF3 — Current Strategy", "TF2 — Previous Strategy"],
         horizontal=True, key="mstr_strategy_variant",
     )
     _show_tf3_mstr = "TF3" in _mstr_variant
@@ -13666,10 +13694,10 @@ with tab_mstr:
 with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
     st.markdown(
-        "This tab runs the **same TF2 + V-Gate strategy** used for MSTR but executes "
-        "trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)** instead. "
-        "All entry/exit signals are computed from the BTC CT model predictions — only the "
-        "traded asset changes. MSTU provides **2× daily leveraged exposure** to MSTR stock, "
+        "This tab runs the **TF3 + V-Gate strategy** (current live) using Bitcoin CT model signals "
+        "to execute trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**. TF3 adds F2 "
+        "(prediction-error acceleration) and F3 (3-of-5 hi-break confirmation) filters on top of "
+        "TF2's base signal. MSTU provides **2× daily leveraged exposure** to MSTR stock, "
         "which holds ~580,000 BTC. MSTU launched ~Jun 2025; the **Bull Market period uses "
         "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
@@ -13678,16 +13706,17 @@ with tab_mstu:
     _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstu_raw      = _fetch_daily_raw()
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
-    # ── TF2 (current strategy) ────────────────────────────────────────────────
+    # ── TF2 (previous strategy — comparison only) ────────────────────────────
     _mstu_bear     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
         "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
     _mstu_full_oos = run_mstu_backtest(
-        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
+        strategy_variant="TF2")     # explicit TF2 OOS for comparison table
     _mstu_full     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)     # Full: Jun 2024–May 2026 (synthetic+actual)
-    # ── TF3 (filtered-entry research variant) ────────────────────────────────
+    # ── TF3 (current live strategy) ──────────────────────────────────────────
     _mstu_bear_tf3 = _run_fixed_period_mstu_backtest_tf3(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
     _mstu_bull_tf3 = _run_fixed_period_mstu_backtest_tf3(
@@ -13699,12 +13728,12 @@ with tab_mstu:
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
 
     # ── TF2 vs TF3 comparison table ───────────────────────────────────────────
-    st.markdown("### 🔬 Entry Signal Filter Research: TF2 vs TF3")
+    st.markdown("### 🔬 Strategy Comparison: TF3 (Current Live) vs TF2 (Previous)")
     st.markdown(
-        "**TF3** adds two Tier-1 entry-quality filters on top of TF2: "
+        "**TF3 (live)** adds two Tier-1 entry-quality filters on top of TF2's base signal: "
         "(F2) err_hi_ma3 must be accelerating today vs yesterday — blocks entries when breakout momentum is already fading · "
-        "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
-        "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
+        "(F3) 3-of-5 day hi-break confirmation (vs TF2's 2-of-3) — requires a more sustained breakout pattern. "
+        "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged in both variants."
     )
     # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
     _MSTU_OOS_START = pd.Timestamp("2026-03-01")
@@ -13765,8 +13794,8 @@ with tab_mstu:
 <thead>
   <tr style='background:#1e3a5f;color:white;'>
     <th style='padding:6px 8px;text-align:left;'>Period</th>
-    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
-    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Previous</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Current ★</th>
     <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
   </tr>
   <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
@@ -13800,13 +13829,13 @@ with tab_mstu:
         )
     _cmp_html_mstu += "</tbody></table>"
     st.markdown(_cmp_html_mstu, unsafe_allow_html=True)
-    st.caption("OOS period sliced at model test_start boundary. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
+    st.caption("TF3 is the current live strategy. OOS from Mar 1, 2026. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
 
     st.markdown("---")
     # ── Strategy variant selector ─────────────────────────────────────────────
     _mstu_variant = st.radio(
         "View detailed backtest results for:",
-        ["TF2 — Current Strategy", "TF3 — Signal Filter Research"],
+        ["TF3 — Current Strategy", "TF2 — Previous Strategy"],
         horizontal=True, key="mstu_strategy_variant",
     )
     _show_tf3_mstu = "TF3" in _mstu_variant
@@ -13821,11 +13850,11 @@ with tab_mstu:
 with tab_mstu_opts:
     st.markdown("## 🔷 MSTU Options — BTC Signal-Driven Backtesting")
     st.markdown(
-        "This tab runs the **same TF2 + V-Gate strategy** but executes in **MSTU ATM call options** "
-        "instead of MSTU stock. On each entry signal: buy an at-the-money call option with the "
-        "**strike = MSTU spot price at entry** and **596 days to expiry**, priced via "
-        "**Black-Scholes** (σ = 60-day rolling historical MSTU volatility, r = 4.5%). "
-        "Exit is triggered by the same BTC D2/D3 regime-adaptive signals. "
+        "This tab runs the **TF2 + V-Gate strategy** on **MSTU ATM call options** "
+        "(options backtests use TF2 signals; MSTU stock tab uses TF3). On each entry signal: "
+        "buy an at-the-money call option with the **strike = MSTU spot price at entry** and "
+        "**596 days to expiry**, priced via **Black-Scholes** (σ = 60-day rolling historical "
+        "MSTU volatility, r = 4.5%). Exit triggered by the same BTC D2/D3 regime-adaptive signals. "
         "B&H benchmark is MSTU stock. MSTU launched ~Jun 2025; the **Bull Market period uses "
         "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
