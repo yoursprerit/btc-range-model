@@ -6898,7 +6898,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
   <!-- STOP-LOSS & RE-ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL1 Above-Exit-Price)</div>
+         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
     <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
       <tr>
         <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
@@ -6912,12 +6912,21 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
       <tr>
         <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#e0f2fe; color:#0c4a6e; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>Re-entry gate</span>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Re-enter only when MSTU price <b>recovers to or above the stop-exit price</b>
-          — ensures positive price momentum before re-exposure
+          Re-enter <b>immediately</b> on next valid TF2+V-Gate signal (BTC above MA30 &amp; MA30 rising)
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Wait <b>10-bar cooldown</b> then re-enter on next valid TF2+V-Gate signal
         </td>
       </tr>
     </table>
