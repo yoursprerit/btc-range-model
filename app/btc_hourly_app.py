@@ -2404,6 +2404,17 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     hi_breaks_5d = int(np.sum(hi_break[-window5:]))
     lo_breaks_5d = int(np.sum(lo_break[-window5:]))
 
+    # ── TF3 filter signals (for live signal card display) ───────────────
+    # EHMA3 acceleration: today's 3-bar avg > yesterday's 3-bar avg
+    if n >= 2:
+        window3_prev = min(3, n - 1)
+        err_hi_ma3_prev = float(np.mean(err_hi[-(window3_prev + 1):-1]))
+        ehma3_accel = err_hi_ma3 > err_hi_ma3_prev
+        err_hi_ma3_prev_val = err_hi_ma3_prev
+    else:
+        ehma3_accel = False
+        err_hi_ma3_prev_val = err_hi_ma3
+
     # ── Consecutive return streak (close_asof = close of the preceding bar) ──
     closes = completed["close_asof"].values.astype(float)
     streak = 0
@@ -2564,6 +2575,8 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
         lo_breaks_3d      = lo_breaks_3d,
         hi_breaks_5d      = hi_breaks_5d,
         lo_breaks_5d      = lo_breaks_5d,
+        ehma3_accel       = ehma3_accel,
+        err_hi_ma3_prev   = err_hi_ma3_prev_val,
         streak            = streak,
         last_lo_err       = last_lo_err,
         last_hi_err       = last_hi_err,
@@ -3232,6 +3245,8 @@ def run_full_period_backtest(end_date_iso: str,
     _L  = N - 1
     _hi5 = int(np.sum(hi_brk[max(0, _L-4):_L+1]))
     _lo5 = int(np.sum(lo_brk[max(0, _L-4):_L+1]))
+    _ehma3_accel = bool(ehma3[_L] > ehma3[_L - 1]) if _L >= 1 else False
+    _ehma3_prev  = float(ehma3[_L - 1]) if _L >= 1 else float(ehma3[_L])
     _d1_t = bool(d1[_L]); _d2_t = bool(d2[_L]); _d3_t = bool(d3[_L])
     _consec_hi = 0
     for _ck in range(_L - 1, -1, -1):
@@ -3268,6 +3283,7 @@ def run_full_period_backtest(end_date_iso: str,
         err_hi_ma3=float(ehma3[_L]),    err_lo_ma3=float(elma3[_L]),
         hi_breaks_3d=int(hb3[_L]),      lo_breaks_3d=int(lb3[_L]),
         hi_breaks_5d=_hi5,              lo_breaks_5d=_lo5,
+        ehma3_accel=_ehma3_accel,       err_hi_ma3_prev=_ehma3_prev,
         streak=_streak,
         last_lo_err=float(err_lo[_L]),  last_hi_err=float(err_hi[_L]),
         dn_score_raw=float(dn_score_arr[_L]),
@@ -9743,6 +9759,19 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 else "FAIL ✗")),
          "= PASS when exactly one of ↑MA30 / clean7d fires, or V-reversal; BLOCKED when both fire simultaneously",
          (sigs["above_ma30"] != sigs["clean_10d"]) or sigs.get("v_recent_gate", False), True),
+        ("TF3 — EHMA3 acceleration (F2)",
+         ("✅ ACCELERATING — today {:.3f}% > prev {:.3f}%"
+          .format(sigs.get("err_hi_ma3", 0), sigs.get("err_hi_ma3_prev", 0))
+          if sigs.get("ehma3_accel")
+          else "✗ NOT accelerating — today {:.3f}% ≤ prev {:.3f}%"
+          .format(sigs.get("err_hi_ma3", 0), sigs.get("err_hi_ma3_prev", 0))),
+         "= ACCELERATING — err_hi_ma3 today > yesterday (skipped when V-reversal active)",
+         sigs.get("ehma3_accel", False) or sigs.get("v_recent_gate", False), True),
+        ("TF3 — hi-breaks 5d ≥ 3 (F3)",
+         f"{sigs.get('hi_breaks_5d', 0)}/5 bars beat pred-high"
+         + (" ✅" if (sigs.get("hi_breaks_5d", 0) >= 3 or sigs.get("v_recent_gate", False)) else " ✗"),
+         "= ≥ 3/5 bars needed — sustained breakout pattern (skipped when V-reversal active)",
+         sigs.get("hi_breaks_5d", 0) >= 3 or sigs.get("v_recent_gate", False), True),
         ("MA30 slope (5-bar)",
          f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
          f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
