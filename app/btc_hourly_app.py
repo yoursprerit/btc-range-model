@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v15"  # TF3 trimmed to Tier-1 only (F2 accel + F3 hb5)
+_BT_LOGIC_VERSION = "sl5-sl5-v16"  # OOS hardcoded to 2026-03-01 everywhere
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -5652,9 +5652,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     cutoffs    = _cutoffs()
     ct_cutoff  = cutoffs.get("daily H/L")
     ct_str     = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
-    # Use the model's actual test_start so the OOS column covers all genuine OOS bars.
-    _oos_ts    = cutoffs.get("daily H/L test_start")
-    OOS_START  = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    OOS_START  = pd.Timestamp("2026-03-01")
     s_oos      = None
     bt_oos     = None
     if bt_full_oos is not None:
@@ -6365,8 +6364,8 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     cutoffs   = _cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
-    _oos_ts   = cutoffs.get("daily H/L test_start")
-    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    OOS_START = pd.Timestamp("2026-03-01")
     s_oos = None; bt_oos = None
 
     if bt_full_oos is not None:
@@ -7095,8 +7094,8 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     cutoffs   = _cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
-    _oos_ts   = cutoffs.get("daily H/L test_start")
-    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    OOS_START = pd.Timestamp("2026-03-01")
     s_oos = None; bt_oos = None
 
     if bt_full_oos is not None:
@@ -7804,8 +7803,8 @@ def render_mstr_options_trading_strategy_dashboard(
     cutoffs   = _cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
-    _oos_ts   = cutoffs.get("daily H/L test_start")
-    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    OOS_START = pd.Timestamp("2026-03-01")
     s_oos = None; bt_oos = None
 
     if bt_full_oos is not None:
@@ -8510,8 +8509,8 @@ def render_mstu_options_trading_strategy_dashboard(
     cutoffs   = _cutoffs()
     ct_cutoff = cutoffs.get("daily H/L")
     ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
-    _oos_ts   = cutoffs.get("daily H/L test_start")
-    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    OOS_START = pd.Timestamp("2026-03-01")
     s_oos = None; bt_oos = None
 
     if bt_full_oos is not None:
@@ -13552,10 +13551,8 @@ with tab_mstr:
         "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
         "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
     )
-    # OOS start boundary — mirrors what render_mstr_trading_strategy_dashboard uses internally
-    _mstr_cutoffs  = _cutoffs()
-    _mstr_oos_ts   = _mstr_cutoffs.get("daily H/L test_start")
-    _MSTR_OOS_START = _mstr_oos_ts if _mstr_oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    _MSTR_OOS_START = pd.Timestamp("2026-03-01")
 
     def _get_cmp_stats(bt, oos_start=None):
         """Return a flat stats dict, optionally sliced to the OOS window."""
@@ -13709,10 +13706,8 @@ with tab_mstu:
         "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
         "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
     )
-    # OOS start boundary — mirrors what render_mstu_trading_strategy_dashboard uses internally
-    _mstu_cutoffs   = _cutoffs()
-    _mstu_oos_ts    = _mstu_cutoffs.get("daily H/L test_start")
-    _MSTU_OOS_START = _mstu_oos_ts if _mstu_oos_ts is not None else pd.Timestamp("2026-03-01")
+    # OOS window is always anchored to 2026-03-01 (fixed, not model-metadata-driven).
+    _MSTU_OOS_START = pd.Timestamp("2026-03-01")
 
     def _get_cmp_stats_mstu(bt, oos_start=None):
         """Return a flat stats dict, optionally sliced to the OOS window."""
