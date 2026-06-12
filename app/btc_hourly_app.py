@@ -13552,51 +13552,82 @@ with tab_mstr:
         "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
         "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
     )
-    def _tf3_cmp_row(lbl, bt2, bt3):
-        def _c(bt):
-            if bt is None: return ("—", "—", "—", "—")
-            s = bt["stats"]
-            ret  = f"{s['strat_ret']:+.1f}%"
-            wr   = f"{s['win_rate']:.0f}%"
-            n    = str(s['n_trades'])
-            tim  = f"{s['time_in_mkt']:.0f}%"
-            return ret, wr, n, tim
-        r2, wr2, n2, t2 = _c(bt2)
-        r3, wr3, n3, t3 = _c(bt3)
-        delta = ""
-        if bt2 and bt3:
+    # OOS start boundary — mirrors what render_mstr_trading_strategy_dashboard uses internally
+    _mstr_cutoffs  = _cutoffs()
+    _mstr_oos_ts   = _mstr_cutoffs.get("daily H/L test_start")
+    _MSTR_OOS_START = _mstr_oos_ts if _mstr_oos_ts is not None else pd.Timestamp("2026-03-01")
+
+    def _get_cmp_stats(bt, oos_start=None):
+        """Return a flat stats dict, optionally sliced to the OOS window."""
+        if bt is None:
+            return None
+        if oos_start is not None:
+            _fnav = bt["nav_series"]; _ftr = bt["trades"]
+            ic    = bt["stats"]["initial_capital"]
+            _onav_raw = _fnav[_fnav.index >= oos_start]
+            if len(_onav_raw) < 2:
+                return None
+            _osn = float(_fnav.asof(oos_start)) or ic
+            if _osn <= 0:
+                return None
+            _onav = _onav_raw / _osn * ic
+            _of   = float(_onav.iloc[-1])
+            _otr  = [t for t in _ftr if pd.Timestamp(t["entry_date"]) >= oos_start]
+            _ow   = [t for t in _otr if t["pnl_pct"] > 0]
+            _oday = max(1, (int(_onav.index[-1].value) - int(oos_start.value)) // 86_400_000_000_000)
+            _odin = sum(t["duration_days"] for t in _otr)
+            _opk  = _onav.cummax()
+            _odd  = float(((_onav - _opk) / _opk * 100).min()) if len(_onav) > 1 else 0.0
+            return dict(strat_ret=(_of/ic-1)*100, win_rate=100*len(_ow)/len(_otr) if _otr else 0.0,
+                        n_trades=len(_otr), time_in_mkt=100*_odin/_oday, max_drawdown=_odd)
+        s = bt["stats"]
+        return dict(strat_ret=s["strat_ret"], win_rate=s["win_rate"], n_trades=s["n_trades"],
+                    time_in_mkt=s["time_in_mkt"], max_drawdown=s["max_drawdown"])
+
+    def _tf3_cmp_row(lbl, bt2, bt3, oos_start=None):
+        def _fmt(s):
+            if s is None: return ("—", "—", "—", "—", "—")
+            return (f"{s['strat_ret']:+.1f}%", f"{s['win_rate']:.0f}%",
+                    f"{s['max_drawdown']:.1f}%", str(s['n_trades']),
+                    f"{s['time_in_mkt']:.0f}%")
+        s2 = _get_cmp_stats(bt2, oos_start); s3 = _get_cmp_stats(bt3, oos_start)
+        r2, wr2, dd2, n2, t2 = _fmt(s2)
+        r3, wr3, dd3, n3, t3 = _fmt(s3)
+        delta = "—"
+        if s2 and s3:
             try:
-                delta_v = bt3["stats"]["strat_ret"] - bt2["stats"]["strat_ret"]
-                delta = f"{'▲' if delta_v >= 0 else '▼'}{abs(delta_v):.1f}pp"
+                dv = s3["strat_ret"] - s2["strat_ret"]
+                delta = f"{'▲' if dv >= 0 else '▼'}{abs(dv):.1f}pp"
             except Exception:
-                delta = "—"
-        return (lbl, r2, wr2, n2, t2, r3, wr3, n3, t3, delta)
+                pass
+        return (lbl, r2, wr2, dd2, n2, t2, r3, wr3, dd3, n3, t3, delta)
+
     _cmp_rows = [
-        _tf3_cmp_row("🐻 Bear (Jun 25–May 26)", _mstr_bear, _mstr_bear_tf3),
-        _tf3_cmp_row("🐂 Bull (Jun 24–May 25)", _mstr_bull, _mstr_bull_tf3),
-        _tf3_cmp_row("🔬 OOS (rolling blind)",  _mstr_full_oos, _mstr_full_oos_tf3),
-        _tf3_cmp_row("📈 Full (Jun 24–May 26)", _mstr_full, _mstr_full_tf3),
+        _tf3_cmp_row("🐻 Bear (Jun 25–May 26)", _mstr_bear,    _mstr_bear_tf3),
+        _tf3_cmp_row("🐂 Bull (Jun 24–May 25)", _mstr_bull,    _mstr_bull_tf3),
+        _tf3_cmp_row("🔬 OOS (rolling blind)",  _mstr_full_oos, _mstr_full_oos_tf3, _MSTR_OOS_START),
+        _tf3_cmp_row("📈 Full (Jun 24–May 26)", _mstr_full,    _mstr_full_tf3),
     ]
     _cmp_html = """
 <table style='width:100%;border-collapse:collapse;font-size:12px;font-family:sans-serif;'>
 <thead>
   <tr style='background:#1e3a5f;color:white;'>
     <th style='padding:6px 8px;text-align:left;'>Period</th>
-    <th colspan='4' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
-    <th colspan='4' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
     <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
   </tr>
   <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
     <th style='padding:4px 8px;'></th>
     <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
-    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>MaxDD</th><th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
     <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
-    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>MaxDD</th><th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
     <th style='padding:4px 6px;'></th>
   </tr>
 </thead>
 <tbody>"""
-    for _i, (_lbl, _r2, _wr2, _n2, _t2, _r3, _wr3, _n3, _t3, _d) in enumerate(_cmp_rows):
+    for _i, (_lbl, _r2, _wr2, _dd2, _n2, _t2, _r3, _wr3, _dd3, _n3, _t3, _d) in enumerate(_cmp_rows):
         _bg = "#f8fafc" if _i % 2 == 0 else "#f1f5f9"
         _dc = "#16a34a" if _d.startswith("▲") else ("#dc2626" if _d.startswith("▼") else "#64748b")
         _cmp_html += (
@@ -13604,10 +13635,12 @@ with tab_mstr:
             f"<td style='padding:5px 8px;font-weight:600;color:#1e293b;'>{_lbl}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#1e40af;'>{_r2}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_wr2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#dc2626;'>{_dd2}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_n2}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t2}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#7c3aed;font-weight:600;'>{_r3}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_wr3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#dc2626;'>{_dd3}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_n3}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t3}</td>"
             f"<td style='padding:5px 6px;text-align:center;font-weight:700;color:{_dc};'>{_d}</td>"
@@ -13615,7 +13648,7 @@ with tab_mstr:
         )
     _cmp_html += "</tbody></table>"
     st.markdown(_cmp_html, unsafe_allow_html=True)
-    st.caption("Δ Return = TF3 minus TF2 strategy return for that period. Fewer trades in TF3 = higher entry bar.")
+    st.caption("OOS period sliced at model test_start boundary. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
 
     st.markdown("---")
     # ── Strategy variant selector ─────────────────────────────────────────────
@@ -13676,51 +13709,82 @@ with tab_mstu:
         "(F3) 3-of-5 day hi-break confirmation (vs current 2-of-3) — requires a more sustained breakout pattern. "
         "Filters only affect entry — exit logic (D2/D3 + stop) is unchanged."
     )
-    def _tf3_cmp_row_mstu(lbl, bt2, bt3):
-        def _c(bt):
-            if bt is None: return ("—", "—", "—", "—")
-            s = bt["stats"]
-            ret  = f"{s['strat_ret']:+.1f}%"
-            wr   = f"{s['win_rate']:.0f}%"
-            n    = str(s['n_trades'])
-            tim  = f"{s['time_in_mkt']:.0f}%"
-            return ret, wr, n, tim
-        r2, wr2, n2, t2 = _c(bt2)
-        r3, wr3, n3, t3 = _c(bt3)
-        delta = ""
-        if bt2 and bt3:
+    # OOS start boundary — mirrors what render_mstu_trading_strategy_dashboard uses internally
+    _mstu_cutoffs   = _cutoffs()
+    _mstu_oos_ts    = _mstu_cutoffs.get("daily H/L test_start")
+    _MSTU_OOS_START = _mstu_oos_ts if _mstu_oos_ts is not None else pd.Timestamp("2026-03-01")
+
+    def _get_cmp_stats_mstu(bt, oos_start=None):
+        """Return a flat stats dict, optionally sliced to the OOS window."""
+        if bt is None:
+            return None
+        if oos_start is not None:
+            _fnav = bt["nav_series"]; _ftr = bt["trades"]
+            ic    = bt["stats"]["initial_capital"]
+            _onav_raw = _fnav[_fnav.index >= oos_start]
+            if len(_onav_raw) < 2:
+                return None
+            _osn = float(_fnav.asof(oos_start)) or ic
+            if _osn <= 0:
+                return None
+            _onav = _onav_raw / _osn * ic
+            _of   = float(_onav.iloc[-1])
+            _otr  = [t for t in _ftr if pd.Timestamp(t["entry_date"]) >= oos_start]
+            _ow   = [t for t in _otr if t["pnl_pct"] > 0]
+            _oday = max(1, (int(_onav.index[-1].value) - int(oos_start.value)) // 86_400_000_000_000)
+            _odin = sum(t["duration_days"] for t in _otr)
+            _opk  = _onav.cummax()
+            _odd  = float(((_onav - _opk) / _opk * 100).min()) if len(_onav) > 1 else 0.0
+            return dict(strat_ret=(_of/ic-1)*100, win_rate=100*len(_ow)/len(_otr) if _otr else 0.0,
+                        n_trades=len(_otr), time_in_mkt=100*_odin/_oday, max_drawdown=_odd)
+        s = bt["stats"]
+        return dict(strat_ret=s["strat_ret"], win_rate=s["win_rate"], n_trades=s["n_trades"],
+                    time_in_mkt=s["time_in_mkt"], max_drawdown=s["max_drawdown"])
+
+    def _tf3_cmp_row_mstu(lbl, bt2, bt3, oos_start=None):
+        def _fmt(s):
+            if s is None: return ("—", "—", "—", "—", "—")
+            return (f"{s['strat_ret']:+.1f}%", f"{s['win_rate']:.0f}%",
+                    f"{s['max_drawdown']:.1f}%", str(s['n_trades']),
+                    f"{s['time_in_mkt']:.0f}%")
+        s2 = _get_cmp_stats_mstu(bt2, oos_start); s3 = _get_cmp_stats_mstu(bt3, oos_start)
+        r2, wr2, dd2, n2, t2 = _fmt(s2)
+        r3, wr3, dd3, n3, t3 = _fmt(s3)
+        delta = "—"
+        if s2 and s3:
             try:
-                delta_v = bt3["stats"]["strat_ret"] - bt2["stats"]["strat_ret"]
-                delta = f"{'▲' if delta_v >= 0 else '▼'}{abs(delta_v):.1f}pp"
+                dv = s3["strat_ret"] - s2["strat_ret"]
+                delta = f"{'▲' if dv >= 0 else '▼'}{abs(dv):.1f}pp"
             except Exception:
-                delta = "—"
-        return (lbl, r2, wr2, n2, t2, r3, wr3, n3, t3, delta)
+                pass
+        return (lbl, r2, wr2, dd2, n2, t2, r3, wr3, dd3, n3, t3, delta)
+
     _cmp_rows_mstu = [
-        _tf3_cmp_row_mstu("🐻 Bear (Jun 25–May 26)", _mstu_bear, _mstu_bear_tf3),
-        _tf3_cmp_row_mstu("🐂 Bull (Jun 24–May 25)", _mstu_bull, _mstu_bull_tf3),
-        _tf3_cmp_row_mstu("🔬 OOS (rolling blind)",  _mstu_full_oos, _mstu_full_oos_tf3),
-        _tf3_cmp_row_mstu("📈 Full (Jun 24–May 26)", _mstu_full, _mstu_full_tf3),
+        _tf3_cmp_row_mstu("🐻 Bear (Jun 25–May 26)", _mstu_bear,    _mstu_bear_tf3),
+        _tf3_cmp_row_mstu("🐂 Bull (Jun 24–May 25)", _mstu_bull,    _mstu_bull_tf3),
+        _tf3_cmp_row_mstu("🔬 OOS (rolling blind)",  _mstu_full_oos, _mstu_full_oos_tf3, _MSTU_OOS_START),
+        _tf3_cmp_row_mstu("📈 Full (Jun 24–May 26)", _mstu_full,    _mstu_full_tf3),
     ]
     _cmp_html_mstu = """
 <table style='width:100%;border-collapse:collapse;font-size:12px;font-family:sans-serif;'>
 <thead>
   <tr style='background:#1e3a5f;color:white;'>
     <th style='padding:6px 8px;text-align:left;'>Period</th>
-    <th colspan='4' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
-    <th colspan='4' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Current</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Filtered</th>
     <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
   </tr>
   <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
     <th style='padding:4px 8px;'></th>
     <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
-    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>MaxDD</th><th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
     <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
-    <th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>MaxDD</th><th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
     <th style='padding:4px 6px;'></th>
   </tr>
 </thead>
 <tbody>"""
-    for _i, (_lbl, _r2, _wr2, _n2, _t2, _r3, _wr3, _n3, _t3, _d) in enumerate(_cmp_rows_mstu):
+    for _i, (_lbl, _r2, _wr2, _dd2, _n2, _t2, _r3, _wr3, _dd3, _n3, _t3, _d) in enumerate(_cmp_rows_mstu):
         _bg = "#f8fafc" if _i % 2 == 0 else "#f1f5f9"
         _dc = "#16a34a" if _d.startswith("▲") else ("#dc2626" if _d.startswith("▼") else "#64748b")
         _cmp_html_mstu += (
@@ -13728,10 +13792,12 @@ with tab_mstu:
             f"<td style='padding:5px 8px;font-weight:600;color:#1e293b;'>{_lbl}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#1e40af;'>{_r2}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_wr2}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#dc2626;'>{_dd2}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_n2}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t2}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#7c3aed;font-weight:600;'>{_r3}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_wr3}</td>"
+            f"<td style='padding:5px 6px;text-align:center;color:#dc2626;'>{_dd3}</td>"
             f"<td style='padding:5px 6px;text-align:center;'>{_n3}</td>"
             f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t3}</td>"
             f"<td style='padding:5px 6px;text-align:center;font-weight:700;color:{_dc};'>{_d}</td>"
@@ -13739,7 +13805,7 @@ with tab_mstu:
         )
     _cmp_html_mstu += "</tbody></table>"
     st.markdown(_cmp_html_mstu, unsafe_allow_html=True)
-    st.caption("Δ Return = TF3 minus TF2 strategy return for that period. Fewer trades in TF3 = higher entry bar.")
+    st.caption("OOS period sliced at model test_start boundary. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
 
     st.markdown("---")
     # ── Strategy variant selector ─────────────────────────────────────────────
