@@ -341,11 +341,11 @@ def run_backtest(dates, sigs, cfg: dict, cap: float = INITIAL_CAP):
                         if (gate_v3 or gate_v7) and not gate_abv and not gate_c10:
                             trigger = "V-recent gate"
                         elif gate_abv and gate_c10:
-                            trigger = "U1+↑MA30+clean10d"
+                            trigger = "U1+↑MA30+Clean 7d"
                         elif gate_abv:
                             trigger = "U1+↑MA30"
                         else:
-                            trigger = "U1+clean10d"
+                            trigger = "U1+Clean 7d"
 
             if allow:
                 qty = nav / price; ep_r = price; ed_r = dates[i]; en = nav; pos = "LONG"
