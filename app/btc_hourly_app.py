@@ -5309,21 +5309,21 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 
 def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                                        bt_full=None, key_suffix: str = "",
-                                       sigs: dict = None) -> None:
+                                       sigs: dict = None,
+                                       bt_bear_tf2=None, bt_bull_tf2=None,
+                                       bt_full_oos_tf2=None, bt_full_tf2=None) -> None:
     """Render the TF3 trading strategy summary + backtest dashboard.
 
     Shows:
-      • Live Position Panel — visible whenever entry signal is active or a
-        position is open (so users never miss an actionable signal)
+      • Live Position Panel
+      • TF3 vs TF2 comparison table (four periods × Return/Win%/MaxDD/Trades/Time%)
+      • Radio selector: view TF3 (current) or TF2 (previous) detailed results
       • Strategy rules summary card (entry, exit, regime logic)
-      • Unified comparison table: four periods × three columns (TF3+V-Gate | TF3+V-Gate-tax | B&H)
-      • Equity-curve charts — one per period — in tabs
-      • Expandable trade log for each period
+      • Unified backtest table + equity-curve charts per period
+      • Expandable trade log per period
 
-    bt_bear:     Fixed bear window  (Jun 2025 → May 2026, locked)
-    bt_bull:     Fixed bull window  (Jun 2024 → Jun 2025)
-    bt_full_oos: Full-period result used only for OOS stats extraction
-    bt_full:     Full market period  (Jun 2024 → May 2026, locked)
+    bt_bear / bt_bull / bt_full_oos / bt_full: TF3 (live strategy) results
+    bt_bear_tf2 / bt_bull_tf2 / bt_full_oos_tf2 / bt_full_tf2: TF2 (comparison)
     key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
     """
     st.markdown("---")
@@ -5497,6 +5497,126 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"</div>",
             unsafe_allow_html=True,
         )
+
+    # ── TF3 vs TF2 comparison table ──────────────────────────────────────
+    _has_tf2_cmp = any(b is not None for b in (bt_bear_tf2, bt_bull_tf2, bt_full_oos_tf2, bt_full_tf2))
+    if _has_tf2_cmp:
+        st.markdown("### 🔬 Strategy Comparison: TF3 (Current Live) vs TF2 (Previous)")
+        st.markdown(
+            "**TF3 (live)** adds two Tier-1 entry-quality filters on top of TF2's base signal: "
+            "(F2) err_hi_ma3 must be accelerating today vs yesterday — blocks entries when breakout momentum is fading · "
+            "(F3) 3-of-5 day hi-break confirmation (vs TF2's 2-of-3) — requires a more sustained breakout pattern. "
+            "V-reversal bypasses TF3 filters. Exit logic (D2/D3) is unchanged."
+        )
+        _BTC_OOS_START = pd.Timestamp("2026-03-01")
+
+        def _get_cmp_stats_btc(bt, oos_start=None):
+            if bt is None:
+                return None
+            if oos_start is not None:
+                _fnav = bt["nav_series"]; _ftr = bt["trades"]
+                ic    = bt["stats"]["initial_capital"]
+                _onav_raw = _fnav[_fnav.index >= oos_start]
+                if len(_onav_raw) < 2:
+                    return None
+                _osn = float(_fnav.asof(oos_start)) or ic
+                if _osn <= 0:
+                    return None
+                _onav = _onav_raw / _osn * ic
+                _of   = float(_onav.iloc[-1])
+                _otr  = [t for t in _ftr if pd.Timestamp(t["entry_date"]) >= oos_start]
+                _ow   = [t for t in _otr if t["pnl_pct"] > 0]
+                _oday = max(1, (int(_onav.index[-1].value) - int(oos_start.value)) // 86_400_000_000_000)
+                _odin = sum(t["duration_days"] for t in _otr)
+                _opk  = _onav.cummax()
+                _odd  = float(((_onav - _opk) / _opk * 100).min()) if len(_onav) > 1 else 0.0
+                return dict(strat_ret=(_of/ic-1)*100, win_rate=100*len(_ow)/len(_otr) if _otr else 0.0,
+                            n_trades=len(_otr), time_in_mkt=100*_odin/_oday, max_drawdown=_odd)
+            s = bt["stats"]
+            return dict(strat_ret=s["strat_ret"], win_rate=s["win_rate"], n_trades=s["n_trades"],
+                        time_in_mkt=s["time_in_mkt"], max_drawdown=s["max_drawdown"])
+
+        def _btc_cmp_row(lbl, bt2, bt3, oos_start=None):
+            def _fmt(s):
+                if s is None: return ("—", "—", "—", "—", "—")
+                return (f"{s['strat_ret']:+.1f}%", f"{s['win_rate']:.0f}%",
+                        f"{s['max_drawdown']:.1f}%", str(s['n_trades']),
+                        f"{s['time_in_mkt']:.0f}%")
+            s2 = _get_cmp_stats_btc(bt2, oos_start); s3 = _get_cmp_stats_btc(bt3, oos_start)
+            r2, wr2, dd2, n2, t2 = _fmt(s2)
+            r3, wr3, dd3, n3, t3 = _fmt(s3)
+            delta = "—"
+            if s2 and s3:
+                try:
+                    dv = s3["strat_ret"] - s2["strat_ret"]
+                    delta = f"{'▲' if dv >= 0 else '▼'}{abs(dv):.1f}pp"
+                except Exception:
+                    pass
+            return (lbl, r2, wr2, dd2, n2, t2, r3, wr3, dd3, n3, t3, delta)
+
+        _cmp_rows_btc = [
+            _btc_cmp_row("🐻 Bear (Jun 25–May 26)", bt_bear_tf2,     bt_bear),
+            _btc_cmp_row("🐂 Bull (Jun 24–May 25)", bt_bull_tf2,     bt_bull),
+            _btc_cmp_row("🔬 OOS (rolling blind)",  bt_full_oos_tf2, bt_full_oos, _BTC_OOS_START),
+            _btc_cmp_row("📈 Full (Jun 24–May 26)", bt_full_tf2,     bt_full),
+        ]
+        _cmp_html_btc = """
+<table style='width:100%;border-collapse:collapse;font-size:12px;font-family:sans-serif;'>
+<thead>
+  <tr style='background:#1e3a5f;color:white;'>
+    <th style='padding:6px 8px;text-align:left;'>Period</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#2d5a8e;'>TF2 — Previous</th>
+    <th colspan='5' style='padding:6px 8px;text-align:center;background:#4a1d96;'>TF3 — Current ★</th>
+    <th style='padding:6px 8px;text-align:center;'>Δ Return</th>
+  </tr>
+  <tr style='background:#334155;color:#cbd5e1;font-size:11px;'>
+    <th style='padding:4px 8px;'></th>
+    <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
+    <th style='padding:4px 6px;'>MaxDD</th><th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'>Return</th><th style='padding:4px 6px;'>Win%</th>
+    <th style='padding:4px 6px;'>MaxDD</th><th style='padding:4px 6px;'>Trades</th><th style='padding:4px 6px;'>Time%</th>
+    <th style='padding:4px 6px;'></th>
+  </tr>
+</thead>
+<tbody>"""
+        for _i, (_lbl, _r2, _wr2, _dd2, _n2, _t2, _r3, _wr3, _dd3, _n3, _t3, _d) in enumerate(_cmp_rows_btc):
+            _bg = "#f8fafc" if _i % 2 == 0 else "#f1f5f9"
+            _dc = "#16a34a" if _d.startswith("▲") else ("#dc2626" if _d.startswith("▼") else "#64748b")
+            _cmp_html_btc += (
+                f"<tr style='background:{_bg};'>"
+                f"<td style='padding:5px 8px;font-weight:600;color:#1e293b;'>{_lbl}</td>"
+                f"<td style='padding:5px 6px;text-align:center;color:#1e40af;'>{_r2}</td>"
+                f"<td style='padding:5px 6px;text-align:center;'>{_wr2}</td>"
+                f"<td style='padding:5px 6px;text-align:center;color:#dc2626;'>{_dd2}</td>"
+                f"<td style='padding:5px 6px;text-align:center;'>{_n2}</td>"
+                f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t2}</td>"
+                f"<td style='padding:5px 6px;text-align:center;color:#7c3aed;font-weight:600;'>{_r3}</td>"
+                f"<td style='padding:5px 6px;text-align:center;'>{_wr3}</td>"
+                f"<td style='padding:5px 6px;text-align:center;color:#dc2626;'>{_dd3}</td>"
+                f"<td style='padding:5px 6px;text-align:center;'>{_n3}</td>"
+                f"<td style='padding:5px 6px;text-align:center;color:#64748b;'>{_t3}</td>"
+                f"<td style='padding:5px 6px;text-align:center;font-weight:700;color:{_dc};'>{_d}</td>"
+                f"</tr>"
+            )
+        _cmp_html_btc += "</tbody></table>"
+        st.markdown(_cmp_html_btc, unsafe_allow_html=True)
+        st.caption("TF3 is the current live strategy. OOS from Mar 1, 2026. MaxDD = peak-to-trough drawdown (negative = loss from peak). Δ Return = TF3 minus TF2.")
+
+        st.markdown("---")
+
+        # ── Strategy variant selector ─────────────────────────────────────
+        _btc_variant = st.radio(
+            "View detailed backtest results for:",
+            ["TF3 — Current Strategy", "TF2 — Previous Strategy"],
+            horizontal=True, key=f"btc_strategy_variant_{key_suffix}",
+        )
+        _show_tf3_btc = "TF3" in _btc_variant
+        if not _show_tf3_btc:
+            # Swap in TF2 backtests for the detailed view below
+            bt_bear     = bt_bear_tf2
+            bt_bull     = bt_bull_tf2
+            bt_full_oos = bt_full_oos_tf2
+            bt_full     = bt_full_tf2
 
     # Use whichever is available for the rules card period label
     _bt_ref = bt_bear if bt_bear is not None else bt_bull
@@ -10007,10 +10127,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         if is_live
         else _bt_end
     )
+    # ── BTC TF3 backtests (live strategy) ────────────────────────────────
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
     _bt_bull     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime, data_end=_data_end or "")
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
+    # ── BTC TF2 backtests (previous strategy — comparison only) ──────────
+    _bt_bear_tf2     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", strategy_variant="TF2")
+    _bt_bull_tf2     = _run_fixed_period_backtest("2025-06-14",         "2024-06-05", _model_mtime, data_end=_data_end or "", strategy_variant="TF2")
+    _bt_full_oos_tf2 = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", strategy_variant="TF2")
+    _bt_full_tf2     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", strategy_variant="TF2")
     _chart_key   = "live" if is_live else "hist"
     # In historical mode use backtest-derived signals (yfinance daily, no direction_head)
     # so the signal panel matches exactly which bars the position entries fired on.
@@ -10233,7 +10359,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # ─────────────── TF3 + V-Gate Strategy Backtest Dashboard ────────────
     render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
                                        bt_full=_bt_full, key_suffix=_chart_key,
-                                       sigs=sigs)
+                                       sigs=sigs,
+                                       bt_bear_tf2=_bt_bear_tf2, bt_bull_tf2=_bt_bull_tf2,
+                                       bt_full_oos_tf2=_bt_full_oos_tf2, bt_full_tf2=_bt_full_tf2)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
