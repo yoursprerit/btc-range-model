@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v17"  # TF3 promoted to live strategy
+_BT_LOGIC_VERSION = "sl5-sl5-v18"  # TF3 promoted to live strategy for BTC
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3004,8 +3004,10 @@ def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
                              initial_capital: float = 100_000.0,
                              model_mtime: float = 0.0,
-                             data_end: str = ""):
-    """Full-period TF2 backtest using yfinance daily BTC data.
+                             data_end: str = "",
+                             strategy_variant: str = "TF3",
+                             logic_version: str = _BT_LOGIC_VERSION):
+    """Full-period TF3 backtest using yfinance daily BTC data.
 
     Uses _build_backtest_preds() (same source as run_mstr_backtest / run_mstu_backtest)
     so BTC, MSTR, and MSTU positions in the Historical Replay panel all derive from
@@ -3131,6 +3133,18 @@ def run_full_period_backtest(end_date_iso: str,
 
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
     tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+
+    # ── TF3: Tier-1 entry-quality filters (live strategy) ────────────────────
+    if strategy_variant == "TF3":
+        ehma3_accel = np.zeros(N, dtype=bool)
+        for i in range(1, N):
+            ehma3_accel[i] = ehma3[i] > ehma3[i-1]
+        hb5 = np.zeros(N, dtype=int)
+        for i in range(N):
+            hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
+        hb5_ok = hb5 >= 3
+        # V-reversal bypasses TF3 quality filters (catches post-crash recoveries)
+        tf1_entry = (tf1_entry & ehma3_accel & hb5_ok) | (u1 & v_recent)
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -3273,7 +3287,7 @@ def run_full_period_backtest(end_date_iso: str,
     )
 
     return dict(
-        strategy   = "TF2",
+        strategy   = strategy_variant,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -3283,7 +3297,7 @@ def run_full_period_backtest(end_date_iso: str,
         bull_regime_series = bull_regime_series,
         last_bar_sigs = last_bar_sigs,
         stats = dict(
-            strategy        = "TF2",
+            strategy        = strategy_variant,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -3307,6 +3321,7 @@ def run_full_period_backtest(end_date_iso: str,
 def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                 model_mtime: float = 0.0,
                                 data_end: str = "",
+                                strategy_variant: str = "TF3",
                                 logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
 
@@ -3315,7 +3330,8 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
     (logic_version).  The OOS period calls run_full_period_backtest directly.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
-                                    model_mtime=model_mtime, data_end=data_end)
+                                    model_mtime=model_mtime, data_end=data_end,
+                                    strategy_variant=strategy_variant)
 
 
 @st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
@@ -5278,13 +5294,13 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                                        bt_full=None, key_suffix: str = "",
                                        sigs: dict = None) -> None:
-    """Render the TF2 trading strategy summary + backtest dashboard.
+    """Render the TF3 trading strategy summary + backtest dashboard.
 
     Shows:
       • Live Position Panel — visible whenever entry signal is active or a
         position is open (so users never miss an actionable signal)
       • Strategy rules summary card (entry, exit, regime logic)
-      • Unified comparison table: four periods × three columns (TF2+V-Gate | TF2+V-Gate-tax | B&H)
+      • Unified comparison table: four periods × three columns (TF3+V-Gate | TF3+V-Gate-tax | B&H)
       • Equity-curve charts — one per period — in tabs
       • Expandable trade log for each period
 
@@ -5295,7 +5311,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
     """
     st.markdown("---")
-    st.subheader("🎯 TF2 + V-Gate Trading Strategy — Regime-Adaptive Backtest")
+    st.subheader("🎯 TF3 + V-Gate Trading Strategy — Regime-Adaptive Backtest")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ Backtest computing … CT model batch predictions being built. "
@@ -5477,13 +5493,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
   <div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    🎯 TF2 + V-Gate &nbsp;—&nbsp; Strategy Rules at a Glance
+    🎯 TF3 + V-Gate &nbsp;—&nbsp; Strategy Rules at a Glance
   </div>
 
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#1e40af; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — two conditions, both required</div>
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — all conditions required (V-reversal bypasses TF3 filters)</div>
     <table style='width:100%; border-collapse:collapse; font-size:12px; color:#1e3a8a;'>
       <tr>
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
@@ -5513,6 +5529,20 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
               (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are active together (late-cycle signal)</span>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#7c3aed;'>③</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>TF3 entry-quality filters</b> — both required (skipped when ⚡ V-reversal bypasses):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>EHMA3 accel</span>
+            &nbsp; Prediction-error momentum accelerating (ehma3[i] &gt; ehma3[i-1])
+            <br>
+            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>≥3/5 hi-breaks</span>
+            &nbsp; At least 3 of the last 5 bars beat the model's predicted high (sustained breakout)
           </div>
         </td>
       </tr>
@@ -5594,7 +5624,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     fmt_tax   = lambda v: f"${v:,.0f}"
 
     def _period_cells(s):
-        """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
+        """4-cell group: TF3+V-Gate | TF3+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
         _na4 = "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
         if s is None:
             return {k: _na4 for k in ("nav", "ret", "dd", "sh", "tim", "tax", "taxpd", "wr")}
@@ -5776,8 +5806,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     else:
         lbl_full = "🌐 Full Market (Jun 2024 – May 2026)"
 
-    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF3+V-Gate</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 TF3+V-Gate (35% STCG)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H (0% unrealised)</th>"
              "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H (15% LTCG)</th>")
     sub_hdr = (
@@ -5904,9 +5934,9 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate Strategy",
+            x=nav_s.index, y=nav_s.values, name="TF3+V-Gate Strategy",
             line=dict(color="#2563eb", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate Strategy</extra>",
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF3+V-Gate Strategy</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -6004,7 +6034,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 sr = bt_bear["stats"]
                 fig_r = _make_chart(
                     bt_bear,
-                    f"TF2+V-Gate vs B&H — Bear Market Performance  "
+                    f"TF3+V-Gate vs B&H — Bear Market Performance  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -6016,7 +6046,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 sf = bt_bull["stats"]
                 fig_f = _make_chart(
                     bt_bull,
-                    f"TF2+V-Gate vs B&H — Bull Market Performance  "
+                    f"TF3+V-Gate vs B&H — Bull Market Performance  "
                     f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -6028,7 +6058,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_chart(
                     bt_oos,
-                    f"TF2+V-Gate vs B&H — OOS Period (Fully Blind)  "
+                    f"TF3+V-Gate vs B&H — OOS Period (Fully Blind)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -6040,7 +6070,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 sfl = bt_full["stats"]
                 fig_fl = _make_chart(
                     bt_full,
-                    f"TF2+V-Gate vs B&H — Full Market Performance  "
+                    f"TF3+V-Gate vs B&H — Full Market Performance  "
                     f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -9079,7 +9109,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 </span>
                 <span style="color:{cfg['txt_col']}; font-size:13px;">
                     <b>{dnc}/3</b> DN · <b>{upc}/1</b> UP ·
-                    TF2 entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
+                    TF3 entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
                     (U1={'✓' if sigs['u1_triggered'] else '✗'}
                     MA30={'↑' if sigs['above_ma30'] else '↓'}
                     slope={'↑' if sigs.get('ma30_slope_pos') else '↓'}
@@ -9175,7 +9205,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
           </div>
           <div style="margin-left:auto; font-size:11px; color:#64748b;
               text-align:right; line-height:1.6;">
-            <b>TF2 + V-Gate Strategy</b><br>Signal as of today's close
+            <b>TF3 + V-Gate Strategy</b><br>Signal as of today's close
           </div>
         </div>
         """,
@@ -9675,7 +9705,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             unsafe_allow_html=True,
         )
 
-    # ── TF2 full-width card (U1 + MA30 + regime-adaptive exit) ───────────
+    # ── TF3 full-width card (U1 + MA30 + TF3 filters + regime-adaptive exit) ──
     # _bull_regime / _regime_label already computed above for ACTION SIGNAL
     _ma30_pct  = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
     _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
@@ -9725,21 +9755,21 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     ]
     st.markdown(
         _sig_card(
-            title="TF2 + V-Gate — Regime-Adaptive Strategy: U1 + Trend + V-reversal + Regime Exit",
+            title="TF3 + V-Gate — Regime-Adaptive Strategy: U1 + Trend + V-reversal + Entry Filters + Regime Exit",
             icon="🎯",
             color="#2563eb",
             triggered=sigs["tf1_triggered"],
             signal_rows=tf1_rows,
             interpretation=(
-                "The <b>optimised regime-adaptive strategy</b> with V-reversal gate improvement. "
+                "The <b>optimised regime-adaptive strategy</b> with V-reversal gate and TF3 entry filters. "
                 "Entry: U1 (hi-band persistence) AND <b>exactly one of</b>: ↑MA30 or Clean 7d "
                 "(not both simultaneously — combined condition has 0% win rate), "
                 "<b>or ⚡ V-reversal capitulation within 3 bars</b> (catches post-crash recoveries "
-                "before price has crossed MA30; V-reversal always allows entry). "
+                "before price has crossed MA30; V-reversal bypasses TF3 quality filters). "
+                "<b>TF3 filters</b>: EHMA3 acceleration (momentum accelerating) AND ≥3 of last 5 bars "
+                "with hi-breaks (sustained breakout). "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 &amp; MA30 rising) → D3 only "
-                "(patient); <b>BEAR/Neutral</b> → D2 or D3 (defensive). "
-                "V-gate improvement: +$4,685 NAV, Sharpe 0.86→0.90, Max DD −26.9%→−23.6% "
-                "over the 2-year backtest period."
+                "(patient); <b>BEAR/Neutral</b> → D2 or D3 (defensive)."
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
@@ -9748,10 +9778,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
             prob_txt=(
-                "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
-                "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
-                "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️, Jun 2024–Jun 2025): B&amp;H +48%. Strategy captures ~90–95% of bull."
+                "TF3 backtest (Jun 2024–May 2026): TF3 entry-quality filters reduce noise entries. "
+                "V-reversal bypass preserves post-crash recovery catches. "
+                "OOS bear period (Mar 2026+): fully blind test — CT model not retrained after this date. "
+                "Bull period (in-sample ⚠️, Jun 2024–Jun 2025): B&amp;H +48%. TF3 captures major moves."
             ),
             conf_txt=(
                 "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
@@ -9878,16 +9908,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **STRATEGY BUY (TF2 + V-Gate)**: U1 + (↑MA30 XOR Clean 7d — not both; OR ⚡V-reversal) → Regime-adaptive entry (see TF2 card below)
+- 🎯 **STRATEGY BUY (TF3 + V-Gate)**: U1 + (↑MA30 XOR Clean 7d — not both; OR ⚡V-reversal) + EHMA3 accel + ≥3/5 hi-breaks → Regime-adaptive entry (see TF3 card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
-**TF2 + V-Gate — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
-- **Entry**: U1 fires AND (BTC > 30-day MA **XOR** no D1/D2 in prior 7 days — not both; **OR** ⚡ V-reversal within 3 bars) — combined ↑MA30+Clean 7d blocked (0% win rate)
+**TF3 + V-Gate — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
+- **Entry**: U1 fires AND (BTC > 30-day MA **XOR** no D1/D2 in prior 7 days — not both; **OR** ⚡ V-reversal within 3 bars) AND EHMA3 acceleration AND ≥3/5 hi-breaks — V-reversal bypasses TF3 filters
 - **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
 - **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −0.75%) or D3 (defensive — cut quickly)
-- **2-year backtest** (May 24–May 26): +87.9% return · Sharpe 0.90 · Max DD −23.6% · Alpha +$64,594 vs B&H
-- **Bear period OOS** (Sep 25–May 26): +$30k alpha vs B&H · V-gate adds post-crash entries before MA30 cross
+- **2-year backtest** (Jun 24–May 26): TF3 filters reduce entry count vs TF2 — higher quality trades, fewer whipsaws
+- **OOS period** (Mar 2026+): Fully blind · TF3 V-reversal bypass preserves post-crash recovery catches
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -10076,7 +10106,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     if hist_picker is not None:
         hist_picker()
 
-    # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
+    # ─────────────── TF3 + V-Gate Signal Watch Dashboard ─────────────────
     if sigs is not None:
         # _intra_raw already fetched above for the top-panel realized H/L metrics
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
@@ -10171,7 +10201,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
 
-    # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
+    # ─────────────── TF3 + V-Gate Strategy Backtest Dashboard ────────────
     render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
                                        bt_full=_bt_full, key_suffix=_chart_key,
                                        sigs=sigs)
@@ -12046,10 +12076,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Retrain Status Dashboard  (TF2 strategy models only)
+# Retrain Status Dashboard  (TF3 strategy models only)
 # ════════════════════════════════════════════════════════════════════════
 def render_retrain_dashboard():
-    """Re-training status for the three models that power TF2 trading signals."""
+    """Re-training status for the three models that power TF3 trading signals."""
     today_utc = pd.Timestamp(datetime.now(timezone.utc)).normalize().tz_convert(None)
     _end_iso  = today_utc.strftime("%Y-%m-%d")
 
@@ -12142,7 +12172,7 @@ def render_retrain_dashboard():
     # ── 1. Top-level banner ───────────────────────────────────────────────────
     if overall[:2] == "🔴":
         st.error(
-            "🔴  **RETRAIN REQUIRED** — One or more TF2 strategy models are past their "
+            "🔴  **RETRAIN REQUIRED** — One or more TF3 strategy models are past their "
             "maintenance threshold.  U1 / D2 / D3 signal accuracy may be degraded.  "
             "See action plan below."
         )
