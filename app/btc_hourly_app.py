@@ -3162,11 +3162,11 @@ def run_full_period_backtest(end_date_iso: str,
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
+                    e_trigger = "U1 + ↑MA30 + Clean 7d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
-                    e_trigger = "U1 + clean10d"
+                    e_trigger = "U1 + Clean 7d"
         nav_arr[i] = btc_qty * price if pos == "LONG" else nav
 
     if pos == "LONG":
@@ -3752,11 +3752,11 @@ def run_mstr_backtest(end_date_iso: str,
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
+                    e_trigger = "U1 + ↑MA30 + Clean 7d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
-                    e_trigger = "U1 + clean10d"
+                    e_trigger = "U1 + Clean 7d"
         nav_arr[i] = mstr_qty * price if pos == "LONG" else nav
 
     if pos == "LONG" and np.isfinite(mstr_px[N-1]) and mstr_px[N-1] > 0:
@@ -4074,11 +4074,11 @@ def run_mstu_backtest(end_date_iso: str,
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
+                    e_trigger = "U1 + ↑MA30 + Clean 7d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
-                    e_trigger = "U1 + clean10d"
+                    e_trigger = "U1 + Clean 7d"
         nav_arr[i] = mstu_qty * price if pos == "LONG" else nav
 
     if pos == "LONG" and np.isfinite(mstu_px[N-1]) and mstu_px[N-1] > 0:
@@ -4413,11 +4413,11 @@ def run_mstr_options_backtest(end_date_iso: str,
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
+                    e_trigger = "U1 + ↑MA30 + Clean 7d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
-                    e_trigger = "U1 + clean10d"
+                    e_trigger = "U1 + Clean 7d"
                 nav = n_contracts * opt_prem
 
         if pos == "LONG":
@@ -4745,11 +4745,11 @@ def run_mstu_options_backtest(end_date_iso: str,
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
+                    e_trigger = "U1 + ↑MA30 + Clean 7d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
-                    e_trigger = "U1 + clean10d"
+                    e_trigger = "U1 + Clean 7d"
                 nav = n_contracts * opt_prem
 
         if pos == "LONG":
@@ -5128,11 +5128,11 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
                 if v_recent[i] and not above_ma30[i] and not clean_10d[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i] and clean_10d[i]:
-                    e_trigger = "U1 + ↑MA30 + clean10d"
+                    e_trigger = "U1 + ↑MA30 + Clean 7d"
                 elif above_ma30[i]:
                     e_trigger = "U1 + ↑MA30"
                 else:
-                    e_trigger = "U1 + clean10d"
+                    e_trigger = "U1 + Clean 7d"
 
         nav_arr[i] = btc_qty * price if pos == "LONG" else nav
 
@@ -9037,9 +9037,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _action_bg    = "#fefce8"; _action_brd = "#ca8a04"; _action_emoji = "🟡"
         _action_label = "U1 ACTIVE — TREND GATE BLOCKED"
         _action_sub   = (
-            "U1 fired but entry requires ↑MA30 OR clean10d OR ⚡V-reversal. "
+            "U1 fired but entry requires ↑MA30 OR Clean 7d OR ⚡V-reversal. "
             f"BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
-            f"clean10d={'YES' if sigs['clean_10d'] else 'NO'}, "
+            f"Clean 7d={'YES' if sigs['clean_10d'] else 'NO'}, "
             f"V-rev={'YES' if _v_gate_ok else 'NO'} — watch for reversal"
         )
     else:
@@ -9683,7 +9683,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **STRATEGY BUY (TF2 + V-Gate)**: U1 + (↑MA30 OR clean10d OR ⚡V-reversal) → Regime-adaptive entry (see TF2 card below)
+- 🎯 **STRATEGY BUY (TF2 + V-Gate)**: U1 + (↑MA30 OR Clean 7d OR ⚡V-reversal) → Regime-adaptive entry (see TF2 card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
