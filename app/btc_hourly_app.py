@@ -5439,7 +5439,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#2563eb;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>At least one trend gate passes</b> (any of the three):
+          <b>Exactly one trend gate passes</b> (↑ MA30 or Clean 7d — not both simultaneously; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
             <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
@@ -5452,6 +5452,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='color:#7c3aed; font-size:11px;'>
               (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are active together (late-cycle signal)</span>
           </div>
         </td>
       </tr>
@@ -6116,7 +6117,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#7c3aed;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>At least one BTC trend gate passes</b>:
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
@@ -6127,6 +6128,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
         </td>
       </tr>
@@ -6846,7 +6848,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#0d9488;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>At least one BTC trend gate passes</b>:
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
             <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
@@ -6857,6 +6859,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
         </td>
       </tr>
@@ -7582,7 +7585,7 @@ def render_mstr_options_trading_strategy_dashboard(
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#d97706;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>At least one BTC trend gate passes</b>:
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
             <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
@@ -7593,6 +7596,7 @@ def render_mstr_options_trading_strategy_dashboard(
             <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
         </td>
       </tr>
@@ -8288,7 +8292,7 @@ def render_mstu_options_trading_strategy_dashboard(
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#0284c7;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>At least one BTC trend gate passes</b>:
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
             <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
             &nbsp; BTC close above its 30-day moving average
@@ -8299,6 +8303,7 @@ def render_mstu_options_trading_strategy_dashboard(
             <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
         </td>
       </tr>
@@ -9043,12 +9048,19 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         )
     elif sigs["u1_triggered"] and not _trend_ok:
         _btc_bg, _btc_brd, _btc_emoji = "#fefce8", "#ca8a04", "🟡"
+        _btc_combined_block = sigs["above_ma30"] and sigs["clean_10d"] and not _v_gate_ok
         _btc_label = "U1 ACTIVE — TREND GATE BLOCKED"
         _btc_sub   = (
-            "U1 fired but entry requires ↑MA30 OR Clean 7d OR ⚡V-reversal. "
-            f"BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
-            f"Clean 7d={'YES' if sigs['clean_10d'] else 'NO'}, "
-            f"V-rev={'YES' if _v_gate_ok else 'NO'} — watch for reversal"
+            (
+                "U1 fired but entry blocked: ↑MA30 AND Clean 7d are both active simultaneously — "
+                "combined condition signals a late-cycle entry (0% win rate historically). "
+                "Wait for D1/D2 to reset the Clean 7d window, or a V-reversal."
+                if _btc_combined_block else
+                "U1 fired but no trend gate active: exactly one of ↑MA30 or Clean 7d must fire (not both), or ⚡V-reversal."
+            )
+            + f"  BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
+            + f"Clean 7d={'YES' if sigs['clean_10d'] else 'NO'}, "
+            + f"V-rev={'YES' if _v_gate_ok else 'NO'}"
         )
     else:
         _btc_bg, _btc_brd, _btc_emoji = "#f8fafc", "#94a3b8", "⬜"
@@ -9635,9 +9647,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             signal_rows=tf1_rows,
             interpretation=(
                 "The <b>optimised regime-adaptive strategy</b> with V-reversal gate improvement. "
-                "Entry: U1 (hi-band persistence) AND at least one of: BTC &gt; MA30, clean 7-day window, "
+                "Entry: U1 (hi-band persistence) AND <b>exactly one of</b>: ↑MA30 or Clean 7d "
+                "(not both simultaneously — combined condition has 0% win rate), "
                 "<b>or ⚡ V-reversal capitulation within 3 bars</b> (catches post-crash recoveries "
-                "before price has crossed MA30). "
+                "before price has crossed MA30; V-reversal always allows entry). "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 &amp; MA30 rising) → D3 only "
                 "(patient); <b>BEAR/Neutral</b> → D2 or D3 (defensive). "
                 "V-gate improvement: +$4,685 NAV, Sharpe 0.86→0.90, Max DD −26.9%→−23.6% "
@@ -9780,12 +9793,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **STRATEGY BUY (TF2 + V-Gate)**: U1 + (↑MA30 OR Clean 7d OR ⚡V-reversal) → Regime-adaptive entry (see TF2 card below)
+- 🎯 **STRATEGY BUY (TF2 + V-Gate)**: U1 + (↑MA30 XOR Clean 7d — not both; OR ⚡V-reversal) → Regime-adaptive entry (see TF2 card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
 **TF2 + V-Gate — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
-- **Entry**: U1 fires AND (BTC > 30-day MA **OR** no D1/D2 in prior 7 days **OR** ⚡ V-reversal within 3 bars)
+- **Entry**: U1 fires AND (BTC > 30-day MA **XOR** no D1/D2 in prior 7 days — not both; **OR** ⚡ V-reversal within 3 bars) — combined ↑MA30+Clean 7d blocked (0% win rate)
 - **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
 - **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −0.75%) or D3 (defensive — cut quickly)
 - **2-year backtest** (May 24–May 26): +87.9% return · Sharpe 0.90 · Max DD −23.6% · Alpha +$64,594 vs B&H
