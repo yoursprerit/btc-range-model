@@ -2,7 +2,7 @@
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
 **Last updated:** 2026-06-12  
-**Current live strategy:** TF2 (Regime-Adaptive) — supersedes TF1  
+**Current live strategy:** TF3 (Regime-Adaptive + Entry Filters) — supersedes TF2  
 **OOS test window:** 2025-09-19 → 2026-05-17 (241 bars, fully out-of-sample)  
 **In-sample test window:** 2024-09-17 → 2025-09-17 (365 bars, in-sample — model trained through this period)  
 **Starting capital:** $100,000 USD  
@@ -294,7 +294,7 @@ The strategy correctly avoided the post-May-7 decline (−4.4%).
 
 ---
 
-## TF2 — Regime-Adaptive Strategy (Current Live Strategy)
+## TF2 — Regime-Adaptive Strategy (Previous Live Strategy — superseded by TF3)
 
 TF2 was derived by running a multi-strategy optimizer across **both** test periods simultaneously,
 seeking an approach that maximises returns in bull markets while minimising losses in bear markets.
@@ -389,9 +389,9 @@ by staying patient in BULL regime while TF1 exited them prematurely at D2 stalls
 | Max drawdown | −8.7% | −14.1% | −30.9% | −22.9% |
 | Time in market | 18% | 16% | 35% | 51% |
 
-**Recommendation:** TF2 is the live strategy. Use TF1 as a reference for pure bear-market
+**Note:** TF2 is the previous live strategy, now superseded by TF3. Use TF1 as a reference for pure bear-market
 defensive performance. When the regime clearly switches to BEAR (MA30 slope turns negative),
-TF2 automatically becomes TF1-equivalent.
+TF2 automatically becomes TF1-equivalent. TF3 retains the same base + adds F2/F3 entry filters.
 
 ---
 
@@ -650,7 +650,7 @@ dead-cat-bounce re-entries on the 2× leveraged instrument where drawdowns compo
 
 ## Implementation in the Live Dashboard
 
-The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is live in `app/btc_hourly_app.py`:
+The TF3 + V-Gate strategy (F2 acceleration + F3 extended-window filters on top of TF2 base) with per-asset stop losses and re-entry criteria is live in `app/btc_hourly_app.py`:
 
 - **`compute_trend_signatures()`** fetches 45 completed bars, computes the 30-bar MA, and
   determines `above_ma30`, `clean_10d`, and `tf1_triggered`.
@@ -661,12 +661,12 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
 - **`run_mstr_backtest()`** — MSTR backtest with **Fixed −3% stop** (`stop_px = entry × 0.97`),
   triggered when `mstr_close[i] < stop_px` (daily close, not intraday), filled at close price.
   After a stop exit, **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30
-  rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
+  rising), re-enter immediately on next valid TF3 signal; in BEAR/Neutral regime, wait 10 bars.
   Close-price triggering avoids false stops on intraday noise (MSTR's daily ATR is 5–10%).
 - **`run_mstu_backtest()`** — MSTU backtest with **Fixed −7% stop** (`stop_px = entry × 0.93`),
   triggered when `mstu_close[i] <= stop_px` (daily close, not intraday), filled at close price.
   After a stop exit, **SL5 regime-adaptive re-entry**: in BULL regime (BTC above MA30 AND MA30
-  rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
+  rising), re-enter immediately on next valid TF3 signal; in BEAR/Neutral regime, wait 10 bars.
   For pre-inception dates (before Sep 18, 2024), the Sep 18 opening price ($25.52)
   is backward-filled — matching the research script price source.
 - All three backtests use **same-bar execution** (signal on bar i, trade at bar i close) — BTC trades
