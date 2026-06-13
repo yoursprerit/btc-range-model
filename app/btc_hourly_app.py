@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v19"  # TF3 V-reversal bypass unified across BTC/MSTR/MSTU
+_BT_LOGIC_VERSION = "sl5-sl5-v20"  # TF3 V-reversal bypass removed; pure EHMA3+hb5 filter all instruments
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3156,8 +3156,7 @@ def run_full_period_backtest(end_date_iso: str,
         for i in range(N):
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
-        # V-reversal bypasses TF3 quality filters (catches post-crash recoveries)
-        tf1_entry = (tf1_entry & ehma3_accel & hb5_ok) | (u1 & v_recent)
+        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -3732,8 +3731,7 @@ def run_mstr_backtest(end_date_iso: str,
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
 
-        # V-reversal bypasses TF3 quality filters (matches BTC TF3 logic)
-        tf1_entry = (tf1_entry & ehma3_accel & hb5_ok) | (u1 & v_recent)
+        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -4084,8 +4082,7 @@ def run_mstu_backtest(end_date_iso: str,
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
 
-        # V-reversal bypasses TF3 quality filters (matches BTC TF3 logic)
-        tf1_entry = (tf1_entry & ehma3_accel & hb5_ok) | (u1 & v_recent)
+        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -9887,13 +9884,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
           if sigs.get("ehma3_accel")
           else "✗ NOT accelerating — today {:.3f}% ≤ prev {:.3f}%"
           .format(sigs.get("err_hi_ma3", 0), sigs.get("err_hi_ma3_prev", 0))),
-         "= ACCELERATING — err_hi_ma3 today > yesterday (skipped when V-reversal active)",
-         sigs.get("ehma3_accel", False) or sigs.get("v_recent_gate", False), True),
+         "= ACCELERATING — err_hi_ma3 today > yesterday",
+         sigs.get("ehma3_accel", False), True),
         ("TF3 — hi-breaks 5d ≥ 3 (F3)",
          f"{sigs.get('hi_breaks_5d', 0)}/5 bars beat pred-high"
-         + (" ✅" if (sigs.get("hi_breaks_5d", 0) >= 3 or sigs.get("v_recent_gate", False)) else " ✗"),
-         "= ≥ 3/5 bars needed — sustained breakout pattern (skipped when V-reversal active)",
-         sigs.get("hi_breaks_5d", 0) >= 3 or sigs.get("v_recent_gate", False), True),
+         + (" ✅" if sigs.get("hi_breaks_5d", 0) >= 3 else " ✗"),
+         "= ≥ 3/5 bars needed — sustained breakout pattern",
+         sigs.get("hi_breaks_5d", 0) >= 3, True),
         ("MA30 slope (5-bar)",
          f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
          f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
