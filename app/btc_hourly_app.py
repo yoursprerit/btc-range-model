@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v18"  # TF3 promoted to live strategy for BTC
+_BT_LOGIC_VERSION = "sl5-sl5-v19"  # TF3 V-reversal bypass unified across BTC/MSTR/MSTU
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3732,7 +3732,8 @@ def run_mstr_backtest(end_date_iso: str,
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
 
-        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
+        # V-reversal bypasses TF3 quality filters (matches BTC TF3 logic)
+        tf1_entry = (tf1_entry & ehma3_accel & hb5_ok) | (u1 & v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -4083,7 +4084,8 @@ def run_mstu_backtest(end_date_iso: str,
             hb5[i] = int(np.sum(hi_brk[max(0, i-4):i+1]))
         hb5_ok = hb5 >= 3
 
-        tf1_entry = tf1_entry & ehma3_accel & hb5_ok
+        # V-reversal bypasses TF3 quality filters (matches BTC TF3 logic)
+        tf1_entry = (tf1_entry & ehma3_accel & hb5_ok) | (u1 & v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
