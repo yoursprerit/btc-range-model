@@ -394,8 +394,9 @@ def compute_signals(comp: pd.DataFrame) -> dict:
     # EMA10 of BTC close (for SL3 variant)
     ema10 = pd.Series(c_asof).ewm(span=10, adjust=False).mean().values
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf2_entry = u1 & ((above_ma30 ^ clean_7d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf2_entry = u1 & ((bull_regime ^ clean_7d) | v_recent)
 
     return dict(
         N=N, c_asof=c_asof,

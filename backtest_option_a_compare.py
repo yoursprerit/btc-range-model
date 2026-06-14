@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-Option A Entry Filter — Comparison vs Current Implementation
-============================================================
-Option A: require ma30_slope for the clean_7d path only.
+Entry Filter Comparison — Current vs Option A vs Option B
+==========================================================
+Current:  tf2_entry = u1 & ((above_ma30 ^ clean_7d) | v_recent)
+Option A: tf2_entry = u1 & ((above_ma30 ^ (clean_7d & ma30_slope)) | v_recent)
+Option B: tf2_entry = u1 & ((bull_regime ^ clean_7d) | v_recent)
+          bull_regime = above_ma30 AND ma30_slope
 
-  Current:  tf2_entry = u1 & ((above_ma30 ^ clean_7d) | v_recent)
-  Option A: tf2_entry = u1 & ((above_ma30 ^ (clean_7d & ma30_slope)) | v_recent)
+Option A (tested previously): modifies clean_7d path — blocks clean_7d entries
+  when MA30 is declining. Side effect: unblocks some dead-cat ↑MA30 entries
+  via XOR algebra. Removed the only winning bear-market trade. Not an improvement.
 
-Runs SL5 (regime-adaptive, UI-recommended variant for MSTR/MSTU) for both entry
-conditions across all three periods and prints a side-by-side comparison.
+Option B (this run): replaces above_ma30 with bull_regime in the XOR gate.
+  - Blocks U1+↑MA30 entries when MA30 is declining (dead-cat bounce filter)
+  - Leaves clean_7d and V-reversal paths unchanged
+  - In bull markets bull_regime ≈ above_ma30, so minimal impact expected
+
+Runs SL5 (regime-adaptive, UI-recommended variant for MSTR/MSTU) for all three
+entry conditions across all periods and prints a side-by-side comparison.
 
 Assets: MSTR (fixed −3% stop) and MSTU (fixed −7% stop).
 """
@@ -272,15 +281,18 @@ def compute_signals_both(comp):
 
     # Current entry gate
     tf2_current  = u1 & ((above_ma30 ^ clean_7d) | v_recent)
-    # Option A: clean_7d path also requires rising MA30
+    # Option A: clean_7d path also requires rising MA30 (tested — removes only winner)
     tf2_option_a = u1 & ((above_ma30 ^ (clean_7d & ma30_slope)) | v_recent)
+    # Option B: replace above_ma30 with bull_regime in the XOR — blocks dead-cat bounces
+    # above a declining MA30 while leaving clean_7d and V-reversal paths unchanged.
+    tf2_option_b = u1 & ((bull_regime ^ clean_7d) | v_recent)
 
     return dict(
         N=N, c_asof=c_asof,
         u1=u1, d1=d1, d2=d2, d3=d3,
         above_ma30=above_ma30, ma30_slope=ma30_slope, bull_regime=bull_regime,
         clean_7d=clean_7d, v_recent=v_recent, ema10=ema10,
-        tf2_entry=tf2_current, tf2_option_a=tf2_option_a,
+        tf2_entry=tf2_current, tf2_option_a=tf2_option_a, tf2_option_b=tf2_option_b,
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,65 +426,69 @@ def entry_paths(trades):
 # ─────────────────────────────────────────────────────────────────────────────
 # Pretty printing
 # ─────────────────────────────────────────────────────────────────────────────
-W=92
+W=106
 def hr(ch="─"): print("  "+ch*(W-2))
 
 ROWS = [
-    ("Strategy return %",    "strat_ret",  "{:+.1f}%",  False),
-    ("B&H return %",         "bh_ret",     "{:+.1f}%",  False),
-    ("Alpha vs B&H (pp)",    "alpha_pp",   "{:+.1f}pp", False),
-    ("Max drawdown %",       "max_dd",     "{:.1f}%",   False),
-    ("Sharpe ratio",         "sharpe",     "{:.2f}",    False),
-    ("Win rate %",           "win_rate",   "{:.1f}%",   False),
-    ("Avg winning trade %",  "avg_win",    "{:+.1f}%",  False),
-    ("Avg losing trade %",   "avg_loss",   "{:+.1f}%",  False),
-    ("Profit factor",        "profit_factor","{:.2f}",  False),
-    ("# Trades",             "n_trades",   "{:d}",      True),
-    ("# Winning trades",     "n_wins",     "{:d}",      True),
-    ("# Losing trades",      "n_losses",   "{:d}",      True),
-    ("# Stop-loss exits",    "n_sl",       "{:d}",      True),
-    ("Time in market %",     "time_in",    "{:.1f}%",   False),
+    ("Strategy return %",    "strat_ret",    "{:+.1f}%",  False),
+    ("B&H return %",         "bh_ret",       "{:+.1f}%",  False),
+    ("Alpha vs B&H (pp)",    "alpha_pp",     "{:+.1f}pp", False),
+    ("Max drawdown %",       "max_dd",       "{:.1f}%",   False),
+    ("Sharpe ratio",         "sharpe",       "{:.2f}",    False),
+    ("Win rate %",           "win_rate",     "{:.1f}%",   False),
+    ("Avg winning trade %",  "avg_win",      "{:+.1f}%",  False),
+    ("Avg losing trade %",   "avg_loss",     "{:+.1f}%",  False),
+    ("Profit factor",        "profit_factor","{:.2f}",    False),
+    ("# Trades",             "n_trades",     "{:d}",      True),
+    ("# Winning trades",     "n_wins",       "{:d}",      True),
+    ("# Losing trades",      "n_losses",     "{:d}",      True),
+    ("# Stop-loss exits",    "n_sl",         "{:d}",      True),
+    ("Time in market %",     "time_in",      "{:.1f}%",   False),
 ]
 
-def print_table(period_name, asset, cur_m, opta_m, cur_paths, opta_paths,
-                cur_signals, opta_signals, blocked, ma30_up_pct):
+def print_table(period_name, asset, cur_m, opta_m, optb_m,
+                cur_paths, opta_paths, optb_paths,
+                cur_sig, opta_sig, optb_sig,
+                blocked_a, blocked_b, ma30_up_pct):
     hr("═")
     print(f"  PERIOD: {period_name}  |  ASSET: {asset}")
     hr("═")
-    print(f"  {'Metric':<28}  {'Current (UI)':>16}  {'Option A':>16}  {'Δ':>12}")
+    print(f"  {'Metric':<28}  {'Current (UI)':>13}  {'Option A':>13}  {'ΔA':>7}  {'Option B':>13}  {'ΔB':>7}")
     hr()
     for label, key, fmt, is_int in ROWS:
-        cv = cur_m[key]; av = opta_m[key]
+        cv = cur_m[key]; av = opta_m[key]; bv = optb_m[key]
         if is_int:
-            delta = int(av)-int(cv)
-            print(f"  {label:<28}  {int(cv):>16}  {int(av):>16}  {delta:>+12d}")
+            da = int(av)-int(cv); db = int(bv)-int(cv)
+            print(f"  {label:<28}  {int(cv):>13}  {int(av):>13}  {da:>+7d}  {int(bv):>13}  {db:>+7d}")
         else:
-            delta = av-cv
-            cs=fmt.format(cv); as_=fmt.format(av)
-            if "%" in fmt: ds=f"{delta:+.1f}pp"
-            elif fmt=="{:.2f}": ds=f"{delta:+.2f}"
-            else: ds=f"{delta:+.1f}"
-            print(f"  {label:<28}  {cs:>16}  {as_:>16}  {ds:>12}")
+            da = av-cv; db = bv-cv
+            cs=fmt.format(cv); as_=fmt.format(av); bs=fmt.format(bv)
+            if "%" in fmt: das=f"{da:+.1f}pp"; dbs=f"{db:+.1f}pp"
+            elif fmt=="{:.2f}": das=f"{da:+.2f}"; dbs=f"{db:+.2f}"
+            else: das=f"{da:+.1f}"; dbs=f"{db:+.1f}"
+            print(f"  {label:<28}  {cs:>13}  {as_:>13}  {das:>7}  {bs:>13}  {dbs:>7}")
     hr()
-    print(f"  {'Entry path breakdown':}")
+    print(f"  Entry path breakdown:")
     for p in ["U1+↑MA30","U1+clean7d","U1+V-reversal"]:
-        c=cur_paths[p]; a=opta_paths[p]
-        print(f"  {'':>4}{p:<24}  {c:>16}  {a:>16}  {a-c:>+12d}")
+        c=cur_paths[p]; a=opta_paths[p]; b=optb_paths[p]
+        print(f"    {p:<24}  {c:>13}  {a:>13}  {a-c:>+7d}  {b:>13}  {b-c:>+7d}")
     hr()
     print(f"  Signal-level stats (trading window):")
-    print(f"  {'':>4}{'Entry signal bars (current):':<28}  {cur_signals}")
-    print(f"  {'':>4}{'Entry signal bars (Option A):':<28}  {opta_signals}")
-    print(f"  {'':>4}{'Blocked by Option A:':<28}  {blocked}  (clean_7d bars where MA30 declining)")
-    print(f"  {'':>4}{'MA30 rising % of bars:':<28}  {ma30_up_pct:.1f}%")
+    print(f"    {'Entry signal bars — current:':<32}  {cur_sig}")
+    print(f"    {'Entry signal bars — Option A:':<32}  {opta_sig}  (blocked: {blocked_a} clean_7d w/ declining MA30)")
+    print(f"    {'Entry signal bars — Option B:':<32}  {optb_sig}  (blocked: {blocked_b} above_ma30 w/ declining MA30)")
+    print(f"    {'MA30 rising % of bars:':<32}  {ma30_up_pct:.1f}%")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     print("\n"+"═"*W)
-    print("  OPTION A ENTRY FILTER — vs CURRENT IMPLEMENTATION  (SL5 variant)")
+    print("  ENTRY FILTER COMPARISON — CURRENT vs OPTION A vs OPTION B  (SL5 variant)")
     print("  Current:  tf2_entry = u1 & ((above_ma30 ^ clean_7d) | v_recent)")
     print("  Option A: tf2_entry = u1 & ((above_ma30 ^ (clean_7d & ma30_slope)) | v_recent)")
+    print("  Option B: tf2_entry = u1 & ((bull_regime ^ clean_7d) | v_recent)")
+    print("            bull_regime = above_ma30 AND ma30_slope")
     print("  MSTR: fixed −3% stop  |  MSTU: fixed −7% stop  |  SL5 regime-adaptive re-entry")
     print("═"*W+"\n")
 
@@ -507,9 +523,11 @@ def main():
         _bt0   = max(WARMUP, int(dates.searchsorted(sd)))
 
         # Signal-level counts (trading window only)
-        cur_sigs  = int(np.sum(sigs["tf2_entry"][_bt0:]))
-        opta_sigs = int(np.sum(sigs["tf2_option_a"][_bt0:]))
-        blocked   = int(np.sum(sigs["tf2_entry"][_bt0:] & ~sigs["tf2_option_a"][_bt0:]))
+        cur_sig   = int(np.sum(sigs["tf2_entry"][_bt0:]))
+        opta_sig  = int(np.sum(sigs["tf2_option_a"][_bt0:]))
+        optb_sig  = int(np.sum(sigs["tf2_option_b"][_bt0:]))
+        blocked_a = int(np.sum(sigs["tf2_entry"][_bt0:] & ~sigs["tf2_option_a"][_bt0:]))
+        blocked_b = int(np.sum(sigs["tf2_entry"][_bt0:] & ~sigs["tf2_option_b"][_bt0:]))
         ma30_up   = 100*np.mean(sigs["ma30_slope"][_bt0:])
 
         asset_px_map = {"MSTR": mstr_px_raw, "MSTU": mstu_px_raw}
@@ -532,15 +550,23 @@ def main():
                                         entry_arr=sigs["tf2_option_a"],
                                         sl_type=sl_t, sl_pct=sl_pct,
                                         cap=INITIAL_CAPITAL, bt_start=sd)
+            optb_res = run_backtest_sl5(dates, a, btc_px, sigs,
+                                        entry_arr=sigs["tf2_option_b"],
+                                        sl_type=sl_t, sl_pct=sl_pct,
+                                        cap=INITIAL_CAPITAL, bt_start=sd)
             cur_m  = metrics(cur_res)
             opta_m = metrics(opta_res)
+            optb_m = metrics(optb_res)
 
             cp = entry_paths(cur_m["trades"])
             ap = entry_paths(opta_m["trades"])
+            bp = entry_paths(optb_m["trades"])
 
             print()
-            print_table(pname, asset_name, cur_m, opta_m, cp, ap,
-                        cur_sigs, opta_sigs, blocked, ma30_up)
+            print_table(pname, asset_name, cur_m, opta_m, optb_m,
+                        cp, ap, bp,
+                        cur_sig, opta_sig, optb_sig,
+                        blocked_a, blocked_b, ma30_up)
 
     print(f"\n{'═'*W}")
     print("  DONE")

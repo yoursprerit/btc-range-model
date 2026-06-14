@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is warm at backtest start
+_BT_LOGIC_VERSION = "sl5-sl5-v14"  # Option B: require bull_regime (above+rising MA30) in XOR gate
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -2520,8 +2520,9 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
     # not an entry gate, to keep live signal consistent with backtest behaviour.
     v_gate_ok     = v_recent_gate
-    # Block combined MA30-up+clean7d: enter only when exactly one fires (XOR) or V-reversal
-    tf1_triggered = u1_triggered and ((above_ma30 != clean_10d) or v_gate_ok)
+    # Require bull_regime (above+rising MA30) for the trend-gate path; clean_7d and V-reversal unchanged.
+    # bull_regime replaces above_ma30 in the XOR: blocks dead-cat bounce entries on declining MA30.
+    tf1_triggered = u1_triggered and ((bull_regime != clean_10d) or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -3129,8 +3130,9 @@ def run_full_period_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -3679,8 +3681,9 @@ def run_mstr_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -4002,8 +4005,9 @@ def run_mstu_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -4342,8 +4346,9 @@ def run_mstr_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR call options ──────────────────────────
     nav      = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -4674,8 +4679,9 @@ def run_mstu_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU call options ──────────────────────────
     nav        = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -5073,8 +5079,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
     tf1_exit  = d2 | d3   # TF1 always exits D2|D3
 
     # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
