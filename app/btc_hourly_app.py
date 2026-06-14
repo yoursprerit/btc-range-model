@@ -73,6 +73,7 @@ BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
 _BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is warm at backtest start
+_BT_LOGIC_V2_VERSION = "sl5-sl5-v13-idea12-v1"  # V2: MA30-slope gate + 1.2% U1 threshold for MA30 path
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3535,7 +3536,8 @@ def run_mstr_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
-                      logic_version: str = _BT_LOGIC_VERSION):
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      entry_variant: str = "v1"):
     """MSTR backtest driven by BTC TF2+V-Gate signals.
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
@@ -3679,8 +3681,19 @@ def run_mstr_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # ── Entry signal (V1 baseline vs V2 filtered variant) ───────────────────
+    if entry_variant == "v2":
+        # Idea 1: MA30 path now requires slope positive (blocks entries above a falling MA30).
+        # Idea 2: MA30 path uses stricter 1.2% U1 threshold (requires stronger upside evidence
+        #         when recent bearish signals present, i.e. clean_10d=False).
+        u1_std    = (ehma3 > 0.7) & (hb3 >= 2)   # clean path & V-gate: unchanged
+        u1_strict = (ehma3 > 1.2) & (hb3 >= 2)   # MA30 path: higher bar
+        ma30_path  = above_ma30 & ~clean_10d & ma30_slope_pos
+        clean_path = ~above_ma30 & clean_10d
+        tf1_entry  = (u1_strict & ma30_path) | (u1_std & clean_path) | (u1_std & v_recent)
+    else:
+        # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -3798,9 +3811,10 @@ def run_mstr_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
+    _mstr_strat_label = f"TF2+V-Gate (MSTR){' v2' if entry_variant == 'v2' else ''}"
 
     return dict(
-        strategy   = "TF2+V-Gate (MSTR)",
+        strategy   = _mstr_strat_label,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -3813,7 +3827,7 @@ def run_mstr_backtest(end_date_iso: str,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
         stats = dict(
-            strategy        = "TF2+V-Gate (MSTR)",
+            strategy        = _mstr_strat_label,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -3849,6 +3863,21 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                              logic_version=logic_version)
 
 
+@st.cache_data(show_spinner="Loading V2 MSTR backtest …")
+def _run_fixed_period_mstr_backtest_v2(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V2_VERSION):
+    """Cached wrapper for V2 MSTR backtests (Idea 1+2: MA30 slope gate + 1.2% U1 threshold).
+
+    Uses entry_variant='v2' so the cache key is separate from V1 — V1 and V2
+    results coexist without invalidating each other.
+    """
+    return run_mstr_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v2")
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MSTU Backtesting  (T-Rex 2× Long MSTR Daily Target ETF)
 # ═══════════════════════════════════════════════════════════════════
@@ -3859,7 +3888,8 @@ def run_mstu_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
-                      logic_version: str = _BT_LOGIC_VERSION):
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      entry_variant: str = "v1"):
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
@@ -4002,8 +4032,19 @@ def run_mstu_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # ── Entry signal (V1 baseline vs V2 filtered variant) ───────────────────
+    if entry_variant == "v2":
+        # Idea 1: MA30 path now requires slope positive (blocks entries above a falling MA30).
+        # Idea 2: MA30 path uses stricter 1.2% U1 threshold (requires stronger upside evidence
+        #         when recent bearish signals present, i.e. clean_10d=False).
+        u1_std    = (ehma3 > 0.7) & (hb3 >= 2)   # clean path & V-gate: unchanged
+        u1_strict = (ehma3 > 1.2) & (hb3 >= 2)   # MA30 path: higher bar
+        ma30_path  = above_ma30 & ~clean_10d & ma30_slope_pos
+        clean_path = ~above_ma30 & clean_10d
+        tf1_entry  = (u1_strict & ma30_path) | (u1_std & clean_path) | (u1_std & v_recent)
+    else:
+        # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -4121,9 +4162,10 @@ def run_mstu_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
+    _mstu_strat_label = f"TF2+V-Gate (MSTU){' v2' if entry_variant == 'v2' else ''}"
 
     return dict(
-        strategy   = "TF2+V-Gate (MSTU)",
+        strategy   = _mstu_strat_label,
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -4136,7 +4178,7 @@ def run_mstu_backtest(end_date_iso: str,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
         stats = dict(
-            strategy        = "TF2+V-Gate (MSTU)",
+            strategy        = _mstu_strat_label,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -4171,6 +4213,20 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version)
+
+
+@st.cache_data(show_spinner="Loading V2 MSTU backtest …")
+def _run_fixed_period_mstu_backtest_v2(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V2_VERSION):
+    """Cached wrapper for V2 MSTU backtests (Idea 1+2: MA30 slope gate + 1.2% U1 threshold).
+
+    Uses entry_variant='v2' so cache key is separate from V1.
+    """
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v2")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -6061,6 +6117,129 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                     caption += "⚠️ pre-Sep 2025 = in-sample."
                 st.caption(caption)
             lt_idx += 1
+
+
+def _render_v2_bt_comparison(asset: str, periods: list) -> None:
+    """Side-by-side comparison: TF2+V-Gate V1 (baseline) vs V2 (Idea 1+2 combined).
+
+    periods — list of (label, bt_v1, bt_v2) where each bt is the dict returned
+    by run_mstr_backtest / run_mstu_backtest, or None when unavailable.
+    Displays a colour-annotated markdown table + per-period trade logs.
+    """
+    with st.expander(
+        "🔬 V2 Entry Filter — Side-by-Side Comparison vs Baseline",
+        expanded=True,
+    ):
+        st.markdown(
+            "**What changed in V2 (Ideas 1 + 2 combined)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
+            "- **Idea 1 — MA30 slope gate:** `U1 + ↑MA30` entries now also require the MA30 to be *rising* "
+            "(slope over 5 days positive). Blocks entries that are above a *falling* moving average — "
+            "the most common pattern in losing bear-market bounce trades.  \n"
+            "- **Idea 2 — Adaptive U1 threshold:** For that same `U1 + ↑MA30` path, the upside-error bar "
+            "rises from `err_hi_ma3 > 0.7%` to `> 1.2%`. When recent bearish signals were present "
+            "(`clean_10d = False`), a weaker bounce is no longer enough to trigger entry."
+        )
+
+        def _pct(bt, key):
+            if bt is None:
+                return "—"
+            v = bt["stats"].get(key)
+            if v is None:
+                return "—"
+            return f"{v:+.1f}%"
+
+        def _num(bt, key):
+            if bt is None:
+                return "—"
+            v = bt["stats"].get(key)
+            return str(int(v)) if v is not None else "—"
+
+        def _delta(bt_v1, bt_v2, key, higher_is_better=True):
+            """Return coloured arrow + delta string."""
+            if bt_v1 is None or bt_v2 is None:
+                return ""
+            v1 = bt_v1["stats"].get(key)
+            v2 = bt_v2["stats"].get(key)
+            if v1 is None or v2 is None:
+                return ""
+            diff = v2 - v1
+            if abs(diff) < 0.05:
+                return " *(=)*"
+            improved = diff > 0 if higher_is_better else diff < 0
+            arrow = "▲" if diff > 0 else "▼"
+            colour = "🟢" if improved else "🔴"
+            return f" *({colour}{arrow}{abs(diff):.1f}pp)*"
+
+        # Build markdown table
+        rows_md = []
+        header = (
+            "| Period | B&H | V1 Strat | V2 Strat | Δ Strat | "
+            "V1 Win% | V2 Win% | V1 # | V2 # | V1 MaxDD | V2 MaxDD |"
+        )
+        sep = "|:--|--:|--:|--:|:--|--:|--:|--:|--:|--:|--:|"
+
+        for label, bt_v1, bt_v2 in periods:
+            bh_ret  = _pct(bt_v1 or bt_v2, "bh_ret")
+            v1_ret  = _pct(bt_v1, "strat_ret")
+            v2_ret  = _pct(bt_v2, "strat_ret")
+            d_ret   = _delta(bt_v1, bt_v2, "strat_ret", higher_is_better=True)
+            v1_wr   = _pct(bt_v1, "win_rate").replace("+", "")
+            v2_wr   = _pct(bt_v2, "win_rate").replace("+", "")
+            v1_n    = _num(bt_v1, "n_trades")
+            v2_n    = _num(bt_v2, "n_trades")
+            v1_dd   = _pct(bt_v1, "max_drawdown")
+            v2_dd   = _pct(bt_v2, "max_drawdown")
+            rows_md.append(
+                f"| **{label}** | {bh_ret} | {v1_ret} | {v2_ret} | {d_ret} |"
+                f" {v1_wr} | {v2_wr} | {v1_n} | {v2_n} | {v1_dd} | {v2_dd} |"
+            )
+
+        st.markdown("\n".join([header, sep] + rows_md))
+        st.caption(
+            "Δ Strat = V2 − V1 return in percentage points. "
+            "🟢 = improvement, 🔴 = regression. "
+            "MaxDD lower (less negative) is better. "
+            "Win% and # trades use absolute counts from each period's fixed window."
+        )
+
+        # Per-period trade log comparison
+        st.markdown("#### Trade-by-Trade Comparison")
+        tab_labels = [lbl for lbl, v1, v2 in periods if v1 is not None or v2 is not None]
+        if tab_labels:
+            tabs_out = st.tabs(tab_labels)
+            for tab, (label, bt_v1, bt_v2) in zip(tabs_out, periods):
+                with tab:
+                    col_v1, col_v2 = st.columns(2)
+                    for col, bt, variant in ((col_v1, bt_v1, "V1 Baseline"),
+                                              (col_v2, bt_v2, "V2 (Ideas 1+2)")):
+                        with col:
+                            st.markdown(f"**{variant}**")
+                            if bt is None:
+                                st.info("No result")
+                                continue
+                            trades = bt.get("trades", [])
+                            if not trades:
+                                st.info("No trades in this period")
+                                continue
+                            rows = []
+                            for t in trades:
+                                rows.append({
+                                    "Entry": pd.Timestamp(t["entry_date"]).strftime("%b %d"),
+                                    "Exit":  pd.Timestamp(t["exit_date"]).strftime("%b %d"),
+                                    "Trigger": t.get("entry_trigger", ""),
+                                    "P&L":  f"{t['pnl_pct']:+.1f}%",
+                                    "Exit sig": t.get("exit_signal", ""),
+                                })
+                            df = pd.DataFrame(rows)
+                            st.dataframe(df, hide_index=True, use_container_width=True)
+                            s = bt["stats"]
+                            wins  = s.get("n_wins", 0)
+                            total = s.get("n_trades", 0)
+                            st.caption(
+                                f"Return: **{s.get('strat_ret', 0):+.1f}%** | "
+                                f"Win rate: **{wins}/{total}** ({s.get('win_rate', 0):.0f}%) | "
+                                f"MaxDD: **{s.get('max_drawdown', 0):.1f}%**"
+                            )
 
 
 def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
@@ -13464,6 +13643,7 @@ with tab_mstr:
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstr_raw      = _fetch_daily_raw()
     _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
+    # ── V1 baseline backtests (existing strategy) ────────────────────────────
     _mstr_bear     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
@@ -13478,6 +13658,21 @@ with tab_mstr:
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
     )
+    # ── V2 backtests (Idea 1+2: MA30 slope gate + 1.2% U1 threshold) ────────
+    _mstr_bear_v2     = _run_fixed_period_mstr_backtest_v2(
+        "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
+    _mstr_bull_v2     = _run_fixed_period_mstr_backtest_v2(
+        "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
+    _mstr_full_oos_v2 = run_mstr_backtest(
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v2")
+    _mstr_full_v2     = _run_fixed_period_mstr_backtest_v2(
+        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
+    _render_v2_bt_comparison("MSTR", [
+        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v2),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v2),
+        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v2),
+        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v2),
+    ])
 
 with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
@@ -13494,6 +13689,7 @@ with tab_mstu:
     _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstu_raw      = _fetch_daily_raw()
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
+    # ── V1 baseline backtests (existing strategy) ────────────────────────────
     _mstu_bear     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
@@ -13509,6 +13705,21 @@ with tab_mstu:
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
     )
+    # ── V2 backtests (Idea 1+2: MA30 slope gate + 1.2% U1 threshold) ────────
+    _mstu_bear_v2     = _run_fixed_period_mstu_backtest_v2(
+        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
+    _mstu_bull_v2     = _run_fixed_period_mstu_backtest_v2(
+        "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)
+    _mstu_full_oos_v2 = run_mstu_backtest(
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v2")
+    _mstu_full_v2     = _run_fixed_period_mstu_backtest_v2(
+        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
+    _render_v2_bt_comparison("MSTU", [
+        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v2),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v2),
+        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v2),
+        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v2),
+    ])
 
 with tab_mstu_opts:
     st.markdown("## 🔷 MSTU Options — BTC Signal-Driven Backtesting")
