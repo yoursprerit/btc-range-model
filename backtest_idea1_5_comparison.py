@@ -511,30 +511,82 @@ def run_asset_backtest(
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 4.  Main: run all periods × assets × modes and print comparison
-# ══════════════════════════════════════════════════════════════════════════
-def main():
-    print("\n" + "═"*70)
-    print("  Ideas 1+5 Combined Comparison — MSTR & MSTU (all UI periods)")
-    print("  Idea 1: bull_regime gate  |  Idea 5: ehma5 > 0.3% on U1")
-    print("═"*70)
 
-    # Build prediction caches keyed by fetch window
-    # We need two fetch windows: one covering Bear+Full (starts Jun 2024)
-    # and one for Bull. In practice all three share the same wide fetch.
-    GLOBAL_FETCH_START = "2023-11-01"   # 200+ days before Jun 2024
-    GLOBAL_FETCH_END   = "2026-06-14"
+# ══════════════════════════════════════════════════════════════════════════
+# 4.  Main: run all periods x assets x modes and print comparison
+#     Data fetch matches UI exactly: fetch_start = period_start - 200 days
+# ══════════════════════════════════════════════════════════════════════════
 
-    print(f"\nFetching data {GLOBAL_FETCH_START} → {GLOBAL_FETCH_END} …")
-    result = build_preds(GLOBAL_FETCH_START, GLOBAL_FETCH_END)
-    if result is None:
-        print("[FATAL] Could not build predictions. Aborting.")
+def _build_for_period(period_start_iso: str, period_end_iso: str):
+    """Per-period preds build matching run_mstr_backtest / run_mstu_backtest:
+    fetch_start = period_start - 200 calendar days  (ensures dist_hi_90 warm)
+    fetch_end   = period_end   + 3 calendar days
+    """
+    start_dt = pd.Timestamp(period_start_iso)
+    end_dt   = pd.Timestamp(period_end_iso)
+    fs = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
+    fe = (end_dt   + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+    print(f"    window: {fs} -> {fe}", flush=True)
+    return build_preds(fs, fe)
+
+
+def _print_trades(trades: list, asset: str, period: str, mode: str):
+    """Compact trade log for cross-checking against the UI trade table."""
+    label = f"  Trade log -- {asset}  {period}  ({mode})"
+    print(label)
+    if not trades:
+        print("    (no trades)")
         return
-    preds_df, raw_df = result
-    print(f"  Predictions built: {len(preds_df)} bars  "
-          f"({preds_df.index[0].date()} → {preds_df.index[-1].date()})")
+    hdr = (f"    {'#':>2}  {'Entry date':>12}  {'Exit date':>12}  "
+           f"{'EntryPx':>9}  {'ExitPx':>9}  {'P&L%':>7}  "
+           f"{'Trigger':<22}  {'Exit signal'}")
+    print(hdr)
+    print("    " + "-" * (len(hdr) - 4))
+    for idx, t in enumerate(trades, 1):
+        e_d = pd.Timestamp(t["entry_date"]).strftime("%Y-%m-%d")
+        x_d = pd.Timestamp(t["exit_date"]).strftime("%Y-%m-%d")
+        trig = t.get("entry_trigger") or "-"
+        sig  = t.get("exit_signal", "-")
+        sl_flag = " [SL]" if t.get("stop_triggered") else ""
+        print(f"    {idx:>2}  {e_d:>12}  {x_d:>12}  "
+              f"{t['entry_price']:>9.2f}  {t['exit_price']:>9.2f}  "
+              f"{t['pnl_pct']:>+6.1f}%  "
+              f"{trig:<22}  {sig}{sl_flag}")
+    print()
 
+
+def main():
+    SEP = "=" * 70
+    print("\n" + SEP)
+    print("  Ideas 1+5 Combined Comparison -- MSTR & MSTU (all UI periods)")
+    print("  Idea 1: bull_regime XOR gate  |  Idea 5: ehma5 > 0.3 on U1")
+    print("  Fetch: per-period (period_start - 200d -> period_end + 3d)")
+    print("         Matches run_mstr_backtest / run_mstu_backtest exactly")
+    print(SEP)
+
+    # UI period definitions
+    # Bear MSTR starts 2025-06-01, MSTU 2025-06-04; use 2025-06-01 as fetch key
+    # (3-day difference is irrelevant -- both are well inside 200-day warmup).
+    PERIOD_FETCH = {
+        "Bear": ("2025-06-01", "2026-05-31"),
+        "Bull": ("2024-06-05", "2025-06-14"),
+        "Full": ("2024-06-01", "2026-05-31"),
+    }
+
+    print("\nBuilding CT predictions (one per period, matching UI fetch windows) ...")
+    period_data: dict = {}
+    for pname, (pstart, pend) in PERIOD_FETCH.items():
+        print(f"\n  [{pname}]", flush=True)
+        res = _build_for_period(pstart, pend)
+        if res is None:
+            print(f"  [FATAL] Could not build preds for {pname}. Aborting.")
+            return
+        preds_df, raw_df = res
+        print(f"  -> {len(preds_df)} bars  "
+              f"({preds_df.index[0].date()} -> {preds_df.index[-1].date()})")
+        period_data[pname] = (preds_df, raw_df)
+
+    # Asset configs: (label, ticker, stop_pct, period_name -> (end, start))
     configs = [
         ("MSTR", "MSTR", 0.03, {
             "Bear": ("2026-05-31", "2025-06-01"),
@@ -548,27 +600,32 @@ def main():
         }),
     ]
 
+    print("\n\n" + SEP)
+    print("  SUMMARY TABLE")
+    print(SEP)
+
     for asset_label, ticker, stop_pct, periods in configs:
-        print(f"\n{'─'*70}")
+        print(f"\n  {'-'*68}")
         print(f"  {asset_label}  (stop-loss {int(stop_pct*100)}%)")
-        print(f"{'─'*70}")
-        hdr = f"{'Period':<8}  {'Mode':<9}  {'Return':>8}  {'B&H':>8}  "
-        hdr += f"{'MaxDD':>7}  {'Sharpe':>6}  {'WinR%':>6}  {'Trd':>4}  {'SLs':>4}  "
-        hdr += f"{'TiM%':>5}  {'AfterTax':>9}"
+        print(f"  {'-'*68}")
+        hdr = (f"  {'Period':<6}  {'Mode':<10}  {'Return':>8}  {'B&H':>8}  "
+               f"{'MaxDD':>7}  {'Sharpe':>6}  {'WinR%':>6}  "
+               f"{'Trd':>4}  {'SLs':>4}  {'TiM%':>5}  {'AfterTax':>9}")
         print(hdr)
-        print("  " + "─"*(len(hdr)-2))
+        print("  " + "-" * (len(hdr) - 2))
 
         for period_name, (end_iso, start_iso) in periods.items():
-            for mode in ("current", "idea1+5"):
-                r = run_asset_backtest(
-                    preds_df, raw_df, ticker,
-                    start_iso, end_iso, stop_pct, mode
-                )
+            preds_df, raw_df = period_data[period_name]
+            r_cur = run_asset_backtest(preds_df, raw_df, ticker,
+                                       start_iso, end_iso, stop_pct, "current")
+            r_i15 = run_asset_backtest(preds_df, raw_df, ticker,
+                                       start_iso, end_iso, stop_pct, "idea1+5")
+            for mode, r in [("current", r_cur), ("idea1+5", r_i15)]:
                 if r is None:
-                    print(f"  {period_name:<8}  {mode:<9}  [NO DATA]")
+                    print(f"  {period_name:<6}  {mode:<10}  [NO DATA]")
                     continue
-                row = (
-                    f"  {period_name:<8}  {mode:<9}"
+                print(
+                    f"  {period_name:<6}  {mode:<10}"
                     f"  {r['strat_ret']:>+7.1f}%"
                     f"  {r['bh_ret']:>+7.1f}%"
                     f"  {r['max_dd']:>+6.1f}%"
@@ -579,32 +636,40 @@ def main():
                     f"  {r['time_in']:>5.0f}%"
                     f"  {r['after_tax_ret']:>+8.1f}%"
                 )
-                print(row)
-            # Delta row
-            r_cur = run_asset_backtest(preds_df, raw_df, ticker, start_iso, end_iso, stop_pct, "current")
-            r_i15 = run_asset_backtest(preds_df, raw_df, ticker, start_iso, end_iso, stop_pct, "idea1+5")
             if r_cur and r_i15:
-                delta_ret = r_i15["strat_ret"] - r_cur["strat_ret"]
-                delta_dd  = r_i15["max_dd"]    - r_cur["max_dd"]
-                delta_sh  = r_i15["sharpe"]    - r_cur["sharpe"]
-                sign_r = "+" if delta_ret >= 0 else ""
-                sign_d = "+" if delta_dd  >= 0 else ""
-                sign_s = "+" if delta_sh  >= 0 else ""
-                print(f"  {'':8}  {'Δ idea1+5':<9}"
-                      f"  {sign_r}{delta_ret:>6.1f}pp"
-                      f"  {'':>8}"
-                      f"  {sign_d}{delta_dd:>5.1f}pp"
-                      f"  {sign_s}{delta_sh:>5.2f}"
-                      f"  {'':>6}"
-                      f"  {r_i15['n_trades']-r_cur['n_trades']:>+4}"
-                      f"  {r_i15['n_sl']-r_cur['n_sl']:>+4}")
+                dr = r_i15["strat_ret"] - r_cur["strat_ret"]
+                dd = r_i15["max_dd"]    - r_cur["max_dd"]
+                ds = r_i15["sharpe"]    - r_cur["sharpe"]
+                print(
+                    f"  {'':6}  {'delta':>10}"
+                    f"  {dr:>+6.1f}pp"
+                    f"  {'':>8}"
+                    f"  {dd:>+5.1f}pp"
+                    f"  {ds:>+5.2f}"
+                    f"  {'':>6}"
+                    f"  {r_i15['n_trades']-r_cur['n_trades']:>+4}"
+                    f"  {r_i15['n_sl']-r_cur['n_sl']:>+4}"
+                )
             print()
 
-    print("═"*70)
-    print("  Legend: B&H=Buy&Hold  MaxDD=Max Drawdown  WinR%=Win Rate")
-    print("  Trd=# Trades  SLs=Stop-Loss exits  TiM%=Time in Market")
+    print(SEP)
+    print("  Legend: B&H=Buy&Hold  MaxDD=Max Drawdown  WinR=Win Rate")
+    print("  Trd=# Trades  SLs=Stop-Loss exits  TiM=Time in Market")
     print("  AfterTax = 35% tax on annual net gains")
-    print("═"*70 + "\n")
+    print(SEP + "\n")
+
+    # ── Trade logs for UI cross-check ────────────────────────────────────────
+    print("\n" + SEP)
+    print("  TRADE LOGS (current implementation) -- cross-check vs UI")
+    print(SEP + "\n")
+
+    for asset_label, ticker, stop_pct, periods in configs:
+        for period_name, (end_iso, start_iso) in periods.items():
+            preds_df, raw_df = period_data[period_name]
+            r = run_asset_backtest(preds_df, raw_df, ticker,
+                                   start_iso, end_iso, stop_pct, "current")
+            if r:
+                _print_trades(r["trades"], asset_label, period_name, "current")
 
 
 if __name__ == "__main__":
