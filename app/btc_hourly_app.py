@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v19"  # cache bust: force fresh computation for all entry gate variants
+_BT_LOGIC_VERSION = "sl5-sl5-v20"  # cache bust: synthetic MSTU pre-inception prices (OLS from MSTR)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3875,7 +3875,9 @@ def run_mstu_backtest(end_date_iso: str,
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
     (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU started trading
-    Sep 18 2024; earlier dates are backward-filled with the Sep 18 opening price.
+    Sep 18 2024; earlier dates use OLS-synthesised prices (log_r(MSTU) ≈ beta*log_r(MSTR))
+    to avoid the flat-bfill artifact that gave Confirmed Uptrend an artificial
+    risk-free entry window during the constant pre-inception price period.
     Uses yfinance daily BTC data (matching backtest_stop_loss_reentry.py) so UI
     numbers are consistent with the research script.
     """
@@ -3915,9 +3917,19 @@ def run_mstu_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices (real from Sep 2024 inception; bfill for earlier dates) ────
+    # ── Fetch MSTU prices via OLS-synthetic backfill (pre-inception) ─────────────
     # MSTU started trading Sep 18, 2024. For pre-inception dates (Jun–Sep 2024),
-    # the Sep 18 price is backward-filled, matching the research script approach.
+    # synthesise prices via OLS regression on MSTR log-returns to avoid the flat-bfill
+    # artifact where a constant pre-inception price gives Confirmed Uptrend an
+    # artificial risk-free entry window (stop-loss can never trigger on a flat price).
+    _mstu_syn = _build_synthetic_mstu_prices(
+        pre_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
+    )
+    if _mstu_syn is None or len(_mstu_syn) == 0:
+        return None
+    mstu_px = _mstu_syn.reindex(dates).ffill().bfill().values.astype(float)
+
+    # ── Fetch actual MSTU from yfinance for intraday lows (display only) ─────────
     try:
         d_mstu = yf.download(
             "MSTU",
@@ -3929,14 +3941,7 @@ def run_mstu_backtest(end_date_iso: str,
             d_mstu.columns = [c[0] for c in d_mstu.columns]
         d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
     except Exception:
-        return None
-    if d_mstu.empty or "Close" not in d_mstu.columns:
-        return None
-    mstu_raw = d_mstu["Close"].sort_index()
-    mstu_all = mstu_raw.reindex(
-        pd.date_range(mstu_raw.index[0], max(mstu_raw.index[-1], end_dt), freq="D")
-    ).ffill()
-    mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
+        d_mstu = pd.DataFrame()
 
     # ── BTC signal arrays (identical to run_full_period_backtest) ────────────────────────────────────────────────────────────────────────
     c_asof  = comp["close_asof"].values.astype(float)
@@ -3946,7 +3951,7 @@ def run_mstu_backtest(end_date_iso: str,
     act_lo  = comp["actual_low"].values.astype(float)
 
     # MSTU intraday lows — for display only; stop triggers on close price
-    if "Low" in d_mstu.columns:
+    if not d_mstu.empty and "Low" in d_mstu.columns:
         _lo_raw = d_mstu["Low"].sort_index()
         _lo_all = _lo_raw.reindex(
             pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
@@ -4874,13 +4879,13 @@ def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_is
 
 @st.cache_data(ttl=3600 * 24, show_spinner="Building synthetic MSTU price history …")
 def _build_synthetic_mstu_prices(pre_dt_iso: str, end_dt_iso: str) -> pd.Series:
-    """Return calendar-day MSTU prices: synthetic (pre-Jun 4 2025) + actual (post-inception).
+    """Return calendar-day MSTU prices: synthetic (pre-Sep 18 2024) + actual (post-inception).
 
     Calibrates log_r(MSTU) = beta*log_r(MSTR) + alpha via OLS on actual post-inception data,
     then applies that model to historical MSTR returns.  The synthetic series is normalised so
-    the last synthetic bar equals MSTU's first actual trading price (Jun 4, 2025).
+    the last synthetic bar equals MSTU's first actual trading price (Sep 18, 2024).
     """
-    INCEPTION = pd.Timestamp("2025-06-04")
+    INCEPTION = pd.Timestamp("2024-09-18")
     pre_dt = pd.Timestamp(pre_dt_iso)
     end_dt = pd.Timestamp(end_dt_iso)
 
