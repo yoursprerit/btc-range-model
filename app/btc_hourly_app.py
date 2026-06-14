@@ -75,6 +75,7 @@ BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 _BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is warm at backtest start
 _BT_LOGIC_V2_VERSION = "sl5-sl5-v13-idea12-v1"  # V2: MA30-slope gate + 1.2% U1 threshold for MA30 path
 _BT_LOGIC_V3_VERSION = "sl5-sl5-v13-idea2-v1"   # V3: Idea 2 only — 1.2% U1 threshold for MA30 path, no slope gate
+_BT_LOGIC_V4_VERSION = "sl5-sl5-v13-idea3-v1"   # V4: Idea 3 only — D1-conflict block (both-sides-hot suppressor)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3700,6 +3701,15 @@ def run_mstr_backtest(end_date_iso: str,
         ma30_path  = above_ma30 & ~clean_10d       # no slope requirement (vs V2)
         clean_path = ~above_ma30 & clean_10d
         tf1_entry  = (u1_strict & ma30_path) | (u1_std & clean_path) | (u1_std & v_recent)
+    elif entry_variant == "v4":
+        # Idea 3 only: D1-Active Conflict Block (both-sides-hot suppressor).
+        # V1 entry signal is computed first, then any bar where both upside (U1) and
+        # downside (D1-like) signals are simultaneously hot is suppressed.
+        # Threshold 0.35 is softer than the full D1 gate (0.5) to catch building
+        # conflict early — the most dangerous entry environment.
+        tf1_entry   = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+        d1_conflict = (lb3 >= 2) & (elma3 > 0.35)
+        tf1_entry   = tf1_entry & ~d1_conflict
     else:
         # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -3820,7 +3830,7 @@ def run_mstr_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
-    _variant_suffix = {"v2": " v2", "v3": " v3"}.get(entry_variant, "")
+    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4"}.get(entry_variant, "")
     _mstr_strat_label = f"TF2+V-Gate (MSTR){_variant_suffix}"
 
     return dict(
@@ -3900,6 +3910,20 @@ def _run_fixed_period_mstr_backtest_v3(end_date_iso: str, backtest_start_iso: st
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, entry_variant="v3")
+
+
+@st.cache_data(show_spinner="Loading V4 MSTR backtest …")
+def _run_fixed_period_mstr_backtest_v4(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V4_VERSION):
+    """Cached wrapper for V4 MSTR backtests (Idea 3 only: D1-conflict block, both-sides-hot suppressor).
+
+    Uses entry_variant='v4' so the cache key is independent of V1, V2, V3.
+    """
+    return run_mstr_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v4")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4074,6 +4098,15 @@ def run_mstu_backtest(end_date_iso: str,
         ma30_path  = above_ma30 & ~clean_10d       # no slope requirement (vs V2)
         clean_path = ~above_ma30 & clean_10d
         tf1_entry  = (u1_strict & ma30_path) | (u1_std & clean_path) | (u1_std & v_recent)
+    elif entry_variant == "v4":
+        # Idea 3 only: D1-Active Conflict Block (both-sides-hot suppressor).
+        # V1 entry signal is computed first, then any bar where both upside (U1) and
+        # downside (D1-like) signals are simultaneously hot is suppressed.
+        # Threshold 0.35 is softer than the full D1 gate (0.5) to catch building
+        # conflict early — the most dangerous entry environment.
+        tf1_entry   = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+        d1_conflict = (lb3 >= 2) & (elma3 > 0.35)
+        tf1_entry   = tf1_entry & ~d1_conflict
     else:
         # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -4194,7 +4227,7 @@ def run_mstu_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
-    _variant_suffix = {"v2": " v2", "v3": " v3"}.get(entry_variant, "")
+    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4"}.get(entry_variant, "")
     _mstu_strat_label = f"TF2+V-Gate (MSTU){_variant_suffix}"
 
     return dict(
@@ -4274,6 +4307,20 @@ def _run_fixed_period_mstu_backtest_v3(end_date_iso: str, backtest_start_iso: st
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, entry_variant="v3")
+
+
+@st.cache_data(show_spinner="Loading V4 MSTU backtest …")
+def _run_fixed_period_mstu_backtest_v4(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V4_VERSION):
+    """Cached wrapper for V4 MSTU backtests (Idea 3 only: D1-conflict block, both-sides-hot suppressor).
+
+    Uses entry_variant='v4' so cache key is independent of V1, V2, V3.
+    """
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v4")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -6166,19 +6213,30 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             lt_idx += 1
 
 
-def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v3") -> None:
+def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v4") -> None:
     """Side-by-side comparison: TF2+V-Gate V1 (baseline) vs a filtered variant.
 
     periods — list of (label, bt_v1, bt_vx) where each bt is the dict returned
     by run_mstr_backtest / run_mstu_backtest, or None when unavailable.
-    variant — "v2" (Ideas 1+2) or "v3" (Idea 2 only).
+    variant — "v2" (Ideas 1+2), "v3" (Idea 2 only), or "v4" (Idea 3 only).
     Displays a colour-annotated markdown table + per-period trade logs.
     """
     variant_upper = variant.upper()
-    if variant == "v3":
-        expander_title = f"🔬 V3 Entry Filter (Idea 2 only) — Side-by-Side Comparison vs Baseline"
+    if variant == "v4":
+        expander_title = "🔬 V4 Entry Filter (Idea 3 only) — Side-by-Side Comparison vs Baseline"
         description_md = (
-            f"**What changed in V3 (Idea 2 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
+            "**What changed in V4 (Idea 3 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
+            "- **Idea 3 — D1-Active Conflict Block:** When both `U1` (high breaks ≥2/3 days, `err_hi_ma3 > 0.7%`) "
+            "AND D1-like downside pressure (`lo_breaks_3d ≥ 2` AND `err_lo_ma3 > 0.35%`) are simultaneously hot, "
+            "the entry is suppressed. A market making wide swings in *both* directions is in a whipsaw state — "
+            "not a clean trend entry.  \n"
+            "- The conflict threshold `0.35%` is softer than the full D1 gate (`0.5%`) to catch building "
+            "downside pressure early, before it reaches a confirmed bearish signal."
+        )
+    elif variant == "v3":
+        expander_title = "🔬 V3 Entry Filter (Idea 2 only) — Side-by-Side Comparison vs Baseline"
+        description_md = (
+            "**What changed in V3 (Idea 2 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
             "- **Idea 2 — Adaptive U1 threshold:** For `U1 + ↑MA30` path entries, the upside-error bar "
             "rises from `err_hi_ma3 > 0.7%` to `> 1.2%`. When recent bearish signals were present "
             "(`clean_10d = False`), a weaker bounce is no longer enough to trigger entry.  \n"
@@ -6186,7 +6244,7 @@ def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v3") -> 
             "Early-recovery entries above a still-flat MA30 are allowed if `err_hi_ma3 > 1.2%`."
         )
     else:
-        expander_title = f"🔬 V2 Entry Filter (Ideas 1+2) — Side-by-Side Comparison vs Baseline"
+        expander_title = "🔬 V2 Entry Filter (Ideas 1+2) — Side-by-Side Comparison vs Baseline"
         description_md = (
             "**What changed in V2 (Ideas 1 + 2 combined)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
             "- **Idea 1 — MA30 slope gate:** `U1 + ↑MA30` entries now also require the MA30 to be *rising* "
@@ -6263,7 +6321,8 @@ def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v3") -> 
         )
 
         # Per-period trade log comparison
-        vx_col_label = "V3 (Idea 2 only)" if variant == "v3" else "V2 (Ideas 1+2)"
+        _vx_labels = {"v4": "V4 (Idea 3 only)", "v3": "V3 (Idea 2 only)", "v2": "V2 (Ideas 1+2)"}
+        vx_col_label = _vx_labels.get(variant, variant.upper())
         st.markdown("#### Trade-by-Trade Comparison")
         tab_labels = [lbl for lbl, v1, vx in periods if v1 is not None or vx is not None]
         if tab_labels:
@@ -13719,21 +13778,21 @@ with tab_mstr:
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
     )
-    # ── V3 backtests (Idea 2 only: 1.2% U1 threshold for MA30 path, no slope gate) ──
-    _mstr_bear_v3     = _run_fixed_period_mstr_backtest_v3(
+    # ── V4 backtests (Idea 3 only: D1-conflict block, both-sides-hot suppressor) ──
+    _mstr_bear_v4     = _run_fixed_period_mstr_backtest_v4(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_bull_v3     = _run_fixed_period_mstr_backtest_v3(
+    _mstr_bull_v4     = _run_fixed_period_mstr_backtest_v4(
         "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_full_oos_v3 = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v3")
-    _mstr_full_v3     = _run_fixed_period_mstr_backtest_v3(
+    _mstr_full_oos_v4 = run_mstr_backtest(
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v4")
+    _mstr_full_v4     = _run_fixed_period_mstr_backtest_v4(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
     _render_v2_bt_comparison("MSTR", [
-        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v3),
-        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v3),
-        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v3),
-        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v3),
-    ], variant="v3")
+        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v4),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v4),
+        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v4),
+        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v4),
+    ], variant="v4")
 
 with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
@@ -13766,21 +13825,21 @@ with tab_mstu:
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
     )
-    # ── V3 backtests (Idea 2 only: 1.2% U1 threshold for MA30 path, no slope gate) ──
-    _mstu_bear_v3     = _run_fixed_period_mstu_backtest_v3(
+    # ── V4 backtests (Idea 3 only: D1-conflict block, both-sides-hot suppressor) ──
+    _mstu_bear_v4     = _run_fixed_period_mstu_backtest_v4(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
-    _mstu_bull_v3     = _run_fixed_period_mstu_backtest_v3(
+    _mstu_bull_v4     = _run_fixed_period_mstu_backtest_v4(
         "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)
-    _mstu_full_oos_v3 = run_mstu_backtest(
-        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v3")
-    _mstu_full_v3     = _run_fixed_period_mstu_backtest_v3(
+    _mstu_full_oos_v4 = run_mstu_backtest(
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v4")
+    _mstu_full_v4     = _run_fixed_period_mstu_backtest_v4(
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
     _render_v2_bt_comparison("MSTU", [
-        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v3),
-        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v3),
-        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v3),
-        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v3),
-    ], variant="v3")
+        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v4),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v4),
+        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v4),
+        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v4),
+    ], variant="v4")
 
 with tab_mstu_opts:
     st.markdown("## 🔷 MSTU Options — BTC Signal-Driven Backtesting")
