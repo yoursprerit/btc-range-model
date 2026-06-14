@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v17"  # fix: all bull/full period starts aligned to 2024-06-01
+_BT_LOGIC_VERSION = "sl5-sl5-v18"  # fix: bull period end date aligned to 2025-05-31
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -2997,7 +2997,7 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
 
 # Bear period locked to Jun 2025 → May 2026 (not rolling).
 # Full Market period locked to Jun 2024 → May 2026 (not rolling).
-# Bull stays fixed (Jun 2024 → Jun 2025 is a specific historical window).
+# Bull stays fixed (Jun 2024 → May 2025 is a specific historical window).
 # OOS period continues to roll daily with today's date.
 
 
@@ -5250,7 +5250,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
       • Expandable trade log for each period
 
     bt_bear:     Fixed bear window  (Jun 2025 → May 2026, locked)
-    bt_bull:     Fixed bull window  (Jun 2024 → Jun 2025)
+    bt_bull:     Fixed bull window  (Jun 2024 → May 2025)
     bt_full_oos: Full-period result used only for OOS stats extraction
     bt_full:     Full market period  (Jun 2024 → May 2026, locked)
     key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
@@ -6202,7 +6202,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
     <b>or</b> a clean breakout approach from below MA30 — the ambiguous
     <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
-    Backtest improvement vs Standard: <b>Bull +39pp · Bear +26pp · Full +114pp</b>.
+    Backtest improvement vs Standard: <b>Bull +40pp · Bear +26pp · Full +114pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
@@ -7047,7 +7047,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
     <b>or</b> a clean breakout approach from below MA30 — the ambiguous
     <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
-    Backtest improvement vs Standard: <b>Bull +107pp · Bear +42pp · Full +312pp</b>.
+    Backtest improvement vs Standard: <b>Bull +109pp · Bear +42pp · Full +312pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
@@ -7158,7 +7158,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
     (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
     briefly climbs above a still-declining MA30.
-    Backtest improvement vs Standard: <b>Bull +107pp · Bear +6pp · Full +104pp</b>.
+    Backtest improvement vs Standard: <b>Bull +109pp · Bear +6pp · Full +104pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
@@ -9915,7 +9915,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
                 "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
                 "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️, Jun 2024–Jun 2025): B&amp;H +48%. Strategy captures ~90–95% of bull."
+                "Bull period (in-sample ⚠️, Jun 2024–May 2025): B&amp;H +48%. Strategy captures ~90–95% of bull."
             ),
             conf_txt=(
                 "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
@@ -10113,7 +10113,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         else _bt_end
     )
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "")  # Jun 2024–Jun 2025
+    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # Jun 2024–May 2025
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
@@ -13730,8 +13730,8 @@ with tab_mstr:
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
         entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-06-14", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        entry_gate=_mstr_variant)  # Jun 2024–Jun 2025
+        "2025-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
+        entry_gate=_mstr_variant)  # Jun 2024–May 2025
     _mstr_full_oos = run_mstr_backtest(
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
         entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
@@ -13778,8 +13778,8 @@ with tab_mstu:
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end,
         entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-06-14", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
-        entry_gate=_mstu_variant)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
+        "2025-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
+        entry_gate=_mstu_variant)    # Bull: Jun 2024–May 2025 (synthetic, matches MSTR)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
         entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
@@ -13814,7 +13814,7 @@ with tab_mstu_opts:
     _mstu_opts_bear     = _run_fixed_period_mstu_options_backtest(
         "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
-        "2025-06-14", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)  # Bull: Jun 2024–Jun 2025 (matches MSTR)
+        "2025-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)  # Bull: Jun 2024–May 2025 (matches MSTR)
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_full     = _run_fixed_period_mstu_options_backtest(
@@ -13845,7 +13845,7 @@ with tab_mstr_opts:
     _opts_bear     = _run_fixed_period_mstr_options_backtest(
         "2026-05-31", "2025-06-01", _opts_model_mtime, data_end=_opts_data_end)
     _opts_bull     = _run_fixed_period_mstr_options_backtest(
-        "2025-06-14", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end)  # Jun 2024–Jun 2025
+        "2025-05-31", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end)  # Jun 2024–May 2025
     _opts_full_oos = run_mstr_options_backtest(
         _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end)
     _opts_full     = _run_fixed_period_mstr_options_backtest(
