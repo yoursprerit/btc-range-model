@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v15"  # Option C: pure_regime — bull_regime OR clean below MA30 (no XOR)
+_BT_LOGIC_VERSION = "sl5-sl5-v16"  # fix: align full period start with bull start (2024-06-05)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -13736,8 +13736,8 @@ with tab_mstr:
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
         entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
     _mstr_full     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        entry_gate=_mstr_variant)    # locked Jun 2024–May 2026
+        "2026-05-31", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end,
+        entry_gate=_mstr_variant)    # locked Jun 2024–May 2026 (start aligned with bull period)
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
@@ -13784,8 +13784,8 @@ with tab_mstu:
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
         entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
     _mstu_full     = _run_fixed_period_mstu_backtest(
-        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
-        entry_gate=_mstu_variant)     # Full: Jun 2024–May 2026 (synthetic+actual)
+        "2026-05-31", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end,
+        entry_gate=_mstu_variant)     # Full: Jun 2024–May 2026 (start aligned with bull period)
     render_mstu_trading_strategy_dashboard(
         _mstu_bear,
         bt_bull=_mstu_bull,
