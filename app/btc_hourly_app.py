@@ -4179,7 +4179,7 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
                                     logic_version: str = _BT_LOGIC_VERSION,
-                                    entry_gate: str = "bull_regime"):
+                                    entry_gate: str = "pure_regime"):
     """Cached wrapper for fixed-period MSTU backtests.
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
@@ -4531,7 +4531,8 @@ def run_mstr_options_backtest(end_date_iso: str,
 @st.cache_data(show_spinner="Loading fixed-period MSTR Options backtest …")
 def _run_fixed_period_mstr_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
-                                             data_end: str = ""):
+                                             data_end: str = "",
+                                             logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period MSTR Options backtests."""
     return run_mstr_options_backtest(end_date_iso, backtest_start_iso,
                                      model_mtime=model_mtime, data_end=data_end)
@@ -4861,7 +4862,8 @@ def run_mstu_options_backtest(end_date_iso: str,
 @st.cache_data(show_spinner="Loading fixed-period MSTU Options backtest …")
 def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
-                                             data_end: str = ""):
+                                             data_end: str = "",
+                                             logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period MSTU Options backtests.
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
@@ -9915,7 +9917,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
                 "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
                 "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️, Jun 2024–May 2025): B&amp;H +48%. Strategy captures ~90–95% of bull."
+                "Bull period (in-sample ⚠️, Jun 2024–May 2025): B&amp;H +55%. Strategy captures ~90–95% of bull."
             ),
             conf_txt=(
                 "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
@@ -13818,7 +13820,8 @@ with tab_mstu_opts:
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
     _mstu_opts_full     = _run_fixed_period_mstu_options_backtest(
-        "2026-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
+        "2026-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
+        logic_version=_BT_LOGIC_VERSION)
     render_mstu_options_trading_strategy_dashboard(
         _mstu_opts_bear,
         bt_bull=_mstu_opts_bull,
@@ -13849,7 +13852,8 @@ with tab_mstr_opts:
     _opts_full_oos = run_mstr_options_backtest(
         _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end)
     _opts_full     = _run_fixed_period_mstr_options_backtest(
-        "2026-05-31", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end)
+        "2026-05-31", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
+        logic_version=_BT_LOGIC_VERSION)
     render_mstr_options_trading_strategy_dashboard(
         _opts_bear, _opts_bull,
         bt_full_oos=_opts_full_oos,
