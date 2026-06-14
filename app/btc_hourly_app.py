@@ -76,6 +76,7 @@ _BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is 
 _BT_LOGIC_V2_VERSION = "sl5-sl5-v13-idea12-v1"  # V2: MA30-slope gate + 1.2% U1 threshold for MA30 path
 _BT_LOGIC_V3_VERSION = "sl5-sl5-v13-idea2-v1"   # V3: Idea 2 only — 1.2% U1 threshold for MA30 path, no slope gate
 _BT_LOGIC_V4_VERSION = "sl5-sl5-v13-idea3-v1"   # V4: Idea 3 only — D1-conflict block (both-sides-hot suppressor)
+_BT_LOGIC_V5_VERSION = "sl5-sl5-v13-idea4-v1"   # V5: Idea 4 only — U1 persistence filter (2 consecutive bars)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3710,6 +3711,13 @@ def run_mstr_backtest(end_date_iso: str,
         tf1_entry   = u1 & ((above_ma30 ^ clean_10d) | v_recent)
         d1_conflict = (lb3 >= 2) & (elma3 > 0.35)
         tf1_entry   = tf1_entry & ~d1_conflict
+    elif entry_variant == "v5":
+        # Idea 4 only: U1 Persistence Filter — require U1 on both bar i AND bar i-1.
+        # Single-bar U1 flashes (often noise or 1-day dead-cat bounces in bear markets)
+        # no longer trigger entry. Delays entry by exactly 1 bar when U1 just turned on.
+        u1_persist    = np.zeros(N, dtype=bool)
+        u1_persist[1:] = u1[1:] & u1[:-1]
+        tf1_entry = u1_persist & ((above_ma30 ^ clean_10d) | v_recent)
     else:
         # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -3830,7 +3838,7 @@ def run_mstr_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
-    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4"}.get(entry_variant, "")
+    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4", "v5": " v5"}.get(entry_variant, "")
     _mstr_strat_label = f"TF2+V-Gate (MSTR){_variant_suffix}"
 
     return dict(
@@ -3924,6 +3932,20 @@ def _run_fixed_period_mstr_backtest_v4(end_date_iso: str, backtest_start_iso: st
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, entry_variant="v4")
+
+
+@st.cache_data(show_spinner="Loading V5 MSTR backtest …")
+def _run_fixed_period_mstr_backtest_v5(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V5_VERSION):
+    """Cached wrapper for V5 MSTR backtests (Idea 4 only: U1 persistence filter, 2 consecutive bars).
+
+    Uses entry_variant='v5' so the cache key is independent of V1–V4.
+    """
+    return run_mstr_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v5")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4107,6 +4129,13 @@ def run_mstu_backtest(end_date_iso: str,
         tf1_entry   = u1 & ((above_ma30 ^ clean_10d) | v_recent)
         d1_conflict = (lb3 >= 2) & (elma3 > 0.35)
         tf1_entry   = tf1_entry & ~d1_conflict
+    elif entry_variant == "v5":
+        # Idea 4 only: U1 Persistence Filter — require U1 on both bar i AND bar i-1.
+        # Single-bar U1 flashes (often noise or 1-day dead-cat bounces in bear markets)
+        # no longer trigger entry. Delays entry by exactly 1 bar when U1 just turned on.
+        u1_persist    = np.zeros(N, dtype=bool)
+        u1_persist[1:] = u1[1:] & u1[:-1]
+        tf1_entry = u1_persist & ((above_ma30 ^ clean_10d) | v_recent)
     else:
         # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -4227,7 +4256,7 @@ def run_mstu_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
-    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4"}.get(entry_variant, "")
+    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4", "v5": " v5"}.get(entry_variant, "")
     _mstu_strat_label = f"TF2+V-Gate (MSTU){_variant_suffix}"
 
     return dict(
@@ -4321,6 +4350,20 @@ def _run_fixed_period_mstu_backtest_v4(end_date_iso: str, backtest_start_iso: st
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, entry_variant="v4")
+
+
+@st.cache_data(show_spinner="Loading V5 MSTU backtest …")
+def _run_fixed_period_mstu_backtest_v5(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V5_VERSION):
+    """Cached wrapper for V5 MSTU backtests (Idea 4 only: U1 persistence filter, 2 consecutive bars).
+
+    Uses entry_variant='v5' so cache key is independent of V1–V4.
+    """
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v5")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -6213,16 +6256,27 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             lt_idx += 1
 
 
-def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v4") -> None:
+def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v5") -> None:
     """Side-by-side comparison: TF2+V-Gate V1 (baseline) vs a filtered variant.
 
     periods — list of (label, bt_v1, bt_vx) where each bt is the dict returned
     by run_mstr_backtest / run_mstu_backtest, or None when unavailable.
-    variant — "v2" (Ideas 1+2), "v3" (Idea 2 only), or "v4" (Idea 3 only).
+    variant — "v2" (Ideas 1+2), "v3" (Idea 2 only), "v4" (Idea 3 only), "v5" (Idea 4 only).
     Displays a colour-annotated markdown table + per-period trade logs.
     """
     variant_upper = variant.upper()
-    if variant == "v4":
+    if variant == "v5":
+        expander_title = "🔬 V5 Entry Filter (Idea 4 only) — Side-by-Side Comparison vs Baseline"
+        description_md = (
+            "**What changed in V5 (Idea 4 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
+            "- **Idea 4 — U1 Persistence Filter:** Entry now requires `U1` to be *True on both bar i AND bar i−1* "
+            "(two consecutive days of elevated high-breaks + upside-error). Single-bar U1 flashes — "
+            "often noise or 1-day dead-cat bounces in bear markets — no longer trigger entry.  \n"
+            "- **Effect:** Delays each entry by exactly 1 day when U1 just turned on. In genuine bull markets U1 "
+            "persists for many bars, so the delay is minimal. In bear markets, 1-day U1 spikes are common false "
+            "positives that this filter suppresses."
+        )
+    elif variant == "v4":
         expander_title = "🔬 V4 Entry Filter (Idea 3 only) — Side-by-Side Comparison vs Baseline"
         description_md = (
             "**What changed in V4 (Idea 3 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
@@ -6321,7 +6375,8 @@ def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v4") -> 
         )
 
         # Per-period trade log comparison
-        _vx_labels = {"v4": "V4 (Idea 3 only)", "v3": "V3 (Idea 2 only)", "v2": "V2 (Ideas 1+2)"}
+        _vx_labels = {"v5": "V5 (Idea 4 only)", "v4": "V4 (Idea 3 only)",
+                      "v3": "V3 (Idea 2 only)", "v2": "V2 (Ideas 1+2)"}
         vx_col_label = _vx_labels.get(variant, variant.upper())
         st.markdown("#### Trade-by-Trade Comparison")
         tab_labels = [lbl for lbl, v1, vx in periods if v1 is not None or vx is not None]
@@ -13778,21 +13833,21 @@ with tab_mstr:
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
     )
-    # ── V4 backtests (Idea 3 only: D1-conflict block, both-sides-hot suppressor) ──
-    _mstr_bear_v4     = _run_fixed_period_mstr_backtest_v4(
+    # ── V5 backtests (Idea 4 only: U1 persistence filter, 2 consecutive bars) ──
+    _mstr_bear_v5     = _run_fixed_period_mstr_backtest_v5(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_bull_v4     = _run_fixed_period_mstr_backtest_v4(
+    _mstr_bull_v5     = _run_fixed_period_mstr_backtest_v5(
         "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_full_oos_v4 = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v4")
-    _mstr_full_v4     = _run_fixed_period_mstr_backtest_v4(
+    _mstr_full_oos_v5 = run_mstr_backtest(
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v5")
+    _mstr_full_v5     = _run_fixed_period_mstr_backtest_v5(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
     _render_v2_bt_comparison("MSTR", [
-        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v4),
-        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v4),
-        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v4),
-        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v4),
-    ], variant="v4")
+        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v5),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v5),
+        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v5),
+        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v5),
+    ], variant="v5")
 
 with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
@@ -13825,21 +13880,21 @@ with tab_mstu:
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
     )
-    # ── V4 backtests (Idea 3 only: D1-conflict block, both-sides-hot suppressor) ──
-    _mstu_bear_v4     = _run_fixed_period_mstu_backtest_v4(
+    # ── V5 backtests (Idea 4 only: U1 persistence filter, 2 consecutive bars) ──
+    _mstu_bear_v5     = _run_fixed_period_mstu_backtest_v5(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
-    _mstu_bull_v4     = _run_fixed_period_mstu_backtest_v4(
+    _mstu_bull_v5     = _run_fixed_period_mstu_backtest_v5(
         "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)
-    _mstu_full_oos_v4 = run_mstu_backtest(
-        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v4")
-    _mstu_full_v4     = _run_fixed_period_mstu_backtest_v4(
+    _mstu_full_oos_v5 = run_mstu_backtest(
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v5")
+    _mstu_full_v5     = _run_fixed_period_mstu_backtest_v5(
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
     _render_v2_bt_comparison("MSTU", [
-        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v4),
-        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v4),
-        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v4),
-        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v4),
-    ], variant="v4")
+        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v5),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v5),
+        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v5),
+        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v5),
+    ], variant="v5")
 
 with tab_mstu_opts:
     st.markdown("## 🔷 MSTU Options — BTC Signal-Driven Backtesting")
