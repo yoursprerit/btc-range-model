@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v18"  # fix: bull period end date aligned to 2025-05-31
+_BT_LOGIC_VERSION = "sl5-sl5-v19"  # cache bust: force fresh computation for all entry gate variants
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
