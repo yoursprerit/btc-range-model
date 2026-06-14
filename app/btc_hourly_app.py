@@ -6209,7 +6209,6 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
     <b>or</b> a clean breakout approach from below MA30 — the ambiguous
     <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
-    Backtest improvement vs Standard: <b>Bull +40pp · Bear +26pp · Full +114pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
@@ -6320,7 +6319,6 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
     (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
     briefly climbs above a still-declining MA30.
-    Backtest improvement vs Standard: <b>Bull +60pp · Bear +3pp · Full +59pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
@@ -7054,7 +7052,6 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
     <b>or</b> a clean breakout approach from below MA30 — the ambiguous
     <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
-    Backtest improvement vs Standard: <b>Bull +109pp · Bear +42pp · Full +312pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
@@ -7165,7 +7162,6 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
     (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
     briefly climbs above a still-declining MA30.
-    Backtest improvement vs Standard: <b>Bull +109pp · Bear +6pp · Full +104pp</b>.
   </div>
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
