@@ -265,11 +265,14 @@ def mstu_synth(mstr_px, mstu_px, from_date):
     return combined[~combined.index.duplicated(keep="last")]
 
 # ── periods (matching the UI exactly) ────────────────────────────────────────
-# (warmup_start, bt_start, bt_end, use_synth_mstu)
+# (label, warmup_start, mstr_bt_start, mstu_bt_start, bt_end, use_synth_mstu)
+# OOS end = yesterday (2026-06-13); MSTR OOS default start = 2024-05-26,
+#           MSTU OOS default start = 2025-06-04 (bear-only, no synth needed)
 PERIODS = [
-    ("Bear Jun25–May26", "2025-03-01", "2025-06-01", "2026-05-31", False),
-    ("Bull Jun24–Jun25", "2024-03-01", "2024-06-05", "2025-06-14", True),
-    ("Full Jun24–May26", "2024-03-01", "2024-06-01", "2026-05-31", True),
+    ("Bear Jun25–May26", "2025-03-01", "2025-06-01", "2025-06-04", "2026-05-31", False),
+    ("Bull Jun24–Jun25", "2024-03-01", "2024-06-05", "2024-06-05", "2025-06-14", True),
+    ("OOS (rolling)",   "2024-03-01", "2024-05-26", "2025-06-04", "2026-06-13", False),
+    ("Full Jun24–May26", "2024-03-01", "2024-06-01", "2024-06-01", "2026-05-31", True),
 ]
 
 global _entry_key
@@ -280,9 +283,9 @@ print("Running per-period backtests …")
 
 all_results = {}
 
-for label, warmup_start, bt_start, bt_end, use_synth in PERIODS:
+for label, warmup_start, mstr_bt_start, mstu_bt_start, bt_end, use_synth in PERIODS:
     print(f"\n{'─'*60}")
-    print(f"Period: {label}  [{bt_start} → {bt_end}]")
+    print(f"Period: {label}  [MSTR:{mstr_bt_start} | MSTU:{mstu_bt_start} → {bt_end}]")
     fetch_end_dt = (pd.Timestamp(bt_end) + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
     print(f"  Fetching BTC [{warmup_start} → {fetch_end_dt}] …")
     raw = fetch_btc(warmup_start, fetch_end_dt)
@@ -293,25 +296,22 @@ for label, warmup_start, bt_start, bt_end, use_synth in PERIODS:
     print("  Building preds + signals …")
     comp = build_preds(raw)
     sigs = compute_sigs(comp)
-    N = sigs["N"]
 
-    # count blocked entries in period
-    bt_start_ts = pd.Timestamp(bt_start); bt_end_ts = pd.Timestamp(bt_end)
-    period_mask = (sigs["dates"] >= bt_start_ts) & (sigs["dates"] <= bt_end_ts)
-    v1_in_period = int(sigs["tf1_v1"][period_mask].sum())
-    v5_in_period = int(sigs["tf1_v5"][period_mask].sum())
-    blocked = v1_in_period - v5_in_period
-    print(f"  V1 entries in period: {v1_in_period}  |  V5 entries: {v5_in_period}  |  Blocked: {blocked}")
+    # count blocked entry signals in MSTR period
+    mstr_mask = (sigs["dates"] >= pd.Timestamp(mstr_bt_start)) & (sigs["dates"] <= pd.Timestamp(bt_end))
+    v1_in = int(sigs["tf1_v1"][mstr_mask].sum())
+    v5_in = int(sigs["tf1_v5"][mstr_mask].sum())
+    print(f"  MSTR V1 entry signals: {v1_in}  |  V5: {v5_in}  |  Blocked: {v1_in - v5_in}")
 
     # V1 backtest
     _entry_key = "tf1_v1"
-    rv1_mstr = run_bt(sigs, bt_start, bt_end, mstr_px, MSTR_SL, label)
-    rv1_mstu = run_bt(sigs, bt_start, bt_end, mstu_px,  MSTU_SL, label)
+    rv1_mstr = run_bt(sigs, mstr_bt_start, bt_end, mstr_px, MSTR_SL, label)
+    rv1_mstu = run_bt(sigs, mstu_bt_start, bt_end, mstu_px,  MSTU_SL, label)
 
     # V5 backtest
     _entry_key = "tf1_v5"
-    rv5_mstr = run_bt(sigs, bt_start, bt_end, mstr_px, MSTR_SL, label)
-    rv5_mstu = run_bt(sigs, bt_start, bt_end, mstu_px,  MSTU_SL, label)
+    rv5_mstr = run_bt(sigs, mstr_bt_start, bt_end, mstr_px, MSTR_SL, label)
+    rv5_mstu = run_bt(sigs, mstu_bt_start, bt_end, mstu_px,  MSTU_SL, label)
 
     all_results[label] = dict(v1_mstr=rv1_mstr, v5_mstr=rv5_mstr,
                               v1_mstu=rv1_mstu, v5_mstu=rv5_mstu)
@@ -323,7 +323,7 @@ for label, warmup_start, bt_start, bt_end, use_synth in PERIODS:
               f"V5 {v5['strat_ret']:+.1f}% ({v5['n_trades']}t, {v5['win_rate']:.0f}%, DD {v5['max_dd']:.1f}%) | "
               f"Δ {d:+.1f}pp")
 
-    # show which V1 trades are blocked by V5
+    # show which V1 MSTR trades are blocked by V5
     print(f"\n  V1 MSTR trades blocked by V5 (U1 not true day before):")
     v1_t = {(pd.Timestamp(t["entry_date"]).date() if not isinstance(t["entry_date"], pd.Timestamp)
               else t["entry_date"].date()): t for t in rv1_mstr["trades"]}
@@ -337,7 +337,7 @@ for label, warmup_start, bt_start, bt_end, use_synth in PERIODS:
         print("    (none)")
 
 print("\n" + "="*70)
-print("SUMMARY V1 vs V5 (Idea 4: U1 Persistence Filter):")
+print("SUMMARY V1 vs V5 (Idea 4: U1 Persistence Filter)  [as of 2026-06-13]")
 print(f"{'Period':<22} {'Asset':<6} {'B&H':>8} {'V1':>8} {'V5':>8} {'Δ':>8} "
       f"{'V1 Win%':>8} {'V5 Win%':>8} {'V1 #':>6} {'V5 #':>6} {'V1 DD':>8} {'V5 DD':>8}")
 print("-"*115)
