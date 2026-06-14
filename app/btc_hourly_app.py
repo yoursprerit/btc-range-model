@@ -77,6 +77,7 @@ _BT_LOGIC_V2_VERSION = "sl5-sl5-v13-idea12-v1"  # V2: MA30-slope gate + 1.2% U1 
 _BT_LOGIC_V3_VERSION = "sl5-sl5-v13-idea2-v1"   # V3: Idea 2 only — 1.2% U1 threshold for MA30 path, no slope gate
 _BT_LOGIC_V4_VERSION = "sl5-sl5-v13-idea3-v1"   # V4: Idea 3 only — D1-conflict block (both-sides-hot suppressor)
 _BT_LOGIC_V5_VERSION = "sl5-sl5-v13-idea4-v1"   # V5: Idea 4 only — U1 persistence filter (2 consecutive bars)
+_BT_LOGIC_V6_VERSION = "sl5-sl5-v13-idea5-v1"   # V6: Idea 5 only — SPX/NDX trend alignment gate for MSTR/MSTU
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3364,6 +3365,7 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
     raw_df = df[["btc_close","btc_high","btc_low","btc_volume"]].copy()
 
     # ── 2. Macro data (yfinance) ─────────────────────────────────────────────
+    # Note: spx_close is added to raw_df after macro fetch (needed for V6 SPX gate)
     _MACRO = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
               "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
     for nm, sym in _MACRO.items():
@@ -3376,6 +3378,10 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
             df[f"{nm}_close"] = _d["Close"].reindex(df.index).ffill(limit=7)
         except Exception:
             pass
+
+    # Expose SPX in raw_df for V6 entry gate (slope alignment)
+    if "spx_close" in df.columns:
+        raw_df["spx_close"] = df["spx_close"]
 
     # ── 3. On-chain (blockchain.info) ────────────────────────────────────────
     _ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
@@ -3718,6 +3724,20 @@ def run_mstr_backtest(end_date_iso: str,
         u1_persist    = np.zeros(N, dtype=bool)
         u1_persist[1:] = u1[1:] & u1[:-1]
         tf1_entry = u1_persist & ((above_ma30 ^ clean_10d) | v_recent)
+    elif entry_variant == "v6":
+        # Idea 5 only: SPX trend alignment gate.
+        # Block MSTR entries when SPX MA20 slope (today vs 5 days ago) is negative —
+        # indicates broad equity downtrend. V-reversal bars bypass the SPX gate because
+        # V-reversals already require extreme oversold conditions (err_lo > 3%).
+        _spx = raw_df["spx_close"].reindex(dates).ffill().values.astype(float) \
+               if "spx_close" in raw_df.columns else np.ones(N) * np.nan
+        _spx_ma20 = pd.Series(_spx).rolling(20, min_periods=10).mean().values
+        spx_slope_pos = np.zeros(N, dtype=bool)
+        for i in range(5, N):
+            if np.isfinite(_spx_ma20[i]) and np.isfinite(_spx_ma20[i - 5]):
+                spx_slope_pos[i] = _spx_ma20[i] > _spx_ma20[i - 5]
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+        tf1_entry = tf1_entry & (spx_slope_pos | v_recent)
     else:
         # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -3838,7 +3858,7 @@ def run_mstr_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
-    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4", "v5": " v5"}.get(entry_variant, "")
+    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4", "v5": " v5", "v6": " v6"}.get(entry_variant, "")
     _mstr_strat_label = f"TF2+V-Gate (MSTR){_variant_suffix}"
 
     return dict(
@@ -3946,6 +3966,20 @@ def _run_fixed_period_mstr_backtest_v5(end_date_iso: str, backtest_start_iso: st
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, entry_variant="v5")
+
+
+@st.cache_data(show_spinner="Loading V6 MSTR backtest …")
+def _run_fixed_period_mstr_backtest_v6(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V6_VERSION):
+    """Cached wrapper for V6 MSTR backtests (Idea 5 only: SPX trend alignment gate).
+
+    Uses entry_variant='v6' so cache key is independent of V1–V5.
+    """
+    return run_mstr_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v6")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4136,6 +4170,20 @@ def run_mstu_backtest(end_date_iso: str,
         u1_persist    = np.zeros(N, dtype=bool)
         u1_persist[1:] = u1[1:] & u1[:-1]
         tf1_entry = u1_persist & ((above_ma30 ^ clean_10d) | v_recent)
+    elif entry_variant == "v6":
+        # Idea 5 only: SPX trend alignment gate.
+        # Block MSTU entries when SPX MA20 slope (today vs 5 days ago) is negative —
+        # indicates broad equity downtrend. V-reversal bars bypass the SPX gate because
+        # V-reversals already require extreme oversold conditions (err_lo > 3%).
+        _spx = raw_df["spx_close"].reindex(dates).ffill().values.astype(float) \
+               if "spx_close" in raw_df.columns else np.ones(N) * np.nan
+        _spx_ma20 = pd.Series(_spx).rolling(20, min_periods=10).mean().values
+        spx_slope_pos = np.zeros(N, dtype=bool)
+        for i in range(5, N):
+            if np.isfinite(_spx_ma20[i]) and np.isfinite(_spx_ma20[i - 5]):
+                spx_slope_pos[i] = _spx_ma20[i] > _spx_ma20[i - 5]
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+        tf1_entry = tf1_entry & (spx_slope_pos | v_recent)
     else:
         # V1: block combined MA30-up+clean7d via XOR, or V-reversal override
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -4256,7 +4304,7 @@ def run_mstu_backtest(end_date_iso: str,
     after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
-    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4", "v5": " v5"}.get(entry_variant, "")
+    _variant_suffix = {"v2": " v2", "v3": " v3", "v4": " v4", "v5": " v5", "v6": " v6"}.get(entry_variant, "")
     _mstu_strat_label = f"TF2+V-Gate (MSTU){_variant_suffix}"
 
     return dict(
@@ -4364,6 +4412,20 @@ def _run_fixed_period_mstu_backtest_v5(end_date_iso: str, backtest_start_iso: st
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, entry_variant="v5")
+
+
+@st.cache_data(show_spinner="Loading V6 MSTU backtest …")
+def _run_fixed_period_mstu_backtest_v6(end_date_iso: str, backtest_start_iso: str,
+                                       model_mtime: float = 0.0,
+                                       data_end: str = "",
+                                       logic_version: str = _BT_LOGIC_V6_VERSION):
+    """Cached wrapper for V6 MSTU backtests (Idea 5 only: SPX trend alignment gate).
+
+    Uses entry_variant='v6' so cache key is independent of V1–V5.
+    """
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_variant="v6")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -6256,16 +6318,32 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             lt_idx += 1
 
 
-def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v5") -> None:
+def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v6") -> None:
     """Side-by-side comparison: TF2+V-Gate V1 (baseline) vs a filtered variant.
 
     periods — list of (label, bt_v1, bt_vx) where each bt is the dict returned
     by run_mstr_backtest / run_mstu_backtest, or None when unavailable.
-    variant — "v2" (Ideas 1+2), "v3" (Idea 2 only), "v4" (Idea 3 only), "v5" (Idea 4 only).
+    variant — "v2" (Ideas 1+2), "v3" (Idea 2 only), "v4" (Idea 3 only),
+              "v5" (Idea 4 only), "v6" (Idea 5 only).
     Displays a colour-annotated markdown table + per-period trade logs.
     """
     variant_upper = variant.upper()
-    if variant == "v5":
+    if variant == "v6":
+        expander_title = "🔬 V6 Entry Filter (Idea 5 only) — Side-by-Side Comparison vs Baseline"
+        description_md = (
+            "**What changed in V6 (Idea 5 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
+            "- **Idea 5 — SPX Trend Alignment Gate:** MSTR/MSTU entries are blocked when the "
+            "SPX MA20 slope (today vs 5 days ago) is *negative* — i.e., the broad equity market "
+            "is in a downtrend. BTC TF2 is designed for BTC; for equity-wrapped instruments, "
+            "an additional macro confirmation is warranted.  \n"
+            "- **V-reversal override:** V-reversal bars (`v_recent = True`) bypass the SPX gate — "
+            "extreme oversold conditions (`err_lo > 3%`) already imply dislocation and a potential "
+            "snap-back, where SPX alignment is less critical.  \n"
+            "- **Rationale:** In 2025–2026 risk-off periods, MSTR/MSTU co-moved with the Nasdaq — "
+            "they fell hard when SPX fell regardless of BTC signals. This gate avoids entering "
+            "MSTR/MSTU positions when the macro environment is actively working against them."
+        )
+    elif variant == "v5":
         expander_title = "🔬 V5 Entry Filter (Idea 4 only) — Side-by-Side Comparison vs Baseline"
         description_md = (
             "**What changed in V5 (Idea 4 only)** — exit logic, stops, and re-entry rules are **unchanged**:  \n"
@@ -6375,8 +6453,8 @@ def _render_v2_bt_comparison(asset: str, periods: list, variant: str = "v5") -> 
         )
 
         # Per-period trade log comparison
-        _vx_labels = {"v5": "V5 (Idea 4 only)", "v4": "V4 (Idea 3 only)",
-                      "v3": "V3 (Idea 2 only)", "v2": "V2 (Ideas 1+2)"}
+        _vx_labels = {"v6": "V6 (Idea 5 only)", "v5": "V5 (Idea 4 only)",
+                      "v4": "V4 (Idea 3 only)", "v3": "V3 (Idea 2 only)", "v2": "V2 (Ideas 1+2)"}
         vx_col_label = _vx_labels.get(variant, variant.upper())
         st.markdown("#### Trade-by-Trade Comparison")
         tab_labels = [lbl for lbl, v1, vx in periods if v1 is not None or vx is not None]
@@ -13833,21 +13911,21 @@ with tab_mstr:
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
     )
-    # ── V5 backtests (Idea 4 only: U1 persistence filter, 2 consecutive bars) ──
-    _mstr_bear_v5     = _run_fixed_period_mstr_backtest_v5(
+    # ── V6 backtests (Idea 5 only: SPX trend alignment gate) ──
+    _mstr_bear_v6     = _run_fixed_period_mstr_backtest_v6(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_bull_v5     = _run_fixed_period_mstr_backtest_v5(
+    _mstr_bull_v6     = _run_fixed_period_mstr_backtest_v6(
         "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_full_oos_v5 = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v5")
-    _mstr_full_v5     = _run_fixed_period_mstr_backtest_v5(
+    _mstr_full_oos_v6 = run_mstr_backtest(
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_variant="v6")
+    _mstr_full_v6     = _run_fixed_period_mstr_backtest_v6(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
     _render_v2_bt_comparison("MSTR", [
-        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v5),
-        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v5),
-        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v5),
-        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v5),
-    ], variant="v5")
+        ("🐻 Bear  Jun 2025–May 2026", _mstr_bear,     _mstr_bear_v6),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstr_bull,     _mstr_bull_v6),
+        ("🔬 OOS (rolling)",           _mstr_full_oos, _mstr_full_oos_v6),
+        ("🌐 Full  Jun 2024–May 2026", _mstr_full,     _mstr_full_v6),
+    ], variant="v6")
 
 with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
@@ -13880,21 +13958,21 @@ with tab_mstu:
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
     )
-    # ── V5 backtests (Idea 4 only: U1 persistence filter, 2 consecutive bars) ──
-    _mstu_bear_v5     = _run_fixed_period_mstu_backtest_v5(
+    # ── V6 backtests (Idea 5 only: SPX trend alignment gate) ──
+    _mstu_bear_v6     = _run_fixed_period_mstu_backtest_v6(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
-    _mstu_bull_v5     = _run_fixed_period_mstu_backtest_v5(
+    _mstu_bull_v6     = _run_fixed_period_mstu_backtest_v6(
         "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)
-    _mstu_full_oos_v5 = run_mstu_backtest(
-        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v5")
-    _mstu_full_v5     = _run_fixed_period_mstu_backtest_v5(
+    _mstu_full_oos_v6 = run_mstu_backtest(
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_variant="v6")
+    _mstu_full_v6     = _run_fixed_period_mstu_backtest_v6(
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
     _render_v2_bt_comparison("MSTU", [
-        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v5),
-        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v5),
-        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v5),
-        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v5),
-    ], variant="v5")
+        ("🐻 Bear  Jun 2025–May 2026", _mstu_bear,     _mstu_bear_v6),
+        ("🐂 Bull  Jun 2024–Jun 2025", _mstu_bull,     _mstu_bull_v6),
+        ("🔬 OOS (rolling)",           _mstu_full_oos, _mstu_full_oos_v6),
+        ("🌐 Full  Jun 2024–May 2026", _mstu_full,     _mstu_full_v6),
+    ], variant="v6")
 
 with tab_mstu_opts:
     st.markdown("## 🔷 MSTU Options — BTC Signal-Driven Backtesting")
