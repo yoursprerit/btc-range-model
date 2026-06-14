@@ -3535,7 +3535,8 @@ def run_mstr_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
-                      logic_version: str = _BT_LOGIC_VERSION):
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      entry_mode: str = "current"):
     """MSTR backtest driven by BTC TF2+V-Gate signals.
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
@@ -3680,7 +3681,11 @@ def run_mstr_backtest(end_date_iso: str,
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Idea 1: tighten gate — require bull_regime (price above rising MA30) not just above_ma30
+    if entry_mode == "idea1":
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
+    else:
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -3752,8 +3757,8 @@ def run_mstr_backtest(end_date_iso: str,
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i]:
-                    e_trigger = "U1 + ↑MA30"
+                elif (bull_regime[i] if entry_mode == "idea1" else above_ma30[i]):
+                    e_trigger = "U1 + Bull Regime" if entry_mode == "idea1" else "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + Clean 7d"
         nav_arr[i] = mstr_qty * price if pos == "LONG" else nav
@@ -3849,6 +3854,17 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                              logic_version=logic_version)
 
 
+@st.cache_data(show_spinner="Loading fixed-period MSTR backtest (Idea 1) …")
+def _run_fixed_period_mstr_backtest_idea1(end_date_iso: str, backtest_start_iso: str,
+                                          model_mtime: float = 0.0,
+                                          data_end: str = "",
+                                          logic_version: str = _BT_LOGIC_VERSION):
+    """Cached wrapper for fixed-period MSTR backtests using Idea 1 (bull_regime gate)."""
+    return run_mstr_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_mode="idea1")
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MSTU Backtesting  (T-Rex 2× Long MSTR Daily Target ETF)
 # ═══════════════════════════════════════════════════════════════════
@@ -3859,7 +3875,8 @@ def run_mstu_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
-                      logic_version: str = _BT_LOGIC_VERSION):
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      entry_mode: str = "current"):
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
@@ -4003,7 +4020,11 @@ def run_mstu_backtest(end_date_iso: str,
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
     # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Idea 1: tighten gate — require bull_regime (price above rising MA30) not just above_ma30
+    if entry_mode == "idea1":
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
+    else:
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -4075,8 +4096,8 @@ def run_mstu_backtest(end_date_iso: str,
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
-                elif above_ma30[i]:
-                    e_trigger = "U1 + ↑MA30"
+                elif (bull_regime[i] if entry_mode == "idea1" else above_ma30[i]):
+                    e_trigger = "U1 + Bull Regime" if entry_mode == "idea1" else "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + Clean 7d"
         nav_arr[i] = mstu_qty * price if pos == "LONG" else nav
@@ -4171,6 +4192,17 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version)
+
+
+@st.cache_data(show_spinner="Loading fixed-period MSTU backtest (Idea 1) …")
+def _run_fixed_period_mstu_backtest_idea1(end_date_iso: str, backtest_start_iso: str,
+                                          model_mtime: float = 0.0,
+                                          data_end: str = "",
+                                          logic_version: str = _BT_LOGIC_VERSION):
+    """Cached wrapper for fixed-period MSTU backtests using Idea 1 (bull_regime gate)."""
+    return run_mstu_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, entry_mode="idea1")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -13464,14 +13496,34 @@ with tab_mstr:
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstr_raw      = _fetch_daily_raw()
     _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
-    _mstr_bear     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
-    _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
-    _mstr_full_oos = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end)  # OOS ends prior day (rolling)
-    _mstr_full     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
+    _mstr_signal_mode = st.radio(
+        "Entry signal",
+        ["Current", "Idea 1 — Bull Regime Gate"],
+        horizontal=True,
+        key="mstr_signal_mode",
+        help=(
+            "**Current**: entry allowed when BTC is above its 30-day MA (regardless of trend direction).\n\n"
+            "**Idea 1**: entry requires BTC above a *rising* 30-day MA — blocks rallies inside a declining trend."
+        ),
+    )
+    if _mstr_signal_mode == "Idea 1 — Bull Regime Gate":
+        _mstr_bear     = _run_fixed_period_mstr_backtest_idea1(
+            "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
+        _mstr_bull     = _run_fixed_period_mstr_backtest_idea1(
+            "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
+        _mstr_full_oos = run_mstr_backtest(
+            _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end, entry_mode="idea1")
+        _mstr_full     = _run_fixed_period_mstr_backtest_idea1(
+            "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)
+    else:
+        _mstr_bear     = _run_fixed_period_mstr_backtest(
+            "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
+        _mstr_bull     = _run_fixed_period_mstr_backtest(
+            "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
+        _mstr_full_oos = run_mstr_backtest(
+            _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end)  # OOS ends prior day (rolling)
+        _mstr_full     = _run_fixed_period_mstr_backtest(
+            "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
@@ -13494,14 +13546,34 @@ with tab_mstu:
     _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstu_raw      = _fetch_daily_raw()
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
-    _mstu_bear     = _run_fixed_period_mstu_backtest(
-        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
-    _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
-    _mstu_full_oos = run_mstu_backtest(
-        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
-    _mstu_full     = _run_fixed_period_mstu_backtest(
-        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)     # Full: Jun 2024–May 2026 (synthetic+actual)
+    _mstu_signal_mode = st.radio(
+        "Entry signal",
+        ["Current", "Idea 1 — Bull Regime Gate"],
+        horizontal=True,
+        key="mstu_signal_mode",
+        help=(
+            "**Current**: entry allowed when BTC is above its 30-day MA (regardless of trend direction).\n\n"
+            "**Idea 1**: entry requires BTC above a *rising* 30-day MA — blocks rallies inside a declining trend."
+        ),
+    )
+    if _mstu_signal_mode == "Idea 1 — Bull Regime Gate":
+        _mstu_bear     = _run_fixed_period_mstu_backtest_idea1(
+            "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)
+        _mstu_bull     = _run_fixed_period_mstu_backtest_idea1(
+            "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)
+        _mstu_full_oos = run_mstu_backtest(
+            _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end, entry_mode="idea1")
+        _mstu_full     = _run_fixed_period_mstu_backtest_idea1(
+            "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)
+    else:
+        _mstu_bear     = _run_fixed_period_mstu_backtest(
+            "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
+        _mstu_bull     = _run_fixed_period_mstu_backtest(
+            "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
+        _mstu_full_oos = run_mstu_backtest(
+            _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
+        _mstu_full     = _run_fixed_period_mstu_backtest(
+            "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)     # Full: Jun 2024–May 2026 (synthetic+actual)
     render_mstu_trading_strategy_dashboard(
         _mstu_bear,
         bt_bull=_mstu_bull,
