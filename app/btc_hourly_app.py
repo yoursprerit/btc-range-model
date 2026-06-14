@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v13"  # fix: 200-day fetch warmup so dist_hi_90 is warm at backtest start
+_BT_LOGIC_VERSION = "sl5-sl5-v14"  # Option B: require bull_regime (above+rising MA30) in XOR gate
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -2520,8 +2520,9 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
     # not an entry gate, to keep live signal consistent with backtest behaviour.
     v_gate_ok     = v_recent_gate
-    # Block combined MA30-up+clean7d: enter only when exactly one fires (XOR) or V-reversal
-    tf1_triggered = u1_triggered and ((above_ma30 != clean_10d) or v_gate_ok)
+    # Require bull_regime (above+rising MA30) for the trend-gate path; clean_7d and V-reversal unchanged.
+    # bull_regime replaces above_ma30 in the XOR: blocks dead-cat bounce entries on declining MA30.
+    tf1_triggered = u1_triggered and ((bull_regime != clean_10d) or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -3129,8 +3130,9 @@ def run_full_period_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -3535,7 +3537,8 @@ def run_mstr_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
-                      logic_version: str = _BT_LOGIC_VERSION):
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      entry_gate: str = "bull_regime"):
     """MSTR backtest driven by BTC TF2+V-Gate signals.
 
     Computes all entry/exit signals from the BTC CT model (identical logic to
@@ -3679,8 +3682,11 @@ def run_mstr_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Entry gate: "above_ma30" = original XOR; "bull_regime" = Confirmed Uptrend (default)
+    if entry_gate == "above_ma30":
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    else:
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
@@ -3814,6 +3820,7 @@ def run_mstr_backtest(end_date_iso: str,
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2+V-Gate (MSTR)",
+            entry_gate      = entry_gate,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -3838,15 +3845,16 @@ def run_mstr_backtest(end_date_iso: str,
 def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
-                                    logic_version: str = _BT_LOGIC_VERSION):
+                                    logic_version: str = _BT_LOGIC_VERSION,
+                                    entry_gate: str = "bull_regime"):
     """Cached wrapper for fixed-period MSTR backtests.
 
     Invalidates on model change (model_mtime), new daily price data (data_end),
-    or backtest logic change (logic_version).
+    backtest logic change (logic_version), or entry_gate variant.
     """
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
-                             logic_version=logic_version)
+                             logic_version=logic_version, entry_gate=entry_gate)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -3859,7 +3867,8 @@ def run_mstu_backtest(end_date_iso: str,
                       initial_capital: float = 100_000.0,
                       model_mtime: float = 0.0,
                       data_end: str = "",
-                      logic_version: str = _BT_LOGIC_VERSION):
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      entry_gate: str = "bull_regime"):
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
     Identical signal logic to run_mstr_backtest but executes trades in MSTU
@@ -4002,8 +4011,11 @@ def run_mstu_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Entry gate: "above_ma30" = original XOR; "bull_regime" = Confirmed Uptrend (default)
+    if entry_gate == "above_ma30":
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    else:
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
@@ -4137,6 +4149,7 @@ def run_mstu_backtest(end_date_iso: str,
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2+V-Gate (MSTU)",
+            entry_gate      = entry_gate,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -4161,16 +4174,17 @@ def run_mstu_backtest(end_date_iso: str,
 def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
-                                    logic_version: str = _BT_LOGIC_VERSION):
+                                    logic_version: str = _BT_LOGIC_VERSION,
+                                    entry_gate: str = "bull_regime"):
     """Cached wrapper for fixed-period MSTU backtests.
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
     Invalidates on model change (model_mtime), new daily price data (data_end),
-    or backtest logic change (logic_version).
+    backtest logic change (logic_version), or entry_gate variant.
     """
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
-                             logic_version=logic_version)
+                             logic_version=logic_version, entry_gate=entry_gate)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4342,8 +4356,9 @@ def run_mstr_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR call options ──────────────────────────
     nav      = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -4674,8 +4689,9 @@ def run_mstu_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU call options ──────────────────────────
     nav        = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -5073,8 +5089,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Block combined MA30-up+clean7d: XOR ensures only one trend gate fires, or V-reversal
-    tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
+    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
+    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
     tf1_exit  = d2 | d3   # TF1 always exits D2|D3
 
     # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
@@ -6064,7 +6081,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
 
 def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
-                                           bt_full=None, key_suffix: str = "") -> None:
+                                           bt_full=None, key_suffix: str = "",
+                                           strategy_variant: str = "bull_regime") -> None:
     """Render the MSTR backtesting dashboard (BTC TF2+V-Gate signals → MSTR execution).
 
     Same four-period layout as render_trading_strategy_dashboard but with:
@@ -6080,16 +6098,92 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 "Refresh in a moment.")
         return
 
-    # ── Strategy rules card ───────────────────────────────────────────────────
-    st.markdown("""
+    # ── Strategy rules card (variant-aware) ──────────────────────────────────
+    _mstr_footer = """
+  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
+  <!-- EXIT -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📤 Exit — BTC signals trigger MSTR sell</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL regime</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          BTC above MA30 AND MA30 rising → exit MSTR on <b>D3 only</b> (patient)
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR / Neutral</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          BTC below MA30 or MA30 flat → exit MSTR on <b>D2 or D3</b> (defensive)
+        </td>
+      </tr>
+    </table>
+  </div>
+  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
+  <!-- STOP-LOSS & RE-ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fef9c3; color:#713f12; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>Stop trigger</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Fixed <b>−3%</b> from entry price — triggers on daily close below stop level
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Re-enter <b>immediately</b> on next valid signal (BTC above MA30 &amp; MA30 rising)
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Wait <b>10-bar cooldown</b> then re-enter on next valid signal
+        </td>
+      </tr>
+    </table>
+  </div>
+  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
+  <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
+    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTR trade at bar <i>i+1</i> close
+    &nbsp;·&nbsp;
+    💰 <b>Capital:</b> $100,000 initial
+    &nbsp;·&nbsp;
+    📅 <b>MSTR prices:</b> split-adjusted (10-for-1 split Aug 2024)
+    &nbsp;·&nbsp;
+    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+  </div>
+</div>"""
+
+    if strategy_variant == "above_ma30":
+        st.markdown("""
 <div style='background:#f5f3ff; border:2px solid #7c3aed; border-radius:12px;
      padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
-
   <div style='font-size:14px; font-weight:700; color:#4c1d95; margin-bottom:14px;
        letter-spacing:0.3px;'>
     📊 TF2 + V-Gate on MSTR &nbsp;—&nbsp; BTC Signals · MSTR Execution
   </div>
-
   <div style='background:#ede9fe; border-radius:8px; padding:10px 14px;
        margin-bottom:12px; font-size:12px; color:#4c1d95; font-weight:600;'>
     🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
@@ -6097,7 +6191,6 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     ~580,000 BTC on its balance sheet, making it a leveraged Bitcoin proxy with
     equity-market liquidity and tax treatment as a security.
   </div>
-
   <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
@@ -6133,89 +6226,67 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         </td>
       </tr>
     </table>
+  </div>""" + _mstr_footer, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+<div style='background:#f5f3ff; border:2px solid #7c3aed; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+  <div style='font-size:14px; font-weight:700; color:#4c1d95; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📊 TF2 + V-Gate on MSTR &nbsp;—&nbsp; <span style='color:#7c3aed;'>Confirmed Uptrend Entry</span>
+    &nbsp;·&nbsp; BTC Signals · MSTR Execution
   </div>
-
-  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
-
-  <!-- EXIT -->
+  <div style='background:#ede9fe; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#4c1d95; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>MSTR stock</b> instead of BTC. MicroStrategy holds
+    ~580,000 BTC on its balance sheet, making it a leveraged Bitcoin proxy with
+    equity-market liquidity and tax treatment as a security.
+  </div>
+  <div style='background:#f3e8ff; border:1px solid #a855f7; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#6b21a8;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate now requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
+    Backtest improvement vs Standard: <b>Bull +60pp · Bear +3pp · Full +59pp</b>.
+  </div>
+  <!-- ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>📤 Exit — BTC signals trigger MSTR sell</div>
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTR buy</div>
     <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
       <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐂 BULL regime</span>
-        </td>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#7c3aed;'>①</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          BTC above MA30 AND MA30 rising → exit MSTR on <b>D3 only</b> (patient)
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#7c3aed; font-size:11px;'>
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
         </td>
       </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
       <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐻 BEAR / Neutral</span>
-        </td>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#7c3aed;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          BTC below MA30 or MA30 flat → exit MSTR on <b>D2 or D3</b> (defensive)
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
+            <br>
+            <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
+          </div>
         </td>
       </tr>
     </table>
-  </div>
-
-  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
-
-  <!-- STOP-LOSS & RE-ENTRY -->
-  <div style='margin-bottom:12px;'>
-    <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
-    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fef9c3; color:#713f12; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>Stop trigger</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−3%</b> from entry price — triggers on daily close below stop level
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Re-enter <b>immediately</b> on next valid TF2+V-Gate signal (BTC above MA30 &amp; MA30 rising)
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Wait <b>10-bar cooldown</b> then re-enter on next valid TF2+V-Gate signal
-        </td>
-      </tr>
-    </table>
-  </div>
-
-  <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
-
-  <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
-    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTR trade at bar <i>i+1</i> close
-    &nbsp;·&nbsp;
-    💰 <b>Capital:</b> $100,000 initial
-    &nbsp;·&nbsp;
-    📅 <b>MSTR prices:</b> split-adjusted (10-for-1 split Aug 2024)
-    &nbsp;·&nbsp;
-    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
-  </div>
-
-</div>""", unsafe_allow_html=True)
+  </div>""" + _mstr_footer, unsafe_allow_html=True)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
@@ -6794,7 +6865,8 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
 
 def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=None,
-                                           bt_full=None, key_suffix: str = "") -> None:
+                                           bt_full=None, key_suffix: str = "",
+                                           strategy_variant: str = "bull_regime") -> None:
     """Render the MSTU backtesting dashboard (BTC TF2+V-Gate signals → MSTU execution).
 
     Four-period layout: Bear (Jun 2025–May 2026) · Bull (Jun 2024–May 2025 synthetic) ·
@@ -6811,63 +6883,9 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 "Refresh in a moment.")
         return
 
-    # ── Strategy rules card ───────────────────────────────────────────────────
-    st.markdown("""
-<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
-     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
-
-  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
-       letter-spacing:0.3px;'>
-    📈 TF2 + V-Gate on MSTU &nbsp;—&nbsp; BTC Signals · MSTU Execution
-  </div>
-
-  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
-       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
-    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
-    engine, but buy and sell <b>MSTU (T-Rex 2× Long MSTR Daily Target ETF)</b> instead of BTC.
-    MSTU provides <b>2× daily leveraged exposure</b> to MSTR stock — which itself holds
-    ~580,000 BTC — making it a doubly-leveraged Bitcoin proxy. Inception ~Jun 2025.
-  </div>
-
-  <!-- ENTRY -->
-  <div style='margin-bottom:12px;'>
-    <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTU buy</div>
-    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
-      <tr>
-        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
-             color:#0d9488;'>①</td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
-          <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
-          </span>
-        </td>
-      </tr>
-      <tr>
-        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
-             color:#0d9488;'>②</td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
-          <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
-            &nbsp; BTC close above its 30-day moving average
-            <br>
-            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
-            &nbsp; No D1 or D2 on BTC in prior 7 bars
-            <br>
-            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
-            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
-            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
-          </div>
-        </td>
-      </tr>
-    </table>
-  </div>
-
+    # ── Strategy rules card (variant-aware) ──────────────────────────────────
+    _mstu_footer = """
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
-
   <!-- EXIT -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
@@ -6894,9 +6912,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
       </tr>
     </table>
   </div>
-
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
-
   <!-- STOP-LOSS & RE-ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
@@ -6933,9 +6949,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
       </tr>
     </table>
   </div>
-
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
-
   <div style='font-size:11px; color:#0f766e; line-height:1.8;'>
     ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTU trade at bar <i>i+1</i> close
     &nbsp;·&nbsp;
@@ -6945,8 +6959,119 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     &nbsp;·&nbsp;
     ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
   </div>
+</div>"""
 
-</div>""", unsafe_allow_html=True)
+    if strategy_variant == "above_ma30":
+        st.markdown("""
+<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📈 TF2 + V-Gate on MSTU &nbsp;—&nbsp; BTC Signals · MSTU Execution
+  </div>
+  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>MSTU (T-Rex 2× Long MSTR Daily Target ETF)</b> instead of BTC.
+    MSTU provides <b>2× daily leveraged exposure</b> to MSTR stock — which itself holds
+    ~580,000 BTC — making it a doubly-leveraged Bitcoin proxy. Inception ~Jun 2025.
+  </div>
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTU buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0d9488; font-size:11px;'>
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
+            &nbsp; BTC close above its 30-day moving average
+            <br>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>""" + _mstu_footer, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📈 TF2 + V-Gate on MSTU &nbsp;—&nbsp; <span style='color:#0d9488;'>Confirmed Uptrend Entry</span>
+    &nbsp;·&nbsp; BTC Signals · MSTU Execution
+  </div>
+  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>MSTU (T-Rex 2× Long MSTR Daily Target ETF)</b> instead of BTC.
+    MSTU provides <b>2× daily leveraged exposure</b> to MSTR stock — which itself holds
+    ~580,000 BTC — making it a doubly-leveraged Bitcoin proxy. Inception ~Jun 2025.
+  </div>
+  <div style='background:#ccfbf1; border:1px solid #0d9488; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#065f46;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate now requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
+    Backtest improvement vs Standard: <b>Bull +107pp · Bear +6pp · Full +104pp</b>.
+  </div>
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTU buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0d9488; font-size:11px;'>
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
+            <br>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>""" + _mstu_footer, unsafe_allow_html=True)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
@@ -13459,24 +13584,40 @@ with tab_mstr:
         "MSTR holds ~580,000 BTC on its balance sheet and behaves as a leveraged Bitcoin "
         "proxy with equity-market tax treatment."
     )
+    _mstr_variant = st.radio(
+        "Entry gate variant",
+        options=["bull_regime", "above_ma30"],
+        format_func=lambda x: (
+            "🔒 Confirmed Uptrend — Bull Regime (above MA30 & MA30 rising)"
+            if x == "bull_regime" else
+            "📊 Standard — Above MA30"
+        ),
+        horizontal=True,
+        key="mstr_variant_radio",
+    )
     _mstr_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstr_raw      = _fetch_daily_raw()
     _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
     _mstr_bear     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2025–May 2026
+        "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
+        entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end)
+        "2025-06-14", "2024-06-05", _mstr_model_mtime, data_end=_mstr_data_end,
+        entry_gate=_mstr_variant)
     _mstr_full_oos = run_mstr_backtest(
-        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end)  # OOS ends prior day (rolling)
+        _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
+        entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
     _mstr_full     = _run_fixed_period_mstr_backtest(
-        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end)    # locked Jun 2024–May 2026
+        "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
+        entry_gate=_mstr_variant)    # locked Jun 2024–May 2026
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
         bt_full=_mstr_full,
         key_suffix="mstr_tab",
+        strategy_variant=_mstr_variant,
     )
 
 with tab_mstu:
@@ -13489,25 +13630,41 @@ with tab_mstu:
         "which holds ~580,000 BTC. MSTU launched ~Jun 2025; the **Bull Market period uses "
         "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
+    _mstu_variant = st.radio(
+        "Entry gate variant",
+        options=["bull_regime", "above_ma30"],
+        format_func=lambda x: (
+            "🔒 Confirmed Uptrend — Bull Regime (above MA30 & MA30 rising)"
+            if x == "bull_regime" else
+            "📊 Standard — Above MA30"
+        ),
+        horizontal=True,
+        key="mstu_variant_radio",
+    )
     _mstu_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstu_raw      = _fetch_daily_raw()
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
     _mstu_bear     = _run_fixed_period_mstu_backtest(
-        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end)    # locked Jun 2025–May 2026
+        "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end,
+        entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
+        "2025-06-14", "2024-06-05", _mstu_model_mtime, data_end=_mstu_data_end,
+        entry_gate=_mstu_variant)    # Bull: Jun 2024–Jun 2025 (synthetic, matches MSTR)
     _mstu_full_oos = run_mstu_backtest(
-        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end)      # OOS ends prior day (rolling)
+        _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
+        entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
     _mstu_full     = _run_fixed_period_mstu_backtest(
-        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end)     # Full: Jun 2024–May 2026 (synthetic+actual)
+        "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
+        entry_gate=_mstu_variant)     # Full: Jun 2024–May 2026 (synthetic+actual)
     render_mstu_trading_strategy_dashboard(
         _mstu_bear,
         bt_bull=_mstu_bull,
         bt_full_oos=_mstu_full_oos,
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
+        strategy_variant=_mstu_variant,
     )
 
 with tab_mstu_opts:
