@@ -11392,19 +11392,52 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         f3.metric("Daily Low — Predicted / Realized", "—")
         f3.caption("Realized: —")
 
-    # ─────────── MSTR / MSTU live prices + 743d ATM call ─────────────────
-    _mstr_spot_key = round(mstr_price) if mstr_price else None
+    # ─────────── MSTR / MSTU prices + 743d ATM call ─────────────────────
+    # In live mode: use real-time prices from fetch_equity_prices().
+    # In historical mode: use versioned CSV close for target_date so prices
+    # reflect the selected day rather than the current live price.
+    if is_live:
+        _disp_mstr_px  = mstr_price
+        _disp_mstu_px  = mstu_price
+        _disp_mstr_chg = mstr_chg
+        _disp_mstu_chg = mstu_chg
+        _mstr_lbl = "MSTR (MicroStrategy)"
+        _mstu_lbl = "MSTU (2× Long MSTR)"
+        _mstr_delta_sfx = "today"
+        _mstu_delta_sfx = "today"
+    else:
+        _date_key = target_date.normalize()
+        _date_sfx = target_date.strftime("%b %d, %Y")
+        def _csv_price_and_chg(csv_df):
+            if csv_df is None or csv_df.empty or "close" not in csv_df.columns:
+                return None, None
+            _idx  = csv_df.index[csv_df.index <= _date_key]
+            if len(_idx) == 0:
+                return None, None
+            _px   = float(csv_df["close"].loc[_idx[-1]])
+            _prev_idx = csv_df.index[csv_df.index < _idx[-1]]
+            _chg  = ((_px / float(csv_df["close"].loc[_prev_idx[-1]]) - 1) * 100
+                     if len(_prev_idx) > 0 else None)
+            return _px, _chg
+        _disp_mstr_px,  _disp_mstr_chg = _csv_price_and_chg(_load_mstr_prices())
+        _disp_mstu_px,  _disp_mstu_chg = _csv_price_and_chg(_load_mstu_prices())
+        _mstr_lbl = f"MSTR @ {_date_sfx}"
+        _mstu_lbl = f"MSTU @ {_date_sfx}"
+        _mstr_delta_sfx = "vs prev day"
+        _mstu_delta_sfx = "vs prev day"
+
+    _mstr_spot_key = round(_disp_mstr_px) if _disp_mstr_px else None
     mstr_call_px, mstr_hv, mstr_call_strike = fetch_mstr_atm_call(_mstr_spot_key)
     e1, e2, e3, _, _ = st.columns(5)
     e1.metric(
-        "MSTR (MicroStrategy)",
-        f"${mstr_price:,.2f}" if mstr_price is not None else "—",
-        delta=(f"{mstr_chg:+.2f}% today" if mstr_chg is not None else None),
+        _mstr_lbl,
+        f"${_disp_mstr_px:,.2f}" if _disp_mstr_px is not None else "—",
+        delta=(f"{_disp_mstr_chg:+.2f}% {_mstr_delta_sfx}" if _disp_mstr_chg is not None else None),
     )
     e2.metric(
-        "MSTU (2× Long MSTR)",
-        f"${mstu_price:,.2f}" if mstu_price is not None else "—",
-        delta=(f"{mstu_chg:+.2f}% today" if mstu_chg is not None else None),
+        _mstu_lbl,
+        f"${_disp_mstu_px:,.2f}" if _disp_mstu_px is not None else "—",
+        delta=(f"{_disp_mstu_chg:+.2f}% {_mstu_delta_sfx}" if _disp_mstu_chg is not None else None),
     )
     e3.metric(
         "MSTR 743d ATM Call (BS)",
