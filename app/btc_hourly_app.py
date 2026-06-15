@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v25"  # cache bust: per-bar ehma3/elma3 in detail_rows for 3d avg table column
+_BT_LOGIC_VERSION = "sl5-sl5-v26"  # cache bust: err_hi_ma3/err_lo_ma3 in detail_rows; logic_version in compute_trend_signatures
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # ════════════════════════════════════════════════════════════════════════
 
@@ -2340,7 +2340,8 @@ def _compute_intraday_signal(intraday: dict, daily_fc: dict) -> dict:
 
 
 @st.cache_data(ttl=3600 * 6, show_spinner=False)
-def compute_trend_signatures(target_date_iso: str, data_end=None):
+def compute_trend_signatures(target_date_iso: str, data_end=None,
+                              logic_version: str = _BT_LOGIC_VERSION):
     """Compute trend signature signals for the dashboard alert card.
 
     Cache TTL: 6 hours — matches _fetch_daily_raw() so signals refresh as
@@ -3249,7 +3250,8 @@ def run_full_period_backtest(end_date_iso: str,
             date=dates[_di], close=float(c_asof[_di]),
             pred_hi=float(pred_hi[_di]), pred_lo=float(pred_lo[_di]),
             actual_hi=float(act_hi[_di]), actual_lo=float(act_lo[_di]),
-            err_hi_pct=float(err_hi[_di]), err_lo_pct=float(err_lo[_di]),
+            err_hi_pct=float(err_hi[_di]), err_hi_ma3=float(ehma3[_di]),
+            err_lo_pct=float(err_lo[_di]), err_lo_ma3=float(elma3[_di]),
             hi_break=bool(hi_brk[_di]), lo_break=bool(lo_brk[_di]),
         ))
     if _dn_c >= 3 or (_dn_c >= 2 and _v_rev_l):  _alert_l = "HIGH_DN"
