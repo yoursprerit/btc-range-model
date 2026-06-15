@@ -1,0 +1,45 @@
+{
+  "version": "v1",
+  "pull_date": "2026-06-15",
+  "pull_ts_utc": "2026-06-15T01:59:45Z",
+  "generated_by": "scripts/pull_backtest_data.py",
+  "qc_all_passed": true,
+  "datasets": {
+    "btc_usd_daily": {
+      "file": "btc_usd_daily.csv",
+      "ticker": "BTC-USD",
+      "rows": 957,
+      "date_from": "2023-11-01",
+      "date_to": "2026-06-15",
+      "checksum_sha256": "927c51d5ec25a387",
+      "qc_passed": true
+    },
+    "mstr_daily": {
+      "file": "mstr_daily.csv",
+      "ticker": "MSTR",
+      "rows": 655,
+      "date_from": "2023-11-01",
+      "date_to": "2026-06-12",
+      "checksum_sha256": "fed8fa0bcf00927e",
+      "qc_passed": true
+    },
+    "mstu_daily": {
+      "file": "mstu_daily.csv",
+      "ticker": "MSTU",
+      "rows": 435,
+      "date_from": "2024-09-18",
+      "date_to": "2026-06-12",
+      "checksum_sha256": "10a6fd34a25b668b",
+      "qc_passed": true
+    },
+    "mstu_synthetic_daily": {
+      "file": "mstu_synthetic_daily.csv",
+      "ticker": "MSTU (OLS-synthetic)",
+      "rows": 655,
+      "date_from": "2023-11-01",
+      "date_to": "2026-06-12",
+      "checksum_sha256": "20b8d5636947d78f",
+      "qc_passed": true
+    }
+  }
+}
