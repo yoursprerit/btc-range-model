@@ -11205,7 +11205,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                     "Lo Break":       "✓" if r["lo_break"] else "–",
                 })
             st.dataframe(
-                pd.DataFrame(rows_display),
+                pd.DataFrame(rows_display[::-1]),
                 hide_index=True,
                 use_container_width=True,
             )
