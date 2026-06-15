@@ -11207,6 +11207,26 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
     _exit_mode = "D3 only (patient — hold the trend)" if _bull_regime else "D2 OR D3 (defensive exit)"
 
+    # Live confidence tier — computed whenever U1 is active (not only on tf1_triggered)
+    # so the user can see the score even when the entry gate isn't fully satisfied.
+    _live_bup_proba = None
+    try:
+        _live_dt = compute_day_type_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
+        if _live_dt is not None:
+            _live_bup_proba = _live_dt.get("proba_by_class", {}).get("BigUpper")
+    except Exception:
+        pass
+    _live_conf_tier = _live_conf_score = None
+    if sigs.get("u1_triggered"):
+        _live_conf_tier, _live_conf_score = _entry_confidence_tier(
+            float(sigs["err_hi_ma3"]),
+            int(sigs["hi_breaks_3d"]),
+            bool(sigs.get("bull_regime", False)),
+            bool(sigs.get("above_ma30", False)),
+            bool(sigs.get("v_recent_gate", False)),
+            _live_bup_proba,
+        )
+
     tf1_rows = [
         ("U1 Signal",
          "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
@@ -11249,6 +11269,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          "BULL exits D3 only; BEAR/Neutral exits D2 or D3",
          _bull_regime, False),
     ]
+    if _live_conf_tier is not None:
+        _ct_emoji = "🟢" if _live_conf_tier == "HIGH" else ("🟡" if _live_conf_tier == "MEDIUM" else "⚪")
+        _bup_pct  = f" · BigUpper prob = {_live_bup_proba:.0%}" if _live_bup_proba is not None else ""
+        tf1_rows.append((
+            "Signal Confidence",
+            f"{_ct_emoji} {_live_conf_tier} ({_live_conf_score:.0%}){_bup_pct}",
+            "HIGH ≥ 65% · MEDIUM 45–64% · LOW < 45%  (BigUpper prob + regime + U1 strength)",
+            _live_conf_tier in ("HIGH", "MEDIUM"),
+            True,
+        ))
     st.markdown(
         _sig_card(
             title="Confirmed Uptrend (CU) — Regime-Adaptive Strategy: U1 + Bull Regime XOR Clean 7d + V-reversal + Regime Exit",
