@@ -3041,14 +3041,14 @@ def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
                              initial_capital: float = 100_000.0,
                              model_mtime: float = 0.0,
-                             data_end: str = ""):
-    """Full-period TF2 backtest using yfinance daily BTC data.
+                             data_end: str = "",
+                             data_mtime: float = 0.0):
+    """Full-period TF2 backtest using versioned CSV data (falls back to yfinance).
 
-    Uses _build_backtest_preds() (same source as run_mstr_backtest / run_mstu_backtest)
-    so BTC, MSTR, and MSTU positions in the Historical Replay panel all derive from
-    identical predictions — preventing the discrepancy where MSTR/MSTU show an open
-    position on a day when the BTC position panel shows nothing (caused by the two
-    pipelines using different close prices: Binance 12:00-UTC vs yfinance midnight-UTC).
+    Uses _build_backtest_preds() with data_mtime so it loads from the versioned
+    data/backtest/ CSVs when available — matching run_btc_backtest exactly.
+    Also overrides execution prices from the versioned btc_daily.csv so signals
+    and trade fills use the same source, eliminating the Live Tab vs BTC Tab discrepancy.
     Returns the same dict structure as run_tf1_backtest.
     """
     WARMUP = 35
@@ -3062,14 +3062,22 @@ def run_full_period_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime,
+                                data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
 
-    closes = raw_df["btc_close"]
-    highs  = raw_df["btc_high"]
-    lows   = raw_df["btc_low"]
+    # Versioned CSV prices → fallback to raw_df (matches run_btc_backtest exactly)
+    _btc_csv = _load_btc_prices()
+    if _btc_csv is not None and "close" in _btc_csv.columns:
+        closes = _btc_csv["close"]
+        highs  = _btc_csv["high"] if "high" in _btc_csv.columns else raw_df["btc_high"]
+        lows   = _btc_csv["low"]  if "low"  in _btc_csv.columns else raw_df["btc_low"]
+    else:
+        closes = raw_df["btc_close"]
+        highs  = raw_df["btc_high"]
+        lows   = raw_df["btc_low"]
 
     # Load 60 extra calendar days before start so MA30/clean10d/dn_score are
     # fully warm by the time the backtest window actually begins.
@@ -3358,15 +3366,18 @@ def run_full_period_backtest(end_date_iso: str,
 def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                 model_mtime: float = 0.0,
                                 data_end: str = "",
-                                logic_version: str = _BT_LOGIC_VERSION):
+                                logic_version: str = _BT_LOGIC_VERSION,
+                                data_mtime: float = 0.0):
     """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
 
     No TTL — results persist until the model file changes (model_mtime),
     new daily BTC price data arrives (data_end), or backtest logic changes
-    (logic_version).  The OOS period calls run_full_period_backtest directly.
+    (logic_version).  data_mtime busts the cache when the versioned CSV dataset
+    is updated.  The OOS period calls run_full_period_backtest directly.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
-                                    model_mtime=model_mtime, data_end=data_end)
+                                    model_mtime=model_mtime, data_end=data_end,
+                                    data_mtime=data_mtime)
 
 
 @st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
@@ -11464,10 +11475,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         if is_live
         else _bt_end
     )
-    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # Jun 2024–May 2025
-    _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
-    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
+    _ds_mtime_live = _backtest_dataset_mtime()
+    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
+    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–May 2025
+    _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
+    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
     # In historical mode use backtest-derived signals (yfinance daily, no direction_head)
     # so the signal panel matches exactly which bars the position entries fired on.
