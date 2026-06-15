@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v24"  # cache bust: CU strategy everywhere, MSTR/MSTU in live tab
+_BT_LOGIC_VERSION = "sl5-sl5-v25"  # cache bust: per-bar ehma3/elma3 in detail_rows for 3d avg table column
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # ════════════════════════════════════════════════════════════════════════
 
@@ -2399,6 +2399,9 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
     err_lo_ma3 = float(np.mean(err_lo[-window3:]))
     hi_breaks_3d = int(np.sum(hi_break[-window3:]))
     lo_breaks_3d = int(np.sum(lo_break[-window3:]))
+    # Per-bar rolling 3d averages — ehma3[-1] == err_hi_ma3 (for table cross-check)
+    ehma3 = np.array([float(np.mean(err_hi[max(0, i - 2): i + 1])) for i in range(n)])
+    elma3 = np.array([float(np.mean(err_lo[max(0, i - 2): i + 1])) for i in range(n)])
 
     # ── 5-day rolling ──────────────────────────────────────────────────
     window5 = min(5, n)
@@ -2553,7 +2556,9 @@ def compute_trend_signatures(target_date_iso: str, data_end=None):
             actual_hi   = float(ah[i]),
             actual_lo   = float(al[i]),
             err_hi_pct  = float(err_hi[i]),
+            err_hi_ma3  = float(ehma3[i]),   # rolling 3d avg at this bar
             err_lo_pct  = float(err_lo[i]),
+            err_lo_ma3  = float(elma3[i]),   # rolling 3d avg at this bar
             hi_break    = bool(hi_break[i]),
             lo_break    = bool(lo_break[i]),
         ))
@@ -11180,23 +11185,25 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             st.caption(
                 "Each row is a **completed** daily bar preceding the viewing date (actual H/L known). "
                 "Signals are computed from these bars only — the viewing date itself is treated as in-progress. "
-                "err_hi = (actual_high − pred_high) / close × 100 — positive = actual exceeded prediction. "
-                "err_lo = (pred_low − actual_low) / close × 100 — positive = actual undershot (more bearish). "
+                "err_hi (bar) = (actual_high − pred_high) / close × 100 — single bar, positive = bullish pressure. "
+                "err_hi 3d avg = rolling 3-bar mean; the bottom row's value equals the D2/U1 card's 'err_hi 3d avg'. "
                 "Hi/Lo Break = actual H > pred_H or actual L < pred_L."
             )
             rows_display = []
             for r in sigs["detail_rows"]:
                 rows_display.append({
-                    "Date":        pd.Timestamp(r["date"]).strftime("%Y-%m-%d"),
-                    "Close ($)":   f"${r['close']:,.0f}",
-                    "Pred H ($)":  f"${r['pred_hi']:,.0f}",
-                    "Actual H ($)":f"${r['actual_hi']:,.0f}",
-                    "err_hi (%)":  f"{r['err_hi_pct']:+.2f}%",
-                    "Hi Break":    "✓" if r["hi_break"] else "–",
-                    "Pred L ($)":  f"${r['pred_lo']:,.0f}",
-                    "Actual L ($)":f"${r['actual_lo']:,.0f}",
-                    "err_lo (%)":  f"{r['err_lo_pct']:+.2f}%",
-                    "Lo Break":    "✓" if r["lo_break"] else "–",
+                    "Date":           pd.Timestamp(r["date"]).strftime("%Y-%m-%d"),
+                    "Close ($)":      f"${r['close']:,.0f}",
+                    "Pred H ($)":     f"${r['pred_hi']:,.0f}",
+                    "Actual H ($)":   f"${r['actual_hi']:,.0f}",
+                    "err_hi (bar)":   f"{r['err_hi_pct']:+.2f}%",
+                    "err_hi 3d avg":  f"{r['err_hi_ma3']:+.2f}%",
+                    "Hi Break":       "✓" if r["hi_break"] else "–",
+                    "Pred L ($)":     f"${r['pred_lo']:,.0f}",
+                    "Actual L ($)":   f"${r['actual_lo']:,.0f}",
+                    "err_lo (bar)":   f"{r['err_lo_pct']:+.2f}%",
+                    "err_lo 3d avg":  f"{r['err_lo_ma3']:+.2f}%",
+                    "Lo Break":       "✓" if r["lo_break"] else "–",
                 })
             st.dataframe(
                 pd.DataFrame(rows_display),
