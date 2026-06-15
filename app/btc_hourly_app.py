@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v26"  # cache bust: err_hi_ma3/err_lo_ma3 in detail_rows; logic_version in compute_trend_signatures
+_BT_LOGIC_VERSION = "sl5-sl5-v27-conf"  # v27: entry confidence tier (HIGH/MEDIUM/LOW) in trade dicts
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # ════════════════════════════════════════════════════════════════════════
 
@@ -3008,18 +3008,47 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
 # OOS period continues to roll daily with today's date.
 
 
+def _entry_confidence_tier(
+        ehma3: float,
+        hb3: int,
+        bull_regime: bool,
+        above_ma30: bool,
+        v_recent: bool,
+        big_upper_proba: "float | None" = None,
+) -> "tuple[str, float]":
+    """Return (tier, score) for a TF2/V-Gate entry bar.
+
+    Blends U1 signal strength, regime context, BigUpper class probability (when
+    available from the 3-class model), and V-reversal bonus into a 0–1 score.
+
+    Tiers:  HIGH ≥ 0.65  ·  MEDIUM 0.45–0.64  ·  LOW < 0.45
+    """
+    u1_str   = min(1.0, max(0.0, (ehma3 - 0.7) / 1.3))   # 0→1 as ehma3 rises from 0.7% to 2%
+    reg_scr  = 1.0 if bull_regime else (0.45 if above_ma30 else 0.0)
+    v_bonus  = 1.0 if v_recent else 0.0
+    hb_bonus = 1.0 if hb3 >= 3 else 0.0
+    if big_upper_proba is not None and np.isfinite(big_upper_proba):
+        bup   = min(1.0, max(0.0, (big_upper_proba - 0.33) / 0.67))
+        score = (0.25 * u1_str + 0.25 * reg_scr + 0.30 * bup
+                 + 0.15 * v_bonus + 0.05 * hb_bonus)
+    else:
+        score = 0.40 * u1_str + 0.35 * reg_scr + 0.15 * v_bonus + 0.10 * hb_bonus
+    tier = "HIGH" if score >= 0.65 else ("MEDIUM" if score >= 0.45 else "LOW")
+    return tier, round(score, 3)
+
+
 def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
                              initial_capital: float = 100_000.0,
                              model_mtime: float = 0.0,
-                             data_end: str = ""):
-    """Full-period TF2 backtest using yfinance daily BTC data.
+                             data_end: str = "",
+                             data_mtime: float = 0.0):
+    """Full-period TF2 backtest using versioned CSV data (falls back to yfinance).
 
-    Uses _build_backtest_preds() (same source as run_mstr_backtest / run_mstu_backtest)
-    so BTC, MSTR, and MSTU positions in the Historical Replay panel all derive from
-    identical predictions — preventing the discrepancy where MSTR/MSTU show an open
-    position on a day when the BTC position panel shows nothing (caused by the two
-    pipelines using different close prices: Binance 12:00-UTC vs yfinance midnight-UTC).
+    Uses _build_backtest_preds() with data_mtime so it loads from the versioned
+    data/backtest/ CSVs when available — matching run_btc_backtest exactly.
+    Also overrides execution prices from the versioned btc_daily.csv so signals
+    and trade fills use the same source, eliminating the Live Tab vs BTC Tab discrepancy.
     Returns the same dict structure as run_tf1_backtest.
     """
     WARMUP = 35
@@ -3033,14 +3062,22 @@ def run_full_period_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime,
+                                data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
 
-    closes = raw_df["btc_close"]
-    highs  = raw_df["btc_high"]
-    lows   = raw_df["btc_low"]
+    # Versioned CSV prices → fallback to raw_df (matches run_btc_backtest exactly)
+    _btc_csv = _load_btc_prices()
+    if _btc_csv is not None and "close" in _btc_csv.columns:
+        closes = _btc_csv["close"]
+        highs  = _btc_csv["high"] if "high" in _btc_csv.columns else raw_df["btc_high"]
+        lows   = _btc_csv["low"]  if "low"  in _btc_csv.columns else raw_df["btc_low"]
+    else:
+        closes = raw_df["btc_close"]
+        highs  = raw_df["btc_high"]
+        lows   = raw_df["btc_low"]
 
     # Load 60 extra calendar days before start so MA30/clean10d/dn_score are
     # fully warm by the time the backtest window actually begins.
@@ -3056,6 +3093,7 @@ def run_full_period_backtest(end_date_iso: str,
     comp = (preds.dropna(subset=["actual_high","actual_low","actual_close"])
                  .reset_index())
     N = len(comp)
+    p_big_upper_arr = comp["p_big_upper"].values if "p_big_upper" in comp.columns else np.full(N, np.nan)
     if N < WARMUP + 3:
         return None
 
@@ -3143,6 +3181,7 @@ def run_full_period_backtest(end_date_iso: str,
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
+    e_conf_tier = "—"; e_conf_score = None; e_big_upper_proba = None
     trades  = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -3161,6 +3200,8 @@ def run_full_period_backtest(end_date_iso: str,
                     exit_nav=nav, pnl_pct=(price/e_price-1)*100,
                     pnl_abs=nav-e_nav, exit_signal=exit_lbl,
                     duration_days=(dates[i]-e_date).days, stop_triggered=False,
+                    conf_tier=e_conf_tier, conf_score=e_conf_score,
+                    big_upper_proba=e_big_upper_proba,
                 ))
                 pos = "CASH"; btc_qty = 0.0
             else:
@@ -3176,6 +3217,12 @@ def run_full_period_backtest(end_date_iso: str,
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + Clean 7d"
+                _bup_i = float(p_big_upper_arr[i]) if np.isfinite(p_big_upper_arr[i]) else None
+                e_conf_tier, e_conf_score = _entry_confidence_tier(
+                    float(ehma3[i]), int(hb3[i]),
+                    bool(bull_regime[i]), bool(above_ma30[i]),
+                    bool(v_recent[i]), _bup_i)
+                e_big_upper_proba = _bup_i
         nav_arr[i] = btc_qty * price if pos == "LONG" else nav
 
     if pos == "LONG":
@@ -3289,7 +3336,9 @@ def run_full_period_backtest(end_date_iso: str,
         bh_series  = bh_series,
         open_pos   = pos == "LONG",
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
-                          entry_trigger=e_trigger) if pos == "LONG" else None),
+                          entry_trigger=e_trigger,
+                          conf_tier=e_conf_tier, conf_score=e_conf_score,
+                          big_upper_proba=e_big_upper_proba) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
         last_bar_sigs = last_bar_sigs,
         stats = dict(
@@ -3317,15 +3366,18 @@ def run_full_period_backtest(end_date_iso: str,
 def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                 model_mtime: float = 0.0,
                                 data_end: str = "",
-                                logic_version: str = _BT_LOGIC_VERSION):
+                                logic_version: str = _BT_LOGIC_VERSION,
+                                data_mtime: float = 0.0):
     """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
 
     No TTL — results persist until the model file changes (model_mtime),
     new daily BTC price data arrives (data_end), or backtest logic changes
-    (logic_version).  The OOS period calls run_full_period_backtest directly.
+    (logic_version).  data_mtime busts the cache when the versioned CSV dataset
+    is updated.  The OOS period calls run_full_period_backtest directly.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
-                                    model_mtime=model_mtime, data_end=data_end)
+                                    model_mtime=model_mtime, data_end=data_end,
+                                    data_mtime=data_mtime)
 
 
 @st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
@@ -3554,8 +3606,47 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
     idx_arr = np.asarray(F.index, dtype="datetime64[ns]")
     nd = np.empty(len(F), dtype="datetime64[ns]")
     nd[:-1] = idx_arr[1:]; nd[-1] = idx_arr[-1] + np.timedelta64(1,"D")
+
+    # ── 7. BigUpper probability from 3-class day-type model ─────────────────
+    _p_big_upper = np.full(len(F), np.nan)
+    try:
+        _dt_art = _load_day_type()
+        _cn_art = _load_cone_7d()
+        if _dt_art is not None and _cn_art is not None:
+            _dt_gbm    = _dt_art["model"]
+            _dt_feats  = _dt_art["feature_columns"]
+            _cone_edg  = np.asarray(_dt_art.get("regime_edges") or _cn_art["regime_edges"])
+            _ff = feat.reindex(F.index).copy()
+            _ff["pred_y_hi"]  = yhi
+            _ff["pred_y_lo"]  = ylo
+            _ff["pred_range"] = yhi + ylo
+            _ff["pred_skew"]  = yhi - ylo
+            _dh = AD_bt.get("direction_head")
+            if _dh is not None and _dh.get("classifier") is not None:
+                try:
+                    _pbull = _dh["classifier"].predict_proba(F)[:, 1]
+                except Exception:
+                    _pbull = np.full(len(F), 0.5)
+            else:
+                _pbull = np.full(len(F), 0.5)
+            _ff["p_bull"] = _pbull
+            _rm30  = _ff["range_ma30"].fillna(0.0).values
+            _regs  = np.searchsorted(_cone_edg, _rm30, side="right").clip(0, 2)
+            for _ri in (0, 1, 2):
+                _ff[f"regime_{_ri}"] = (_regs == _ri).astype(float)
+            _missing = [_fc for _fc in _dt_feats if _fc not in _ff.columns]
+            if not _missing:
+                _x3      = _ff[_dt_feats].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                _proba3  = _dt_gbm.predict_proba(_x3)
+                _cls3    = list(_dt_gbm.classes_)
+                if "BigUpper" in _cls3:
+                    _p_big_upper = _proba3[:, _cls3.index("BigUpper")]
+    except Exception:
+        pass  # optional — fall back to NaN
+
     preds_df = pd.DataFrame(
-        {"close_asof": c_vals, "pred_high": ph, "pred_low": pl},
+        {"close_asof": c_vals, "pred_high": ph, "pred_low": pl,
+         "p_big_upper": _p_big_upper},
         index=pd.DatetimeIndex(nd, name="target_date"),
     )
     preds_df = preds_df[~preds_df.index.duplicated(keep="last")]
@@ -3687,6 +3778,7 @@ def run_mstr_backtest(end_date_iso: str,
 
     comp = preds.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
     N = len(comp)
+    p_big_upper_arr = comp["p_big_upper"].values if "p_big_upper" in comp.columns else np.full(N, np.nan)
     if N < WARMUP + 3:
         return None
 
@@ -3803,6 +3895,7 @@ def run_mstr_backtest(end_date_iso: str,
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
+    e_conf_tier = "—"; e_conf_score = None; e_big_upper_proba = None
     e_reentry = False   # True when current position was entered after an SL exit
     stop_px  = 0.0
     # SL5 regime-adaptive re-entry state
@@ -3830,6 +3923,8 @@ def run_mstr_backtest(end_date_iso: str,
                     pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                     was_reentry=e_reentry,
+                    conf_tier=e_conf_tier, conf_score=e_conf_score,
+                    big_upper_proba=e_big_upper_proba,
                 ))
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
@@ -3846,6 +3941,8 @@ def run_mstr_backtest(end_date_iso: str,
                         pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
                         duration_days=(dates[i]-e_date).days, stop_triggered=False,
                         was_reentry=e_reentry,
+                        conf_tier=e_conf_tier, conf_score=e_conf_score,
+                        big_upper_proba=e_big_upper_proba,
                     ))
                     pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                     from_sl = False              # reset SL state on clean exit
@@ -3874,6 +3971,12 @@ def run_mstr_backtest(end_date_iso: str,
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + Clean 7d"
+                _bup_i = float(p_big_upper_arr[i]) if np.isfinite(p_big_upper_arr[i]) else None
+                e_conf_tier, e_conf_score = _entry_confidence_tier(
+                    float(ehma3[i]), int(hb3[i]),
+                    bool(bull_regime[i]), bool(above_ma30[i]),
+                    bool(v_recent[i]), _bup_i)
+                e_big_upper_proba = _bup_i
         nav_arr[i] = mstr_qty * price if pos == "LONG" else nav
 
     if pos == "LONG" and np.isfinite(mstr_px[N-1]) and mstr_px[N-1] > 0:
@@ -3926,7 +4029,9 @@ def run_mstr_backtest(end_date_iso: str,
         last_price    = float(mstr_px[N-1]) if N > 0 and np.isfinite(mstr_px[N-1]) else None,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
                              entry_trigger=e_trigger,
-                             stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+                             stop_price=round(stop_px, 4),
+                             conf_tier=e_conf_tier, conf_score=e_conf_score,
+                             big_upper_proba=e_big_upper_proba) if pos == "LONG" else None),
         from_sl       = from_sl,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
@@ -4021,6 +4126,7 @@ def run_btc_backtest(end_date_iso: str,
 
     comp = preds.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
     N = len(comp)
+    p_big_upper_arr = comp["p_big_upper"].values if "p_big_upper" in comp.columns else np.full(N, np.nan)
     if N < WARMUP + 3:
         return None
 
@@ -4108,6 +4214,7 @@ def run_btc_backtest(end_date_iso: str,
     # ── Backtest loop — execute in BTC ────────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
+    e_conf_tier = "—"; e_conf_score = None; e_big_upper_proba = None
     trades  = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -4129,6 +4236,8 @@ def run_btc_backtest(end_date_iso: str,
                     exit_nav=nav, pnl_pct=(price/e_price-1)*100,
                     pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
                     duration_days=(dates[i]-e_date).days, stop_triggered=False,
+                    conf_tier=e_conf_tier, conf_score=e_conf_score,
+                    big_upper_proba=e_big_upper_proba,
                 ))
                 pos = "CASH"; btc_qty = 0.0
             else:
@@ -4144,6 +4253,12 @@ def run_btc_backtest(end_date_iso: str,
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + Clean 7d"
+                _bup_i = float(p_big_upper_arr[i]) if np.isfinite(p_big_upper_arr[i]) else None
+                e_conf_tier, e_conf_score = _entry_confidence_tier(
+                    float(ehma3[i]), int(hb3[i]),
+                    bool(bull_regime[i]), bool(above_ma30[i]),
+                    bool(v_recent[i]), _bup_i)
+                e_big_upper_proba = _bup_i
         nav_arr[i] = btc_qty * price if pos == "LONG" else nav
 
     if pos == "LONG" and np.isfinite(btc_px[N-1]) and btc_px[N-1] > 0:
@@ -4195,7 +4310,9 @@ def run_btc_backtest(end_date_iso: str,
         open_pos      = pos == "LONG",
         last_price    = float(btc_px[N-1]) if N > 0 and np.isfinite(btc_px[N-1]) else None,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
-                             entry_trigger=e_trigger) if pos == "LONG" else None),
+                             entry_trigger=e_trigger,
+                             conf_tier=e_conf_tier, conf_score=e_conf_score,
+                             big_upper_proba=e_big_upper_proba) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2+V-Gate (BTC)",
@@ -4281,6 +4398,7 @@ def run_mstu_backtest(end_date_iso: str,
 
     comp = preds.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
     N = len(comp)
+    p_big_upper_arr = comp["p_big_upper"].values if "p_big_upper" in comp.columns else np.full(N, np.nan)
     if N < WARMUP + 3:
         return None
 
@@ -4408,6 +4526,7 @@ def run_mstu_backtest(end_date_iso: str,
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
+    e_conf_tier = "—"; e_conf_score = None; e_big_upper_proba = None
     e_reentry = False   # True when current position was entered after an SL exit
     stop_px  = 0.0
     # SL5 regime-adaptive re-entry state (matches MSTR logic)
@@ -4435,6 +4554,8 @@ def run_mstu_backtest(end_date_iso: str,
                     pnl_abs=nav-e_nav,   exit_signal="SL-fixed-7%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                     was_reentry=e_reentry,
+                    conf_tier=e_conf_tier, conf_score=e_conf_score,
+                    big_upper_proba=e_big_upper_proba,
                 ))
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
@@ -4451,6 +4572,8 @@ def run_mstu_backtest(end_date_iso: str,
                         pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
                         duration_days=(dates[i]-e_date).days, stop_triggered=False,
                         was_reentry=e_reentry,
+                        conf_tier=e_conf_tier, conf_score=e_conf_score,
+                        big_upper_proba=e_big_upper_proba,
                     ))
                     pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                     from_sl = False              # reset SL state on clean exit
@@ -4479,6 +4602,12 @@ def run_mstu_backtest(end_date_iso: str,
                     e_trigger = "U1 + ↑MA30"
                 else:
                     e_trigger = "U1 + Clean 7d"
+                _bup_i = float(p_big_upper_arr[i]) if np.isfinite(p_big_upper_arr[i]) else None
+                e_conf_tier, e_conf_score = _entry_confidence_tier(
+                    float(ehma3[i]), int(hb3[i]),
+                    bool(bull_regime[i]), bool(above_ma30[i]),
+                    bool(v_recent[i]), _bup_i)
+                e_big_upper_proba = _bup_i
         nav_arr[i] = mstu_qty * price if pos == "LONG" else nav
 
     if pos == "LONG" and np.isfinite(mstu_px[N-1]) and mstu_px[N-1] > 0:
@@ -4531,7 +4660,9 @@ def run_mstu_backtest(end_date_iso: str,
         last_price    = float(mstu_px[N-1]) if N > 0 and np.isfinite(mstu_px[N-1]) else None,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
                              entry_trigger=e_trigger,
-                             stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+                             stop_price=round(stop_px, 4),
+                             conf_tier=e_conf_tier, conf_score=e_conf_score,
+                             big_upper_proba=e_big_upper_proba) if pos == "LONG" else None),
         from_sl       = from_sl,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
@@ -6265,14 +6396,20 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
             exit_y  = float(t["exit_nav"])
             win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            _ct  = t.get("conf_tier", "—")
+            _cs  = t.get("conf_score")
+            _mc  = "#16a34a" if _ct == "HIGH" else ("#f59e0b" if _ct == "MEDIUM" else "#94a3b8")
+            _ms  = 16 if _ct == "HIGH" else (13 if _ct == "MEDIUM" else 11)
+            _clbl = f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}"
             fig.add_trace(go.Scatter(
                 x=[t["entry_date"]], y=[entry_y], mode="markers",
-                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                marker=dict(symbol="triangle-up", size=_ms, color=_mc,
                             line=dict(width=1.5, color="white")),
                 showlegend=False,
                 hovertemplate=(
                     f"<b>BUY</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
-                    f" @ ${t['entry_price']:,.0f}<br>{t['entry_trigger']}<extra></extra>"
+                    f" @ ${t['entry_price']:,.0f}<br>{t['entry_trigger']}"
+                    f"<br>Confidence: {_clbl}<extra></extra>"
                 ),
             ))
             fig.add_trace(go.Scatter(
@@ -6403,11 +6540,15 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         has_p = bt["open_pos"]
         rows  = []
         for i, t in enumerate(bt["trades"], 1):
+            _ct = t.get("conf_tier", "—"); _cs = t.get("conf_score")
+            _ci = (f"{'🟢' if _ct=='HIGH' else '🟡' if _ct=='MEDIUM' else '⚪'} "
+                   f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}")
             rows.append({
                 "#":           i,
                 "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
                 "Buy @":       f"${t['entry_price']:,.0f}",
                 "Trigger":     t["entry_trigger"],
+                "Confidence":  _ci,
                 "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
                 "Sell @":      f"${t['exit_price']:,.0f}",
                 "P&L":         f"{t['pnl_pct']:+.1f}%",
@@ -6424,6 +6565,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 "Entry":       pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
                 "Buy @":       f"${oe['price']:,.0f}",
                 "Trigger":     "—",
+                "Confidence":  "—",
                 "Exit":        "⏳ OPEN",
                 "Sell @":      "—",
                 "P&L":         f"{unr_pct:+.1f}% (unrlzd)",
@@ -7095,14 +7237,20 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
             exit_y  = float(t["exit_nav"])
             win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            _ct  = t.get("conf_tier", "—")
+            _cs  = t.get("conf_score")
+            _mc  = "#16a34a" if _ct == "HIGH" else ("#f59e0b" if _ct == "MEDIUM" else "#94a3b8")
+            _ms  = 16 if _ct == "HIGH" else (13 if _ct == "MEDIUM" else 11)
+            _clbl = f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}"
             fig.add_trace(go.Scatter(
                 x=[t["entry_date"]], y=[entry_y], mode="markers",
-                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                marker=dict(symbol="triangle-up", size=_ms, color=_mc,
                             line=dict(width=1.5, color="white")),
                 showlegend=False,
                 hovertemplate=(
                     f"<b>BUY MSTR</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
-                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}<extra></extra>"
+                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}"
+                    f"<br>Confidence: {_clbl}<extra></extra>"
                 ),
             ))
             fig.add_trace(go.Scatter(
@@ -7247,11 +7395,15 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 result = "✓ WIN"
             else:
                 result = "✗ LOSS"
+            _ct = t.get("conf_tier", "—"); _cs = t.get("conf_score")
+            _ci = (f"{'🟢' if _ct=='HIGH' else '🟡' if _ct=='MEDIUM' else '⚪'} "
+                   f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}")
             rows.append({
                 "#":           i,
                 "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
                 "Buy MSTR @":  f"${t['entry_price']:,.2f}",
                 "BTC Trigger": t["entry_trigger"],
+                "Confidence":  _ci,
                 "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
                 "Sell MSTR @": f"${t['exit_price']:,.2f}",
                 "P&L":         f"{t['pnl_pct']:+.1f}%",
@@ -7268,6 +7420,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 "Entry":       pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
                 "Buy MSTR @":  f"${oe['price']:,.2f}",
                 "BTC Trigger": "—",
+                "Confidence":  "—",
                 "Exit":        "⏳ OPEN",
                 "Sell MSTR @": "—",
                 "P&L":         f"{unr_pct:+.1f}% (unrlzd)",
@@ -7936,14 +8089,20 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
             exit_y  = float(t["exit_nav"])
             win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            _ct  = t.get("conf_tier", "—")
+            _cs  = t.get("conf_score")
+            _mc  = "#16a34a" if _ct == "HIGH" else ("#f59e0b" if _ct == "MEDIUM" else "#94a3b8")
+            _ms  = 16 if _ct == "HIGH" else (13 if _ct == "MEDIUM" else 11)
+            _clbl = f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}"
             fig.add_trace(go.Scatter(
                 x=[t["entry_date"]], y=[entry_y], mode="markers",
-                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                marker=dict(symbol="triangle-up", size=_ms, color=_mc,
                             line=dict(width=1.5, color="white")),
                 showlegend=False,
                 hovertemplate=(
                     f"<b>BUY MSTU</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
-                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}<extra></extra>"
+                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}"
+                    f"<br>Confidence: {_clbl}<extra></extra>"
                 ),
             ))
             fig.add_trace(go.Scatter(
@@ -8088,11 +8247,15 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 result = "✓ WIN"
             else:
                 result = "✗ LOSS"
+            _ct = t.get("conf_tier", "—"); _cs = t.get("conf_score")
+            _ci = (f"{'🟢' if _ct=='HIGH' else '🟡' if _ct=='MEDIUM' else '⚪'} "
+                   f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}")
             rows.append({
                 "#":           i,
                 "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
                 "Buy MSTU @":  f"${t['entry_price']:,.2f}",
                 "BTC Trigger": t["entry_trigger"],
+                "Confidence":  _ci,
                 "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
                 "Sell MSTU @": f"${t['exit_price']:,.2f}",
                 "P&L":         f"{t['pnl_pct']:+.1f}%",
@@ -8109,6 +8272,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 "Entry":       pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
                 "Buy MSTU @":  f"${oe['price']:,.2f}",
                 "BTC Trigger": "—",
+                "Confidence":  "—",
                 "Exit":        "⏳ OPEN",
                 "Sell MSTU @": "—",
                 "P&L":         f"{unr_pct:+.1f}% (unrlzd)",
@@ -8744,14 +8908,20 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
             exit_y  = float(t["exit_nav"])
             win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            _ct  = t.get("conf_tier", "—")
+            _cs  = t.get("conf_score")
+            _mc  = "#16a34a" if _ct == "HIGH" else ("#f59e0b" if _ct == "MEDIUM" else "#94a3b8")
+            _ms  = 16 if _ct == "HIGH" else (13 if _ct == "MEDIUM" else 11)
+            _clbl = f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}"
             fig.add_trace(go.Scatter(
                 x=[t["entry_date"]], y=[entry_y], mode="markers",
-                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                marker=dict(symbol="triangle-up", size=_ms, color=_mc,
                             line=dict(width=1.5, color="white")),
                 showlegend=False,
                 hovertemplate=(
                     f"<b>BUY BTC</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
-                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}<extra></extra>"
+                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}"
+                    f"<br>Confidence: {_clbl}<extra></extra>"
                 ),
             ))
             fig.add_trace(go.Scatter(
@@ -8896,11 +9066,15 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 result = "✓ WIN"
             else:
                 result = "✗ LOSS"
+            _ct = t.get("conf_tier", "—"); _cs = t.get("conf_score")
+            _ci = (f"{'🟢' if _ct=='HIGH' else '🟡' if _ct=='MEDIUM' else '⚪'} "
+                   f"{_ct}{f' ({_cs:.0%})' if _cs is not None else ''}")
             rows.append({
                 "#":          i,
                 "Entry":      pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
                 "Buy BTC @":  f"${t['entry_price']:,.2f}",
                 "Trigger":    t["entry_trigger"],
+                "Confidence": _ci,
                 "Exit":       pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
                 "Sell BTC @": f"${t['exit_price']:,.2f}",
                 "P&L":        f"{t['pnl_pct']:+.1f}%",
@@ -8917,6 +9091,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 "Entry":      pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
                 "Buy BTC @":  f"${oe['price']:,.2f}",
                 "Trigger":    "—",
+                "Confidence": "—",
                 "Exit":       "⏳ OPEN",
                 "Sell BTC @": "—",
                 "P&L":        f"{unr_pct:+.1f}% (unrlzd)",
@@ -11300,10 +11475,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         if is_live
         else _bt_end
     )
-    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "")  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # Jun 2024–May 2025
-    _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")  # OOS ends prior day (rolling)
-    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "")  # locked Jun 2024–May 2026
+    _ds_mtime_live = _backtest_dataset_mtime()
+    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
+    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–May 2025
+    _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
+    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
     # In historical mode use backtest-derived signals (yfinance daily, no direction_head)
     # so the signal panel matches exactly which bars the position entries fired on.
