@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v23"  # cache bust: full versioned dataset (raw_features + prices)
+_BT_LOGIC_VERSION = "sl5-sl5-v24"  # cache bust: CU strategy everywhere, MSTR/MSTU in live tab
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # ════════════════════════════════════════════════════════════════════════
 
@@ -5614,7 +5614,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 
 def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                                        bt_full=None, key_suffix: str = "",
-                                       sigs: dict = None) -> None:
+                                       sigs: dict = None,
+                                       asset_label: str = "BTC",
+                                       show_position_panel: bool = True) -> None:
     """Render the TF2 trading strategy summary + backtest dashboard.
 
     Shows:
@@ -5632,7 +5634,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     key_suffix:  appended to plotly_chart keys to avoid DuplicateElementKey.
     """
     st.markdown("---")
-    st.subheader("🎯 TF2 + V-Gate Trading Strategy — Regime-Adaptive Backtest")
+    _asset_full = {"BTC": "BTC (No SL)", "MSTR": "MSTR (3% SL)", "MSTU": "MSTU (7% SL)"}.get(asset_label, asset_label)
+    st.subheader(f"🎯 Confirmed Uptrend (CU) Strategy — {_asset_full} Backtest")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ Backtest computing … CT model batch predictions being built. "
@@ -5650,27 +5653,26 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     _lp_sig_date     = None
     _lp_regime_lbl   = "—"
     _lp_u1           = False
-    _lp_above_ma30   = False
+    _lp_bull         = False
     _lp_clean_10d    = False
     _lp_err_hi_ma3   = None
     if sigs is not None:
         _lp_bull       = sigs.get("bull_regime", False)
         _lp_vgate      = sigs.get("v_recent_gate", False)
-        _lp_trend      = (sigs["above_ma30"] != sigs["clean_10d"]) or _lp_vgate
+        _lp_trend      = (_lp_bull != sigs["clean_10d"]) or _lp_vgate
         _lp_entry_signal = bool(sigs["u1_triggered"] and _lp_trend)
         _lp_exit_signal  = bool(
             sigs.get("exhaustion_active", False)
             or ((sigs.get("err_hi_ma3", 0) < -0.75) and not _lp_bull)
         )
         _lp_u1         = bool(sigs["u1_triggered"])
-        _lp_above_ma30 = bool(sigs["above_ma30"])
         _lp_clean_10d  = bool(sigs["clean_10d"])
         _lp_err_hi_ma3 = sigs.get("err_hi_ma3")
         _lp_regime_lbl = "🐂 BULL" if _lp_bull else "🐻 BEAR / NEUTRAL"
         _lp_sig_date   = pd.Timestamp(sigs["as_of_date"]).strftime("%b %d, %Y")
-        if sigs["above_ma30"]: _lp_entry_gates.append("↑MA30")
-        if sigs["clean_10d"]:  _lp_entry_gates.append("Clean 7d")
-        if _lp_vgate:          _lp_entry_gates.append("⚡V-reversal")
+        if _lp_bull:          _lp_entry_gates.append("🐂Bull Regime")
+        if sigs["clean_10d"]: _lp_entry_gates.append("Clean 7d")
+        if _lp_vgate:         _lp_entry_gates.append("⚡V-reversal")
 
     # Use bt_full_oos (capped at viewing date) for open-position state; fall back to bt_bear.
     _lp_bt   = bt_full_oos if bt_full_oos is not None else bt_bear
@@ -5694,7 +5696,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     # Build signal-detail row (shared across all panel states)
     _lp_gates_str = (" + ".join(_lp_entry_gates)) if _lp_entry_gates else "none"
     _lp_u1_str    = "✅ ACTIVE" if _lp_u1 else "○ inactive"
-    _lp_ma30_str  = "↑ above" if _lp_above_ma30 else "↓ below"
+    _lp_bull_str  = "✓ BULL" if _lp_bull else "✗ BEAR"
     _lp_clean_str = "✓" if _lp_clean_10d else "✗"
     _lp_ma3_str   = (f"{_lp_err_hi_ma3:+.2f}%" if _lp_err_hi_ma3 is not None else "—")
     _lp_sig_row   = (
@@ -5702,14 +5704,14 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         f"<b>Signal as-of:</b> {_lp_sig_date or '—'} &nbsp;|&nbsp; "
         f"<b>Regime:</b> {_lp_regime_lbl} &nbsp;|&nbsp; "
         f"<b>U1:</b> {_lp_u1_str} &nbsp;|&nbsp; "
-        f"<b>MA30:</b> {_lp_ma30_str} &nbsp;|&nbsp; "
+        f"<b>Bull Regime:</b> {_lp_bull_str} &nbsp;|&nbsp; "
         f"<b>Clean&nbsp;7d:</b> {_lp_clean_str} &nbsp;|&nbsp; "
-        f"<b>Trend gate:</b> {_lp_gates_str} &nbsp;|&nbsp; "
+        f"<b>CU gate:</b> {_lp_gates_str} &nbsp;|&nbsp; "
         f"<b>err_hi_ma3:</b> {_lp_ma3_str}"
         f"</div>"
     )
 
-    if _lp_open:
+    if show_position_panel and _lp_open:
         oe     = _lp_bt["open_entry"]
         unr    = (float(_lp_bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
         oe_col = "#16a34a" if unr >= 0 else "#dc2626"
@@ -5733,7 +5735,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"</div>",
             unsafe_allow_html=True,
         )
-    elif _lp_closed_today:
+    elif show_position_panel and _lp_closed_today:
         _cl_pnl   = _lp_closed_today.get("pnl_pct", 0.0)
         _cl_pos   = _cl_pnl > 0
         _cl_bg    = "#f0fdf4" if _cl_pos else "#fef2f2"
@@ -5769,7 +5771,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"</div>",
             unsafe_allow_html=True,
         )
-    elif _lp_entry_signal:
+    elif show_position_panel and _lp_entry_signal:
         _entry_exit_warn = (
             f"<br><span style='color:#dc2626; font-weight:600;'>⚠️ Exit signal also active — "
             f"entry and exit conflict; exercise caution</span>"
@@ -5789,7 +5791,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             f"</div>",
             unsafe_allow_html=True,
         )
-    elif _lp_exit_signal and not _lp_open:
+    elif show_position_panel and _lp_exit_signal and not _lp_open:
         st.markdown(
             f"<div style='background:#fef2f2; border:2px solid #dc2626; border-radius:10px; "
             f"padding:12px 16px; margin:0 0 12px 0; color:#7f1d1d;'>"
@@ -5814,7 +5816,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
   <div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    🎯 TF2 + V-Gate &nbsp;—&nbsp; Strategy Rules at a Glance
+    🎯 Confirmed Uptrend (CU) &nbsp;—&nbsp; Strategy Rules at a Glance
   </div>
 
   <!-- ENTRY -->
@@ -5836,10 +5838,10 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#2563eb;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>Exactly one trend gate passes</b> (↑ MA30 or Clean 7d — not both simultaneously; or ⚡ V-reversal):
+          <b>Confirmed Uptrend gate</b> — bull_regime XOR clean_7d, or ⚡ V-reversal:
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
-            &nbsp; BTC close above its 30-day moving average
+            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>🐂 Bull Regime</span>
+            &nbsp; BTC above MA30 <b>AND</b> MA30 slope rising (5-bar) — confirmed uptrend
             <br>
             <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
             &nbsp; No D1 or D2 signal in the prior 7 bars (no recent bearish fingerprint)
@@ -5849,7 +5851,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             <span style='color:#7c3aed; font-size:11px;'>
               (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
-            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are active together (late-cycle signal)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ BLOCKED when Bull Regime AND Clean 7d are both active (late-cycle — historically low win rate)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ BLOCKED when neither Bull Regime nor Clean 7d is active (no momentum)</span>
           </div>
         </td>
       </tr>
@@ -6242,9 +6245,9 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate Strategy",
+            x=nav_s.index, y=nav_s.values, name="Confirmed Uptrend (CU)",
             line=dict(color="#2563eb", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate Strategy</extra>",
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Confirmed Uptrend (CU)</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -10374,7 +10377,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
-      • TF1 full-width card (U1 + MA30 trend-filter — best backtest strategy)
+      • TF1 full-width card (Confirmed Uptrend (CU) — best backtest strategy)
       • V-reversal special signal
       • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
@@ -10397,7 +10400,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         "WATCH_DN":    {"bg": "#fffbeb", "border": "#f59e0b", "badge_bg": "#f59e0b",
                         "badge_txt": "👁 DOWNTREND WATCH",              "txt_col": "#92400e"},
         "STRATEGY_BUY":{"bg": "#eff6ff", "border": "#2563eb", "badge_bg": "#2563eb",
-                        "badge_txt": "🎯 STRATEGY BUY SIGNAL (TF1)",   "txt_col": "#1e3a8a"},
+                        "badge_txt": "🎯 CONFIRMED UPTREND BUY (CU)",  "txt_col": "#1e3a8a"},
         "WATCH_UP":    {"bg": "#f0fdf4", "border": "#16a34a", "badge_bg": "#16a34a",
                         "badge_txt": "📈 UPTREND SIGNAL (U1)",          "txt_col": "#14532d"},
         "NEUTRAL":     {"bg": "#f8fafc", "border": "#94a3b8", "badge_bg": "#64748b",
@@ -10421,12 +10424,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 </span>
                 <span style="color:{cfg['txt_col']}; font-size:13px;">
                     <b>{dnc}/3</b> DN · <b>{upc}/1</b> UP ·
-                    TF2 entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
+                    CU entry: <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
                     (U1={'✓' if sigs['u1_triggered'] else '✗'}
-                    MA30={'↑' if sigs['above_ma30'] else '↓'}
-                    slope={'↑' if sigs.get('ma30_slope_pos') else '↓'}
-                    regime={'🐂BULL' if sigs.get('bull_regime') else '🐻BEAR'}
-                    clean7d={'✓' if sigs['clean_10d'] else '✗'})
+                    bull_regime={'✓' if sigs.get('bull_regime') else '✗'}
+                    clean7d={'✓' if sigs['clean_10d'] else '✗'}
+                    V-rev={'✓' if sigs.get('v_recent_gate') else '✗'})
                     · as-of: <b>{as_of_str}</b>
                     · <b>{sigs['n_bars']}</b> bars
                 </span>
@@ -10440,7 +10442,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
     _v_gate_ok    = sigs.get("v_recent_gate", False)
-    _trend_ok     = (sigs["above_ma30"] != sigs["clean_10d"]) or _v_gate_ok
+    _trend_ok     = (_bull_regime != sigs["clean_10d"]) or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3      = sigs.get("exhaustion_active", False)
     _exit_d2      = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
@@ -10466,7 +10468,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _btc_bg, _btc_brd, _btc_emoji = "#f0fdf4", "#16a34a", "🟢"
         _btc_label = "ENTRY SIGNAL ACTIVE"
         _entry_gates = []
-        if sigs["above_ma30"]: _entry_gates.append("↑MA30")
+        if _bull_regime:       _entry_gates.append("🐂Bull Regime")
         if sigs["clean_10d"]:  _entry_gates.append("Clean 7d")
         if _v_gate_ok:         _entry_gates.append("⚡V-reversal")
         _btc_sub   = (
@@ -10475,17 +10477,17 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         )
     elif sigs["u1_triggered"] and not _trend_ok:
         _btc_bg, _btc_brd, _btc_emoji = "#fefce8", "#ca8a04", "🟡"
-        _btc_combined_block = sigs["above_ma30"] and sigs["clean_10d"] and not _v_gate_ok
+        _btc_combined_block = _bull_regime and sigs["clean_10d"] and not _v_gate_ok
         _btc_label = "U1 ACTIVE — TREND GATE BLOCKED"
         _btc_sub   = (
             (
-                "U1 fired but entry blocked: ↑MA30 AND Clean 7d are both active simultaneously — "
-                "combined condition signals a late-cycle entry (0% win rate historically). "
+                "U1 fired but entry blocked: Bull Regime AND Clean 7d both active simultaneously — "
+                "combined condition signals a late-cycle entry (historically low win rate). "
                 "Wait for D1/D2 to reset the Clean 7d window, or a V-reversal."
                 if _btc_combined_block else
-                "U1 fired but no trend gate active: exactly one of ↑MA30 or Clean 7d must fire (not both), or ⚡V-reversal."
+                "U1 fired but no trend gate active: exactly one of Bull Regime or Clean 7d must fire (not both), or ⚡V-reversal."
             )
-            + f"  BTC {'above' if sigs['above_ma30'] else 'below'} MA30, "
+            + f"  Bull Regime={'YES' if _bull_regime else 'NO'}, "
             + f"Clean 7d={'YES' if sigs['clean_10d'] else 'NO'}, "
             + f"V-rev={'YES' if _v_gate_ok else 'NO'}"
         )
@@ -10517,7 +10519,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
           </div>
           <div style="margin-left:auto; font-size:11px; color:#64748b;
               text-align:right; line-height:1.6;">
-            <b>TF2 + V-Gate Strategy</b><br>Signal as of today's close
+            <b>Confirmed Uptrend (CU) Strategy</b><br>Signal as of today's close
           </div>
         </div>
         """,
@@ -10568,10 +10570,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         # BTC signal context
         if _entry_signal:
             _gate_parts = []
-            if sigs["above_ma30"]: _gate_parts.append("↑MA30")
+            if _bull_regime:       _gate_parts.append("🐂Bull Regime")
             if sigs["clean_10d"]:  _gate_parts.append("Clean 7d")
             if _v_gate_ok:         _gate_parts.append("⚡V-reversal")
-            _eq_sub = f"BTC U1 confirmed · gate: {' + '.join(_gate_parts)}  |  Regime: {_regime_label}"
+            _eq_sub = f"BTC U1 confirmed · CU gate: {' + '.join(_gate_parts)}  |  Regime: {_regime_label}"
         elif _exit_signal:
             _eq_sub = f"BTC exit signal active  |  Regime: {_regime_label}"
         elif sigs["u1_triggered"]:
@@ -10597,7 +10599,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 border-radius:12px; padding:14px 20px; margin:2px 0 4px 0;">
               <div style="font-size:10px; font-weight:700; color:#64748b;
                   text-transform:uppercase; letter-spacing:0.9px; margin-bottom:8px;">
-                📈 MSTR / MSTU — Fixed SL + SL5 Regime-Adaptive Re-Entry
+                📈 MSTR / MSTU — Confirmed Uptrend (CU) · Fixed SL + SL5 Re-Entry
               </div>
               <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:7px; align-items:flex-start;">
                 {_chip_html(_mstr_lbl, _mstr_note, _mstr_bg, _mstr_brd, _mstr_col, "MSTR")}
@@ -11419,6 +11421,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         hist_picker()
 
     # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
+    _bt_mstr_oos = None
+    _bt_mstu_oos = None
     if sigs is not None:
         # _intra_raw already fetched above for the top-panel realized H/L metrics
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
@@ -11426,8 +11430,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # Compute MSTR/MSTU OOS positions for the live position tracker.
         # Uses _bt_oos_end (slider date in historical mode, yesterday in live mode)
         # so last_price and open_pos reflect the selected date's state.
-        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
-        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "")
+        _ds_mtime    = _backtest_dataset_mtime()
+        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
 
         def _last_closed_trade(bt: dict | None) -> dict | None:
             _tl = (bt or {}).get("trades") or []
@@ -11513,10 +11518,28 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
 
-    # ─────────────── TF2 + V-Gate Strategy Backtest Dashboard ────────────
-    render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
-                                       bt_full=_bt_full, key_suffix=_chart_key,
-                                       sigs=sigs)
+    # ─────────────── Confirmed Uptrend (CU) Strategy Backtest Dashboard ────────────
+    # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
+    _ds_mtime    = _backtest_dataset_mtime()
+    _bt_mstr_bear = _run_fixed_period_mstr_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstr_full = _run_fixed_period_mstr_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstu_bear = _run_fixed_period_mstu_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstu_full = _run_fixed_period_mstu_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (7% SL)"])
+    with _btab_btc:
+        render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
+                                           bt_full=_bt_full, key_suffix=_chart_key,
+                                           sigs=sigs, asset_label="BTC")
+    with _btab_mstr:
+        render_trading_strategy_dashboard(_bt_mstr_bear, _bt_mstr_bull, bt_full_oos=_bt_mstr_oos,
+                                           bt_full=_bt_mstr_full, key_suffix=f"{_chart_key}_mstr",
+                                           sigs=sigs, asset_label="MSTR", show_position_panel=False)
+    with _btab_mstu:
+        render_trading_strategy_dashboard(_bt_mstu_bear, _bt_mstu_bull, bt_full_oos=_bt_mstu_oos,
+                                           bt_full=_bt_mstu_full, key_suffix=f"{_chart_key}_mstu",
+                                           sigs=sigs, asset_label="MSTU", show_position_panel=False)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
