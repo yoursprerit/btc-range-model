@@ -72,7 +72,8 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v21"  # cache bust: BTC no-stop-loss (signals-only exit)
+_BT_LOGIC_VERSION = "sl5-sl5-v22"  # cache bust: versioned price dataset (data/backtest/)
+_BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3531,6 +3532,75 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
     return preds_df, raw_df
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Versioned price-data helpers  (data/backtest/ CSVs)
+# ═══════════════════════════════════════════════════════════════════
+
+def _load_backtest_manifest() -> dict | None:
+    """Return parsed manifest.json or None if absent."""
+    try:
+        with open(_BACKTEST_DATA_DIR / "manifest.json") as _fh:
+            return json.load(_fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _read_price_csv(filename: str) -> pd.DataFrame | None:
+    """Load a versioned price CSV; return None on any error."""
+    try:
+        df = pd.read_csv(
+            _BACKTEST_DATA_DIR / filename, index_col=0, parse_dates=True
+        )
+        df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
+        df.columns = [c.lower() for c in df.columns]
+        return df
+    except (FileNotFoundError, Exception):
+        return None
+
+
+@st.cache_data(ttl=86_400)
+def _load_btc_prices() -> pd.DataFrame | None:
+    """BTC-USD daily OHLCV from versioned CSV."""
+    return _read_price_csv("btc_usd_daily.csv")
+
+
+@st.cache_data(ttl=86_400)
+def _load_mstr_prices() -> pd.DataFrame | None:
+    """MSTR daily OHLCV from versioned CSV."""
+    return _read_price_csv("mstr_daily.csv")
+
+
+@st.cache_data(ttl=86_400)
+def _load_mstu_prices() -> pd.DataFrame | None:
+    """MSTU daily OHLCV (post-inception) from versioned CSV."""
+    return _read_price_csv("mstu_daily.csv")
+
+
+@st.cache_data(ttl=86_400)
+def _load_mstu_synthetic() -> pd.Series | None:
+    """MSTU synthetic close series (OLS back-fill) from versioned CSV."""
+    df = _read_price_csv("mstu_synthetic_daily.csv")
+    return df["close"] if df is not None and "close" in df.columns else None
+
+
+@st.cache_data
+def _backtest_dataset_version() -> str:
+    """Return a short version string for the versioned dataset, e.g. 'v1 · 2026-06-15'."""
+    m = _load_backtest_manifest()
+    if m is None:
+        return "live (no snapshot)"
+    return f"{m.get('version','?')} · {m.get('pull_date','?')}"
+
+
+@st.cache_data
+def _backtest_dataset_mtime() -> float:
+    """Return manifest mtime (seconds since epoch) for cache-key purposes."""
+    try:
+        return float((_BACKTEST_DATA_DIR / "manifest.json").stat().st_mtime)
+    except FileNotFoundError:
+        return 0.0
+
+
 @st.cache_data(show_spinner="Running MSTR backtest …")
 def run_mstr_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-05-26",
@@ -3538,15 +3608,13 @@ def run_mstr_backtest(end_date_iso: str,
                       model_mtime: float = 0.0,
                       data_end: str = "",
                       logic_version: str = _BT_LOGIC_VERSION,
+                      data_mtime: float = 0.0,
                       entry_gate: str = "pure_regime"):
     """MSTR backtest driven by BTC TF2+V-Gate signals.
 
-    Computes all entry/exit signals from the BTC CT model (identical logic to
-    run_full_period_backtest) but executes trades in MSTR stock instead of BTC.
-    MSTR daily closes (split-adjusted) are fetched from yfinance and forward-filled
-    across weekends/holidays so each BTC signal date has a valid execution price.
-    Uses yfinance daily BTC data (matching backtest_stop_loss_reentry.py) so UI numbers
-    are consistent with the research script.
+    Execution prices are loaded from the versioned data/backtest/mstr_daily.csv
+    (pulled by scripts/pull_backtest_data.py) with fallback to live yfinance.
+    Signal generation uses the BTC CT model predictions (live).
     """
     WARMUP = 35
 
@@ -3584,38 +3652,37 @@ def run_mstr_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTR prices (split-adjusted so Aug-2024 10-for-1 split is seamless) ──
-    try:
-        d_mstr = yf.download(
-            "MSTR",
-            start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
-        )
-        if isinstance(d_mstr.columns, pd.MultiIndex):
-            d_mstr.columns = [c[0] for c in d_mstr.columns]
-        d_mstr.index = pd.DatetimeIndex(d_mstr.index).tz_localize(None).normalize()
-    except Exception:
-        return None
+    # ── MSTR prices: versioned CSV → fallback to live yfinance ──────────────
+    _mstr_csv = _load_mstr_prices()
+    if _mstr_csv is not None and "close" in _mstr_csv.columns:
+        _mstr_close = _mstr_csv["close"].sort_index()
+        _mstr_low   = _mstr_csv["low"].sort_index() if "low" in _mstr_csv.columns else _mstr_close
+    else:
+        try:
+            d_mstr = yf.download(
+                "MSTR",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstr.columns, pd.MultiIndex):
+                d_mstr.columns = [c[0] for c in d_mstr.columns]
+            d_mstr.index = pd.DatetimeIndex(d_mstr.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_mstr.empty or "Close" not in d_mstr.columns:
+            return None
+        _mstr_close = d_mstr["Close"].sort_index()
+        _mstr_low   = d_mstr["Low"].sort_index() if "Low" in d_mstr.columns else _mstr_close
 
-    if d_mstr.empty or "Close" not in d_mstr.columns:
-        return None
-
-    # Forward-fill MSTR to all calendar days (weekends use last trading close)
-    mstr_raw = d_mstr["Close"].sort_index()
-    mstr_all = mstr_raw.reindex(
-        pd.date_range(mstr_raw.index[0],
-                      max(mstr_raw.index[-1], end_dt), freq="D")
+    _mstr_all = _mstr_close.reindex(
+        pd.date_range(_mstr_close.index[0], max(_mstr_close.index[-1], end_dt), freq="D")
     ).ffill()
-    mstr_px = mstr_all.reindex(dates).ffill().bfill().values.astype(float)
-
-    # MSTR intraday lows — kept for display/annotation only; stop is triggered on close
-    mstr_lo_raw = d_mstr["Low"].sort_index() if "Low" in d_mstr.columns else mstr_raw
-    mstr_lo_all = mstr_lo_raw.reindex(
-        pd.date_range(mstr_lo_raw.index[0],
-                      max(mstr_lo_raw.index[-1], end_dt), freq="D")
+    _mstr_lo_all = _mstr_low.reindex(
+        pd.date_range(_mstr_low.index[0], max(_mstr_low.index[-1], end_dt), freq="D")
     ).ffill()
-    mstr_lo = mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)  # noqa: F841
+    mstr_px = _mstr_all.reindex(dates).ffill().bfill().values.astype(float)
+    mstr_lo = _mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)  # noqa: F841
 
     # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
     c_asof  = comp["close_asof"].values.astype(float)
@@ -3848,15 +3915,13 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
                                     logic_version: str = _BT_LOGIC_VERSION,
+                                    data_mtime: float = 0.0,
                                     entry_gate: str = "pure_regime"):
-    """Cached wrapper for fixed-period MSTR backtests.
-
-    Invalidates on model change (model_mtime), new daily price data (data_end),
-    backtest logic change (logic_version), or entry_gate variant.
-    """
+    """Cached wrapper for fixed-period MSTR backtests."""
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
-                             logic_version=logic_version, entry_gate=entry_gate)
+                             logic_version=logic_version, data_mtime=data_mtime,
+                             entry_gate=entry_gate)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -3870,6 +3935,7 @@ def run_btc_backtest(end_date_iso: str,
                      model_mtime: float = 0.0,
                      data_end: str = "",
                      logic_version: str = _BT_LOGIC_VERSION,
+                     data_mtime: float = 0.0,
                      entry_gate: str = "pure_regime"):
     """BTC backtest driven by BTC TF2+V-Gate signals.
 
@@ -3891,9 +3957,16 @@ def run_btc_backtest(end_date_iso: str,
         return None
     preds, raw_df = ext
 
-    btc_closes = raw_df["btc_close"]
-    btc_highs  = raw_df["btc_high"]
-    btc_lows   = raw_df["btc_low"]
+    # ── BTC actual prices: versioned CSV → fallback to raw_df from pipeline ──
+    _btc_csv = _load_btc_prices()
+    if _btc_csv is not None and "close" in _btc_csv.columns:
+        btc_closes = _btc_csv["close"]
+        btc_highs  = _btc_csv["high"] if "high" in _btc_csv.columns else raw_df["btc_high"]
+        btc_lows   = _btc_csv["low"]  if "low"  in _btc_csv.columns else raw_df["btc_low"]
+    else:
+        btc_closes = raw_df["btc_close"]
+        btc_highs  = raw_df["btc_high"]
+        btc_lows   = raw_df["btc_low"]
 
     preds = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
     if len(preds) < WARMUP + 3:
@@ -3913,7 +3986,7 @@ def run_btc_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── BTC prices are already in comp — no separate fetch needed ────────────
+    # ── BTC execution prices from versioned actual_close ─────────────────────
     btc_px = comp["actual_close"].values.astype(float)
 
     # ── BTC signal arrays ─────────────────────────────────────────────────────
@@ -4109,11 +4182,13 @@ def _run_fixed_period_btc_backtest(end_date_iso: str, backtest_start_iso: str,
                                    model_mtime: float = 0.0,
                                    data_end: str = "",
                                    logic_version: str = _BT_LOGIC_VERSION,
+                                   data_mtime: float = 0.0,
                                    entry_gate: str = "pure_regime"):
     """Cached wrapper for fixed-period BTC backtests."""
     return run_btc_backtest(end_date_iso, backtest_start_iso,
                             model_mtime=model_mtime, data_end=data_end,
-                            logic_version=logic_version, entry_gate=entry_gate)
+                            logic_version=logic_version, data_mtime=data_mtime,
+                            entry_gate=entry_gate)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4127,16 +4202,13 @@ def run_mstu_backtest(end_date_iso: str,
                       model_mtime: float = 0.0,
                       data_end: str = "",
                       logic_version: str = _BT_LOGIC_VERSION,
+                      data_mtime: float = 0.0,
                       entry_gate: str = "pure_regime"):
     """MSTU backtest driven by BTC TF2+V-Gate signals.
 
-    Identical signal logic to run_mstr_backtest but executes trades in MSTU
-    (T-Rex 2X Long MSTR Daily Target ETF) instead of MSTR.  MSTU started trading
-    Sep 18 2024; earlier dates use OLS-synthesised prices (log_r(MSTU) ≈ beta*log_r(MSTR))
-    to avoid the flat-bfill artifact that gave Confirmed Uptrend an artificial
-    risk-free entry window during the constant pre-inception price period.
-    Uses yfinance daily BTC data (matching backtest_stop_loss_reentry.py) so UI
-    numbers are consistent with the research script.
+    Execution prices loaded from versioned data/backtest/mstu_synthetic_daily.csv
+    (OLS synthesis for pre-inception dates) and data/backtest/mstu_daily.csv
+    (actual post-inception), with fallback to live yfinance + on-the-fly synthesis.
     """
     WARMUP = 35
 
@@ -4174,48 +4246,55 @@ def run_mstu_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices via OLS-synthetic backfill (pre-inception) ─────────────
-    # MSTU started trading Sep 18, 2024. For pre-inception dates (Jun–Sep 2024),
-    # synthesise prices via OLS regression on MSTR log-returns to avoid the flat-bfill
-    # artifact where a constant pre-inception price gives Confirmed Uptrend an
-    # artificial risk-free entry window (stop-loss can never trigger on a flat price).
-    _mstu_syn = _build_synthetic_mstu_prices(
-        pre_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
-    )
-    if _mstu_syn is None or len(_mstu_syn) == 0:
-        return None
-    mstu_px = _mstu_syn.reindex(dates).ffill().bfill().values.astype(float)
+    # ── MSTU prices: versioned CSV → fallback to live yfinance + OLS synthesis ──
+    _mstu_syn_csv = _load_mstu_synthetic()
+    _mstu_act_csv = _load_mstu_prices()
 
-    # ── Fetch actual MSTU from yfinance for intraday lows (display only) ─────────
-    try:
-        d_mstu = yf.download(
-            "MSTU",
-            start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
+    if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
+        mstu_px = _mstu_syn_csv.reindex(dates).ffill().bfill().values.astype(float)
+    else:
+        _mstu_syn = _build_synthetic_mstu_prices(
+            pre_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
         )
-        if isinstance(d_mstu.columns, pd.MultiIndex):
-            d_mstu.columns = [c[0] for c in d_mstu.columns]
-        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
-    except Exception:
-        d_mstu = pd.DataFrame()
+        if _mstu_syn is None or len(_mstu_syn) == 0:
+            return None
+        mstu_px = _mstu_syn.reindex(dates).ffill().bfill().values.astype(float)
 
-    # ── BTC signal arrays (identical to run_full_period_backtest) ────────────────────────────────────────────────────────────────────────
-    c_asof  = comp["close_asof"].values.astype(float)
-    pred_hi = comp["pred_high"].values.astype(float)
-    pred_lo = comp["pred_low"].values.astype(float)
-    act_hi  = comp["actual_high"].values.astype(float)
-    act_lo  = comp["actual_low"].values.astype(float)
-
-    # MSTU intraday lows — for display only; stop triggers on close price
-    if not d_mstu.empty and "Low" in d_mstu.columns:
-        _lo_raw = d_mstu["Low"].sort_index()
+    # MSTU intraday lows — versioned CSV → fallback to yfinance; display only
+    if _mstu_act_csv is not None and "low" in _mstu_act_csv.columns:
+        _lo_raw = _mstu_act_csv["low"].sort_index()
         _lo_all = _lo_raw.reindex(
             pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
         ).ffill()
         mstu_lo = _lo_all.reindex(dates).ffill().bfill().values.astype(float)
     else:
-        mstu_lo = mstu_px.copy()
+        try:
+            d_mstu = yf.download(
+                "MSTU",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstu.columns, pd.MultiIndex):
+                d_mstu.columns = [c[0] for c in d_mstu.columns]
+            d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+        except Exception:
+            d_mstu = pd.DataFrame()
+        if not d_mstu.empty and "Low" in d_mstu.columns:
+            _lo_raw = d_mstu["Low"].sort_index()
+            _lo_all = _lo_raw.reindex(
+                pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
+            ).ffill()
+            mstu_lo = _lo_all.reindex(dates).ffill().bfill().values.astype(float)
+        else:
+            mstu_lo = mstu_px.copy()
+
+    # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
+    c_asof  = comp["close_asof"].values.astype(float)
+    pred_hi = comp["pred_high"].values.astype(float)
+    pred_lo = comp["pred_low"].values.astype(float)
+    act_hi  = comp["actual_high"].values.astype(float)
+    act_lo  = comp["actual_low"].values.astype(float)
 
     err_hi = (act_hi - pred_hi) / c_asof * 100
     err_lo = (pred_lo - act_lo) / c_asof * 100
@@ -4441,16 +4520,13 @@ def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
                                     logic_version: str = _BT_LOGIC_VERSION,
+                                    data_mtime: float = 0.0,
                                     entry_gate: str = "pure_regime"):
-    """Cached wrapper for fixed-period MSTU backtests.
-
-    Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
-    Invalidates on model change (model_mtime), new daily price data (data_end),
-    backtest logic change (logic_version), or entry_gate variant.
-    """
+    """Cached wrapper for fixed-period MSTU backtests."""
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
-                             logic_version=logic_version, entry_gate=entry_gate)
+                             logic_version=logic_version, data_mtime=data_mtime,
+                             entry_gate=entry_gate)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -14773,6 +14849,9 @@ with tab_btc:
         "are both in Bitcoin. Entry/exit signals come from the same BTC CT model predictions. "
         "No stop-loss — positions close only on D2 or D3 regime exit signals."
     )
+    _ds_ver_btc = _backtest_dataset_version()
+    _ds_mtime   = _backtest_dataset_mtime()
+    st.caption(f"📦 Price dataset {_ds_ver_btc} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     _btc_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
@@ -14793,16 +14872,16 @@ with tab_btc:
     _btc_data_end = _btc_raw.index.max().strftime("%Y-%m-%d") if not _btc_raw.empty else ""
     _btc_bear     = _run_fixed_period_btc_backtest(
         "2026-05-31", "2025-06-01", _btc_model_mtime, data_end=_btc_data_end,
-        entry_gate=_btc_variant)    # locked Jun 2025–May 2026
+        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # locked Jun 2025–May 2026
     _btc_bull     = _run_fixed_period_btc_backtest(
         "2025-05-31", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
-        entry_gate=_btc_variant)    # Jun 2024–May 2025
+        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # Jun 2024–May 2025
     _btc_full_oos = run_btc_backtest(
         _btc_oos_end, model_mtime=_btc_model_mtime, data_end=_btc_data_end,
-        entry_gate=_btc_variant)    # OOS ends prior day (rolling)
+        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # OOS ends prior day (rolling)
     _btc_full     = _run_fixed_period_btc_backtest(
         "2026-05-31", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
-        entry_gate=_btc_variant)    # locked Jun 2024–May 2026
+        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # locked Jun 2024–May 2026
     render_btc_trading_strategy_dashboard(
         _btc_bear, _btc_bull,
         bt_full_oos=_btc_full_oos,
@@ -14820,6 +14899,9 @@ with tab_mstr:
         "MSTR holds ~580,000 BTC on its balance sheet and behaves as a leveraged Bitcoin "
         "proxy with equity-market tax treatment."
     )
+    _ds_ver_mstr = _backtest_dataset_version()
+    _ds_mtime_mstr = _backtest_dataset_mtime()
+    st.caption(f"📦 Price dataset {_ds_ver_mstr} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     _mstr_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
@@ -14840,16 +14922,16 @@ with tab_mstr:
     _mstr_data_end = _mstr_raw.index.max().strftime("%Y-%m-%d") if not _mstr_raw.empty else ""
     _mstr_bear     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
+        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
         "2025-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        entry_gate=_mstr_variant)  # Jun 2024–May 2025
+        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # Jun 2024–May 2025
     _mstr_full_oos = run_mstr_backtest(
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
-        entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
+        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
     _mstr_full     = _run_fixed_period_mstr_backtest(
         "2026-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        entry_gate=_mstr_variant)    # locked Jun 2024–May 2026
+        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)    # locked Jun 2024–May 2026
     render_mstr_trading_strategy_dashboard(
         _mstr_bear, _mstr_bull,
         bt_full_oos=_mstr_full_oos,
@@ -14865,9 +14947,12 @@ with tab_mstu:
         "trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)** instead. "
         "All entry/exit signals are computed from the BTC CT model predictions — only the "
         "traded asset changes. MSTU provides **2× daily leveraged exposure** to MSTR stock, "
-        "which holds ~580,000 BTC. MSTU launched ~Jun 2025; the **Bull Market period uses "
+        "which holds ~580,000 BTC. MSTU launched Sep 18 2024; the **Bull Market period uses "
         "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
+    _ds_ver_mstu = _backtest_dataset_version()
+    _ds_mtime_mstu = _backtest_dataset_mtime()
+    st.caption(f"📦 Price dataset {_ds_ver_mstu} · pulled via `scripts/pull_backtest_data.py` · OLS β≈1.96 · all QC checks passed")
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
@@ -14888,16 +14973,16 @@ with tab_mstu:
     _mstu_data_end = _mstu_raw.index.max().strftime("%Y-%m-%d") if not _mstu_raw.empty else ""
     _mstu_bear     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end,
-        entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
+        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
         "2025-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
-        entry_gate=_mstu_variant)    # Bull: Jun 2024–May 2025 (synthetic, matches MSTR)
+        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # Bull: Jun 2024–May 2025 (synthetic)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
-        entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
+        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
     _mstu_full     = _run_fixed_period_mstu_backtest(
         "2026-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
-        entry_gate=_mstu_variant)     # Full: Jun 2024–May 2026 (synthetic+actual)
+        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)     # Full: Jun 2024–May 2026
     render_mstu_trading_strategy_dashboard(
         _mstu_bear,
         bt_bull=_mstu_bull,
