@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v20"  # cache bust: synthetic MSTU pre-inception prices (OLS from MSTR)
+_BT_LOGIC_VERSION = "sl5-sl5-v21"  # cache bust: BTC no-stop-loss (signals-only exit)
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3875,8 +3875,8 @@ def run_btc_backtest(end_date_iso: str,
 
     Both signals and trade execution are in BTC spot.  Entry/exit signals are computed
     from the BTC CT model predictions; the same BTC daily close prices that drive the
-    signals serve as execution prices.  Stop-loss is fixed at −5% from entry price with
-    SL5 regime-adaptive re-entry (immediate in bull regime, 10-bar cooldown in bear).
+    signals serve as execution prices.  No stop-loss — positions close only on D2/D3
+    regime exit signals.
     """
     WARMUP = 35
 
@@ -3992,9 +3992,6 @@ def run_btc_backtest(end_date_iso: str,
     # ── Backtest loop — execute in BTC ────────────────────────────────────────
     nav      = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
-    e_reentry = False
-    stop_px  = 0.0
-    from_sl = False; bars_since_sl = 0
     trades  = []; nav_arr = np.full(N, np.nan)
 
     for i in range(N):
@@ -4006,49 +4003,25 @@ def run_btc_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = btc_qty * price
-            if price <= stop_px:
-                exit_px  = price
-                exit_nav = btc_qty * exit_px
-                nav = exit_nav
+            should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+            exit_lbl    = "D3" if d3[i] else "D2 (bear)"
+            if should_exit:
+                nav = cur
                 trades.append(dict(
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
-                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
-                    exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-5%",
-                    duration_days=(dates[i]-e_date).days, stop_triggered=True,
-                    was_reentry=e_reentry,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
+                    exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                    pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
+                    duration_days=(dates[i]-e_date).days, stop_triggered=False,
                 ))
-                pos = "CASH"; btc_qty = 0.0; stop_px = 0.0; e_reentry = False
-                from_sl = True; bars_since_sl = 0
+                pos = "CASH"; btc_qty = 0.0
             else:
-                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
-                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
-                if should_exit:
-                    nav = cur
-                    trades.append(dict(
-                        entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
-                        entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
-                        exit_nav=nav, pnl_pct=(price/e_price-1)*100,
-                        pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
-                        duration_days=(dates[i]-e_date).days, stop_triggered=False,
-                        was_reentry=e_reentry,
-                    ))
-                    pos = "CASH"; btc_qty = 0.0; stop_px = 0.0; e_reentry = False
-                    from_sl = False
-                else:
-                    nav = cur
+                nav = cur
         else:
-            if from_sl:
-                bars_since_sl += 1
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
-            _sl_reentry_ok = (not from_sl
-                              or bool(bull_regime[i])
-                              or bars_since_sl >= 10)
-            if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
-                e_reentry = bool(from_sl)
+            if tf1_entry[i] and not _exit_at_i:
                 btc_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * 0.95
-                from_sl = False; bars_since_sl = 0
+                e_nav = nav; pos = "LONG"
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
                 elif above_ma30[i]:
@@ -4106,10 +4079,7 @@ def run_btc_backtest(end_date_iso: str,
         open_pos      = pos == "LONG",
         last_price    = float(btc_px[N-1]) if N > 0 and np.isfinite(btc_px[N-1]) else None,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
-                             entry_trigger=e_trigger,
-                             stop_price=round(stop_px, 2)) if pos == "LONG" else None),
-        from_sl       = from_sl,
-        bars_since_sl = bars_since_sl,
+                             entry_trigger=e_trigger) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
         stats = dict(
             strategy        = "TF2+V-Gate (BTC)",
@@ -4118,8 +4088,8 @@ def run_btc_backtest(end_date_iso: str,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
             alpha_abs       = final_nav - final_bh,
-            n_trades        = len(trades),    n_stop_exits  = sum(1 for t in trades if t.get("stop_triggered")),
-            n_reentries     = sum(1 for t in trades if t.get("was_reentry")),
+            n_trades        = len(trades),    n_stop_exits  = 0,
+            n_reentries     = 0,
             n_wins          = len(wins),      n_losses      = len(losses),
             win_rate        = win_rate,       avg_pnl       = avg_pnl,
             best_trade      = best_t,         worst_trade   = worst_t,
@@ -8108,41 +8078,15 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     </table>
   </div>
   <div style='border-top:1px solid #fed7aa; margin:10px 0;'></div>
-  <!-- STOP-LOSS & RE-ENTRY -->
+  <!-- NO STOP-LOSS -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#c2410c; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
-    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#7c2d12;'>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fef9c3; color:#713f12; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>Stop trigger</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−5%</b> from entry price — triggers on daily close below stop level
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Re-enter <b>immediately</b> on next valid signal (BTC above MA30 &amp; MA30 rising)
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Wait <b>10-bar cooldown</b> then re-enter on next valid signal
-        </td>
-      </tr>
-    </table>
+         letter-spacing:0.8px; margin-bottom:6px;'>🔒 Position Management</div>
+    <div style='font-size:12px; color:#7c2d12;'>
+      No stop-loss — positions are closed <b>only</b> by D2 or D3 regime exit signals.
+      BTC volatility (~3–4% daily σ) makes fixed percentage stops prone to noise-driven
+      whipsaws; regime exits provide a more stable exit criterion.
+    </div>
   </div>
   <div style='border-top:1px solid #fed7aa; margin:10px 0;'></div>
   <div style='font-size:11px; color:#c2410c; line-height:1.8;'>
@@ -14827,7 +14771,7 @@ with tab_btc:
     st.markdown(
         "Runs the **TF2 + V-Gate strategy** directly on **BTC spot** — signals and execution "
         "are both in Bitcoin. Entry/exit signals come from the same BTC CT model predictions. "
-        "Stop-loss is fixed at **−5%** from entry price with SL5 regime-adaptive re-entry."
+        "No stop-loss — positions close only on D2 or D3 regime exit signals."
     )
     _btc_variant = st.radio(
         "Entry gate variant",
