@@ -11069,21 +11069,20 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     ]
     st.markdown(
         _sig_card(
-            title="TF2 + V-Gate — Regime-Adaptive Strategy: U1 + Trend + V-reversal + Regime Exit",
+            title="Confirmed Uptrend (CU) — Regime-Adaptive Strategy: U1 + Bull Regime XOR Clean 7d + V-reversal + Regime Exit",
             icon="🎯",
             color="#2563eb",
             triggered=sigs["tf1_triggered"],
             signal_rows=tf1_rows,
             interpretation=(
-                "The <b>optimised regime-adaptive strategy</b> with V-reversal gate improvement. "
-                "Entry: U1 (hi-band persistence) AND <b>exactly one of</b>: ↑MA30 or Clean 7d "
-                "(not both simultaneously — combined condition has 0% win rate), "
+                "The <b>Confirmed Uptrend (CU) regime-adaptive strategy</b> — the best-performing variant. "
+                "Entry: U1 (hi-band persistence) AND <b>Bull Regime XOR Clean 7d</b> "
+                "(Bull Regime = above MA30 AND MA30 rising; exactly one must fire — not both), "
                 "<b>or ⚡ V-reversal capitulation within 3 bars</b> (catches post-crash recoveries "
-                "before price has crossed MA30; V-reversal always allows entry). "
+                "before the regime condition is met; V-reversal always allows entry). "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 &amp; MA30 rising) → D3 only "
                 "(patient); <b>BEAR/Neutral</b> → D2 or D3 (defensive). "
-                "V-gate improvement: +$4,685 NAV, Sharpe 0.86→0.90, Max DD −26.9%→−23.6% "
-                "over the 2-year backtest period."
+                "CU outperforms Standard and Pure Regime across full period Jun 2024–May 2026."
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
@@ -11222,16 +11221,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **STRATEGY BUY (TF2 + V-Gate)**: U1 + (↑MA30 XOR Clean 7d — not both; OR ⚡V-reversal) → Regime-adaptive entry (see TF2 card below)
+- 🎯 **CONFIRMED UPTREND BUY (CU)**: U1 + (Bull Regime XOR Clean 7d — not both; OR ⚡V-reversal) → Confirmed Uptrend entry (see CU card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
-**TF2 + V-Gate — Regime-Adaptive Strategy (optimised across bull + bear regimes):**
-- **Entry**: U1 fires AND (BTC > 30-day MA **XOR** no D1/D2 in prior 7 days — not both; **OR** ⚡ V-reversal within 3 bars) — combined ↑MA30+Clean 7d blocked (0% win rate)
+**Confirmed Uptrend (CU) — Regime-Adaptive Strategy (best-performing variant):**
+- **Entry**: U1 fires AND (**Bull Regime XOR Clean 7d** — not both; **OR** ⚡ V-reversal within 3 bars) — Bull Regime = above MA30 AND MA30 rising; both-active is blocked (late-cycle)
 - **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
 - **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −0.75%) or D3 (defensive — cut quickly)
-- **2-year backtest** (May 24–May 26): +87.9% return · Sharpe 0.90 · Max DD −23.6% · Alpha +$64,594 vs B&H
-- **Bear period OOS** (Sep 25–May 26): +$30k alpha vs B&H · V-gate adds post-crash entries before MA30 cross
+- **Full period** (Jun 2024–May 2026): BTC +43.2% · MSTR +339.9% · MSTU +973.9% (all CU variant)
+- **Bear period OOS** (Sep 25–May 26): CU outperforms PR/Standard · fewer but higher-quality trades
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -14914,6 +14913,7 @@ with tab_btc:
     _btc_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
+        index=1,
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout"
             if x == "pure_regime" else
@@ -14964,6 +14964,7 @@ with tab_mstr:
     _mstr_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
+        index=1,
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout"
             if x == "pure_regime" else
@@ -15015,6 +15016,7 @@ with tab_mstu:
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
+        index=1,
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout"
             if x == "pure_regime" else
