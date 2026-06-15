@@ -72,7 +72,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v22"  # cache bust: versioned price dataset (data/backtest/)
+_BT_LOGIC_VERSION = "sl5-sl5-v23"  # cache bust: full versioned dataset (raw_features + prices)
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # ════════════════════════════════════════════════════════════════════════
 
@@ -800,7 +800,7 @@ def _fetch_daily_raw():
     return _fetch_daily_raw_inner(_bar_start_iso, _hourly_end_iso, _utc_hour)
 
 
-@st.cache_data(ttl=86400, show_spinner="Computing daily H/L forecast …")
+@st.cache_data(ttl=3600*6, show_spinner="Computing daily H/L forecast …")
 def compute_daily_forecast(target_date_iso, data_end=None):
     """Apply the 12:00-UTC (7am-CT) daily model as it was trained.
 
@@ -3323,13 +3323,13 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
 
 @st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
 def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
-                          model_mtime: float = 0.0) -> "tuple | None":
-    """Build CT predictions for MSTR/MSTU backtests using yfinance DAILY BTC data.
+                          model_mtime: float = 0.0,
+                          data_mtime: float = 0.0) -> "tuple | None":
+    """Build CT predictions for backtests using daily BTC data.
 
-    Matches backtest_stop_loss_reentry.py (research script) exactly:
-      - yfinance daily BTC-USD bars (midnight UTC close) — NOT 12:00-UTC Binance bars
-      - No direction_head classifier adjustment (beta=0 in the model would override ML predictions)
-      - Same feature engineering, same ensemble prediction
+    When data_mtime > 0 (versioned data/backtest/ dataset present), loads
+    raw_features_daily.csv instead of calling yfinance/blockchain.info/Coinbase APIs.
+    Falls back to live API fetch when the CSV is absent or insufficient.
 
     Returns (preds_df, raw_df) where preds_df has target_date index with
     close_asof/pred_high/pred_low and raw_df has btc_close/btc_high/btc_low/btc_volume.
@@ -3342,92 +3342,115 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
     except Exception:
         return None
 
-    # ── 1. BTC daily (yfinance, same source as research script) ──────────────
-    try:
-        d_btc = yf.download("BTC-USD", start=fetch_start_iso, end=fetch_end_iso,
-                             progress=False, auto_adjust=True)
-        if isinstance(d_btc.columns, pd.MultiIndex):
-            d_btc.columns = [c[0] for c in d_btc.columns]
-        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
-    except Exception:
-        return None
-    if d_btc.empty or "Close" not in d_btc.columns:
-        return None
-
-    df = pd.DataFrame({
-        "btc_close":  d_btc["Close"],
-        "btc_high":   d_btc["High"],
-        "btc_low":    d_btc["Low"],
-        "btc_volume": d_btc.get("Volume", pd.Series(dtype=float)),
-    })
-    raw_df = df[["btc_close","btc_high","btc_low","btc_volume"]].copy()
-
-    # ── 2. Macro data (yfinance) ─────────────────────────────────────────────
-    _MACRO = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
-              "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
-    for nm, sym in _MACRO.items():
-        try:
-            _d = yf.download(sym, start=fetch_start_iso, end=fetch_end_iso,
-                             progress=False, auto_adjust=True)
-            if isinstance(_d.columns, pd.MultiIndex):
-                _d.columns = [c[0] for c in _d.columns]
-            _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
-            df[f"{nm}_close"] = _d["Close"].reindex(df.index).ffill(limit=7)
-        except Exception:
-            pass
-
-    # ── 3. On-chain (blockchain.info) ────────────────────────────────────────
-    _ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
-                "n-unique-addresses","transaction-fees-usd","mempool-size",
-                "estimated-transaction-volume-usd","market-cap",
-                "avg-block-size","cost-per-transaction"]
-    for _m in _ONCHAIN:
-        try:
-            _r = requests.get(
-                f"https://api.blockchain.info/charts/{_m}",
-                params={"timespan":"3years","format":"json","sampled":"true"},
-                timeout=20)
-            _vals = _r.json().get("values", [])
-            _s = pd.Series(
-                {pd.Timestamp(_v["x"], unit="s").normalize(): _v["y"] for _v in _vals},
-                name=f"oc_{_m.replace('-','_')}", dtype=float)
-            _s = _s[~_s.index.duplicated(keep="last")].sort_index()
-            _s.index = pd.DatetimeIndex(_s.index).tz_localize(None)
-            df[_s.name] = _s.reindex(df.index).ffill(limit=7)
-        except Exception:
-            pass
-
-    # ── 4. Coinbase premium ──────────────────────────────────────────────────
-    _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
-    _cb_rows: list = []
-    _cb_cur = pd.Timestamp(fetch_start_iso)
-    _cb_end = pd.Timestamp(fetch_end_iso)
-    while _cb_cur <= _cb_end:
-        _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
-        try:
-            _r2 = requests.get(_CB_URL, params={
-                "granularity":86400,
-                "start":_cb_cur.strftime("%Y-%m-%dT00:00:00Z"),
-                "end":(_cb_chunk + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z"),
-            }, timeout=30)
-            if _r2.status_code == 200:
-                _cb_rows.extend(_r2.json())
-        except Exception:
-            pass
-        _cb_cur = _cb_chunk + pd.Timedelta(days=1)
-        _time.sleep(0.1)
-    if _cb_rows:
-        _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
-        _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
-        _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
-        _cb_close = _cb_df["close"].reindex(df.index).astype(float)
-        c_ref = df["btc_close"]
-        _prem = (_cb_close - c_ref) / c_ref * 100
-        df["cb_premium"]     = _prem
-        df["cb_premium_ma3"] = _prem.rolling(3).mean()
-        df["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
+    # ── 0. Try versioned raw_features CSV (when data_mtime > 0) ──────────────
+    _fs = pd.Timestamp(fetch_start_iso); _fe = pd.Timestamp(fetch_end_iso)
+    if data_mtime > 0:
+        _rf = _load_raw_features()
+        if _rf is not None and len(_rf) > 0:
+            _rf_slice = _rf.loc[(_rf.index >= _fs) & (_rf.index <= _fe)]
+            if len(_rf_slice) >= 35:      # enough rows to warm up signals
+                df     = _rf_slice.copy()
+                raw_df = df[["btc_close","btc_high","btc_low","btc_volume"]].copy()
+                # jump straight to feature engineering (skip steps 1-4 below)
+                _skip_fetch = True
+            else:
+                _skip_fetch = False
+        else:
+            _skip_fetch = False
     else:
-        df["cb_premium"] = df["cb_premium_ma3"] = df["cb_premium_z7"] = 0.0
+        _skip_fetch = False
+
+    if not _skip_fetch:
+        # ── 1. BTC daily (yfinance, same source as research script) ──────────
+        try:
+            d_btc = yf.download("BTC-USD", start=fetch_start_iso, end=fetch_end_iso,
+                                 progress=False, auto_adjust=True)
+            if isinstance(d_btc.columns, pd.MultiIndex):
+                d_btc.columns = [c[0] for c in d_btc.columns]
+            d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_btc.empty or "Close" not in d_btc.columns:
+            return None
+
+        df = pd.DataFrame({
+            "btc_close":  d_btc["Close"],
+            "btc_high":   d_btc["High"],
+            "btc_low":    d_btc["Low"],
+            "btc_volume": d_btc.get("Volume", pd.Series(dtype=float)),
+        })
+        raw_df = df[["btc_close","btc_high","btc_low","btc_volume"]].copy()
+
+    if not _skip_fetch:
+        pass  # macro / on-chain / Coinbase blocks below only run when not using CSV
+
+    if not _skip_fetch:
+        # ── 2. Macro data (yfinance) ─────────────────────────────────────────
+        _MACRO = {"eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
+                  "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
+        for nm, sym in _MACRO.items():
+            try:
+                _d = yf.download(sym, start=fetch_start_iso, end=fetch_end_iso,
+                                 progress=False, auto_adjust=True)
+                if isinstance(_d.columns, pd.MultiIndex):
+                    _d.columns = [c[0] for c in _d.columns]
+                _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+                df[f"{nm}_close"] = _d["Close"].reindex(df.index).ffill(limit=7)
+            except Exception:
+                pass
+
+        # ── 3. On-chain (blockchain.info) ─────────────────────────────────────
+        _ONCHAIN = ["hash-rate","difficulty","n-transactions","miners-revenue",
+                    "n-unique-addresses","transaction-fees-usd","mempool-size",
+                    "estimated-transaction-volume-usd","market-cap",
+                    "avg-block-size","cost-per-transaction"]
+        for _m in _ONCHAIN:
+            try:
+                _r = requests.get(
+                    f"https://api.blockchain.info/charts/{_m}",
+                    params={"timespan":"3years","format":"json","sampled":"true"},
+                    timeout=20)
+                _vals = _r.json().get("values", [])
+                _s = pd.Series(
+                    {pd.Timestamp(_v["x"], unit="s").normalize(): _v["y"] for _v in _vals},
+                    name=f"oc_{_m.replace('-','_')}", dtype=float)
+                _s = _s[~_s.index.duplicated(keep="last")].sort_index()
+                _s.index = pd.DatetimeIndex(_s.index).tz_localize(None)
+                df[_s.name] = _s.reindex(df.index).ffill(limit=7)
+            except Exception:
+                pass
+
+        # ── 4. Coinbase premium ───────────────────────────────────────────────
+        _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+        _cb_rows: list = []
+        _cb_cur = pd.Timestamp(fetch_start_iso)
+        _cb_end = pd.Timestamp(fetch_end_iso)
+        while _cb_cur <= _cb_end:
+            _cb_chunk = min(_cb_cur + pd.Timedelta(days=299), _cb_end)
+            try:
+                _r2 = requests.get(_CB_URL, params={
+                    "granularity":86400,
+                    "start":_cb_cur.strftime("%Y-%m-%dT00:00:00Z"),
+                    "end":(_cb_chunk + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z"),
+                }, timeout=30)
+                if _r2.status_code == 200:
+                    _cb_rows.extend(_r2.json())
+            except Exception:
+                pass
+            _cb_cur = _cb_chunk + pd.Timedelta(days=1)
+            _time.sleep(0.1)
+        if _cb_rows:
+            _cb_df = pd.DataFrame(_cb_rows, columns=["ts","low","high","open","close","volume"])
+            _cb_df["date"] = pd.to_datetime(_cb_df["ts"], unit="s").dt.normalize()
+            _cb_df = _cb_df.drop_duplicates("date").set_index("date").sort_index()
+            _cb_close = _cb_df["close"].reindex(df.index).astype(float)
+            c_ref = df["btc_close"]
+            _prem = (_cb_close - c_ref) / c_ref * 100
+            df["cb_premium"]     = _prem
+            df["cb_premium_ma3"] = _prem.rolling(3).mean()
+            df["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
+        else:
+            df["cb_premium"] = df["cb_premium_ma3"] = df["cb_premium_z7"] = 0.0
 
     # ── 5. Feature engineering (identical to research script build_ct_preds) ─
     c   = df["btc_close"]; h = df["btc_high"]
@@ -3559,6 +3582,19 @@ def _read_price_csv(filename: str) -> pd.DataFrame | None:
 
 
 @st.cache_data(ttl=86_400)
+def _load_raw_features() -> pd.DataFrame | None:
+    """Full merged raw_features dataframe (BTC OHLCV + 7 macro + 11 on-chain + Coinbase premium)."""
+    try:
+        df = pd.read_csv(
+            _BACKTEST_DATA_DIR / "raw_features_daily.csv", index_col=0, parse_dates=True
+        )
+        df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
+        return df
+    except (FileNotFoundError, Exception):
+        return None
+
+
+@st.cache_data(ttl=86_400)
 def _load_btc_prices() -> pd.DataFrame | None:
     """BTC-USD daily OHLCV from versioned CSV."""
     return _read_price_csv("btc_usd_daily.csv")
@@ -3625,7 +3661,7 @@ def run_mstr_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime, data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -3952,7 +3988,7 @@ def run_btc_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime, data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -4219,7 +4255,7 @@ def run_mstu_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime, data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext

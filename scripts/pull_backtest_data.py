@@ -1,50 +1,69 @@
 #!/usr/bin/env python3
 """
-Pull fresh price data for all backtests (BTC, MSTR, MSTU), validate it,
-synthesise MSTU pre-inception prices via OLS, and save versioned CSVs to
-data/backtest/ with a manifest.json.
+Pull ALL data used by the CT model for backtesting:
+  - BTC-USD OHLCV            (yfinance)
+  - 7 macro series           (yfinance: ETH, SPX, NDX, VIX, Gold, DXY, TNX)
+  - 11 on-chain metrics      (blockchain.info)
+  - Coinbase BTC premium     (Coinbase Exchange API)
+  - MSTR OHLCV               (yfinance)
+  - MSTU OHLCV               (yfinance, post-inception Sep 18 2024)
+  - MSTU synthetic prices    (OLS on MSTR log-returns)
 
-Run manually whenever you want to refresh the dataset:
+Saves versioned CSVs to data/backtest/ and updates manifest.json.
+
+Run manually to refresh the dataset:
     python scripts/pull_backtest_data.py
 
-The version badge displayed in the UI reads from data/backtest/manifest.json.
+The UI reads manifest.json to display the dataset version badge and uses
+raw_features_daily.csv to build CT model predictions without live API calls.
 """
 
-import hashlib
-import json
-import sys
+import hashlib, json, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
-REPO_ROOT   = Path(__file__).resolve().parent.parent
-DATA_DIR    = REPO_ROOT / "data" / "backtest"
-INCEPTION   = pd.Timestamp("2024-09-18")   # MSTU first trading day
-FETCH_FROM  = "2023-11-01"                 # 200+ days before earliest backtest start
+REPO_ROOT  = Path(__file__).resolve().parent.parent
+DATA_DIR   = REPO_ROOT / "data" / "backtest"
+INCEPTION  = pd.Timestamp("2024-09-18")   # MSTU first trading day
+FETCH_FROM = "2023-11-01"                 # 200+ days before earliest backtest start
+
+_MACRO_SYMS = {
+    "eth": "ETH-USD", "spx": "^GSPC", "ndx": "^IXIC",
+    "vix": "^VIX",   "gold": "GC=F",  "dxy": "DX-Y.NYB", "tnx": "^TNX",
+}
+_ONCHAIN = [
+    "hash-rate", "difficulty", "n-transactions", "miners-revenue",
+    "n-unique-addresses", "transaction-fees-usd", "mempool-size",
+    "estimated-transaction-volume-usd", "market-cap",
+    "avg-block-size", "cost-per-transaction",
+]
+_CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
-def _norm_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten MultiIndex columns (yfinance quirk) and normalise index to UTC-naive dates."""
+def _norm(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
     df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
     return df
 
 
-def _download(ticker: str, start: str, retries: int = 3) -> pd.DataFrame:
-    """Download from yfinance with retry."""
+def _yf(ticker: str, start: str, retries: int = 3) -> pd.DataFrame:
     for attempt in range(1, retries + 1):
         try:
             df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
-            df = _norm_df(df)
+            df = _norm(df)
             if not df.empty:
                 return df
         except Exception as exc:
-            print(f"  [attempt {attempt}] {ticker}: {exc}")
+            print(f"  [yf attempt {attempt}] {ticker}: {exc}")
+            if attempt < retries:
+                time.sleep(2 ** attempt)
     raise RuntimeError(f"Failed to download {ticker} after {retries} attempts")
 
 
@@ -55,208 +74,275 @@ def _checksum(df: pd.DataFrame) -> str:
 # ─── quality checks ─────────────────────────────────────────────────────────
 
 def validate(name: str, df: pd.DataFrame, close_col: str = "close",
-             min_rows: int = 100) -> bool:
+             min_rows: int = 50) -> bool:
     issues = []
-
     if len(df) < min_rows:
         issues.append(f"only {len(df)} rows (expected ≥ {min_rows})")
-
     if close_col not in df.columns:
         issues.append(f"missing column '{close_col}'")
         print(f"  [QC FAIL] {name}: {'; '.join(issues)}")
         return False
-
     prices = df[close_col].dropna()
-
     if len(prices) < min_rows:
         issues.append(f"only {len(prices)} non-NaN prices")
-
     if (prices <= 0).any():
-        bad = (prices <= 0).sum()
-        issues.append(f"{bad} non-positive price(s)")
-
-    # Flat run: >7 consecutive unchanged closes on trading days (weekends excluded)
+        issues.append(f"{(prices<=0).sum()} non-positive price(s)")
     trading = prices.loc[prices.index.dayofweek < 5]
-    flat_streak = (trading.diff().abs() < 1e-8).rolling(7).sum()
-    if (flat_streak >= 7).any():
-        issues.append("suspicious flat run of >7 trading days")
-
-    # Large single-day move (>80%) — likely a data error
+    flat = (trading.diff().abs() < 1e-8).rolling(7).sum()
+    if (flat >= 7).any():
+        issues.append("suspicious flat run >7 trading days")
     log_r = np.log(prices / prices.shift(1)).dropna()
     if (log_r.abs() > np.log(1.8)).any():
-        n_big = (log_r.abs() > np.log(1.8)).sum()
-        issues.append(f"{n_big} daily move(s) >80% (possible split/error)")
-
-    # Coverage check
-    last = df.index[-1]
+        issues.append(f"{(log_r.abs()>np.log(1.8)).sum()} move(s) >80% in one day")
     today = pd.Timestamp.today().normalize()
-    if (today - last).days > 5:
-        issues.append(f"stale — last row is {last.date()} ({(today-last).days}d ago)")
-
+    if (today - df.index[-1]).days > 5:
+        issues.append(f"stale — last row {df.index[-1].date()} ({(today-df.index[-1]).days}d ago)")
     if issues:
         print(f"  [QC WARN] {name}: {'; '.join(issues)}")
         return False
+    print(f"  [QC OK ] {name}: {len(df)} rows  {df.index[0].date()} → {df.index[-1].date()}")
+    return True
 
-    print(f"  [QC OK ] {name}: {len(df)} rows  "
-          f"{df.index[0].date()} → {df.index[-1].date()}")
+
+def validate_raw(name: str, df: pd.DataFrame, min_rows: int = 100) -> bool:
+    """Validate a raw features dataframe (multi-column, partial NaN OK)."""
+    if len(df) < min_rows:
+        print(f"  [QC WARN] {name}: only {len(df)} rows")
+        return False
+    non_null_pct = (1 - df.isnull().mean()).mean() * 100
+    today = pd.Timestamp.today().normalize()
+    stale = (today - df.index[-1]).days > 5
+    if stale:
+        print(f"  [QC WARN] {name}: stale — last row {df.index[-1].date()}")
+        return False
+    print(f"  [QC OK ] {name}: {len(df)} rows  {df.index[0].date()} → {df.index[-1].date()}  "
+          f"avg non-null {non_null_pct:.0f}%  ({len(df.columns)} cols)")
     return True
 
 
 # ─── MSTU OLS synthesis ─────────────────────────────────────────────────────
 
 def synthesise_mstu(mstr_df: pd.DataFrame, mstu_actual: pd.DataFrame) -> pd.Series:
-    """
-    Synthesise MSTU prices before inception via OLS on MSTR log-returns.
-
-    Returns a pd.Series (index=DatetimeIndex, name='close') covering the full
-    range of mstr_df, with synthetic prices before INCEPTION and actual
-    post-inception prices after.
-    """
     common = mstr_df.index.intersection(mstu_actual.index)
     common = common[common >= INCEPTION]
-
-    beta, alpha = 2.0, -0.0002   # fallback (theoretical 2×)
-
+    beta, alpha = 2.0, -0.0002
     if len(common) >= 10:
-        mstr_lr = np.log(mstr_df.loc[common, "close"] /
-                         mstr_df.loc[common, "close"].shift(1)).dropna()
-        mstu_lr = np.log(mstu_actual.loc[common, "close"] /
-                         mstu_actual.loc[common, "close"].shift(1)).dropna()
-        aligned = mstr_lr.index.intersection(mstu_lr.index)
-        x = mstr_lr.loc[aligned].values
-        y = mstu_lr.loc[aligned].values
+        ml = np.log(mstr_df.loc[common, "close"] /
+                    mstr_df.loc[common, "close"].shift(1)).dropna()
+        sl = np.log(mstu_actual.loc[common, "close"] /
+                    mstu_actual.loc[common, "close"].shift(1)).dropna()
+        al = ml.index.intersection(sl.index)
+        x, y = ml.loc[al].values, sl.loc[al].values
         mask = np.isfinite(x) & np.isfinite(y)
         if mask.sum() >= 10:
-            coeffs = np.polyfit(x[mask], y[mask], 1)
-            beta, alpha = float(coeffs[0]), float(coeffs[1])
-            print(f"  OLS  β={beta:.4f}  α={alpha:.6f}  "
-                  f"(n={mask.sum()} overlapping bars)")
-
-    # Pre-inception index
+            c = np.polyfit(x[mask], y[mask], 1)
+            beta, alpha = float(c[0]), float(c[1])
+            print(f"  OLS  β={beta:.4f}  α={alpha:.6f}  (n={mask.sum()} bars)")
     pre_idx = mstr_df.index[mstr_df.index < INCEPTION]
     mstr_pre = mstr_df.loc[pre_idx, "close"]
-    mstr_lr_pre = np.log(mstr_pre / mstr_pre.shift(1)).fillna(0.0).values
-    syn_lr = beta * mstr_lr_pre + alpha
-
-    # Anchor to first actual MSTU close
-    anchor_px = float(
-        mstu_actual.loc[mstu_actual.index >= INCEPTION, "close"].iloc[0]
-    )
-    cum_lr = np.cumsum(syn_lr)
-    syn_prices = anchor_px * np.exp(cum_lr - cum_lr[-1])
-
-    syn_series    = pd.Series(syn_prices, index=pre_idx, name="close")
-    actual_series = mstu_actual["close"].copy()
-    actual_series.name = "close"
-
-    combined = pd.concat([syn_series, actual_series]).sort_index()
-    combined = combined[~combined.index.duplicated(keep="last")]
-    return combined
+    lr_pre = np.log(mstr_pre / mstr_pre.shift(1)).fillna(0.0).values
+    syn_lr = beta * lr_pre + alpha
+    anchor = float(mstu_actual.loc[mstu_actual.index >= INCEPTION, "close"].iloc[0])
+    cum = np.cumsum(syn_lr)
+    syn_px = anchor * np.exp(cum - cum[-1])
+    combined = pd.concat([
+        pd.Series(syn_px, index=pre_idx, name="close"),
+        mstu_actual["close"].copy().rename("close"),
+    ]).sort_index()
+    return combined[~combined.index.duplicated(keep="last")]
 
 
 # ─── main ───────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main() -> int:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    pull_ts = datetime.now(timezone.utc)
+    pull_ts   = datetime.now(timezone.utc)
     pull_date = pull_ts.strftime("%Y-%m-%d")
     print(f"=== pull_backtest_data.py  ({pull_date} UTC) ===\n")
 
-    # ── download ─────────────────────────────────────────────────────────────
-    print("Downloading BTC-USD …")
-    btc_raw = _download("BTC-USD", FETCH_FROM)
-    btc = btc_raw[["Open", "High", "Low", "Close", "Volume"]].rename(
-        columns=str.lower)
-    btc = btc.ffill()
+    fetch_end = (pd.Timestamp.today() + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
+    # ── 1. BTC-USD OHLCV ──────────────────────────────────────────────────────
+    print("Downloading BTC-USD …")
+    btc_raw = _yf("BTC-USD", FETCH_FROM)
+    btc = btc_raw[["Open","High","Low","Close","Volume"]].rename(columns=str.lower).ffill()
+
+    # ── 2. Macro series ───────────────────────────────────────────────────────
+    print("Downloading macro series …")
+    macro_frames: dict = {}
+    for nm, sym in _MACRO_SYMS.items():
+        try:
+            d = _yf(sym, FETCH_FROM)
+            macro_frames[f"{nm}_close"] = d["Close"]
+            print(f"  {sym:12s}: {len(d)} rows")
+        except Exception as exc:
+            print(f"  [WARN] {sym}: {exc}")
+
+    # ── 3. On-chain (blockchain.info) ─────────────────────────────────────────
+    print("Downloading on-chain metrics …")
+    onchain_frames: dict = {}
+    ok_count = 0
+    for m in _ONCHAIN:
+        col = f"oc_{m.replace('-','_')}"
+        try:
+            r = requests.get(
+                f"https://api.blockchain.info/charts/{m}",
+                params={"timespan": "3years", "format": "json", "sampled": "true"},
+                timeout=25,
+            )
+            vals = r.json().get("values", [])
+            s = pd.Series(
+                {pd.Timestamp(v["x"], unit="s").normalize(): v["y"] for v in vals},
+                name=col, dtype=float,
+            )
+            s = s[~s.index.duplicated(keep="last")].sort_index()
+            s.index = pd.DatetimeIndex(s.index).tz_localize(None)
+            onchain_frames[col] = s
+            ok_count += 1
+        except Exception as exc:
+            print(f"  [WARN] {m}: {exc}")
+    print(f"  On-chain: {ok_count}/{len(_ONCHAIN)} OK")
+
+    # ── 4. Coinbase premium ───────────────────────────────────────────────────
+    print("Downloading Coinbase BTC premium …")
+    cb_rows: list = []
+    cur = pd.Timestamp(FETCH_FROM)
+    end = pd.Timestamp(fetch_end)
+    while cur <= end:
+        chunk = min(cur + pd.Timedelta(days=299), end)
+        try:
+            r2 = requests.get(_CB_URL, params={
+                "granularity": 86400,
+                "start": cur.strftime("%Y-%m-%dT00:00:00Z"),
+                "end":   (chunk + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z"),
+            }, timeout=30)
+            if r2.status_code == 200:
+                cb_rows.extend(r2.json())
+        except Exception as exc:
+            print(f"  [WARN] Coinbase chunk {cur.date()}: {exc}")
+        cur = chunk + pd.Timedelta(days=1)
+        time.sleep(0.15)
+    print(f"  Coinbase candles: {len(cb_rows)} rows received")
+
+    # ── 5. Build merged raw_df ────────────────────────────────────────────────
+    print("\nBuilding merged raw_features dataframe …")
+    df = btc[["close","high","low","volume"]].copy()
+    df.columns = ["btc_close","btc_high","btc_low","btc_volume"]
+
+    for col, s in macro_frames.items():
+        df[col] = s.reindex(df.index).ffill(limit=7)
+
+    for col, s in onchain_frames.items():
+        df[col] = s.reindex(df.index).ffill(limit=7)
+
+    if cb_rows:
+        cb_df = pd.DataFrame(cb_rows, columns=["ts","low","high","open","close","volume"])
+        cb_df["date"] = pd.to_datetime(cb_df["ts"], unit="s").dt.normalize()
+        cb_df = cb_df.drop_duplicates("date").set_index("date").sort_index()
+        cb_df.index = pd.DatetimeIndex(cb_df.index).tz_localize(None)
+        cb_close = cb_df["close"].reindex(df.index).astype(float)
+        prem = (cb_close - df["btc_close"]) / df["btc_close"] * 100
+        df["cb_premium"]     = prem
+        df["cb_premium_ma3"] = prem.rolling(3).mean()
+        df["cb_premium_z7"]  = (prem - prem.rolling(7).mean()) / prem.rolling(7).std()
+    else:
+        df["cb_premium"] = df["cb_premium_ma3"] = df["cb_premium_z7"] = 0.0
+
+    # ── 6. MSTR, MSTU, synthetic ──────────────────────────────────────────────
     print("Downloading MSTR …")
-    mstr_raw = _download("MSTR", FETCH_FROM)
-    mstr = mstr_raw[["Open", "High", "Low", "Close", "Volume"]].rename(
-        columns=str.lower)
-    mstr = mstr.ffill()
+    mstr_raw = _yf("MSTR", FETCH_FROM)
+    mstr = mstr_raw[["Open","High","Low","Close","Volume"]].rename(columns=str.lower).ffill()
 
     print("Downloading MSTU …")
-    mstu_raw = _download("MSTU", str(INCEPTION.date()))
-    mstu = mstu_raw[["Open", "High", "Low", "Close", "Volume"]].rename(
-        columns=str.lower)
-    mstu = mstu.ffill()
+    mstu_raw = _yf("MSTU", str(INCEPTION.date()))
+    mstu = mstu_raw[["Open","High","Low","Close","Volume"]].rename(columns=str.lower).ffill()
 
-    # ── MSTU OLS synthesis ───────────────────────────────────────────────────
-    print("\nSynthesising MSTU pre-inception prices (OLS on MSTR) …")
+    print("Synthesising MSTU pre-inception (OLS) …")
     mstu_syn = synthesise_mstu(mstr, mstu).to_frame("close")
 
-    # ── quality checks ───────────────────────────────────────────────────────
+    # ── 7. Quality checks ─────────────────────────────────────────────────────
     print("\nQuality checks:")
-    btc_ok    = validate("BTC-USD",           btc,      close_col="close")
-    mstr_ok   = validate("MSTR",              mstr,     close_col="close")
-    mstu_ok   = validate("MSTU (actual)",     mstu,     close_col="close", min_rows=50)
-    msyn_ok   = validate("MSTU (synthetic)",  mstu_syn, close_col="close", min_rows=100)
+    rf_ok   = validate_raw("raw_features", df)
+    btc_ok  = validate("BTC-USD",           btc,      min_rows=300)
+    mstr_ok = validate("MSTR",              mstr,     min_rows=200)
+    mstu_ok = validate("MSTU (actual)",     mstu,     min_rows=50)
+    msyn_ok = validate("MSTU (synthetic)",  mstu_syn, min_rows=100)
 
-    all_ok = all([btc_ok, mstr_ok, mstu_ok, msyn_ok])
+    all_ok = all([rf_ok, btc_ok, mstr_ok, mstu_ok, msyn_ok])
     if not all_ok:
         print("\n⚠  One or more QC checks failed — data saved with warnings.")
     else:
         print("\n✅  All QC checks passed.")
 
-    # ── save CSVs ────────────────────────────────────────────────────────────
+    # ── 8. Save CSVs ─────────────────────────────────────────────────────────
     print(f"\nSaving CSVs to {DATA_DIR}/")
+    df.to_csv(       DATA_DIR / "raw_features_daily.csv")
     btc.to_csv(      DATA_DIR / "btc_usd_daily.csv")
     mstr.to_csv(     DATA_DIR / "mstr_daily.csv")
     mstu.to_csv(     DATA_DIR / "mstu_daily.csv")
     mstu_syn.to_csv( DATA_DIR / "mstu_synthetic_daily.csv")
 
-    # ── manifest ─────────────────────────────────────────────────────────────
+    # ── 9. Manifest ───────────────────────────────────────────────────────────
     manifest = {
-        "version":       "v1",
+        "version":       "v2",
         "pull_date":     pull_date,
         "pull_ts_utc":   pull_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "generated_by":  "scripts/pull_backtest_data.py",
         "qc_all_passed": all_ok,
         "datasets": {
+            "raw_features_daily": {
+                "file":            "raw_features_daily.csv",
+                "description":     "Full merged raw data: BTC OHLCV + 7 macro + 11 on-chain + Coinbase premium",
+                "columns":         list(df.columns),
+                "rows":            len(df),
+                "date_from":       str(df.index[0].date()),
+                "date_to":         str(df.index[-1].date()),
+                "checksum_sha256": _checksum(df),
+                "qc_passed":       rf_ok,
+            },
             "btc_usd_daily": {
-                "file":             "btc_usd_daily.csv",
-                "ticker":           "BTC-USD",
-                "rows":             len(btc),
-                "date_from":        str(btc.index[0].date()),
-                "date_to":          str(btc.index[-1].date()),
-                "checksum_sha256":  _checksum(btc),
-                "qc_passed":        btc_ok,
+                "file":            "btc_usd_daily.csv",
+                "ticker":          "BTC-USD",
+                "rows":            len(btc),
+                "date_from":       str(btc.index[0].date()),
+                "date_to":         str(btc.index[-1].date()),
+                "checksum_sha256": _checksum(btc),
+                "qc_passed":       btc_ok,
             },
             "mstr_daily": {
-                "file":             "mstr_daily.csv",
-                "ticker":           "MSTR",
-                "rows":             len(mstr),
-                "date_from":        str(mstr.index[0].date()),
-                "date_to":          str(mstr.index[-1].date()),
-                "checksum_sha256":  _checksum(mstr),
-                "qc_passed":        mstr_ok,
+                "file":            "mstr_daily.csv",
+                "ticker":          "MSTR",
+                "rows":            len(mstr),
+                "date_from":       str(mstr.index[0].date()),
+                "date_to":         str(mstr.index[-1].date()),
+                "checksum_sha256": _checksum(mstr),
+                "qc_passed":       mstr_ok,
             },
             "mstu_daily": {
-                "file":             "mstu_daily.csv",
-                "ticker":           "MSTU",
-                "rows":             len(mstu),
-                "date_from":        str(mstu.index[0].date()),
-                "date_to":          str(mstu.index[-1].date()),
-                "checksum_sha256":  _checksum(mstu),
-                "qc_passed":        mstu_ok,
+                "file":            "mstu_daily.csv",
+                "ticker":          "MSTU",
+                "rows":            len(mstu),
+                "date_from":       str(mstu.index[0].date()),
+                "date_to":         str(mstu.index[-1].date()),
+                "checksum_sha256": _checksum(mstu),
+                "qc_passed":       mstu_ok,
             },
             "mstu_synthetic_daily": {
-                "file":             "mstu_synthetic_daily.csv",
-                "ticker":           "MSTU (OLS-synthetic)",
-                "rows":             len(mstu_syn),
-                "date_from":        str(mstu_syn.index[0].date()),
-                "date_to":          str(mstu_syn.index[-1].date()),
-                "checksum_sha256":  _checksum(mstu_syn),
-                "qc_passed":        msyn_ok,
+                "file":            "mstu_synthetic_daily.csv",
+                "ticker":          "MSTU (OLS-synthetic)",
+                "rows":            len(mstu_syn),
+                "date_from":       str(mstu_syn.index[0].date()),
+                "date_to":         str(mstu_syn.index[-1].date()),
+                "checksum_sha256": _checksum(mstu_syn),
+                "qc_passed":       msyn_ok,
             },
         },
     }
-
     with open(DATA_DIR / "manifest.json", "w") as fh:
         json.dump(manifest, fh, indent=2)
 
-    print(f"\nmanifest.json written  →  version={manifest['version']}  "
-          f"pull_date={manifest['pull_date']}")
+    print(f"\nmanifest.json  version={manifest['version']}  pull_date={manifest['pull_date']}")
+    print(f"raw_features_daily.csv: {len(df)} rows × {len(df.columns)} cols")
     print("\nDone.")
     return 0 if all_ok else 1
 
