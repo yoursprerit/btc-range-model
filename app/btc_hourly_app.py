@@ -4608,7 +4608,8 @@ def run_mstr_options_backtest(end_date_iso: str,
                                option_days: int = 743,
                                model_mtime: float = 0.0,
                                data_end: str = "",
-                               data_mtime: float = 0.0):
+                               data_mtime: float = 0.0,
+                               entry_gate: str = "bull_regime"):
     """MSTR Options backtest driven by BTC TF2+V-Gate signals.
 
     On each entry signal: buy ATM MSTR call options expiring option_days out,
@@ -4759,9 +4760,12 @@ def run_mstr_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
-    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
-    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
+    if entry_gate == "above_ma30":
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    elif entry_gate == "pure_regime":
+        tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
+    else:  # bull_regime (Confirmed Uptrend, default)
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTR call options ──────────────────────────
     nav      = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -4932,11 +4936,12 @@ def _run_fixed_period_mstr_options_backtest(end_date_iso: str, backtest_start_is
                                              model_mtime: float = 0.0,
                                              data_end: str = "",
                                              data_mtime: float = 0.0,
-                                             logic_version: str = _BT_LOGIC_VERSION):
+                                             logic_version: str = _BT_LOGIC_VERSION,
+                                             entry_gate: str = "bull_regime"):
     """Cached wrapper for fixed-period MSTR Options backtests."""
     return run_mstr_options_backtest(end_date_iso, backtest_start_iso,
                                      model_mtime=model_mtime, data_end=data_end,
-                                     data_mtime=data_mtime)
+                                     data_mtime=data_mtime, entry_gate=entry_gate)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4950,7 +4955,8 @@ def run_mstu_options_backtest(end_date_iso: str,
                                option_days: int = 596,
                                model_mtime: float = 0.0,
                                data_end: str = "",
-                               data_mtime: float = 0.0):
+                               data_mtime: float = 0.0,
+                               entry_gate: str = "bull_regime"):
     """MSTU Options backtest driven by BTC TF2+V-Gate signals.
 
     On each entry signal: buy ATM MSTU call options expiring option_days out,
@@ -5121,9 +5127,12 @@ def run_mstu_options_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
-    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
-    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
+    if entry_gate == "above_ma30":
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    elif entry_gate == "pure_regime":
+        tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
+    else:  # bull_regime (Confirmed Uptrend, default)
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
 
     # ── Backtest loop — execute in MSTU call options ──────────────────────────
     nav        = initial_capital; pos = "CASH"; n_contracts = 0.0
@@ -5291,14 +5300,15 @@ def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_is
                                              model_mtime: float = 0.0,
                                              data_end: str = "",
                                              data_mtime: float = 0.0,
-                                             logic_version: str = _BT_LOGIC_VERSION):
+                                             logic_version: str = _BT_LOGIC_VERSION,
+                                             entry_gate: str = "bull_regime"):
     """Cached wrapper for fixed-period MSTU Options backtests.
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
     """
     return run_mstu_options_backtest(end_date_iso, backtest_start_iso,
                                      model_mtime=model_mtime, data_end=data_end,
-                                     data_mtime=data_mtime)
+                                     data_mtime=data_mtime, entry_gate=entry_gate)
 
 
 @st.cache_data(ttl=3600 * 24, show_spinner="Building synthetic MSTU price history …")
@@ -9019,7 +9029,8 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
 def render_mstr_options_trading_strategy_dashboard(
         bt_bear, bt_bull, bt_full_oos=None,
-        bt_full=None, key_suffix: str = "") -> None:
+        bt_full=None, key_suffix: str = "",
+        strategy_variant: str = "bull_regime") -> None:
     """Render MSTR Options backtesting dashboard (BTC signals → MSTR ATM call options).
 
     Same four-period layout as the MSTR stock tab but executes in MSTR call options:
@@ -9036,67 +9047,8 @@ def render_mstr_options_trading_strategy_dashboard(
                 "Refresh in a moment.")
         return
 
-    # ── Strategy rules card ───────────────────────────────────────────────────
-    st.markdown("""
-<div style='background:#fffbeb; border:2px solid #d97706; border-radius:12px;
-     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
-
-  <div style='font-size:14px; font-weight:700; color:#92400e; margin-bottom:14px;
-       letter-spacing:0.3px;'>
-    🎯 Confirmed Uptrend (CU) on MSTR Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
-  </div>
-
-  <div style='background:#fde68a; border-radius:8px; padding:10px 14px;
-       margin-bottom:12px; font-size:12px; color:#92400e; font-weight:600;'>
-    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
-    engine, but buy and sell <b>MSTR ATM call options</b> instead of the stock.
-    Options are priced at <b>at-the-money (strike = MSTR spot at entry)</b> with
-    <b>743 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
-    historical MSTR volatility. B&amp;H benchmark is MSTR stock.
-  </div>
-
-  <div style='background:#fef3c7; border:1px solid #f59e0b; border-radius:7px;
-       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#92400e;'>
-    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate requires BTC to be in a
-    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
-    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
-    briefly climbs above a still-declining MA30.
-  </div>
-
-  <!-- ENTRY -->
-  <div style='margin-bottom:12px;'>
-    <div style='font-size:11px; font-weight:700; color:#b45309; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTR call buy</div>
-    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#92400e;'>
-      <tr>
-        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
-             color:#d97706;'>①</td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
-          <span style='color:#d97706; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
-          </span>
-        </td>
-      </tr>
-      <tr>
-        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
-             color:#d97706;'>②</td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
-          <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#fde68a; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
-            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
-            <br>
-            <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
-            &nbsp; No D1 or D2 on BTC in prior 7 bars
-            <br>
-            <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
-            <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
-            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
-          </div>
-        </td>
-      </tr>
+    # ── Strategy rules card (variant-aware) ──────────────────────────────────
+    _mstr_opts_footer = """
       <tr>
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#d97706;'>③</td>
@@ -9156,7 +9108,121 @@ def render_mstr_options_trading_strategy_dashboard(
     ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
   </div>
 
-</div>""", unsafe_allow_html=True)
+</div>"""
+
+    _mstr_opts_core = """
+  <div style='background:#fde68a; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#92400e; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>MSTR ATM call options</b> instead of the stock.
+    Options are priced at <b>at-the-money (strike = MSTR spot at entry)</b> with
+    <b>743 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
+    historical MSTR volatility. B&amp;H benchmark is MSTR stock.
+  </div>"""
+
+    _mstr_opts_entry_hdr = """
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#b45309; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTR call buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#92400e;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#d97706;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#d97706; font-size:11px;'>
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#d97706;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>"""
+
+    _mstr_opts_div = """
+<div style='background:#fffbeb; border:2px solid #d97706; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>"""
+
+    if strategy_variant == "pure_regime":
+        st.markdown(_mstr_opts_div + """
+  <div style='font-size:14px; font-weight:700; color:#92400e; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    🎯 CU on MSTR Call Options &nbsp;—&nbsp; <span style='color:#d97706;'>Pure Regime Entry</span>
+    &nbsp;·&nbsp; BTC Signals · ATM Call Execution
+  </div>""" + _mstr_opts_core + """
+  <div style='background:#fef3c7; border:1px solid #f59e0b; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#92400e;'>
+    🎯 <b>Pure Regime Entry:</b> Two clean, non-overlapping entry paths replace the XOR gate.
+    Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
+    <b>or</b> a clean breakout approach from below MA30 — the ambiguous
+    <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
+  </div>""" + _mstr_opts_entry_hdr + """
+          <b>One of three independent paths must be active</b> (no XOR overlap zone):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
+            <br>
+            <span style='background:#fef3c7; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
+            &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
+            <br>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
+          </div>
+        </td>
+      </tr>""" + _mstr_opts_footer, unsafe_allow_html=True)
+    elif strategy_variant == "above_ma30":
+        st.markdown(_mstr_opts_div + """
+  <div style='font-size:14px; font-weight:700; color:#92400e; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📊 Standard Entry on MSTR Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
+  </div>""" + _mstr_opts_core + _mstr_opts_entry_hdr + """
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
+            &nbsp; BTC close above its 30-day moving average
+            <br>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
+          </div>
+        </td>
+      </tr>""" + _mstr_opts_footer, unsafe_allow_html=True)
+    else:  # bull_regime (CU, default)
+        st.markdown(_mstr_opts_div + """
+  <div style='font-size:14px; font-weight:700; color:#92400e; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    🎯 Confirmed Uptrend (CU) on MSTR Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
+  </div>""" + _mstr_opts_core + """
+  <div style='background:#fef3c7; border:1px solid #f59e0b; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#92400e;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
+  </div>""" + _mstr_opts_entry_hdr + """
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
+            <br>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
+          </div>
+        </td>
+      </tr>""" + _mstr_opts_footer, unsafe_allow_html=True)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
@@ -9735,7 +9801,8 @@ def render_mstr_options_trading_strategy_dashboard(
 
 def render_mstu_options_trading_strategy_dashboard(
         bt_bear, bt_bull=None, bt_full_oos=None,
-        bt_full=None, key_suffix: str = "") -> None:
+        bt_full=None, key_suffix: str = "",
+        strategy_variant: str = "bull_regime") -> None:
     """Render MSTU Options backtesting dashboard (BTC signals → MSTU ATM call options).
 
     Four-period layout: Bear · Bull (synthetic) · OOS · Full — sky-blue theme.
@@ -9751,67 +9818,8 @@ def render_mstu_options_trading_strategy_dashboard(
                 "Refresh in a moment.")
         return
 
-    # ── Strategy rules card ───────────────────────────────────────────────────
-    st.markdown("""
-<div style='background:#f0f9ff; border:2px solid #0284c7; border-radius:12px;
-     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
-
-  <div style='font-size:14px; font-weight:700; color:#0c4a6e; margin-bottom:14px;
-       letter-spacing:0.3px;'>
-    🎯 Confirmed Uptrend (CU) on MSTU Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
-  </div>
-
-  <div style='background:#bae6fd; border-radius:8px; padding:10px 14px;
-       margin-bottom:12px; font-size:12px; color:#0c4a6e; font-weight:600;'>
-    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
-    engine, but buy and sell <b>MSTU ATM call options</b> instead of the ETF.
-    Options are priced at <b>at-the-money (strike = MSTU spot at entry)</b> with
-    <b>596 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
-    historical MSTU volatility. MSTU inception ~Jun 2025 — pre-Jun 2025 uses synthetic prices.
-  </div>
-
-  <div style='background:#e0f2fe; border:1px solid #38bdf8; border-radius:7px;
-       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#0c4a6e;'>
-    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate requires BTC to be in a
-    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
-    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
-    briefly climbs above a still-declining MA30.
-  </div>
-
-  <!-- ENTRY -->
-  <div style='margin-bottom:12px;'>
-    <div style='font-size:11px; font-weight:700; color:#0369a1; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTU call buy</div>
-    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#0c4a6e;'>
-      <tr>
-        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
-             color:#0284c7;'>①</td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
-          <span style='color:#0284c7; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
-          </span>
-        </td>
-      </tr>
-      <tr>
-        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
-             color:#0284c7;'>②</td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
-          <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
-            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
-            <br>
-            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
-            &nbsp; No D1 or D2 on BTC in prior 7 bars
-            <br>
-            <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
-            <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
-            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
-          </div>
-        </td>
-      </tr>
+    # ── Strategy rules card (variant-aware) ──────────────────────────────────
+    _mstu_opts_footer = """
       <tr>
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#0284c7;'>③</td>
@@ -9871,7 +9879,121 @@ def render_mstu_options_trading_strategy_dashboard(
     ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
   </div>
 
-</div>""", unsafe_allow_html=True)
+</div>"""
+
+    _mstu_opts_core = """
+  <div style='background:#bae6fd; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#0c4a6e; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>MSTU ATM call options</b> instead of the ETF.
+    Options are priced at <b>at-the-money (strike = MSTU spot at entry)</b> with
+    <b>596 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
+    historical MSTU volatility. MSTU inception ~Jun 2025 — pre-Jun 2025 uses synthetic prices.
+  </div>"""
+
+    _mstu_opts_entry_hdr = """
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#0369a1; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger MSTU call buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#0c4a6e;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0284c7;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0284c7; font-size:11px;'>
+            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0284c7;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>"""
+
+    _mstu_opts_div = """
+<div style='background:#f0f9ff; border:2px solid #0284c7; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>"""
+
+    if strategy_variant == "pure_regime":
+        st.markdown(_mstu_opts_div + """
+  <div style='font-size:14px; font-weight:700; color:#0c4a6e; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    🎯 CU on MSTU Call Options &nbsp;—&nbsp; <span style='color:#0284c7;'>Pure Regime Entry</span>
+    &nbsp;·&nbsp; BTC Signals · ATM Call Execution
+  </div>""" + _mstu_opts_core + """
+  <div style='background:#e0f2fe; border:1px solid #38bdf8; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#0c4a6e;'>
+    🎯 <b>Pure Regime Entry:</b> Two clean, non-overlapping entry paths replace the XOR gate.
+    Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
+    <b>or</b> a clean breakout approach from below MA30 — the ambiguous
+    <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
+  </div>""" + _mstu_opts_entry_hdr + """
+          <b>One of three independent paths must be active</b> (no XOR overlap zone):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
+            <br>
+            <span style='background:#e0f2fe; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
+            &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
+            <br>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
+          </div>
+        </td>
+      </tr>""" + _mstu_opts_footer, unsafe_allow_html=True)
+    elif strategy_variant == "above_ma30":
+        st.markdown(_mstu_opts_div + """
+  <div style='font-size:14px; font-weight:700; color:#0c4a6e; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📊 Standard Entry on MSTU Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
+  </div>""" + _mstu_opts_core + _mstu_opts_entry_hdr + """
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
+            &nbsp; BTC close above its 30-day moving average
+            <br>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
+          </div>
+        </td>
+      </tr>""" + _mstu_opts_footer, unsafe_allow_html=True)
+    else:  # bull_regime (CU, default)
+        st.markdown(_mstu_opts_div + """
+  <div style='font-size:14px; font-weight:700; color:#0c4a6e; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    🎯 Confirmed Uptrend (CU) on MSTU Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
+  </div>""" + _mstu_opts_core + """
+  <div style='background:#e0f2fe; border:1px solid #38bdf8; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#0c4a6e;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
+  </div>""" + _mstu_opts_entry_hdr + """
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
+            <br>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 3 bars
+            <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
+          </div>
+        </td>
+      </tr>""" + _mstu_opts_footer, unsafe_allow_html=True)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
@@ -15155,6 +15277,20 @@ with tab_mstu_opts:
         "B&H benchmark is MSTU stock. MSTU launched ~Jun 2025; the **Bull Market period uses "
         "synthetic MSTU prices** calibrated from MSTR historical data via OLS regression."
     )
+    _mstu_opts_variant = st.radio(
+        "Entry gate variant",
+        options=["pure_regime", "bull_regime", "above_ma30"],
+        index=1,
+        format_func=lambda x: (
+            "🎯 Pure Regime — Bull Regime or Clean Breakout"
+            if x == "pure_regime" else
+            "🔒 Confirmed Uptrend — Bull Regime (XOR)"
+            if x == "bull_regime" else
+            "📊 Standard — Above MA30"
+        ),
+        horizontal=True,
+        key="mstu_opts_variant_radio",
+    )
     _mstu_opts_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                                if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstu_opts_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
@@ -15163,22 +15299,24 @@ with tab_mstu_opts:
     _mstu_opts_ds_mtime = _backtest_dataset_mtime()
     _mstu_opts_bear     = _run_fixed_period_mstu_options_backtest(
         "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        data_mtime=_mstu_opts_ds_mtime)
+        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)
     _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
         "2025-06-14", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        data_mtime=_mstu_opts_ds_mtime)  # Bull: Jun 2024–Jun 2025
+        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)  # Bull: Jun 2024–Jun 2025
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        data_mtime=_mstu_opts_ds_mtime)
+        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)
     _mstu_opts_full     = _run_fixed_period_mstu_options_backtest(
         "2026-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        data_mtime=_mstu_opts_ds_mtime, logic_version=_BT_LOGIC_VERSION)
+        data_mtime=_mstu_opts_ds_mtime, logic_version=_BT_LOGIC_VERSION,
+        entry_gate=_mstu_opts_variant)
     render_mstu_options_trading_strategy_dashboard(
         _mstu_opts_bear,
         bt_bull=_mstu_opts_bull,
         bt_full_oos=_mstu_opts_full_oos,
         bt_full=_mstu_opts_full,
         key_suffix="mstu_opts_tab",
+        strategy_variant=_mstu_opts_variant,
     )
 
 with tab_mstr_opts:
@@ -15191,6 +15329,20 @@ with tab_mstr_opts:
         "Exit is triggered by the same BTC D2/D3 regime-adaptive signals. "
         "B&H benchmark is MSTR stock (unleveraged)."
     )
+    _opts_variant = st.radio(
+        "Entry gate variant",
+        options=["pure_regime", "bull_regime", "above_ma30"],
+        index=1,
+        format_func=lambda x: (
+            "🎯 Pure Regime — Bull Regime or Clean Breakout"
+            if x == "pure_regime" else
+            "🔒 Confirmed Uptrend — Bull Regime (XOR)"
+            if x == "bull_regime" else
+            "📊 Standard — Above MA30"
+        ),
+        horizontal=True,
+        key="mstr_opts_variant_radio",
+    )
     _opts_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _opts_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
@@ -15199,21 +15351,23 @@ with tab_mstr_opts:
     _opts_ds_mtime = _backtest_dataset_mtime()
     _opts_bear     = _run_fixed_period_mstr_options_backtest(
         "2026-05-31", "2025-06-01", _opts_model_mtime, data_end=_opts_data_end,
-        data_mtime=_opts_ds_mtime)
+        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)
     _opts_bull     = _run_fixed_period_mstr_options_backtest(
         "2025-06-14", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
-        data_mtime=_opts_ds_mtime)  # Jun 2024–Jun 2025
+        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)  # Jun 2024–Jun 2025
     _opts_full_oos = run_mstr_options_backtest(
         _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end,
-        data_mtime=_opts_ds_mtime)
+        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)
     _opts_full     = _run_fixed_period_mstr_options_backtest(
         "2026-05-31", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
-        data_mtime=_opts_ds_mtime, logic_version=_BT_LOGIC_VERSION)
+        data_mtime=_opts_ds_mtime, logic_version=_BT_LOGIC_VERSION,
+        entry_gate=_opts_variant)
     render_mstr_options_trading_strategy_dashboard(
         _opts_bear, _opts_bull,
         bt_full_oos=_opts_full_oos,
         bt_full=_opts_full,
         key_suffix="mstr_opts_tab",
+        strategy_variant=_opts_variant,
     )
 
 with tab_explain:
