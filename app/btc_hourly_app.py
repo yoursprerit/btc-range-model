@@ -4607,7 +4607,8 @@ def run_mstr_options_backtest(end_date_iso: str,
                                initial_capital: float = 100_000.0,
                                option_days: int = 743,
                                model_mtime: float = 0.0,
-                               data_end: str = ""):
+                               data_end: str = "",
+                               data_mtime: float = 0.0):
     """MSTR Options backtest driven by BTC TF2+V-Gate signals.
 
     On each entry signal: buy ATM MSTR call options expiring option_days out,
@@ -4629,7 +4630,8 @@ def run_mstr_options_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime,
+                                data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -4656,24 +4658,26 @@ def run_mstr_options_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTR prices (split-adjusted) ───────────────────────────────────
-    try:
-        d_mstr = yf.download(
-            "MSTR",
-            start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
-        )
-        if isinstance(d_mstr.columns, pd.MultiIndex):
-            d_mstr.columns = [c[0] for c in d_mstr.columns]
-        d_mstr.index = pd.DatetimeIndex(d_mstr.index).tz_localize(None).normalize()
-    except Exception:
-        return None
-
-    if d_mstr.empty or "Close" not in d_mstr.columns:
-        return None
-
-    mstr_raw = d_mstr["Close"].sort_index()
+    # ── Fetch MSTR prices: versioned CSV → fallback to yfinance ──────────────
+    _mstr_csv = _load_mstr_prices()
+    if _mstr_csv is not None and "close" in _mstr_csv.columns:
+        mstr_raw = _mstr_csv["close"].sort_index()
+    else:
+        try:
+            d_mstr = yf.download(
+                "MSTR",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstr.columns, pd.MultiIndex):
+                d_mstr.columns = [c[0] for c in d_mstr.columns]
+            d_mstr.index = pd.DatetimeIndex(d_mstr.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_mstr.empty or "Close" not in d_mstr.columns:
+            return None
+        mstr_raw = d_mstr["Close"].sort_index()
     mstr_all = mstr_raw.reindex(
         pd.date_range(mstr_raw.index[0],
                       max(mstr_raw.index[-1], end_dt), freq="D")
@@ -4927,10 +4931,12 @@ def run_mstr_options_backtest(end_date_iso: str,
 def _run_fixed_period_mstr_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
                                              data_end: str = "",
+                                             data_mtime: float = 0.0,
                                              logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period MSTR Options backtests."""
     return run_mstr_options_backtest(end_date_iso, backtest_start_iso,
-                                     model_mtime=model_mtime, data_end=data_end)
+                                     model_mtime=model_mtime, data_end=data_end,
+                                     data_mtime=data_mtime)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4943,7 +4949,8 @@ def run_mstu_options_backtest(end_date_iso: str,
                                initial_capital: float = 100_000.0,
                                option_days: int = 596,
                                model_mtime: float = 0.0,
-                               data_end: str = ""):
+                               data_end: str = "",
+                               data_mtime: float = 0.0):
     """MSTU Options backtest driven by BTC TF2+V-Gate signals.
 
     On each entry signal: buy ATM MSTU call options expiring option_days out,
@@ -4965,7 +4972,8 @@ def run_mstu_options_backtest(end_date_iso: str,
     fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
     fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime)
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime,
+                                data_mtime=data_mtime)
     if ext is None:
         return None
     preds, raw_df = ext
@@ -4992,36 +5000,60 @@ def run_mstu_options_backtest(end_date_iso: str,
     if N - _bt0 < 3:
         return None
 
-    # ── Fetch MSTU prices (real from Sep 2024 inception; bfill for earlier dates) ────
-    # MSTU started trading Sep 18, 2024. For pre-inception dates, Sep 18 price is bfilled.
-    try:
-        d_mstu = yf.download(
-            "MSTU",
-            start=pre_dt.strftime("%Y-%m-%d"),
-            end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
-        )
-        if isinstance(d_mstu.columns, pd.MultiIndex):
-            d_mstu.columns = [c[0] for c in d_mstu.columns]
-        d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
-    except Exception:
-        return None
-    if d_mstu.empty or "Close" not in d_mstu.columns:
-        return None
-    mstu_raw = d_mstu["Close"].sort_index()
-    mstu_trading = mstu_raw
-    mstu_all = mstu_raw.reindex(
-        pd.date_range(mstu_raw.index[0], max(mstu_raw.index[-1], end_dt), freq="D")
-    ).ffill()
-    mstu_px = mstu_all.reindex(dates).ffill().bfill().values.astype(float)
+    # ── MSTU position prices: synthetic CSV → yfinance bfill ─────────────────
+    _mstu_syn_csv = _load_mstu_synthetic()
+    _mstu_act_csv = _load_mstu_prices()
+    if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
+        mstu_px = _mstu_syn_csv.reindex(dates).ffill().bfill().values.astype(float)
+    else:
+        try:
+            d_mstu = yf.download(
+                "MSTU",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstu.columns, pd.MultiIndex):
+                d_mstu.columns = [c[0] for c in d_mstu.columns]
+            d_mstu.index = pd.DatetimeIndex(d_mstu.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_mstu.empty or "Close" not in d_mstu.columns:
+            return None
+        mstu_raw_fb = d_mstu["Close"].sort_index()
+        mstu_all_fb = mstu_raw_fb.reindex(
+            pd.date_range(mstu_raw_fb.index[0], max(mstu_raw_fb.index[-1], end_dt), freq="D")
+        ).ffill()
+        mstu_px = mstu_all_fb.reindex(dates).ffill().bfill().values.astype(float)
+
+    # ── MSTU volatility: actual (post-inception) prices ───────────────────────
+    if _mstu_act_csv is not None and "close" in _mstu_act_csv.columns:
+        mstu_trading = _mstu_act_csv["close"].sort_index()
+    elif _mstu_act_csv is None or "close" not in (_mstu_act_csv.columns if _mstu_act_csv is not None else []):
+        try:
+            d_mstu_v = yf.download(
+                "MSTU",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_mstu_v.columns, pd.MultiIndex):
+                d_mstu_v.columns = [c[0] for c in d_mstu_v.columns]
+            d_mstu_v.index = pd.DatetimeIndex(d_mstu_v.index).tz_localize(None).normalize()
+            mstu_trading = d_mstu_v["Close"].sort_index() if not d_mstu_v.empty and "Close" in d_mstu_v.columns else pd.Series(dtype=float)
+        except Exception:
+            mstu_trading = pd.Series(dtype=float)
 
     # ── 60-day rolling historical volatility of MSTU (annualised) ────────────
-    mstu_log_ret = np.log(mstu_trading / mstu_trading.shift(1)).dropna()
-    hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
-    hv_all = hv_series.reindex(
-        pd.date_range(mstu_trading.index[0], max(mstu_trading.index[-1], end_dt), freq="D")
-    ).ffill().bfill()
-    hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
+    if len(mstu_trading) < 2:
+        hv_arr = np.full(N, 1.20)  # default 120% vol when history unavailable
+    else:
+        mstu_log_ret = np.log(mstu_trading / mstu_trading.shift(1)).dropna()
+        hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
+        hv_all = hv_series.reindex(
+            pd.date_range(mstu_trading.index[0], max(mstu_trading.index[-1], end_dt), freq="D")
+        ).ffill().bfill()
+        hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
     hv_arr = np.clip(hv_arr, 0.20, 5.00)  # MSTU is 2× leveraged — wider vol range
 
     # ── BTC signal arrays ─────────────────────────────────────────────────────
@@ -5258,13 +5290,15 @@ def run_mstu_options_backtest(end_date_iso: str,
 def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
                                              data_end: str = "",
+                                             data_mtime: float = 0.0,
                                              logic_version: str = _BT_LOGIC_VERSION):
     """Cached wrapper for fixed-period MSTU Options backtests.
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
     """
     return run_mstu_options_backtest(end_date_iso, backtest_start_iso,
-                                     model_mtime=model_mtime, data_end=data_end)
+                                     model_mtime=model_mtime, data_end=data_end,
+                                     data_mtime=data_mtime)
 
 
 @st.cache_data(ttl=3600 * 24, show_spinner="Building synthetic MSTU price history …")
@@ -11320,7 +11354,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     )
     _ds_mtime_live = _backtest_dataset_mtime()
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–May 2025
+    _bt_bull     = _run_fixed_period_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–May 2025
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
@@ -11562,10 +11596,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
     _ds_mtime    = _backtest_dataset_mtime()
     _bt_mstr_bear = _run_fixed_period_mstr_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
-    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _bt_mstr_full = _run_fixed_period_mstr_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _bt_mstu_bear = _run_fixed_period_mstu_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
-    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _bt_mstu_full = _run_fixed_period_mstu_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (7% SL)"])
     with _btab_btc:
@@ -14974,7 +15008,7 @@ with tab_btc:
         "2026-05-31", "2025-06-01", _btc_model_mtime, data_end=_btc_data_end,
         data_mtime=_ds_mtime, entry_gate=_btc_variant)    # locked Jun 2025–May 2026
     _btc_bull     = _run_fixed_period_btc_backtest(
-        "2025-05-31", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
+        "2025-06-14", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
         data_mtime=_ds_mtime, entry_gate=_btc_variant)    # Jun 2024–May 2025
     _btc_full_oos = run_btc_backtest(
         _btc_oos_end, model_mtime=_btc_model_mtime, data_end=_btc_data_end,
@@ -15025,7 +15059,7 @@ with tab_mstr:
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
         data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-05-31", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
+        "2025-06-14", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
         data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # Jun 2024–May 2025
     _mstr_full_oos = run_mstr_backtest(
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
@@ -15077,7 +15111,7 @@ with tab_mstu:
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end,
         data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-05-31", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
+        "2025-06-14", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
         data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # Bull: Jun 2024–May 2025 (synthetic)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
@@ -15110,15 +15144,19 @@ with tab_mstu_opts:
     _mstu_opts_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _mstu_opts_raw      = _fetch_daily_raw()
     _mstu_opts_data_end = _mstu_opts_raw.index.max().strftime("%Y-%m-%d") if not _mstu_opts_raw.empty else ""
+    _mstu_opts_ds_mtime = _backtest_dataset_mtime()
     _mstu_opts_bear     = _run_fixed_period_mstu_options_backtest(
-        "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
+        "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
+        data_mtime=_mstu_opts_ds_mtime)
     _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
-        "2025-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end)  # Bull: Jun 2024–May 2025 (matches MSTR)
+        "2025-06-14", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
+        data_mtime=_mstu_opts_ds_mtime)  # Bull: Jun 2024–Jun 2025
     _mstu_opts_full_oos = run_mstu_options_backtest(
-        _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end)
+        _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
+        data_mtime=_mstu_opts_ds_mtime)
     _mstu_opts_full     = _run_fixed_period_mstu_options_backtest(
         "2026-05-31", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        logic_version=_BT_LOGIC_VERSION)
+        data_mtime=_mstu_opts_ds_mtime, logic_version=_BT_LOGIC_VERSION)
     render_mstu_options_trading_strategy_dashboard(
         _mstu_opts_bear,
         bt_bull=_mstu_opts_bull,
@@ -15142,15 +15180,19 @@ with tab_mstr_opts:
     _opts_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
     _opts_raw      = _fetch_daily_raw()
     _opts_data_end = _opts_raw.index.max().strftime("%Y-%m-%d") if not _opts_raw.empty else ""
+    _opts_ds_mtime = _backtest_dataset_mtime()
     _opts_bear     = _run_fixed_period_mstr_options_backtest(
-        "2026-05-31", "2025-06-01", _opts_model_mtime, data_end=_opts_data_end)
+        "2026-05-31", "2025-06-01", _opts_model_mtime, data_end=_opts_data_end,
+        data_mtime=_opts_ds_mtime)
     _opts_bull     = _run_fixed_period_mstr_options_backtest(
-        "2025-05-31", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end)  # Jun 2024–May 2025
+        "2025-06-14", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
+        data_mtime=_opts_ds_mtime)  # Jun 2024–Jun 2025
     _opts_full_oos = run_mstr_options_backtest(
-        _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end)
+        _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end,
+        data_mtime=_opts_ds_mtime)
     _opts_full     = _run_fixed_period_mstr_options_backtest(
         "2026-05-31", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
-        logic_version=_BT_LOGIC_VERSION)
+        data_mtime=_opts_ds_mtime, logic_version=_BT_LOGIC_VERSION)
     render_mstr_options_trading_strategy_dashboard(
         _opts_bear, _opts_bull,
         bt_full_oos=_opts_full_oos,
