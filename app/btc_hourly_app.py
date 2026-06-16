@@ -4035,6 +4035,8 @@ def run_mstr_backtest(end_date_iso: str,
         from_sl       = from_sl,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
+        btc_price_series   = pd.Series(comp["actual_close"].values.astype(float)[_bt0:], index=dates[_bt0:]),
+        mstr_price_series  = pd.Series(mstr_px[_bt0:], index=dates[_bt0:]),
         stats = dict(
             strategy        = "TF2+V-Gate (MSTR)",
             entry_gate      = entry_gate,
@@ -4302,6 +4304,7 @@ def run_btc_backtest(end_date_iso: str,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
                              entry_trigger=e_trigger) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
+        btc_price_series   = pd.Series(btc_px[_bt0:], index=dates[_bt0:]),
         stats = dict(
             strategy        = "TF2+V-Gate (BTC)",
             entry_gate      = entry_gate,
@@ -4640,6 +4643,8 @@ def run_mstu_backtest(end_date_iso: str,
         from_sl       = from_sl,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
+        btc_price_series   = pd.Series(comp["actual_close"].values.astype(float)[_bt0:], index=dates[_bt0:]),
+        mstu_price_series  = pd.Series(mstu_px[_bt0:], index=dates[_bt0:]),
         stats = dict(
             strategy        = "TF2+V-Gate (MSTU)",
             entry_gate      = entry_gate,
@@ -6405,6 +6410,25 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             line=dict(color="#2563eb", width=2.5),
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Confirmed Uptrend (CU)</extra>",
         ))
+        btc_price = bt.get("btc_price_series")
+        if btc_price is not None and len(btc_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=btc_price.index, y=btc_price.values, name="BTC Price",
+                line=dict(color="#f7931a", width=1.2), yaxis="y2", opacity=0.7,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>BTC Price</extra>",
+            ))
+        asset_price = None
+        if asset_label == "MSTR":
+            asset_price = bt.get("mstr_price_series")
+        elif asset_label == "MSTU":
+            asset_price = bt.get("mstu_price_series")
+        if asset_price is not None and len(asset_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=asset_price.index, y=asset_price.values, name=f"{asset_label} Price",
+                line=dict(color="#db2777", width=1.2, dash="dot"), yaxis="y3",
+                opacity=0.8,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.2f}<extra>" + asset_label + " Price</extra>",
+            ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
             line_color="#64748b", line_width=1, opacity=0.4,
@@ -6448,19 +6472,34 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                     f" @ ${oe['price']:,.0f}<extra></extra>"
                 ),
             ))
-        fig.update_layout(
+        layout = dict(
             title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
             xaxis_title=None,
             yaxis_title="Portfolio Value ($)",
             yaxis_tickprefix="$", yaxis_tickformat=",.0f",
             height=360,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=0, r=0, t=36, b=0),
+            margin=dict(l=0, r=70, t=36, b=0),
             hovermode="x unified",
             plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
-            xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
             yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis2=dict(
+                title="BTC Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="x",
+                tickprefix="$", tickformat=",.0f", color="#f7931a",
+            ),
         )
+        if asset_price is not None and len(asset_price) > 0:
+            layout["xaxis"] = dict(domain=[0.0, 0.88], showgrid=True,
+                                   gridcolor="#e2e8f0", zeroline=False)
+            layout["yaxis3"] = dict(
+                title=f"{asset_label} Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="free", position=1.0,
+                tickprefix="$", tickformat=",.2f", color="#db2777",
+            )
+        else:
+            layout["xaxis"] = dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False)
+        fig.update_layout(**layout)
         return fig
 
     tab_labels = []
@@ -7236,6 +7275,21 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             line=dict(color="#7c3aed", width=2.5),
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTR)</extra>",
         ))
+        btc_price = bt.get("btc_price_series")
+        if btc_price is not None and len(btc_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=btc_price.index, y=btc_price.values, name="BTC Price",
+                line=dict(color="#2563eb", width=1.2), yaxis="y2", opacity=0.7,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>BTC Price</extra>",
+            ))
+        mstr_price = bt.get("mstr_price_series")
+        if mstr_price is not None and len(mstr_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=mstr_price.index, y=mstr_price.values, name="MSTR Price",
+                line=dict(color="#db2777", width=1.2, dash="dot"), yaxis="y3",
+                opacity=0.8,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.2f}<extra>MSTR Price</extra>",
+            ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
             line_color="#64748b", line_width=1, opacity=0.4,
@@ -7286,11 +7340,21 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             yaxis_tickprefix="$", yaxis_tickformat=",.0f",
             height=360,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=0, r=0, t=36, b=0),
+            margin=dict(l=0, r=70, t=36, b=0),
             hovermode="x unified",
             plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
-            xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            xaxis=dict(domain=[0.0, 0.88], showgrid=True, gridcolor="#e2e8f0", zeroline=False),
             yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis2=dict(
+                title="BTC Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="x",
+                tickprefix="$", tickformat=",.0f", color="#2563eb",
+            ),
+            yaxis3=dict(
+                title="MSTR Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="free", position=1.0,
+                tickprefix="$", tickformat=",.0f", color="#db2777",
+            ),
         )
         return fig
 
@@ -8078,6 +8142,21 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             line=dict(color="#0d9488", width=2.5),
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTU)</extra>",
         ))
+        btc_price = bt.get("btc_price_series")
+        if btc_price is not None and len(btc_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=btc_price.index, y=btc_price.values, name="BTC Price",
+                line=dict(color="#2563eb", width=1.2), yaxis="y2", opacity=0.7,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>BTC Price</extra>",
+            ))
+        mstu_price = bt.get("mstu_price_series")
+        if mstu_price is not None and len(mstu_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=mstu_price.index, y=mstu_price.values, name="MSTU Price",
+                line=dict(color="#db2777", width=1.2, dash="dot"), yaxis="y3",
+                opacity=0.8,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.2f}<extra>MSTU Price</extra>",
+            ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
             line_color="#64748b", line_width=1, opacity=0.4,
@@ -8128,11 +8207,21 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             yaxis_tickprefix="$", yaxis_tickformat=",.0f",
             height=360,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=0, r=0, t=36, b=0),
+            margin=dict(l=0, r=70, t=36, b=0),
             hovermode="x unified",
             plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
-            xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            xaxis=dict(domain=[0.0, 0.88], showgrid=True, gridcolor="#e2e8f0", zeroline=False),
             yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis2=dict(
+                title="BTC Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="x",
+                tickprefix="$", tickformat=",.0f", color="#2563eb",
+            ),
+            yaxis3=dict(
+                title="MSTU Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="free", position=1.0,
+                tickprefix="$", tickformat=",.2f", color="#db2777",
+            ),
         )
         return fig
 
@@ -8887,6 +8976,13 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             line=dict(color="#ea580c", width=2.5),
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (BTC)</extra>",
         ))
+        btc_price = bt.get("btc_price_series")
+        if btc_price is not None and len(btc_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=btc_price.index, y=btc_price.values, name="BTC Price",
+                line=dict(color="#2563eb", width=1.2), yaxis="y2", opacity=0.7,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>BTC Price</extra>",
+            ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
             line_color="#64748b", line_width=1, opacity=0.4,
@@ -8937,11 +9033,16 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             yaxis_tickprefix="$", yaxis_tickformat=",.0f",
             height=360,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=0, r=0, t=36, b=0),
+            margin=dict(l=0, r=70, t=36, b=0),
             hovermode="x unified",
             plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
             xaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
             yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis2=dict(
+                title="BTC Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False,
+                tickprefix="$", tickformat=",.0f", color="#2563eb",
+            ),
         )
         return fig
 
