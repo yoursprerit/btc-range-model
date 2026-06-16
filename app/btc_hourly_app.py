@@ -294,8 +294,11 @@ def fetch_data():
     df = df.dropna(subset=["btc_close"])
 
     # Prepend cached pre-live history, if any. yfinance hard-caps hourly bars
-    # at ~730 days, so this is the only way to extend historical-replay's
-    # min_date further back — see scripts/fetch_macro_hourly_cache.py.
+    # at ~730 days, and the Coinbase premium feed is independently capped at
+    # 365 days by _fetch_coinbase_hourly() below — both are dead ends for
+    # extending historical-replay's min_date, so the cache (which also
+    # carries a coinbase_close column) is the only way past either limit.
+    # See scripts/fetch_macro_hourly_cache.py.
     # Only rows STRICTLY BEFORE the live fetch's earliest timestamp are used,
     # so live data always wins on overlap and no row inside the live window
     # (which feeds current predictions/signals) is ever touched.
@@ -332,10 +335,17 @@ def fetch_data():
     df["fng_d24"] = pd.Series(df["fng"].values, index=df.index).diff(24).values
     df["fng_d7"]  = pd.Series(df["fng"].values, index=df.index).diff(24*7).values
 
-    # Coinbase hourly premium
+    # Coinbase hourly premium. _fetch_coinbase_hourly() only covers the live
+    # 365-day window; the cache prepended above also carries a coinbase_close
+    # column for older dates, so merge into it (live wins on overlap) instead
+    # of a blind join, which would otherwise raise on the duplicate column.
     cb_close = _fetch_coinbase_hourly()
     if cb_close.notna().any():
-        df = df.join(cb_close.reindex(df.index), how="left")
+        cb_aligned = cb_close.reindex(df.index)
+        if "coinbase_close" in df.columns:
+            df["coinbase_close"] = cb_aligned.combine_first(df["coinbase_close"])
+        else:
+            df["coinbase_close"] = cb_aligned
     return df
 
 @st.cache_data(ttl=30, show_spinner=False)
