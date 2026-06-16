@@ -6233,6 +6233,11 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 trades             = _otr_scaled,
                 stats              = s_oos,
                 bull_regime_series = _oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "mstr_price_series", "mstu_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
             )
 
     s_full = bt_full["stats"] if bt_full else None
@@ -7085,6 +7090,11 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 open_pos=_oos_open, open_entry=_oos_oe,
                 trades=_otr_scaled, stats=s_oos,
                 bull_regime_series=_oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "mstr_price_series", "mstu_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
             )
 
     s_full = bt_full["stats"] if bt_full else None
@@ -7950,6 +7960,11 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 open_pos=_oos_open, open_entry=_oos_oe,
                 trades=_otr_scaled, stats=s_oos,
                 bull_regime_series=_oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "mstr_price_series", "mstu_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
             )
 
     s_bull = bt_bull["stats"] if bt_bull else None
@@ -8786,6 +8801,11 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 open_pos=_oos_open, open_entry=_oos_oe,
                 trades=_otr_scaled, stats=s_oos,
                 bull_regime_series=_oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "mstr_price_series", "mstu_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
             )
 
     s_full = bt_full["stats"] if bt_full else None
@@ -9566,6 +9586,11 @@ def render_mstr_options_trading_strategy_dashboard(
                 open_pos=_oos_open, open_entry=_oos_oe,
                 trades=_otr_scaled, stats=s_oos,
                 bull_regime_series=_oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "mstr_price_series", "mstu_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
             )
 
     s_full = bt_full["stats"] if bt_full else None
@@ -10336,6 +10361,11 @@ def render_mstu_options_trading_strategy_dashboard(
                 open_pos=_oos_open, open_entry=_oos_oe,
                 trades=_otr_scaled, stats=s_oos,
                 bull_regime_series=_oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "mstr_price_series", "mstu_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
             )
 
     s_bull = bt_bull["stats"] if bt_bull else None
