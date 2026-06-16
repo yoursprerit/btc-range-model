@@ -27,6 +27,7 @@ DAY_TYPE_MODEL  = MODELS_DIR / "inference_assets_3class.joblib"
 
 # Data
 BINANCE_HOURLY_CSV  = DATA_DIR / "binance_hourly_btc.csv"
+MACRO_HOURLY_CACHE_CSV = DATA_DIR / "macro_hourly_cache.csv"
 RAW_CT_CSV          = DATA_DIR / "raw_ct.csv"
 RAW_HOURLY_CSV      = DATA_DIR / "raw_hourly.csv"
 FEATURES_CT_CSV     = DATA_DIR / "features_ct.csv"

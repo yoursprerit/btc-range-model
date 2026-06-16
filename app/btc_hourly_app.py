@@ -31,17 +31,19 @@ sys.path.insert(0, str(_REPO_ROOT))
 try:
     from paths import (
         HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, CONE_14D_MODEL, DAY_TYPE_MODEL,
-        BINANCE_HOURLY_CSV,
+        BINANCE_HOURLY_CSV, MACRO_HOURLY_CACHE_CSV,
         BOOKMARKS_FILE as _BOOKMARKS_PATH, RUNTIME_DIR,
     )
 except ImportError:
-    # Fallback for deployments where paths.py predates CONE_14D_MODEL
+    # Fallback for deployments where paths.py predates CONE_14D_MODEL /
+    # MACRO_HOURLY_CACHE_CSV
     from paths import (
         HOURLY_MODEL, DAILY_MODEL_CT, CONE_7D_MODEL, DAY_TYPE_MODEL,
         BINANCE_HOURLY_CSV,
         BOOKMARKS_FILE as _BOOKMARKS_PATH, RUNTIME_DIR,
     )
     CONE_14D_MODEL = Path(str(CONE_7D_MODEL)).parent / "inference_assets_14d_cone.joblib"
+    MACRO_HOURLY_CACHE_CSV = Path(str(BINANCE_HOURLY_CSV)).parent / "macro_hourly_cache.csv"
 
 import numpy as np
 import pandas as pd
@@ -290,6 +292,23 @@ def fetch_data():
         d = d.reindex(grid).ffill(limit=168 if name not in ("btc","eth") else 4)
         df = df.join(d)
     df = df.dropna(subset=["btc_close"])
+
+    # Prepend cached pre-live history, if any. yfinance hard-caps hourly bars
+    # at ~730 days, so this is the only way to extend historical-replay's
+    # min_date further back — see scripts/fetch_macro_hourly_cache.py.
+    # Only rows STRICTLY BEFORE the live fetch's earliest timestamp are used,
+    # so live data always wins on overlap and no row inside the live window
+    # (which feeds current predictions/signals) is ever touched.
+    try:
+        if MACRO_HOURLY_CACHE_CSV.exists():
+            cached = pd.read_csv(MACRO_HOURLY_CACHE_CSV, index_col="timestamp_utc",
+                                 parse_dates=True)
+            cached = cached.loc[cached.index < df.index.min()]
+            if not cached.empty:
+                df = pd.concat([cached, df]).sort_index()
+                df = df[~df.index.duplicated(keep="last")]
+    except Exception:
+        pass
 
     # Fear & Greed daily, forward-filled to hourly.
     #

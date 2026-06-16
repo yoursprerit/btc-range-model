@@ -42,6 +42,10 @@ btc-range-model/
 │   ├── train_hourly_model.py← hourly close-price model training
 │   └── fetch_binance_hourly.py ← one-shot Binance hourly history fetcher
 │
+├── scripts/
+│   ├── pull_backtest_data.py        ← refreshes data/backtest/ versioned daily CSVs
+│   └── fetch_macro_hourly_cache.py  ← extends historical-replay min_date (see below)
+│
 ├── notebooks/
 │   ├── btc_inference_ct.ipynb   ← 7am-CT daily H/L inference walk-through
 │   ├── btc_hourly_training.ipynb← hourly model training walk-through
@@ -54,7 +58,8 @@ btc-range-model/
 │   └── inference_assets_hourly.joblib   ← active hourly close model
 │
 ├── data/                     ← input & engineered data (mostly cached / regenerable)
-│   ├── binance_hourly_btc.csv   ← full BTCUSDT hourly history (2017-08 → now)
+│   ├── binance_hourly_btc.csv   ← full BTCUSDT hourly history (2017-08 → now), gitignored/regenerable
+│   ├── macro_hourly_cache.csv   ← committed snapshot of hourly BTC+macro, NOT regenerable past its window (see below)
 │   ├── raw_hourly.csv            ← Yahoo BTC-USD hourly + macro (rolling 2y)
 │   ├── raw_ct.csv                ← joined 12:00-UTC daily bars
 │   └── features_ct.csv           ← engineered features matrix
@@ -704,6 +709,19 @@ The page has **two tabs** sharing the same render code:
 - **Calendar picker** — st.date_input for arbitrary date selection across the data window.
 - **Datetime slider** — 25-tick CT slider from 7am picked_date through 7am next day, controls the as-of moment within the bar.
 - **🔖 Bookmarks panel** — categorize and persist favorite dates. Backed by `runtime/bookmarks.json` so they survive restarts.
+
+**Minimum replay date.** `fetch_data()` pulls hourly BTC + macro from yfinance,
+which hard-caps 1-hour bars at ~730 days — no API call can ever return hourly
+macro data older than that. `data/macro_hourly_cache.csv` is a one-time
+snapshot of that window, committed to the repo (unlike the gitignored,
+freely-regenerable `binance_hourly_btc.csv`) because once a date rolls out of
+yfinance's live window it can never be fetched again. `fetch_data()` prepends
+cached rows that fall *strictly before* the live fetch's earliest timestamp —
+live data always wins on overlap, so this only extends `min_date` backward and
+never alters any row inside the live window (i.e. it cannot affect current
+predictions, live signals, or backtests). Refresh the snapshot occasionally
+with `python scripts/fetch_macro_hourly_cache.py` to checkpoint freshly-aging
+history before it expires out of the 730-day window.
 
 ### How the UI talks to the ML models
 
