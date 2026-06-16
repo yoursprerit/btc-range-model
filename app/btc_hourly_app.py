@@ -704,16 +704,26 @@ def _fetch_binance_hourly(days_back=None):
 
 
 @st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
-def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = "", _utc_hour: str = ""):
-    """Implementation of the daily-bar fetch.  None of `_bar_start_iso`,
-    `_hourly_end_iso`, or `_utc_hour` is used inside the function body —
+def _fetch_daily_raw_inner(bar_start_iso: str, hourly_end_iso: str = "", utc_hour: str = ""):
+    """Implementation of the daily-bar fetch.  None of `bar_start_iso`,
+    `hourly_end_iso`, or `utc_hour` is used inside the function body —
     all three are cache-busting keys only.
 
-    `_bar_start_iso` equals the ISO date of the 12:00-UTC bar currently open
+    IMPORTANT: these three params must NOT be given a leading underscore.
+    Streamlit's @st.cache_data deliberately excludes underscore-prefixed
+    argument names from the cache-key hash (that's its escape hatch for
+    passing unhashable objects like DB connections) — so a leading
+    underscore here would silently turn this into a single shared cache
+    entry that never busts on these keys, governed only by the blind 6-hour
+    TTL regardless of bar boundaries. That was the actual reason this
+    function kept serving identical (flat) data across day boundaries even
+    after earlier fixes added these "cache-busting" keys.
+
+    `bar_start_iso` equals the ISO date of the 12:00-UTC bar currently open
     (i.e. floor((now_utc − 12h).date())).  It changes at exactly 12:00 UTC each day,
     giving this function a cache miss at bar-close time.
 
-    `_hourly_end_iso` equals the ISO timestamp of the latest candle in
+    `hourly_end_iso` equals the ISO timestamp of the latest candle in
     _fetch_binance_hourly() at the time _fetch_daily_raw() is called.  It changes
     when the hourly cache refreshes and picks up the final candle of the just-closed
     daily bar (e.g. the Jun 8 11:00 UTC candle needed to complete the Jun 7 daily bar).
@@ -721,9 +731,9 @@ def _fetch_daily_raw_inner(_bar_start_iso: str, _hourly_end_iso: str = "", _utc_
     with incomplete data (missing the newest completed bar) and hold it stale for the
     full 6-hour TTL — causing today's and yesterday's err_hi_ma3 to show the same value.
 
-    `_utc_hour` equals the current UTC hour string (e.g. "2026-06-10T12").  It changes
+    `utc_hour` equals the current UTC hour string (e.g. "2026-06-10T12").  It changes
     every hour, guaranteeing a fresh fetch within 1 hour of the 12:00 UTC bar boundary
-    even when `_hourly_end_iso` is stuck — which happens when Binance is rate-limited
+    even when `hourly_end_iso` is stuck — which happens when Binance is rate-limited
     on Streamlit Cloud and the Yahoo Finance fallback returns the same stale hourly
     timestamp across multiple 10-minute refresh cycles.  Without this third key, the
     bad cache entry (built while yesterday's bar was incomplete) would persist for the
