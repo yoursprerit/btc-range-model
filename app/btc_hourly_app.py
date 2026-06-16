@@ -365,13 +365,42 @@ def fetch_data():
             df["coinbase_close"] = cb_aligned
     return df
 
+# Binance public-API hosts, tried in order. `api.binance.com` returns HTTP 451
+# ("Unavailable For Legal Reasons") when called from US-hosted infrastructure
+# such as Streamlit Community Cloud, so `api.binance.us` — which serves the same
+# public klines/ticker endpoints with equally fresh data — is tried FIRST. The
+# global host is kept as a secondary so non-US deployments (where `.us` may be
+# the blocked one) still work. Without this, the daily-bar pipeline silently
+# fell back to rate-limited/stale yfinance hourly data on Streamlit Cloud, so the
+# newest completed daily bar never arrived and Daily H/L predictions went flat.
+BINANCE_API_HOSTS = ("https://api.binance.us", "https://api.binance.com")
+
+
+def _binance_get(path: str, params: dict, timeout: int = 30):
+    """GET a Binance public endpoint, trying each host in ``BINANCE_API_HOSTS``
+    until one returns HTTP 200 with a JSON body. Returns the parsed JSON, or
+    ``None`` if every host fails (geo-block, rate-limit, or network error).
+
+    ``path`` is the endpoint path beginning with '/', e.g. '/api/v3/klines'."""
+    for host in BINANCE_API_HOSTS:
+        try:
+            r = requests.get(f"{host}{path}", params=params, timeout=timeout)
+            if r.status_code != 200:
+                continue
+            return r.json()
+        except Exception:
+            continue
+    return None
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_live_spot():
     """Binance public ticker — true real-time BTC/USDT price (no API key)."""
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price",
-                         params={"symbol":"BTCUSDT"}, timeout=10)
-        return float(r.json()["price"]), datetime.now(timezone.utc)
+        j = _binance_get("/api/v3/ticker/price", {"symbol": "BTCUSDT"}, timeout=10)
+        if not j or "price" not in j:
+            return None, None
+        return float(j["price"]), datetime.now(timezone.utc)
     except Exception:
         return None, None
 
@@ -498,23 +527,20 @@ def fetch_btc_1m():
     DataFrame on any network or parsing error.
     """
     try:
-        url = "https://api.binance.com/api/v3/klines"
         # First call: most recent 1 000 bars
-        r1 = requests.get(url, params={"symbol": "BTCUSDT",
-                                        "interval": "1m", "limit": 1000},
-                          timeout=8)
-        r1.raise_for_status()
-        data = r1.json()
+        data = _binance_get("/api/v3/klines",
+                            {"symbol": "BTCUSDT", "interval": "1m", "limit": 1000},
+                            timeout=8)
         if not data:
             return pd.DataFrame()
         # Second call: 500 bars ending just before the first batch
         earliest_ms = data[0][0]
-        r2 = requests.get(url, params={"symbol": "BTCUSDT",
-                                        "interval": "1m", "limit": 500,
-                                        "endTime": earliest_ms - 1},
-                          timeout=8)
-        r2.raise_for_status()
-        data = r2.json() + data          # oldest first
+        older = _binance_get("/api/v3/klines",
+                             {"symbol": "BTCUSDT", "interval": "1m", "limit": 500,
+                              "endTime": earliest_ms - 1},
+                             timeout=8)
+        if older:
+            data = older + data          # oldest first
         idx = pd.to_datetime([row[0] for row in data],
                              unit="ms", utc=True).tz_localize(None)
         closes = [float(row[4]) for row in data]
@@ -664,12 +690,7 @@ def _fetch_binance_hourly(days_back=None):
     while cursor < end_ms:
         params = dict(symbol="BTCUSDT", interval="1h",
                       startTime=cursor, limit=1000)
-        try:
-            r = requests.get("https://api.binance.com/api/v3/klines",
-                             params=params, timeout=30)
-            batch = r.json()
-        except Exception:
-            break
+        batch = _binance_get("/api/v3/klines", params, timeout=30)
         # Guard: Binance returns an error dict (e.g. rate-limit) instead of a
         # list of klines — a non-empty dict would pass `if not batch` but then
         # fail on `batch[-1][0]`.  Also coerce the open-time to int to handle
@@ -697,6 +718,20 @@ def _fetch_binance_hourly(days_back=None):
         return _fetch_yfinance_hourly_fallback()
     df = pd.concat(parts)
     df = df[~df.index.duplicated(keep="last")].sort_index()
+
+    # Staleness guard: if every Binance host failed the top-up but a committed
+    # CSV (or an earlier partial pull) left `parts` non-empty, `df` here can be
+    # hours or days old. Returning it would freeze the newest completed daily
+    # bar and make Daily H/L predictions identical day after day. When the
+    # newest hourly bar is older than ~3 hours, try the Yahoo fallback and keep
+    # whichever source is fresher (merging so deep CSV history is preserved).
+    now_utc = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    if df.empty or (now_utc - df.index.max()) > pd.Timedelta(hours=3):
+        yf_df = _fetch_yfinance_hourly_fallback()
+        if not yf_df.empty and (df.empty or yf_df.index.max() > df.index.max()):
+            df = pd.concat([df, yf_df])
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+
     if days_back is not None and len(df):
         cutoff = df.index.max() - pd.Timedelta(days=days_back)
         df = df.loc[df.index >= cutoff]
