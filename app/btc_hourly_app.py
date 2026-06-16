@@ -293,22 +293,39 @@ def fetch_data():
         df = df.join(d)
     df = df.dropna(subset=["btc_close"])
 
-    # Prepend cached pre-live history, if any. yfinance hard-caps hourly bars
+    # Merge in cached pre-live history, if any. yfinance hard-caps hourly bars
     # at ~730 days, and the Coinbase premium feed is independently capped at
     # 365 days by _fetch_coinbase_hourly() below — both are dead ends for
     # extending historical-replay's min_date, so the cache (which also
     # carries a coinbase_close column) is the only way past either limit.
     # See scripts/fetch_macro_hourly_cache.py.
-    # Only rows STRICTLY BEFORE the live fetch's earliest timestamp are used,
-    # so live data always wins on overlap and no row inside the live window
-    # (which feeds current predictions/signals) is ever touched.
+    # Two distinct gaps the cache has to fill, both via combine_first so live
+    # data always wins and nothing inside the live window is overwritten:
+    #   1. Within the live window, individual symbols can come back short
+    #      (yfinance's per-symbol "729d" request sometimes returns empty on
+    #      Streamlit Cloud and falls back to a shorter period above — see the
+    #      retry loop), and coinbase_close itself is live-fetched for only the
+    #      last 365 days even though df's BTC/macro window can reach ~729 days.
+    #      Those NaN cells need cache values even though the row already
+    #      exists in df.
+    #   2. Entirely outside the live window: dates older than df.index.min()
+    #      don't exist in df at all yet and must be prepended as new rows.
     try:
         if MACRO_HOURLY_CACHE_CSV.exists():
             cached = pd.read_csv(MACRO_HOURLY_CACHE_CSV, index_col="timestamp_utc",
                                  parse_dates=True)
-            cached = cached.loc[cached.index < df.index.min()]
-            if not cached.empty:
-                df = pd.concat([cached, df]).sort_index()
+            cached_aligned = cached.reindex(df.index)
+            common_cols = [c for c in df.columns if c in cached.columns]
+            df[common_cols] = df[common_cols].combine_first(cached_aligned[common_cols])
+            if "coinbase_close" in cached.columns:
+                # Seed coinbase_close now (df doesn't have this column yet —
+                # it's only added by the live Coinbase fetch below) so that
+                # fetch covers it with combine_first across the whole window,
+                # not just the entirely-prepended-from-cache portion.
+                df["coinbase_close"] = cached_aligned["coinbase_close"]
+            older = cached.loc[cached.index < df.index.min()]
+            if not older.empty:
+                df = pd.concat([older, df]).sort_index()
                 df = df[~df.index.duplicated(keep="last")]
     except Exception:
         pass
