@@ -4898,7 +4898,7 @@ def run_mstr_options_backtest(end_date_iso: str,
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
     return dict(
-        strategy   = f"TF2+V-Gate (MSTR Calls {option_days}d)",
+        strategy   = f"CU (MSTR Calls {option_days}d)",
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -4907,7 +4907,7 @@ def run_mstr_options_backtest(end_date_iso: str,
         bull_regime_series = bull_regime_series,
         option_days = option_days,
         stats = dict(
-            strategy        = f"TF2+V-Gate (MSTR Calls {option_days}d)",
+            strategy        = f"CU (MSTR Calls {option_days}d)",
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -5257,7 +5257,7 @@ def run_mstu_options_backtest(end_date_iso: str,
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
     return dict(
-        strategy   = f"TF2+V-Gate (MSTU Calls {option_days}d)",
+        strategy   = f"CU (MSTU Calls {option_days}d)",
         trades     = trades,
         nav_series = nav_series,
         bh_series  = bh_series,
@@ -5266,7 +5266,7 @@ def run_mstu_options_backtest(end_date_iso: str,
         bull_regime_series = bull_regime_series,
         option_days = option_days,
         stats = dict(
-            strategy        = f"TF2+V-Gate (MSTU Calls {option_days}d)",
+            strategy        = f"CU (MSTU Calls {option_days}d)",
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -9029,7 +9029,7 @@ def render_mstr_options_trading_strategy_dashboard(
       • B&H benchmark: MSTR stock (unleveraged alternative)
     """
     st.markdown("---")
-    st.subheader("📋 MSTR Options — BTC Signal-Driven Backtest (ATM Calls, 743d Expiry)")
+    st.subheader("🎯 MSTR Options — Confirmed Uptrend (CU) Strategy Backtest (ATM Calls, 743d Expiry)")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTR Options backtest computing … fetching MSTR data and pricing options. "
@@ -9043,7 +9043,7 @@ def render_mstr_options_trading_strategy_dashboard(
 
   <div style='font-size:14px; font-weight:700; color:#92400e; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    📋 TF2 + V-Gate on MSTR Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
+    🎯 Confirmed Uptrend (CU) on MSTR Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
   </div>
 
   <div style='background:#fde68a; border-radius:8px; padding:10px 14px;
@@ -9053,6 +9053,14 @@ def render_mstr_options_trading_strategy_dashboard(
     Options are priced at <b>at-the-money (strike = MSTR spot at entry)</b> with
     <b>743 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
     historical MSTR volatility. B&amp;H benchmark is MSTR stock.
+  </div>
+
+  <div style='background:#fef3c7; border:1px solid #f59e0b; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#92400e;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
   </div>
 
   <!-- ENTRY -->
@@ -9074,10 +9082,10 @@ def render_mstr_options_trading_strategy_dashboard(
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#d97706;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
-            &nbsp; BTC close above its 30-day moving average
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
             <br>
             <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
             &nbsp; No D1 or D2 on BTC in prior 7 bars
@@ -9085,7 +9093,7 @@ def render_mstr_options_trading_strategy_dashboard(
             <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
-            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
         </td>
       </tr>
@@ -9344,8 +9352,8 @@ def render_mstr_options_trading_strategy_dashboard(
     else:
         lbl_full = "🌐 Full Market (Jun 2024 – May 2026)"
 
-    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📋 TF2+V-Gate (MSTR Calls)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>🎯 CU (MSTR Calls)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 CU After Tax (35% STCG)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTR stock (0%)</th>"
              "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H MSTR stock (15% LTCG)</th>")
     sub_hdr = (
@@ -9487,9 +9495,9 @@ def render_mstr_options_trading_strategy_dashboard(
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold MSTR stock</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate (MSTR Calls)",
+            x=nav_s.index, y=nav_s.values, name="CU (MSTR Calls)",
             line=dict(color="#d97706", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTR Calls)</extra>",
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>CU (MSTR Calls)</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -9591,7 +9599,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 sr = bt_bear["stats"]
                 fig_r = _make_opts_chart(
                     bt_bear,
-                    f"TF2+V-Gate (MSTR Calls) vs B&H MSTR — Bear Market  "
+                    f"CU (MSTR Calls) vs B&H MSTR — Bear Market  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9604,7 +9612,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 sf = bt_bull["stats"]
                 fig_f = _make_opts_chart(
                     bt_bull,
-                    f"TF2+V-Gate (MSTR Calls) vs B&H MSTR — Bull Market  "
+                    f"CU (MSTR Calls) vs B&H MSTR — Bull Market  "
                     f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9617,7 +9625,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 so = bt_oos["stats"]
                 fig_o = _make_opts_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTR Calls) vs B&H MSTR — OOS Period (Fully Blind)  "
+                    f"CU (MSTR Calls) vs B&H MSTR — OOS Period (Fully Blind)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9630,7 +9638,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 sfl = bt_full["stats"]
                 fig_fl = _make_opts_chart(
                     bt_full,
-                    f"TF2+V-Gate (MSTR Calls) vs B&H MSTR — Full Market  "
+                    f"CU (MSTR Calls) vs B&H MSTR — Full Market  "
                     f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9736,7 +9744,7 @@ def render_mstu_options_trading_strategy_dashboard(
       • B&H benchmark: MSTU stock
     """
     st.markdown("---")
-    st.subheader("🔷 MSTU Options — BTC Signal-Driven Backtest (ATM Calls, 596d Expiry)")
+    st.subheader("🎯 MSTU Options — Confirmed Uptrend (CU) Strategy Backtest (ATM Calls, 596d Expiry)")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTU Options backtest computing … fetching MSTU data and pricing options. "
@@ -9750,7 +9758,7 @@ def render_mstu_options_trading_strategy_dashboard(
 
   <div style='font-size:14px; font-weight:700; color:#0c4a6e; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    🔷 TF2 + V-Gate on MSTU Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
+    🎯 Confirmed Uptrend (CU) on MSTU Call Options &nbsp;—&nbsp; BTC Signals · ATM Call Execution
   </div>
 
   <div style='background:#bae6fd; border-radius:8px; padding:10px 14px;
@@ -9760,6 +9768,14 @@ def render_mstu_options_trading_strategy_dashboard(
     Options are priced at <b>at-the-money (strike = MSTU spot at entry)</b> with
     <b>596 days to expiry</b>, valued using <b>Black-Scholes</b> with 60-day rolling
     historical MSTU volatility. MSTU inception ~Jun 2025 — pre-Jun 2025 uses synthetic prices.
+  </div>
+
+  <div style='background:#e0f2fe; border:1px solid #38bdf8; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#0c4a6e;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
   </div>
 
   <!-- ENTRY -->
@@ -9781,10 +9797,10 @@ def render_mstu_options_trading_strategy_dashboard(
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#0284c7;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
-            &nbsp; BTC close above its 30-day moving average
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
             <br>
             <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
             &nbsp; No D1 or D2 on BTC in prior 7 bars
@@ -9792,7 +9808,7 @@ def render_mstu_options_trading_strategy_dashboard(
             <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; BTC capitulation spike within last 3 bars
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
-            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
         </td>
       </tr>
@@ -10051,8 +10067,8 @@ def render_mstu_options_trading_strategy_dashboard(
     else:
         lbl_full = "📈 Full (Since Inception)"
 
-    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>🔷 TF2+V-Gate (MSTU Calls)</th>"
-             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>🎯 CU (MSTU Calls)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 CU After Tax (35% STCG)</th>"
              "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H MSTU stock (0%)</th>"
              "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H MSTU stock (15% LTCG)</th>")
     sub_hdr = (
@@ -10195,9 +10211,9 @@ def render_mstu_options_trading_strategy_dashboard(
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold MSTU stock</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate (MSTU Calls)",
+            x=nav_s.index, y=nav_s.values, name="CU (MSTU Calls)",
             line=dict(color="#0284c7", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (MSTU Calls)</extra>",
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>CU (MSTU Calls)</extra>",
         ))
         fig.add_hline(
             y=s["initial_capital"], line_dash="dash",
@@ -10299,7 +10315,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 sr = bt_bear["stats"]
                 fig_r = _make_mstu_opts_chart(
                     bt_bear,
-                    f"TF2+V-Gate (MSTU Calls) vs B&H MSTU — Bear Market  "
+                    f"CU (MSTU Calls) vs B&H MSTU — Bear Market  "
                     f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -10312,7 +10328,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 sb = bt_bull["stats"]
                 fig_b = _make_mstu_opts_chart(
                     bt_bull,
-                    f"TF2+V-Gate (MSTU Calls) vs B&H MSTU — Bull Market 🧪 Synthetic  "
+                    f"CU (MSTU Calls) vs B&H MSTU — Bull Market 🧪 Synthetic  "
                     f"({pd.Timestamp(sb['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sb['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -10325,7 +10341,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 so = bt_oos["stats"]
                 fig_o = _make_mstu_opts_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTU Calls) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"CU (MSTU Calls) vs B&H MSTU — OOS Period (Fully Blind)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -10338,7 +10354,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 sfl = bt_full["stats"]
                 fig_fl = _make_mstu_opts_chart(
                     bt_full,
-                    f"TF2+V-Gate (MSTU Calls) vs B&H MSTU — Full (Since Inception)  "
+                    f"CU (MSTU Calls) vs B&H MSTU — Full (Since Inception)  "
                     f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})",
                 )
