@@ -74,8 +74,21 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v28"
+_BT_LOGIC_VERSION = "sl5-sl5-v29-sata"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
+
+# ── SATA idle-cash yield (Strive Variable Rate Series A Perpetual Preferred) ──
+# Strive's SATA is the first US-listed security to pay a cash dividend every
+# business day: a 13% annual coupon on its $100 stated par value, distributed on
+# each business day (~250/yr) and — when reinvested at par — compounding to an
+# effective ≈13.88% annual yield.  In the SATA backtest variant, idle (CASH)
+# capital between Confirmed-Uptrend positions is parked in SATA at par and earns
+# this daily dividend (reinvested → daily compounding) on each business day.
+# Per the user's framing, SATA is assumed to have always existed, traded flat at
+# $100 par, and paid this same daily dividend across every backtest period.
+SATA_ANNUAL_RATE    = 0.13          # 13% annual coupon on $100 par
+SATA_BUSINESS_DAYS  = 250           # business days/yr → 13%/250 ≈ 0.052%/biz-day
+SATA_DAILY_FACTOR   = 1.0 + SATA_ANNUAL_RATE / SATA_BUSINESS_DAYS  # ≈1.00052
 # ════════════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
@@ -3897,10 +3910,17 @@ def run_mstr_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
+    # SATA variant decode — "bull_regime_sata" reuses the identical Confirmed
+    # Uptrend (bull_regime) entry signals; the ONLY difference is that idle cash
+    # between positions is parked in SATA preferred (see backtest loop below).
+    # Signal generation is therefore completely unchanged from "bull_regime".
+    sata_cash = (entry_gate == "bull_regime_sata")
+    _sig_gate = "bull_regime" if sata_cash else entry_gate
+
     # Entry gate selection
-    if entry_gate == "above_ma30":
+    if _sig_gate == "above_ma30":
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
-    elif entry_gate == "bull_regime":
+    elif _sig_gate == "bull_regime":
         tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
     else:  # pure_regime (default)
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
@@ -3919,6 +3939,12 @@ def run_mstr_backtest(end_date_iso: str,
         price = mstr_px[i]
         if i < _bt0:
             nav_arr[i] = initial_capital; continue
+        # SATA idle-cash yield: cash held entering this bar earns SATA's daily
+        # dividend on business days (reinvested at par → daily compounding).
+        # Only bars that START in CASH accrue; exit bars are LONG at the open so
+        # the freed cash earns from the next bar onward (no double-count).
+        if sata_cash and pos == "CASH" and dates[i].weekday() < 5:
+            nav *= SATA_DAILY_FACTOR
         if not np.isfinite(price) or price <= 0:
             nav_arr[i] = mstr_qty * mstr_px[i-1] if pos == "LONG" and i > 0 else nav
             continue
@@ -4040,6 +4066,7 @@ def run_mstr_backtest(end_date_iso: str,
         stats = dict(
             strategy        = "TF2+V-Gate (MSTR)",
             entry_gate      = entry_gate,
+            sata_cash       = sata_cash,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -4204,10 +4231,17 @@ def run_btc_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
+    # SATA variant decode — "bull_regime_sata" reuses the identical Confirmed
+    # Uptrend (bull_regime) entry signals; the ONLY difference is that idle cash
+    # between positions is parked in SATA preferred (see backtest loop below).
+    # Signal generation is therefore completely unchanged from "bull_regime".
+    sata_cash = (entry_gate == "bull_regime_sata")
+    _sig_gate = "bull_regime" if sata_cash else entry_gate
+
     # Entry gate selection
-    if entry_gate == "above_ma30":
+    if _sig_gate == "above_ma30":
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
-    elif entry_gate == "bull_regime":
+    elif _sig_gate == "bull_regime":
         tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
     else:  # pure_regime (default)
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
@@ -4221,6 +4255,12 @@ def run_btc_backtest(end_date_iso: str,
         price = btc_px[i]
         if i < _bt0:
             nav_arr[i] = initial_capital; continue
+        # SATA idle-cash yield: cash held entering this bar earns SATA's daily
+        # dividend on business days (reinvested at par → daily compounding).
+        # BTC bars are 7-days/week, so weekend bars correctly accrue nothing.
+        # Only bars that START in CASH accrue (no double-count on exit bars).
+        if sata_cash and pos == "CASH" and dates[i].weekday() < 5:
+            nav *= SATA_DAILY_FACTOR
         if not np.isfinite(price) or price <= 0:
             nav_arr[i] = btc_qty * btc_px[i-1] if pos == "LONG" and i > 0 else nav
             continue
@@ -4308,6 +4348,7 @@ def run_btc_backtest(end_date_iso: str,
         stats = dict(
             strategy        = "TF2+V-Gate (BTC)",
             entry_gate      = entry_gate,
+            sata_cash       = sata_cash,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -4505,10 +4546,17 @@ def run_mstu_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
+    # SATA variant decode — "bull_regime_sata" reuses the identical Confirmed
+    # Uptrend (bull_regime) entry signals; the ONLY difference is that idle cash
+    # between positions is parked in SATA preferred (see backtest loop below).
+    # Signal generation is therefore completely unchanged from "bull_regime".
+    sata_cash = (entry_gate == "bull_regime_sata")
+    _sig_gate = "bull_regime" if sata_cash else entry_gate
+
     # Entry gate selection
-    if entry_gate == "above_ma30":
+    if _sig_gate == "above_ma30":
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
-    elif entry_gate == "bull_regime":
+    elif _sig_gate == "bull_regime":
         tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
     else:  # pure_regime (default)
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
@@ -4527,6 +4575,12 @@ def run_mstu_backtest(end_date_iso: str,
         price = mstu_px[i]
         if i < _bt0:
             nav_arr[i] = initial_capital; continue
+        # SATA idle-cash yield: cash held entering this bar earns SATA's daily
+        # dividend on business days (reinvested at par → daily compounding).
+        # Only bars that START in CASH accrue; exit bars are LONG at the open so
+        # the freed cash earns from the next bar onward (no double-count).
+        if sata_cash and pos == "CASH" and dates[i].weekday() < 5:
+            nav *= SATA_DAILY_FACTOR
         if not np.isfinite(price) or price <= 0:
             nav_arr[i] = mstu_qty * mstu_px[i-1] if pos == "LONG" and i > 0 else nav
             continue
@@ -4648,6 +4702,7 @@ def run_mstu_backtest(end_date_iso: str,
         stats = dict(
             strategy        = "TF2+V-Gate (MSTU)",
             entry_gate      = entry_gate,
+            sata_cash       = sata_cash,
             initial_capital = initial_capital,
             final_nav       = final_nav,      final_bh      = final_bh,
             strat_ret       = strat_ret,      bh_ret        = bh_ret,
@@ -15351,18 +15406,30 @@ with tab_btc:
     st.caption(f"📦 Price dataset {_ds_ver_btc} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     _btc_variant = st.radio(
         "Entry gate variant",
-        options=["pure_regime", "bull_regime", "above_ma30"],
+        options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
         index=1,
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
+            "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
+            if x == "bull_regime_sata" else
             "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="btc_variant_radio",
     )
+    if _btc_variant == "bull_regime_sata":
+        st.caption(
+            "🪙 **SATA idle-cash variant** — *identical* Confirmed Uptrend (Bull Regime XOR) "
+            "entry/exit signals; the **only** difference is that capital sitting in **cash "
+            "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
+            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
+            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "same daily dividend across every backtest period."
+        )
     _btc_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                         if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _btc_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
@@ -15402,18 +15469,30 @@ with tab_mstr:
     st.caption(f"📦 Price dataset {_ds_ver_mstr} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     _mstr_variant = st.radio(
         "Entry gate variant",
-        options=["pure_regime", "bull_regime", "above_ma30"],
+        options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
         index=1,
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
+            "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
+            if x == "bull_regime_sata" else
             "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="mstr_variant_radio",
     )
+    if _mstr_variant == "bull_regime_sata":
+        st.caption(
+            "🪙 **SATA idle-cash variant** — *identical* Confirmed Uptrend (Bull Regime XOR) "
+            "entry/exit signals; the **only** difference is that capital sitting in **cash "
+            "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
+            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
+            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "same daily dividend across every backtest period."
+        )
     _mstr_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstr_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
@@ -15454,18 +15533,30 @@ with tab_mstu:
     st.caption(f"📦 Price dataset {_ds_ver_mstu} · pulled via `scripts/pull_backtest_data.py` · OLS β≈1.96 · all QC checks passed")
     _mstu_variant = st.radio(
         "Entry gate variant",
-        options=["pure_regime", "bull_regime", "above_ma30"],
+        options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
         index=1,
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
+            "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
+            if x == "bull_regime_sata" else
             "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="mstu_variant_radio",
     )
+    if _mstu_variant == "bull_regime_sata":
+        st.caption(
+            "🪙 **SATA idle-cash variant** — *identical* Confirmed Uptrend (Bull Regime XOR) "
+            "entry/exit signals; the **only** difference is that capital sitting in **cash "
+            "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
+            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
+            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "same daily dividend across every backtest period."
+        )
     _mstu_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
                          if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
     _mstu_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
