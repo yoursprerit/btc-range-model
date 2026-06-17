@@ -11773,7 +11773,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     )
     _ds_mtime_live = _backtest_dataset_mtime()
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–May 2025
+    _bt_bull     = _run_fixed_period_backtest("2025-06-05", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–Jun 5 2025
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
@@ -12015,10 +12015,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
     _ds_mtime    = _backtest_dataset_mtime()
     _bt_mstr_bear = _run_fixed_period_mstr_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
-    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-06-05", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _bt_mstr_full = _run_fixed_period_mstr_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _bt_mstu_bear = _run_fixed_period_mstu_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
-    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-06-14", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
+    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-06-05", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _bt_mstu_full = _run_fixed_period_mstu_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
     _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (7% SL)"])
     with _btab_btc:
@@ -15439,8 +15439,8 @@ with tab_btc:
         "2026-05-31", "2025-06-01", _btc_model_mtime, data_end=_btc_data_end,
         data_mtime=_ds_mtime, entry_gate=_btc_variant)    # locked Jun 2025–May 2026
     _btc_bull     = _run_fixed_period_btc_backtest(
-        "2025-06-14", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
-        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # Jun 2024–May 2025
+        "2025-06-05", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
+        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # Jun 2024–Jun 5 2025
     _btc_full_oos = run_btc_backtest(
         _btc_oos_end, model_mtime=_btc_model_mtime, data_end=_btc_data_end,
         data_mtime=_ds_mtime, entry_gate=_btc_variant)    # OOS ends prior day (rolling)
@@ -15502,8 +15502,8 @@ with tab_mstr:
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
         data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-06-14", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # Jun 2024–May 2025
+        "2025-06-05", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
+        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # Jun 2024–Jun 5 2025
     _mstr_full_oos = run_mstr_backtest(
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
         data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
@@ -15566,8 +15566,8 @@ with tab_mstu:
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end,
         data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-06-14", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
-        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # Bull: Jun 2024–May 2025 (synthetic)
+        "2025-06-05", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
+        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # Bull: Jun 2024–Jun 5 2025 (synthetic)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
         data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
@@ -15618,8 +15618,8 @@ with tab_mstu_opts:
         "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
         data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)
     _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
-        "2025-06-14", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)  # Bull: Jun 2024–Jun 2025
+        "2025-06-05", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
+        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)  # Bull: Jun 2024–Jun 5 2025
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
         data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)
@@ -15670,8 +15670,8 @@ with tab_mstr_opts:
         "2026-05-31", "2025-06-01", _opts_model_mtime, data_end=_opts_data_end,
         data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)
     _opts_bull     = _run_fixed_period_mstr_options_backtest(
-        "2025-06-14", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
-        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)  # Jun 2024–Jun 2025
+        "2025-06-05", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
+        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)  # Jun 2024–Jun 5 2025
     _opts_full_oos = run_mstr_options_backtest(
         _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end,
         data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)
