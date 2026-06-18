@@ -12285,9 +12285,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
 
     fig.add_trace(go.Scatter(
         x=xt_ct, y=pred_close_lb, mode="markers",
-        marker=dict(color=marker_colors, size=8,
+        marker=dict(color=marker_colors, size=8, symbol="circle",
                     line=dict(width=1, color="white")),
-        name="Past hourly predictions (green = correct dir.)",
+        name="● Past hourly predictions (green = correct dir.)",
         customdata=np.column_stack([y_lb*100, actual_lb]),
         hovertemplate=("Past pred for %{x|%Y-%m-%d %H:%M} CT<br>"
                        "Pred close: $%{y:,.0f}<br>"
@@ -12312,9 +12312,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         if _hm_x:
             fig.add_trace(go.Scatter(
                 x=_hm_x, y=_hm_y, mode="markers",
-                marker=dict(color=_hm_col, size=9, symbol="circle",
+                marker=dict(color=_hm_col, size=11, symbol="diamond",
                             line=dict(color="white", width=1.5)),
-                name="Hourly realized close (green=correct dir.)",
+                name="◆ Hourly realized close (green=correct dir.)",
                 hovertemplate=(
                     "Realized %{x|%Y-%m-%d %H:%M} CT<br>"
                     "$%{y:,.0f}<extra></extra>"
@@ -12519,7 +12519,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                   "<br><span style='font-size:13px;color:#555'>"
                   f"Refreshes every {REFRESH_SECONDS}s; target slides forward each minute.  "
                   f"Last {LOOKBACK_HOURS}h actuals (black) ±0.5 % shaded.  "
-                  f"Past-hour dots: <span style='color:seagreen'>green=correct dir.</span>/"
+                  f"Past hours: ● = prediction, ◆ = realized close — "
+                  f"<span style='color:seagreen'>green=correct dir.</span>/"
                   f"<span style='color:indianred'>red=miscalled</span>.  "
                   f"⭐ rolling forecast, anchored at live spot, ±0.5 % band.  "
                   f"Dotted lines = daily H/L threshold (refreshes at 12:00 UTC = 7am CT)."
