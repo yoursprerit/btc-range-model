@@ -12284,10 +12284,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                     np.where(correct, "seagreen", "indianred"))
 
     fig.add_trace(go.Scatter(
-        x=xt_ct, y=pred_close_lb, mode="markers",
+        x=xt_ct, y=pred_close_lb, mode="lines+markers",
+        line=dict(color="#7c3aed", width=2),
         marker=dict(color=marker_colors, size=8, symbol="circle",
                     line=dict(width=1, color="white")),
-        name="● Past hourly predictions (green = correct dir.)",
+        name="● Past hourly predictions (purple line; green = correct dir.)",
         customdata=np.column_stack([y_lb*100, actual_lb]),
         hovertemplate=("Past pred for %{x|%Y-%m-%d %H:%M} CT<br>"
                        "Pred close: $%{y:,.0f}<br>"
@@ -12519,7 +12520,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                   "<br><span style='font-size:13px;color:#555'>"
                   f"Refreshes every {REFRESH_SECONDS}s; target slides forward each minute.  "
                   f"Last {LOOKBACK_HOURS}h actuals (black) ±0.5 % shaded.  "
-                  f"Past hours: ● = prediction, ◆ = realized close — "
+                  f"Past hours: ● = prediction (joined by a "
+                  f"<span style='color:#7c3aed'>purple line</span>), "
+                  f"◆ = realized close — "
                   f"<span style='color:seagreen'>green=correct dir.</span>/"
                   f"<span style='color:indianred'>red=miscalled</span>.  "
                   f"⭐ rolling forecast, anchored at live spot, ±0.5 % band.  "
