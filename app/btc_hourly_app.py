@@ -12312,10 +12312,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 )
         if _hm_x:
             fig.add_trace(go.Scatter(
-                x=_hm_x, y=_hm_y, mode="markers",
+                x=_hm_x, y=_hm_y, mode="lines+markers",
+                line=dict(color="#0d9488", width=2),
                 marker=dict(color=_hm_col, size=11, symbol="diamond",
                             line=dict(color="white", width=1.5)),
-                name="◆ Hourly realized close (green=correct dir.)",
+                name="◆ Hourly realized close (teal line; green=correct dir.)",
                 hovertemplate=(
                     "Realized %{x|%Y-%m-%d %H:%M} CT<br>"
                     "$%{y:,.0f}<extra></extra>"
@@ -12522,7 +12523,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                   f"Last {LOOKBACK_HOURS}h actuals (black) ±0.5 % shaded.  "
                   f"Past hours: ● = prediction (joined by a "
                   f"<span style='color:#7c3aed'>purple line</span>), "
-                  f"◆ = realized close — "
+                  f"◆ = realized close (joined by a "
+                  f"<span style='color:#0d9488'>teal line</span>) — "
                   f"<span style='color:seagreen'>green=correct dir.</span>/"
                   f"<span style='color:indianred'>red=miscalled</span>.  "
                   f"⭐ rolling forecast, anchored at live spot, ±0.5 % band.  "
