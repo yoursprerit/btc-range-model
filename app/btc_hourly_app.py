@@ -74,7 +74,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v29-sata"
+_BT_LOGIC_VERSION = "sl5-sl5-v30-sata-btcoverlay"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── SATA idle-cash yield (Strive Variable Rate Series A Perpetual Preferred) ──
@@ -3405,6 +3405,7 @@ def run_full_period_backtest(end_date_iso: str,
         open_entry = (dict(price=e_price, date=e_date, nav=e_nav,
                           entry_trigger=e_trigger) if pos == "LONG" else None),
         bull_regime_series = bull_regime_series,
+        btc_price_series   = pd.Series(exec_px[_bt0:], index=dates[_bt0:]),
         last_bar_sigs = last_bar_sigs,
         stats = dict(
             strategy        = "TF2",
