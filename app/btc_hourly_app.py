@@ -11891,7 +11891,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _disp_sata_chg = sata_chg
         _mstr_lbl = "MSTR (MicroStrategy)"
         _mstu_lbl = "MSTU (2× Long MSTR)"
-        _strc_lbl = "STRC (Strife)"
+        _strc_lbl = "STRC (Stretch)"
         _sata_lbl = "SATA (Strive Pref)"
         _mstr_delta_sfx = "today"
         _mstu_delta_sfx = "today"
@@ -11917,7 +11917,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _disp_sata_px,  _disp_sata_chg = None, None  # no versioned SATA history
         _mstr_lbl = f"MSTR @ {_date_sfx}"
         _mstu_lbl = f"MSTU @ {_date_sfx}"
-        _strc_lbl = "STRC (Strife)"
+        _strc_lbl = "STRC (Stretch)"
         _sata_lbl = "SATA (Strive Pref)"
         _mstr_delta_sfx = "vs prev day"
         _mstu_delta_sfx = "vs prev day"
