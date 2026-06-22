@@ -11500,26 +11500,72 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             unsafe_allow_html=True,
         )
 
-    # ── TF2 full-width card (U1 + MA30 + regime-adaptive exit) ───────────
+    # ── TF2 full-width card (U1 + Bull Regime XOR Clean 7d + V-reversal + regime exit) ─
+    # Rows mirror the "Strategy Rules at a Glance" box exactly: the entry trigger is
+    #   tf1_triggered = U1 AND ((bull_regime XOR clean_7d) OR V-reversal)
+    # where bull_regime = (BTC > MA30) AND (MA30 rising 5-bar). The XOR uses
+    # bull_regime — NOT bare above_ma30 — so a dead-cat bounce above a *declining*
+    # MA30 does NOT satisfy the gate. above_ma30 / MA30-slope are shown as the two
+    # sub-conditions of Bull Regime for transparency.
     # _bull_regime / _regime_label already computed above for ACTION SIGNAL
     _ma30_pct  = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
     _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
     _exit_mode = "D3 only (patient — hold the trend)" if _bull_regime else "D2 OR D3 (defensive exit)"
 
+    _u1     = sigs["u1_triggered"]
+    _above  = sigs["above_ma30"]
+    _rising = sigs.get("ma30_slope_pos", False)
+    _bull   = sigs.get("bull_regime", False)        # _above AND _rising
+    _clean  = sigs["clean_10d"]
+    _vrev   = sigs.get("v_recent_gate", False)
+    _xor_one   = (_bull != _clean)                  # exactly one of Bull Regime / Clean 7d
+    _gate_pass = _xor_one or _vrev                  # final Confirmed Uptrend gate
+
+    # Bull Regime status text — explain *why* when it fails
+    if _bull:
+        _bull_disp = "YES — BTC > MA30 AND MA30 rising"
+    elif _above and not _rising:
+        _bull_disp = "NO — above MA30 but MA30 not rising (dead-cat filter)"
+    elif _rising and not _above:
+        _bull_disp = "NO — MA30 rising but BTC ≤ MA30"
+    else:
+        _bull_disp = "NO — below MA30 and MA30 not rising"
+
+    # Confirmed Uptrend gate status text — match the box's BLOCKED cases
+    if _vrev:
+        _gate_disp = "PASS ✅ — ⚡ V-reversal override"
+    elif _bull and _clean:
+        _gate_disp = "BLOCKED ⚠️ — Bull Regime AND Clean 7d both active (late-cycle)"
+    elif not _bull and not _clean:
+        _gate_disp = "BLOCKED ✗ — neither Bull Regime nor Clean 7d (no momentum)"
+    else:
+        _gate_disp = "PASS ✅ — exactly one of Bull Regime / Clean 7d active"
+
     tf1_rows = [
-        ("U1 Signal",
-         "✅ ACTIVE" if sigs["u1_triggered"] else "○ inactive",
-         "= ACTIVE  (required)",
-         sigs["u1_triggered"], True),
-        ("BTC vs 30-day MA",
+        # ── Entry condition ① — U1 (required) ──
+        ("① U1 Signal",
+         "✅ ACTIVE" if _u1 else "○ inactive",
+         "= ACTIVE  (entry condition ① — err_hi_ma3 > +0.7% AND hi_breaks_3d ≥ 2)",
+         _u1, True),
+        # ── Entry condition ② — Confirmed Uptrend gate ──
+        ("② 🐂 Bull Regime",
+         _bull_disp,
+         "= YES  (gate option A — BTC > MA30 AND MA30 rising 5-bar)",
+         _bull, True),
+        ("   ↳ BTC vs 30-day MA",
          f"${sigs['current_close_sig']:,.0f}  vs  MA=${sigs['ma30_value']:,.0f} ({_ma30_pct:+.1f}%)",
-         "> MA30  (entry gate — satisfies trend filter)",
-         sigs["above_ma30"], True),
-        ("Clean 7d (no D1/D2)",
-         "YES — zero D1/D2 fires in prior 7 bars" if sigs["clean_10d"] else "NO — recent D1 or D2 fired",
-         "= YES  (entry gate — alt. to ↑MA30)",
-         sigs["clean_10d"], True),
-        ("⚡ V-reversal (3-bar gate)",
+         "> MA30  (Bull Regime sub-condition)",
+         _above, False),
+        ("   ↳ MA30 slope (5-bar)",
+         f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
+         f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
+         "rising  (Bull Regime sub-condition)",
+         _rising, False),
+        ("② Clean 7d (no D1/D2)",
+         "YES — zero D1/D2 fires in prior 7 bars" if _clean else "NO — recent D1 or D2 fired",
+         "= YES  (gate option B — no D1/D2 in prior 7 bars)",
+         _clean, True),
+        ("② ⚡ V-reversal (3-bar)",
          (("ACTIVE today — dn_score={:.2f}, err_lo={:+.1f}% (threshold: >0.8 & >3%)"
            .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
           if sigs.get("v_recent_gate_age") == 0
@@ -11528,24 +11574,19 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                         "s" if (sigs.get("v_recent_gate_age") or 0) != 1 else "",
                         2 - (sigs.get("v_recent_gate_age") or 0),
                         "s" if 2 - (sigs.get("v_recent_gate_age") or 0) != 1 else ""))
-          if sigs.get("v_recent_gate")
+          if _vrev
           else "○ not active — no capitulation spike in last 3 bars (dn_score < 0.8 or err_lo < 3%)"),
-         "= ACTIVE  (entry gate — alt. to ↑MA30)",
-         sigs.get("v_recent_gate", False), True),
-        ("Entry filter (↑MA30 XOR clean7d; or V-rev)",
-         ("BLOCKED ⚠️ combined" if (sigs["above_ma30"] and sigs["clean_10d"] and not sigs.get("v_recent_gate"))
-          else ("PASS ✅" if ((sigs["above_ma30"] != sigs["clean_10d"]) or sigs.get("v_recent_gate"))
-                else "FAIL ✗")),
-         "= PASS when exactly one of ↑MA30 / clean7d fires, or V-reversal; BLOCKED when both fire simultaneously",
-         (sigs["above_ma30"] != sigs["clean_10d"]) or sigs.get("v_recent_gate", False), True),
-        ("MA30 slope (5-bar)",
-         f"MA30 = ${sigs['ma30_value']:,.0f}  vs  5d ago = "
-         f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
-         "rising MA30 + price > MA30 = BULL regime (affects exit mode only)",
-         sigs.get("ma30_slope_pos", False), False),
+         "= ACTIVE  (gate override — capitulation dn_score > 0.8 AND err_lo > 3%)",
+         _vrev, True),
+        ("② Confirmed Uptrend gate",
+         _gate_disp,
+         "= PASS when exactly one of Bull Regime / Clean 7d fires, or ⚡ V-reversal; "
+         "BLOCKED when both fire or neither fires",
+         _gate_pass, True),
+        # ── Exit — regime-adaptive ──
         ("Regime → exit mode",
          f"{_regime_label}  →  {_exit_mode}",
-         "BULL exits D3 only; BEAR/Neutral exits D2 or D3",
+         "BULL (BTC > MA30 AND MA30 rising) exits D3 only; BEAR/Neutral exits D2 or D3",
          _bull_regime, False),
     ]
     st.markdown(
