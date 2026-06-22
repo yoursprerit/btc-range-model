@@ -420,9 +420,9 @@ def fetch_live_spot():
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_equity_prices():
-    """Fetch live MSTR and MSTU prices via Yahoo Finance."""
+    """Fetch live MSTR, MSTU and STRC prices via Yahoo Finance."""
     prices, changes = {}, {}
-    for ticker in ("MSTR", "MSTU"):
+    for ticker in ("MSTR", "MSTU", "STRC"):
         try:
             fi = yf.Ticker(ticker).fast_info
             price = float(fi.last_price)
@@ -433,7 +433,8 @@ def fetch_equity_prices():
             prices[ticker] = None
             changes[ticker] = None
     return (prices.get("MSTR"), changes.get("MSTR"),
-            prices.get("MSTU"), changes.get("MSTU"))
+            prices.get("MSTU"), changes.get("MSTU"),
+            prices.get("STRC"), changes.get("STRC"))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -2285,7 +2286,7 @@ if not valid_mask.any():
     st.stop()
 latest_t_global = F_filled.index[valid_mask][-1]
 live_spot, live_spot_ts = fetch_live_spot()
-mstr_price, mstr_chg, mstu_price, mstu_chg = fetch_equity_prices()
+mstr_price, mstr_chg, mstu_price, mstu_chg, strc_price, strc_chg = fetch_equity_prices()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -11881,12 +11882,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     if is_live:
         _disp_mstr_px  = mstr_price
         _disp_mstu_px  = mstu_price
+        _disp_strc_px  = strc_price
         _disp_mstr_chg = mstr_chg
         _disp_mstu_chg = mstu_chg
+        _disp_strc_chg = strc_chg
         _mstr_lbl = "MSTR (MicroStrategy)"
         _mstu_lbl = "MSTU (2× Long MSTR)"
+        _strc_lbl = "STRC (Strife)"
         _mstr_delta_sfx = "today"
         _mstu_delta_sfx = "today"
+        _strc_delta_sfx = "today"
     else:
         _date_key = target_date.normalize()
         _date_sfx = target_date.strftime("%b %d, %Y")
@@ -11903,14 +11908,17 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             return _px, _chg
         _disp_mstr_px,  _disp_mstr_chg = _csv_price_and_chg(_load_mstr_prices())
         _disp_mstu_px,  _disp_mstu_chg = _csv_price_and_chg(_load_mstu_prices())
+        _disp_strc_px,  _disp_strc_chg = None, None  # no versioned STRC history
         _mstr_lbl = f"MSTR @ {_date_sfx}"
         _mstu_lbl = f"MSTU @ {_date_sfx}"
+        _strc_lbl = "STRC (Strife)"
         _mstr_delta_sfx = "vs prev day"
         _mstu_delta_sfx = "vs prev day"
+        _strc_delta_sfx = "vs prev day"
 
     _mstr_spot_key = round(_disp_mstr_px) if _disp_mstr_px else None
     mstr_call_px, mstr_hv, mstr_call_strike = fetch_mstr_atm_call(_mstr_spot_key)
-    e1, e2, e3, _, _ = st.columns(5)
+    e1, e2, e3, e4, _ = st.columns(5)
     e1.metric(
         _mstr_lbl,
         f"${_disp_mstr_px:,.2f}" if _disp_mstr_px is not None else "—",
@@ -11922,6 +11930,11 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         delta=(f"{_disp_mstu_chg:+.2f}% {_mstu_delta_sfx}" if _disp_mstu_chg is not None else None),
     )
     e3.metric(
+        _strc_lbl,
+        f"${_disp_strc_px:,.2f}" if _disp_strc_px is not None else "—",
+        delta=(f"{_disp_strc_chg:+.2f}% {_strc_delta_sfx}" if _disp_strc_chg is not None else None),
+    )
+    e4.metric(
         "MSTR 743d ATM Call (BS)",
         f"${mstr_call_px:,.2f}" if mstr_call_px is not None else "—",
         delta=(f"K=${mstr_call_strike:,.0f} · σ={mstr_hv*100:.0f}%"
