@@ -3150,9 +3150,10 @@ def run_full_period_backtest(end_date_iso: str,
     # Versioned CSV prices → fallback to raw_df (matches run_btc_backtest exactly)
     _btc_csv = _load_btc_prices()
     if _btc_csv is not None and "close" in _btc_csv.columns:
-        closes = _btc_csv["close"]
-        highs  = _btc_csv["high"] if "high" in _btc_csv.columns else raw_df["btc_high"]
-        lows   = _btc_csv["low"]  if "low"  in _btc_csv.columns else raw_df["btc_low"]
+        _btc_ext = _yf_extend_price_df(_btc_csv, "BTC-USD", end_date_iso)
+        closes = _btc_ext["close"]
+        highs  = _btc_ext["high"] if "high" in _btc_ext.columns else raw_df["btc_high"]
+        lows   = _btc_ext["low"]  if "low"  in _btc_ext.columns else raw_df["btc_low"]
     else:
         closes = raw_df["btc_close"]
         highs  = raw_df["btc_high"]
@@ -3448,6 +3449,127 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                     data_mtime=data_mtime)
 
 
+def _yf_extend_raw_features(df: pd.DataFrame, end_iso: str) -> pd.DataFrame:
+    """Extend a stale raw-features DataFrame with fresh yfinance BTC + macro data.
+
+    Fetches BTC OHLCV and 7 macro series for dates after df.index.max() up to
+    end_iso.  On-chain and Coinbase premium columns are forward-filled from the
+    last known row so feature engineering has complete columns to work with.
+    Returns df unchanged if already covers end_iso or if the live fetch fails.
+    """
+    end_ts  = pd.Timestamp(end_iso)
+    last_ts = df.index.max()
+    if last_ts >= end_ts:
+        return df
+
+    gap_start = (last_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    gap_end   = (end_ts  + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+    try:
+        d_btc = yf.download("BTC-USD", start=gap_start, end=gap_end,
+                             progress=False, auto_adjust=True)
+        if isinstance(d_btc.columns, pd.MultiIndex):
+            d_btc.columns = [c[0] for c in d_btc.columns]
+        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
+        if d_btc.empty or "Close" not in d_btc.columns:
+            return df
+    except Exception:
+        return df
+
+    ext = pd.DataFrame({
+        "btc_close":  d_btc["Close"],
+        "btc_high":   d_btc["High"],
+        "btc_low":    d_btc["Low"],
+        "btc_volume": d_btc.get("Volume", pd.Series(dtype=float)),
+    })
+
+    _MACRO_EXT = {"eth": "ETH-USD", "spx": "^GSPC", "ndx": "^IXIC",
+                  "vix": "^VIX",  "gold": "GC=F",  "dxy": "DX-Y.NYB", "tnx": "^TNX"}
+    for nm, sym in _MACRO_EXT.items():
+        try:
+            _d = yf.download(sym, start=gap_start, end=gap_end,
+                             progress=False, auto_adjust=True)
+            if isinstance(_d.columns, pd.MultiIndex):
+                _d.columns = [c[0] for c in _d.columns]
+            _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+            ext[f"{nm}_close"] = _d["Close"].reindex(ext.index).ffill(limit=7)
+        except Exception:
+            pass
+
+    # Forward-fill on-chain and Coinbase premium from the last known CSV row
+    last_row = df.iloc[-1]
+    for col in df.columns:
+        if col not in ext.columns:
+            ext[col] = last_row[col]
+
+    ext = ext.reindex(columns=df.columns)
+    new_rows = ext.loc[~ext.index.isin(df.index)]
+    if new_rows.empty:
+        return df
+    return pd.concat([df, new_rows]).sort_index()
+
+
+def _yf_extend_price_df(df: pd.DataFrame, ticker: str, end_iso: str) -> pd.DataFrame:
+    """Extend a versioned price DataFrame (OHLCV) with fresh yfinance data up to end_iso.
+
+    Returns df unchanged if already covers end_iso or if the live fetch fails.
+    """
+    end_ts  = pd.Timestamp(end_iso)
+    last_ts = df.index.max()
+    if last_ts >= end_ts:
+        return df
+
+    gap_start = (last_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    gap_end   = (end_ts  + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+    try:
+        _d = yf.download(ticker, start=gap_start, end=gap_end,
+                         progress=False, auto_adjust=True)
+        if isinstance(_d.columns, pd.MultiIndex):
+            _d.columns = [c[0] for c in _d.columns]
+        _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+        if _d.empty:
+            return df
+        ext = _d.rename(columns=str.lower)
+        new_rows = ext.loc[~ext.index.isin(df.index)]
+        if new_rows.empty:
+            return df
+        combined = pd.concat([df, new_rows[new_rows.columns.intersection(df.columns)]]).sort_index()
+        return combined
+    except Exception:
+        return df
+
+
+def _yf_extend_series(s: "pd.Series", ticker: str, end_iso: str) -> "pd.Series":
+    """Extend a price Series with fresh yfinance Close data up to end_iso.
+
+    Returns s unchanged if already covers end_iso or if the live fetch fails.
+    """
+    end_ts  = pd.Timestamp(end_iso)
+    last_ts = s.index.max()
+    if last_ts >= end_ts:
+        return s
+
+    gap_start = (last_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    gap_end   = (end_ts  + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+    try:
+        _d = yf.download(ticker, start=gap_start, end=gap_end,
+                         progress=False, auto_adjust=True)
+        if isinstance(_d.columns, pd.MultiIndex):
+            _d.columns = [c[0] for c in _d.columns]
+        _d.index = pd.DatetimeIndex(_d.index).tz_localize(None).normalize()
+        if _d.empty or "Close" not in _d.columns:
+            return s
+        ext = _d["Close"].rename(s.name)
+        new_idx = ext.index.difference(s.index)
+        if new_idx.empty:
+            return s
+        return pd.concat([s, ext.loc[new_idx]]).sort_index()
+    except Exception:
+        return s
+
+
 @st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
 def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
                           model_mtime: float = 0.0,
@@ -3475,6 +3597,9 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
         _rf = _load_raw_features()
         if _rf is not None and len(_rf) > 0:
             _rf_slice = _rf.loc[(_rf.index >= _fs) & (_rf.index <= _fe)]
+            # Extend stale CSV with fresh yfinance data so OOS rolls to yesterday
+            if not _rf_slice.empty and _rf_slice.index.max() < _fe:
+                _rf_slice = _yf_extend_raw_features(_rf_slice, fetch_end_iso)
             if len(_rf_slice) >= 35:      # enough rows to warm up signals
                 df     = _rf_slice.copy()
                 raw_df = df[["btc_close","btc_high","btc_low","btc_volume"]].copy()
@@ -3819,6 +3944,7 @@ def run_mstr_backtest(end_date_iso: str,
     # ── MSTR prices: versioned CSV → fallback to live yfinance ──────────────
     _mstr_csv = _load_mstr_prices()
     if _mstr_csv is not None and "close" in _mstr_csv.columns:
+        _mstr_csv   = _yf_extend_price_df(_mstr_csv, "MSTR", end_date_iso)
         _mstr_close = _mstr_csv["close"].sort_index()
         _mstr_low   = _mstr_csv["low"].sort_index() if "low" in _mstr_csv.columns else _mstr_close
     else:
@@ -4140,9 +4266,10 @@ def run_btc_backtest(end_date_iso: str,
     # ── BTC actual prices: versioned CSV → fallback to raw_df from pipeline ──
     _btc_csv = _load_btc_prices()
     if _btc_csv is not None and "close" in _btc_csv.columns:
-        btc_closes = _btc_csv["close"]
-        btc_highs  = _btc_csv["high"] if "high" in _btc_csv.columns else raw_df["btc_high"]
-        btc_lows   = _btc_csv["low"]  if "low"  in _btc_csv.columns else raw_df["btc_low"]
+        _btc_ext   = _yf_extend_price_df(_btc_csv, "BTC-USD", end_date_iso)
+        btc_closes = _btc_ext["close"]
+        btc_highs  = _btc_ext["high"] if "high" in _btc_ext.columns else raw_df["btc_high"]
+        btc_lows   = _btc_ext["low"]  if "low"  in _btc_ext.columns else raw_df["btc_low"]
     else:
         btc_closes = raw_df["btc_close"]
         btc_highs  = raw_df["btc_high"]
@@ -4446,7 +4573,8 @@ def run_mstu_backtest(end_date_iso: str,
     _mstu_act_csv = _load_mstu_prices()
 
     if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
-        mstu_px = _mstu_syn_csv.reindex(dates).ffill().bfill().values.astype(float)
+        _mstu_syn_ext = _yf_extend_series(_mstu_syn_csv, "MSTU", end_date_iso)
+        mstu_px = _mstu_syn_ext.reindex(dates).ffill().bfill().values.astype(float)
     else:
         _mstu_syn = _build_synthetic_mstu_prices(
             pre_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
@@ -4457,6 +4585,7 @@ def run_mstu_backtest(end_date_iso: str,
 
     # MSTU intraday lows — versioned CSV → fallback to yfinance; display only
     if _mstu_act_csv is not None and "low" in _mstu_act_csv.columns:
+        _mstu_act_csv = _yf_extend_price_df(_mstu_act_csv, "MSTU", end_date_iso)
         _lo_raw = _mstu_act_csv["low"].sort_index()
         _lo_all = _lo_raw.reindex(
             pd.date_range(_lo_raw.index[0], max(_lo_raw.index[-1], end_dt), freq="D")
@@ -4816,6 +4945,7 @@ def run_mstr_options_backtest(end_date_iso: str,
     # ── Fetch MSTR prices: versioned CSV → fallback to yfinance ──────────────
     _mstr_csv = _load_mstr_prices()
     if _mstr_csv is not None and "close" in _mstr_csv.columns:
+        _mstr_csv = _yf_extend_price_df(_mstr_csv, "MSTR", end_date_iso)
         mstr_raw = _mstr_csv["close"].sort_index()
     else:
         try:
@@ -5164,7 +5294,8 @@ def run_mstu_options_backtest(end_date_iso: str,
     _mstu_syn_csv = _load_mstu_synthetic()
     _mstu_act_csv = _load_mstu_prices()
     if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
-        mstu_px = _mstu_syn_csv.reindex(dates).ffill().bfill().values.astype(float)
+        _mstu_syn_ext = _yf_extend_series(_mstu_syn_csv, "MSTU", end_date_iso)
+        mstu_px = _mstu_syn_ext.reindex(dates).ffill().bfill().values.astype(float)
     else:
         try:
             d_mstu = yf.download(
@@ -5188,6 +5319,7 @@ def run_mstu_options_backtest(end_date_iso: str,
 
     # ── MSTU volatility: actual (post-inception) prices ───────────────────────
     if _mstu_act_csv is not None and "close" in _mstu_act_csv.columns:
+        _mstu_act_csv = _yf_extend_price_df(_mstu_act_csv, "MSTU", end_date_iso)
         mstu_trading = _mstu_act_csv["close"].sort_index()
     elif _mstu_act_csv is None or "close" not in (_mstu_act_csv.columns if _mstu_act_csv is not None else []):
         try:
