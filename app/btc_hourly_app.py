@@ -11961,22 +11961,25 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
-    # In historical mode use backtest-derived signals (yfinance daily, no direction_head)
-    # so the signal panel matches exactly which bars the position entries fired on.
-    # In live mode use compute_trend_signatures (Binance data, includes today's bar).
+    # Build the signal panel from the SAME function and the SAME data on both tabs:
+    # compute_trend_signatures() → _fetch_daily_raw() (Binance hourly rebucketed to
+    # 12:00-UTC / 7am-CT bars — the boundary the daily H/L model was trained on).
+    # This makes err_hi, err_hi_ma3, U1 and the last-5-bars table byte-for-byte
+    # identical between Live and Historical for any overlapping date. The two tabs
+    # differ ONLY in the anchor date:
+    #   Live      → compute_trend_signatures(today): today's bar is still in progress
+    #               (no realized H/L yet) → last completed bar = today − 1.
+    #   Historical→ compute_trend_signatures(D − 1): replays date D as it stood live,
+    #               when the last completed bar was likewise D − 1.
     #
-    # Both paths anchor to the last COMPLETED bar (see _bt_oos_end above):
-    #   Live      → compute_trend_signatures(today) naturally excludes today's
-    #               in-progress bar (no realized H/L yet) → last completed = today − 1.
-    #   Historical→ the OOS backtest ends at _bt_oos_end (= target_date − 1), so its
-    #               last_bar_sigs is bar (D − 1). The fallback must use the same
-    #               anchor — calling compute_trend_signatures(D) would re-introduce
-    #               bar D's realized H/L (look-ahead vs the Live tab on date D).
-    if is_live:
-        sigs = compute_trend_signatures(_bt_end, data_end=_data_end)
-    else:
-        sigs = (_bt_full_oos or {}).get("last_bar_sigs") or \
-               compute_trend_signatures(_bt_oos_end, data_end=_data_end)
+    # We deliberately do NOT source the panel from _bt_full_oos["last_bar_sigs"].
+    # That is computed from the backtest's yfinance *midnight-UTC* daily bars — a
+    # different 24-hour window than the model's 12:00-UTC bars — so its actual H/L
+    # (and therefore err_hi / err_hi_ma3) disagreed with the Live tab for the same
+    # date. The position panel still reads open positions from _bt_full_oos, exactly
+    # as the Live tab does; only the signal figures come from compute_trend_signatures.
+    _sig_anchor = _bt_end if is_live else _bt_oos_end
+    sigs = compute_trend_signatures(_sig_anchor, data_end=_data_end)
 
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
