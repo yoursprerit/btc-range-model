@@ -19,10 +19,11 @@ stop tightened −7% → −3%; U1 lowered +1.1% → +0.9%).
 |-------|------|----|----|------|---------|---------|---------|-----------|
 | **MSTR** | Pure Regime | +0.9% | −1.3% | −3% | +132% | +27% | **+205%** | +176% |
 | **MSTU** | Pure Regime | +0.9% | −1.3% | **−3%** | +310% | +66% | **+534%** | +427% |
-| **BTC** | Pure Regime | +0.9% | −1.3% | none | +30% | +4% | +36% | +50% |
+| **BTC** | Pure Regime | +0.9% | −1.3% | none | +68% | +3% | +96% | +50% |
 
-Full-period B&H: MSTR −2%, MSTU −76%, BTC +6%. MSTR/MSTU improve materially; BTC dips
-slightly (the unified U1>0.9 favors the equities) but still beats B&H.
+Full-period B&H: MSTR −2%, MSTU −76%, BTC +6%. All three improve materially versus the
+prior config, and each beats Buy & Hold on the full period (BTC also beats B&H in bull,
++68% vs +52%).
 
 **Important caveats (this is heavy in-sample optimization):**
 - These are the best of a ~200-config sweep on **~7 trades per period**; the bull window
