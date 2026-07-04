@@ -5,7 +5,39 @@
 
 ---
 
-## ⭐ 2026-07 Re-tune — U1 > +1.1% / D2 < −1.3% on the 12:00-UTC bars (CURRENT LIVE)
+## ⭐ 2026-07b — Asset-specific entry gates (CURRENT LIVE)
+
+Building on the U1/D2 re-tune below, each asset now uses the **entry gate** that best
+captures its own bull market while staying defensive in bear. **Only the entry gate is
+asset-specific** — the U1 (>+1.1%) / D2 (<−1.3%) thresholds, the fixed stops, the SL5
+re-entry and the regime-adaptive D2/D3 exit are all shared. These are the **default**
+selections in the MSTR / MSTU / options backtest radio buttons.
+
+| Asset | Default entry gate | Rationale |
+|-------|--------------------|-----------|
+| **MSTR** | 🎯 **Pure Regime** (`bull_regime OR (clean_7d & below-MA30) OR V-rev`) | Matches B&H in bull |
+| **MSTU** | 📊 **Standard MA30** (`above_MA30 XOR clean_7d OR V-rev`) | Beats 2× B&H (avoids decay) |
+| **BTC** | 🔒 Confirmed Uptrend (`bull_regime XOR clean_7d OR V-rev`) | Unchanged |
+
+**Results (real app functions, live stops, regime exit):**
+
+| Asset (gate) | 🐂 Bull | 🐻 Bear | 🌐 Full | Bull B&H | prior (bull_regime) |
+|--------------|---------|---------|---------|----------|---------------------|
+| MSTR (Pure Regime) | **+113%** | **+26%** | **+176%** | +127% | +60 / +44 / +131 |
+| MSTU (Standard MA30) | **+145%** | **+115%** | **+427%** | +58%¹ | +123 / +95 / +335 |
+
+¹ App B&H for MSTU bull is +58% (pre-inception backfill); measured from MSTU's Sep-2024
+inception it is +190% — either way the Standard-MA30 gate improves *every* period vs the
+prior `bull_regime` default. The live signal/position panel shows MSTR and MSTU entry
+signals separately because their gates fire on different bars; exit signals are shared.
+
+> Caveat: bull windows are in-sample for the CT model and ride ~2 big rally trades;
+> the asset-specific gains are real but small-sample. See `frontier` analysis in the
+> repo (bull-capture vs bear-defense sweep).
+
+---
+
+## ⭐ 2026-07 Re-tune — U1 > +1.1% / D2 < −1.3% on the 12:00-UTC bars
 
 The signal thresholds were re-fit to the corrected 12:00-UTC bar timeline (the
 same bars the live model and dashboard use). The previous thresholds
