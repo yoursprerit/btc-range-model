@@ -57,7 +57,7 @@ models haven't fully absorbed.
 ### 🔴 DOWNTREND Signature B — "Predicted-High Collapse" (p < 0.001)
 
 **Definition:**  
-The 3-day MA of high-side error (`err_hi_ma3`) turns **sharply negative** (< −0.75%).
+The 3-day MA of high-side error (`err_hi_ma3`) turns **sharply negative** (< −1.3%).
 Actual daily highs are *below* what the model predicted. The model was forecasting
 upside potential, but price failed to reach those predicted highs.
 
@@ -119,7 +119,7 @@ marking the exact moment price lost its upside momentum.
 ### 🟢 UPTREND Signature — "High-Band Breakout Persistence" (moderate, 1.68× lift)
 
 **Definition:**  
-The 3-day MA of high-side error (`err_hi_ma3`) turns **persistently positive** (> +0.7%)
+The 3-day MA of high-side error (`err_hi_ma3`) turns **persistently positive** (> +1.1%)
 AND at least 2 of the last 3 days had actual daily high exceed the predicted high
 (`hi_breaks_3d ≥ 2`). Both conditions must hold simultaneously (U1 = AND gate).
 
@@ -137,8 +137,9 @@ macro, and on-chain — has not yet fully captured the strength of the upward mo
 
 **Statistically significant:** `err_hi_pct` PRE_UP mean = **+1.34** vs NORMAL = −0.22 (Δ = +1.56, p = 0.022)
 
-> The live U1 threshold (`err_hi_ma3 > 0.7`) is tighter than the original analysis threshold
-> (`> 0.5`) to reduce false positives at the cost of slightly fewer triggers.
+> The live U1 threshold (`err_hi_ma3 > 1.1`, re-tuned 2026-07 on the 12:00-UTC bars) is tighter
+> than the original analysis threshold (`> 0.5`) to reduce false positives at the cost of fewer
+> triggers. It was raised from `> 0.7` when the backtest was re-anchored to the 12:00-UTC timeline.
 
 **Real event confirmations:**
 - **2026-05-04 Gradual Climb:** `hiBreak3d = 2`, `↑score = 0.685–0.751` in days before event
@@ -229,7 +230,7 @@ CT ensemble uses raw 103-feature matrix).
 | # | Signal | Condition | Statistical Support | Importance |
 |---|--------|-----------|--------------------|-----------| 
 | 1 | D1 | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > +0.5%` | p = 0.0095 | **Primary** |
-| 2 | D2 | `err_hi_ma3 < −0.75%` (predicted highs not being reached) | p < 0.0001 | **Primary** |
+| 2 | D2 | `err_hi_ma3 < −1.3%` (predicted highs not being reached) | p < 0.0001 | **Primary** |
 | 3 | D3 | First `lo_break` today after ≥ 3 consecutive `hi_break` days | contextual | **Primary** |
 | 4 | — | `lo_band_break = 1` on current day | p = 0.0006 | Confirming |
 | 5 | — | 3-class predicts `BigLower` with p ≥ 0.55 | 69.2% accuracy | Confirming |
@@ -241,7 +242,7 @@ CT ensemble uses raw 103-feature matrix).
 ### UPTREND Early Warning  
 | # | Signal | Condition | Statistical Support | Importance |
 |---|--------|-----------|--------------------|-----------| 
-| 1 | U1 | `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2` | p = 0.022 | **Primary** |
+| 1 | U1 | `err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2` | p = 0.022 | **Primary** |
 | 2 | — | `hi_band_break = 1` on current day | p = 0.033 | Confirming |
 | 3 | — | `model_disagree` elevated (> 1.2) | p = 0.023 | Context (regime transition) |
 | 4 | — | 3-class predicts `BigUpper` with p ≥ 0.55 | 69.2% accuracy | Confirming |
@@ -312,10 +313,10 @@ lo_breaks_3d = sum(actual_L < pred_L for last 3 bars)
 
 # ── Signal trigger conditions (exact live thresholds) ───────────────────────
 D1 = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)    # Low-Band Accumulation
-D2 = (err_hi_ma3 < -0.75)                            # Predicted-High Collapse
+D2 = (err_hi_ma3 < -1.3)                             # Predicted-High Collapse (re-tuned 2026-07)
 D3 = (consec_hi_breaks_ending_yesterday >= 3)        # Exhaustion Canary
      and lo_break_today                              #   (first lo_break after streak)
-U1 = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)     # High-Band Breakout Persistence
+U1 = (err_hi_ma3 > 1.1) and (hi_breaks_3d >= 2)     # High-Band Breakout Persistence (re-tuned 2026-07)
 
 # ── Strategy entry gate ──────────────────────────────────────────────────────
 MA30       = mean(close[-30:])

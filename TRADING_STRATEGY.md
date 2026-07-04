@@ -1,7 +1,45 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-06-12  
+**Last updated:** 2026-07-04  
+
+---
+
+## ⭐ 2026-07 Re-tune — U1 > +1.1% / D2 < −1.3% on the 12:00-UTC bars (CURRENT LIVE)
+
+The signal thresholds were re-fit to the corrected 12:00-UTC bar timeline (the
+same bars the live model and dashboard use). The previous thresholds
+(U1 > +0.7% / D2 < −0.75%) were fit to the **retired midnight-UTC dataset**; when
+that dataset was re-anchored to 12:00-UTC (so backtest = live = historical,
+byte-identical predictions), the old thresholds fired too many marginal entries
+on the noisier bars. Re-tuning raised the U1 entry bar and loosened the D2 exit:
+
+- **U1 entry:** `err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2`  *(was +0.7%)*
+- **D2 exit:**  `err_hi_ma3 < −1.3%`  *(was −0.75%)*
+- Single source of truth in `app/btc_hourly_app.py`: `U1_ERRHI_MIN`, `D2_ERRHI_MAX`.
+
+The higher entry bar removes ~5 marginal U1 entries per period that were whipsaw
+stop-outs while retaining both large rally trades; the looser D2 holds confirmed
+trends longer. Result: higher return, roughly half the drawdown, and a much
+stronger (partly-OOS) bear regime.
+
+**Authoritative four-period results (re-tuned, 12:00-UTC bars, `bull_regime` gate,
+SL5 re-entry, live stops — BTC none / MSTR −3% / MSTU −7%):**
+
+| Asset | 🐂 Bull | 🐻 Bear | 🌐 Full | Full B&H | Full Sharpe / MaxDD |
+|-------|---------|---------|---------|----------|---------------------|
+| BTC   | +38.2%  | +8.6%   | **+50.2%**  | +6.2%   | +0.99 / −6.5%  |
+| MSTR  | +60.0%  | +44.2%  | **+130.6%** | +4.4%   | +1.09 / −13.7% |
+| MSTU  | +123.4% | +94.8%  | **+335.3%** | −86.9%  | +1.15 / −26.2% |
+
+> These supersede the numbers in the older sections below, which reflect the prior
+> U1 > +0.7% / D2 < −0.75% parameterization and/or the retired midnight-UTC dataset
+> (e.g. the "+339.9% MSTR / +973.9% MSTU" figures were a midnight-bar artifact — see
+> `backtest_retune_12utc.py` for the full recoverable-vs-never-real accounting).
+> Older tables are retained for historical reference.
+
+---
+
 **Current live strategy:** TF2 (Regime-Adaptive) — supersedes TF1  
 **OOS test window:** 2025-09-19 → 2026-05-17 (241 bars, fully out-of-sample)  
 **In-sample test window:** 2024-09-17 → 2025-09-17 (365 bars, in-sample — model trained through this period)  
@@ -30,9 +68,9 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 
 | Signal | Condition | Type |
 |--------|-----------|------|
-| **U1** | `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
+| **U1** | `err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
 | **D1** | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > 0.5%` | Downtrend — actual lows consistently break predicted floor |
-| **D2** | `err_hi_ma3 < −0.75%` | Downtrend — predicted highs not being reached (exhaustion) |
+| **D2** | `err_hi_ma3 < −1.3%` | Downtrend — predicted highs not being reached (exhaustion) |
 | **D3** | Today is a `lo_break` AND ≥ 3 consecutive `hi_break` days immediately precede it | Reversal canary — momentum-to-reversal handoff |
 
 **Derived metrics:**
@@ -98,7 +136,7 @@ OR the V-reversal gate fires (overrides the combined block):
 Sell at same-bar close (after-hours execution) when **either** of the following is true on the signal bar:
 
 ```
-D2: err_hi_ma3 < −0.75%  (predicted highs not being reached)
+D2: err_hi_ma3 < −1.3%  (predicted highs not being reached)
 OR
 D3: today is a lo_break AND ≥ 3 consecutive hi_break days immediately preceded it
 ```

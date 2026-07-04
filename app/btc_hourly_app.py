@@ -74,8 +74,18 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-sl5-v30-sata-btcoverlay"
+_BT_LOGIC_VERSION = "sl5-sl5-v31-u1_11-d2_13"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
+
+# ── Trend-signature signal thresholds (single source of truth) ──────────────
+# Re-tuned 2026-07 against the 12:00-UTC bars (see backtest_retune_12utc.py):
+# a higher U1 entry bar filters marginal whipsaw entries on the noisier 12:00-UTC
+# timeline, and a looser D2 exit holds confirmed trends longer. Previous values
+# (U1 +0.7% / D2 −0.75%) were fit to the retired midnight-UTC bars. Every live/
+# historical signal path, every backtest and every UI threshold label reads from
+# these two constants — change them here to re-tune the whole app consistently.
+U1_ERRHI_MIN =  1.1   # U1 entry: err_hi_ma3 must exceed +1.1%  (AND hi_breaks_3d ≥ 2)
+D2_ERRHI_MAX = -1.3   # D2 exit:  err_hi_ma3 below −1.3%
 
 # ── SATA idle-cash yield (Strive Variable Rate Series A Perpetual Preferred) ──
 # Strive's SATA is the first US-listed security to pay a cash dividend every
@@ -2463,11 +2473,11 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
 
     DOWNTREND signals (statistically significant, p < 0.001):
       D1  lo_breaks_3d  — actual low broke predicted low ≥ 2 of last 3 days
-      D2  err_hi_ma3    — 3d avg (actual_high − pred_high)/close < −0.75%
+      D2  err_hi_ma3    — 3d avg (actual_high − pred_high)/close < −1.3%
       D3  exhaustion    — first lo_break after streak of ≥ 3 hi_breaks (reversal canary)
 
     UPTREND signals (p = 0.022):
-      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.7%
+      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +1.1%
 
     V-Reversal special signal:
       V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 3% today
@@ -2596,7 +2606,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
         _hb3_i  = int(np.sum(hi_break[_s: _i + 1]))
         _lb3_i  = int(np.sum(lo_break[_s: _i + 1]))
         _d1_hist[_i] = (_lb3_i >= 2) and (_elma_i > 0.5)
-        _d2_hist[_i] = (_ehma_i < -0.75)
+        _d2_hist[_i] = (_ehma_i < D2_ERRHI_MAX)
     # 30-bar rolling mean of close prices (close_asof = the daily close proxy)
     ma30_window = min(30, n)
     ma30_value  = float(np.mean(c[-ma30_window:]))
@@ -2620,10 +2630,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
 
     # ── Signature trigger flags ─────────────────────────────────────────
     d1_triggered  = (lo_breaks_3d >= 2) and (err_lo_ma3 > 0.5)
-    d2_triggered  = (err_hi_ma3 < -0.75)
+    d2_triggered  = (err_hi_ma3 < D2_ERRHI_MAX)
     # D3 triggers on the current bar (same-bar execution — signal and exit both on bar i).
     d3_triggered  = exhaustion_active
-    u1_triggered  = (err_hi_ma3 > 0.7) and (hi_breaks_3d >= 2)
+    u1_triggered  = (err_hi_ma3 > U1_ERRHI_MIN) and (hi_breaks_3d >= 2)
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
@@ -3201,9 +3211,9 @@ def run_full_period_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -4052,9 +4062,9 @@ def run_mstr_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -4374,9 +4384,9 @@ def run_btc_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -4691,9 +4701,9 @@ def run_mstu_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -5057,9 +5067,9 @@ def run_mstr_options_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -5426,9 +5436,9 @@ def run_mstu_options_backtest(end_date_iso: str,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -5757,11 +5767,11 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     """Run a trading strategy backtest on a configurable window.
 
     Entry (both TF1 and TF2):
-        U1 active (err_hi_ma3 > +0.7% AND hi_breaks_3d ≥ 2)
+        U1 active (err_hi_ma3 > +1.1% AND hi_breaks_3d ≥ 2)
         AND (BTC > MA30  OR  clean_7d  OR  V-gate)
 
     Exit — TF1 (conservative, bear-optimised):
-        D2 (err_hi_ma3 < −0.75%)  OR  D3 (exhaustion canary)
+        D2 (err_hi_ma3 < −1.3%)  OR  D3 (exhaustion canary)
 
     Exit — TF2 (regime-adaptive, default):
         BULL regime (above_ma30 AND MA30 slope > 0) → exit D3 only (patient)
@@ -5827,9 +5837,9 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
         hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
 
-    u1 = (ehma3 > 0.7) & (hb3 >= 2)
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
     d1 = (lb3 >= 2)    & (elma3 > 0.5)
-    d2 = ehma3 < -0.75
+    d2 = ehma3 < D2_ERRHI_MAX
     d3 = np.zeros(N, dtype=bool)
     for i in range(1, N):
         consec = 0
@@ -6073,7 +6083,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         _lp_entry_signal = bool(sigs["u1_triggered"] and _lp_trend)
         _lp_exit_signal  = bool(
             sigs.get("exhaustion_active", False)
-            or ((sigs.get("err_hi_ma3", 0) < -0.75) and not _lp_bull)
+            or ((sigs.get("err_hi_ma3", 0) < D2_ERRHI_MAX) and not _lp_bull)
         )
         _lp_u1         = bool(sigs["u1_triggered"])
         _lp_clean_10d  = bool(sigs["clean_10d"])
@@ -6240,7 +6250,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active</b> — model's predicted highs are being beaten consistently<br>
           <span style='color:#3b82f6; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7044,7 +7054,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7095,7 +7105,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7154,7 +7164,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7919,7 +7929,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7970,7 +7980,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8029,7 +8039,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8763,7 +8773,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8813,7 +8823,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8871,7 +8881,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -9597,7 +9607,7 @@ def render_mstr_options_trading_strategy_dashboard(
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#d97706; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -10373,7 +10383,7 @@ def render_mstu_options_trading_strategy_dashboard(
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0284c7; font-size:11px;'>
-            err_hi_ma3 &gt; +0.7% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -11117,7 +11127,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _trend_ok     = (_bull_regime != sigs["clean_10d"]) or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok
     _exit_d3      = sigs.get("exhaustion_active", False)
-    _exit_d2      = (sigs.get("err_hi_ma3", 0) < -0.75) and not _bull_regime
+    _exit_d2      = (sigs.get("err_hi_ma3", 0) < D2_ERRHI_MAX) and not _bull_regime
     _exit_signal  = _exit_d3 or _exit_d2
 
     # ── Row 1: BTC (no stop loss) ─────────────────────────────────────────
@@ -11568,8 +11578,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 
     # Card D2
     d2_rows = [
-        ("err_hi 3d avg",       f"{sigs['err_hi_ma3']:+.2f}%", "< −0.75%",
-         sigs['err_hi_ma3'] < -0.75, True),
+        ("err_hi 3d avg",       f"{sigs['err_hi_ma3']:+.2f}%", f"< {D2_ERRHI_MAX:+.2f}%",
+         sigs['err_hi_ma3'] < D2_ERRHI_MAX, True),
         ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3",
          "often 0 when D2 fires; not part of trigger",
          sigs['hi_breaks_3d'] < 1, False),
@@ -11656,8 +11666,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 
     # Card U1
     u1_rows = [
-        ("err_hi 3d avg",       f"{sigs['err_hi_ma3']:+.2f}%", "> +0.7%",
-         sigs['err_hi_ma3'] > 0.7, True),
+        ("err_hi 3d avg",       f"{sigs['err_hi_ma3']:+.2f}%", f"> {U1_ERRHI_MIN:+.1f}%",
+         sigs['err_hi_ma3'] > U1_ERRHI_MIN, True),
         ("Hi-band breaks (3d)", f"{sigs['hi_breaks_3d']}/3",   "≥ 2",
          sigs['hi_breaks_3d'] >= 2, True),
         ("Current streak",      d3_streak_str,
@@ -11736,7 +11746,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         # ── Entry condition ① — U1 (required) ──
         ("① U1 Signal",
          "✅ ACTIVE" if _u1 else "○ inactive",
-         "= ACTIVE  (entry condition ① — err_hi_ma3 > +0.7% AND hi_breaks_3d ≥ 2)",
+         "= ACTIVE  (entry condition ① — err_hi_ma3 > +1.1% AND hi_breaks_3d ≥ 2)",
          _u1, True),
         # ── Entry condition ② — Confirmed Uptrend gate ──
         ("② 🐂 Bull Regime",
@@ -11832,7 +11842,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"<b>Today's</b> actual low massively overshot the predicted low "
                 f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
                 f"This is the <b>V-reversal capitulation pattern</b>. "
-                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.7% AND "
+                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +1.1% AND "
                 f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -11842,7 +11852,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"A capitulation spike fired <b>{_v_age} bar{'s' if _v_age != 1 else ''} ago</b> "
                 f"(not today — today's dn_score={sigs['dn_score_raw']:.2f}, err_lo={sigs['last_lo_err']:+.2f}%). "
                 f"The V-gate remains open for <b>{_bars_remaining} more bar{'s' if _bars_remaining != 1 else ''}</b>. "
-                f"If U1 fires (err_hi_ma3 &gt; +0.7% AND hi_breaks_3d ≥ 2) the strategy will enter "
+                f"If U1 fires (err_hi_ma3 &gt; +1.1% AND hi_breaks_3d ≥ 2) the strategy will enter "
                 f"even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -11943,8 +11953,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 **Confirmed Uptrend (CU) — Regime-Adaptive Strategy (best-performing variant):**
 - **Entry**: U1 fires AND (**Bull Regime XOR Clean 7d** — not both; **OR** ⚡ V-reversal within 3 bars) — Bull Regime = above MA30 AND MA30 rising; both-active is blocked (late-cycle)
 - **Exit** in BULL regime (price > MA30 AND MA30 rising): D3 only (patient — hold the trend)
-- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −0.75%) or D3 (defensive — cut quickly)
-- **Full period** (Jun 2024–May 2026): BTC +43.2% · MSTR +339.9% · MSTU +973.9% (all CU variant)
+- **Exit** in BEAR/Neutral regime: D2 (err_hi_ma3 < −1.3%) or D3 (defensive — cut quickly)
+- **Full period** (Jun 2024–May 2026): BTC +50.2% · MSTR +131.4% · MSTU +335.1% (all CU variant, re-tuned U1>+1.1% / D2<−1.3% on 12:00-UTC bars)
 - **Bear period OOS** (Sep 25–May 26): CU outperforms PR/Standard · fewer but higher-quality trades
 
 **Probability context:**
@@ -14412,8 +14422,8 @@ def render_retrain_dashboard():
                 help=(
                     "**Primary signal driver.**  "
                     "`err_hi = (actual_high − pred_high) / close × 100`.  "
-                    "**U1** fires when `err_hi_ma3 > +0.7%`.  "
-                    "**D2** fires when `err_hi_ma3 < −0.75%`.  "
+                    "**U1** fires when `err_hi_ma3 > +1.1%`.  "
+                    "**D2** fires when `err_hi_ma3 < −1.3%`.  "
                     "Higher MAPE → more noise in these error terms → false signals."
                 ),
             )
@@ -14572,10 +14582,10 @@ def render_retrain_dashboard():
         "🟢 U1 — Entry",
         "🔥 ACTIVE" if sigs.get("u1_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}  |  {_hb3}/3 hi-breaks"
-               if _ehi is not None else "threshold: err_hi_ma3 > +0.7%"),
+               if _ehi is not None else "threshold: err_hi_ma3 > +1.1%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 > +0.7%` AND `hi_breaks_3d ≥ 2`.  "
+            "**Threshold:** `err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2`.  "
             "**Entry gate:** U1 confirmed by above-MA30, clean 7d, or V-reversal.  "
             "Statistical lift: 1.68× over base rate."
         ),
@@ -14584,10 +14594,10 @@ def render_retrain_dashboard():
         "🔴 D2 — Exit (strongest)",
         "🔥 ACTIVE" if sigs.get("d2_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}"
-               if _ehi is not None else "threshold: err_hi_ma3 < −0.75%"),
+               if _ehi is not None else "threshold: err_hi_ma3 < −1.3%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 < −0.75%`.  "
+            "**Threshold:** `err_hi_ma3 < −1.3%`.  "
             "2.24× lift — strongest exit signal.  "
             "Active in BEAR/NEUTRAL regime; in BULL regime only D3 triggers exit."
         ),
