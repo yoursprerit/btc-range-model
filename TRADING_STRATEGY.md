@@ -17,13 +17,19 @@ stop tightened −7% → −3%; U1 lowered +1.1% → +0.9%).
 
 | Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | prior Full |
 |-------|------|----|----|------|---------|---------|---------|-----------|
-| **MSTR** | Pure Regime | +0.9% | −1.3% | −3% | +132% | +27% | **+205%** | +176% |
-| **MSTU** | Pure Regime | +0.9% | −1.3% | **−3%** | +310% | +66% | **+534%** | +427% |
-| **BTC** | Pure Regime | +0.9% | −1.3% | none | +68% | +3% | +96% | +50% |
+| **MSTR** | Pure Regime | +0.9% | −1.3% | −3% | +131% | +27% | **+205%** | +176% |
+| **MSTU** | Pure Regime | +0.9% | −1.3% | **−3%** | +260% | +66% | **+534%** | +427% |
+| **BTC** | Pure Regime | +0.9% | −1.3% | none | +91% | +3% | +96% | +50% |
 
-Full-period B&H: MSTR −2%, MSTU −76%, BTC +6%. All three improve materially versus the
-prior config, and each beats Buy & Hold on the full period (BTC also beats B&H in bull,
-+68% vs +52%).
+**Bull-period end extended to 2025-08-16** (was 2025-06-05): all three assets held an open
+trade at the old bull cutoff (entered 2025-04-22). The window now runs until that trade
+actually closes — BTC/MSTR exit on D2 (2025-08-16), MSTU on its −3% stop (2025-08-15) — so
+the 🐂 Bull column reflects the *realized* result of every trade rather than a mark-to-market
+of an open position. This lowers MSTU/MSTR bull (the open trade gave back gains / stopped
+out) and raises BTC bull. Bull B&H over the extended window: BTC +73%, MSTR +140%, MSTU +39%.
+
+Full-period B&H (unchanged, ends 2026-05-31): MSTR −2%, MSTU −76%, BTC +6%. All three beat
+Buy & Hold on the full period.
 
 **Important caveats (this is heavy in-sample optimization):**
 - These are the best of a ~200-config sweep on **~7 trades per period**; the bull window
