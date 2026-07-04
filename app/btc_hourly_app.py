@@ -74,7 +74,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-v34-pureregime-unified-btc"
+_BT_LOGIC_VERSION = "sl5-v35-bull-extended-0816"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── Trend-signature signal thresholds (single source of truth) ──────────────
@@ -7820,7 +7820,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                                            strategy_variant: str = "pure_regime") -> None:
     """Render the MSTU backtesting dashboard (BTC TF2+V-Gate signals → MSTU execution).
 
-    Four-period layout: Bear (Jun 2025–May 2026) · Bull (Jun 2024–May 2025 synthetic) ·
+    Four-period layout: Bear (Jun 2025–May 2026) · Bull (Jun 2024–Aug 2025 synthetic) ·
     OOS (rolling) · Full (Jun 2024–May 2026, synthetic+actual):
       • Teal color scheme to distinguish from BTC (blue/orange) and MSTR (purple)
       • MSTU ETF prices in trade log
@@ -8262,12 +8262,12 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         lbl_r = "🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS"
 
     if s_bull:
-        lbl_bull = (f"🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic<br>"
+        lbl_bull = (f"🐂 Bull Market (Jun 2024 – Aug 2025) 🧪 Synthetic<br>"
                     f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                     f"{pd.Timestamp(s_bull['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(s_bull['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
+        lbl_bull = "🐂 Bull Market (Jun 2024 – Aug 2025) 🧪 Synthetic"
 
     if s_oos:
         lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
@@ -10665,12 +10665,12 @@ def render_mstu_options_trading_strategy_dashboard(
         lbl_r = "🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS"
 
     if s_bull:
-        lbl_bull = (f"🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic<br>"
+        lbl_bull = (f"🐂 Bull Market (Jun 2024 – Aug 2025) 🧪 Synthetic<br>"
                     f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                     f"{pd.Timestamp(s_bull['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(s_bull['end_date']).strftime('%b %d, %Y')}</span>")
     else:
-        lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
+        lbl_bull = "🐂 Bull Market (Jun 2024 – Aug 2025) 🧪 Synthetic"
 
     if s_oos:
         lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
@@ -11847,7 +11847,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
                 "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
                 "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️, Jun 2024–May 2025): B&amp;H +55%. Strategy captures ~90–95% of bull."
+                "Bull period (in-sample ⚠️, Jun 2024–Aug 2025, extended to last open-trade close): "
+                "BTC strategy <b>+91%</b> vs B&amp;H +73% — beats B&amp;H."
             ),
             conf_txt=(
                 "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
@@ -12057,7 +12058,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     )
     _ds_mtime_live = _backtest_dataset_mtime()
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-06-05", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–Jun 5 2025
+    _bt_bull     = _run_fixed_period_backtest("2025-08-16", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–Aug 16 2025 (bull, extended to last open-trade close)
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
     _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
@@ -12336,10 +12337,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
     _ds_mtime    = _backtest_dataset_mtime()
     _bt_mstr_bear = _run_fixed_period_mstr_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
-    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-06-05", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
+    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-08-16", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
     _bt_mstr_full = _run_fixed_period_mstr_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
     _bt_mstu_bear = _run_fixed_period_mstu_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
-    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-06-05", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
+    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-08-16", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
     _bt_mstu_full = _run_fixed_period_mstu_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
     _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (7% SL)"])
     with _btab_btc:
@@ -15766,8 +15767,8 @@ with tab_btc:
         "2026-05-31", "2025-06-01", _btc_model_mtime, data_end=_btc_data_end,
         data_mtime=_ds_mtime, entry_gate=_btc_variant)    # locked Jun 2025–May 2026
     _btc_bull     = _run_fixed_period_btc_backtest(
-        "2025-06-05", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
-        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # Jun 2024–Jun 5 2025
+        "2025-08-16", "2024-06-01", _btc_model_mtime, data_end=_btc_data_end,
+        data_mtime=_ds_mtime, entry_gate=_btc_variant)    # Jun 2024–Aug 16 2025 (bull, extended to last open-trade close)
     _btc_full_oos = run_btc_backtest(
         _btc_oos_end, model_mtime=_btc_model_mtime, data_end=_btc_data_end,
         data_mtime=_ds_mtime, entry_gate=_btc_variant)    # OOS ends prior day (rolling)
@@ -15788,7 +15789,7 @@ with tab_mstr:
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
         "**⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
         "optimization) — enters on Bull Regime *or* a washed-out Clean Breakout, delivering "
-        "**Full +205%** (vs B&H −2%), Bull +132%, while staying positive in bear (+27% vs "
+        "**Full +205%** (vs B&H −2%), Bull +131%, while staying positive in bear (+27% vs "
         "B&H −57%). Exit is the shared regime-adaptive D2/D3 rule; stop is fixed −3% with "
         "SL5 re-entry. Switch gates with the radio below."
     )
@@ -15830,8 +15831,8 @@ with tab_mstr:
         "2026-05-31", "2025-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
         data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)    # locked Jun 2025–May 2026
     _mstr_bull     = _run_fixed_period_mstr_backtest(
-        "2025-06-05", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
-        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # Jun 2024–Jun 5 2025
+        "2025-08-16", "2024-06-01", _mstr_model_mtime, data_end=_mstr_data_end,
+        data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # Jun 2024–Aug 16 2025 (bull, extended to last open-trade close)
     _mstr_full_oos = run_mstr_backtest(
         _mstr_oos_end, model_mtime=_mstr_model_mtime, data_end=_mstr_data_end,
         data_mtime=_ds_mtime_mstr, entry_gate=_mstr_variant)  # OOS ends prior day (rolling)
@@ -15852,7 +15853,7 @@ with tab_mstu:
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
         "signals. **⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
         "optimization) with a **tightened fixed −3% stop** — for the 2× fund this delivers "
-        "**Full +534%** (vs B&H −76%), Bull +310%, and keeps Bear positive (+66% vs B&H −92%) "
+        "**Full +534%** (vs B&H −76%), Bull +260%, and keeps Bear positive (+66% vs B&H −92%) "
         "by avoiding the leveraged-ETF volatility decay B&H suffers. Exit is the shared "
         "regime-adaptive D2/D3 rule with SL5 re-entry. MSTU launched Sep 18 2024; the Bull "
         "period uses synthetic MSTU prices (OLS from MSTR). Switch gates with the radio below."
@@ -15895,8 +15896,8 @@ with tab_mstu:
         "2026-05-31", "2025-06-04", _mstu_model_mtime, data_end=_mstu_data_end,
         data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # locked Jun 2025–May 2026
     _mstu_bull     = _run_fixed_period_mstu_backtest(
-        "2025-06-05", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
-        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # Bull: Jun 2024–Jun 5 2025 (synthetic)
+        "2025-08-16", "2024-06-01", _mstu_model_mtime, data_end=_mstu_data_end,
+        data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)    # Bull: Jun 2024–Aug 16 2025 (synthetic, extended to trade close)
     _mstu_full_oos = run_mstu_backtest(
         _mstu_oos_end, model_mtime=_mstu_model_mtime, data_end=_mstu_data_end,
         data_mtime=_ds_mtime_mstu, entry_gate=_mstu_variant)      # OOS ends prior day (rolling)
@@ -15945,8 +15946,8 @@ with tab_mstu_opts:
         "2026-05-31", "2025-06-04", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
         data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)
     _mstu_opts_bull     = _run_fixed_period_mstu_options_backtest(
-        "2025-06-05", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
-        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)  # Bull: Jun 2024–Jun 5 2025
+        "2025-08-16", "2024-06-01", _mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
+        data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)  # Bull: Jun 2024–Aug 16 2025 (extended to last open-trade close)
     _mstu_opts_full_oos = run_mstu_options_backtest(
         _mstu_opts_oos_end, model_mtime=_mstu_opts_model_mtime, data_end=_mstu_opts_data_end,
         data_mtime=_mstu_opts_ds_mtime, entry_gate=_mstu_opts_variant)
@@ -15995,8 +15996,8 @@ with tab_mstr_opts:
         "2026-05-31", "2025-06-01", _opts_model_mtime, data_end=_opts_data_end,
         data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)
     _opts_bull     = _run_fixed_period_mstr_options_backtest(
-        "2025-06-05", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
-        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)  # Jun 2024–Jun 5 2025
+        "2025-08-16", "2024-06-01", _opts_model_mtime, data_end=_opts_data_end,
+        data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)  # Jun 2024–Aug 16 2025 (bull, extended to last open-trade close)
     _opts_full_oos = run_mstr_options_backtest(
         _opts_oos_end, model_mtime=_opts_model_mtime, data_end=_opts_data_end,
         data_mtime=_opts_ds_mtime, entry_gate=_opts_variant)
