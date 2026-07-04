@@ -5,35 +5,33 @@
 
 ---
 
-## ⭐ 2026-07b — Asset-specific entry gates (CURRENT LIVE)
+## ⭐ 2026-07c — Unified Pure Regime + full-period per-asset optimization (CURRENT LIVE)
 
-Building on the U1/D2 re-tune below, each asset now uses the **entry gate** that best
-captures its own bull market while staying defensive in bear. **Only the entry gate is
-asset-specific** — the U1 (>+1.1%) / D2 (<−1.3%) thresholds, the fixed stops, the SL5
-re-entry and the regime-adaptive D2/D3 exit are all shared. These are the **default**
-selections in the MSTR / MSTU / options backtest radio buttons.
+Each asset's config (gate × U1 × D2 × stop) was swept **on the live 7-day forward-fill
+backtest grid** — the grid the app actually runs — to maximize FULL-period return while
+keeping the bear period non-negative. All three assets converge on the **same signal
+config**: 🎯 **Pure Regime** entry, **U1 > +0.9%**, **D2 < −1.3%**, regime-adaptive D2/D3
+exit, SL5 re-entry. Only the **fixed stop** differs per asset. This supersedes the
+2026-07b asset-specific-gate scheme (MSTU moved from Standard-MA30 → Pure Regime, its
+stop tightened −7% → −3%; U1 lowered +1.1% → +0.9%).
 
-| Asset | Default entry gate | Rationale |
-|-------|--------------------|-----------|
-| **MSTR** | 🎯 **Pure Regime** (`bull_regime OR (clean_7d & below-MA30) OR V-rev`) | Matches B&H in bull |
-| **MSTU** | 📊 **Standard MA30** (`above_MA30 XOR clean_7d OR V-rev`) | Beats 2× B&H (avoids decay) |
-| **BTC** | 🔒 Confirmed Uptrend (`bull_regime XOR clean_7d OR V-rev`) | Unchanged |
+| Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | prior Full |
+|-------|------|----|----|------|---------|---------|---------|-----------|
+| **MSTR** | Pure Regime | +0.9% | −1.3% | −3% | +132% | +27% | **+205%** | +176% |
+| **MSTU** | Pure Regime | +0.9% | −1.3% | **−3%** | +310% | +66% | **+534%** | +427% |
+| **BTC** | Pure Regime | +0.9% | −1.3% | none | +30% | +4% | +36% | +50% |
 
-**Results (real app functions, live stops, regime exit):**
+Full-period B&H: MSTR −2%, MSTU −76%, BTC +6%. MSTR/MSTU improve materially; BTC dips
+slightly (the unified U1>0.9 favors the equities) but still beats B&H.
 
-| Asset (gate) | 🐂 Bull | 🐻 Bear | 🌐 Full | Bull B&H | prior (bull_regime) |
-|--------------|---------|---------|---------|----------|---------------------|
-| MSTR (Pure Regime) | **+113%** | **+26%** | **+176%** | +127% | +60 / +44 / +131 |
-| MSTU (Standard MA30) | **+145%** | **+115%** | **+427%** | +58%¹ | +123 / +95 / +335 |
-
-¹ App B&H for MSTU bull is +58% (pre-inception backfill); measured from MSTU's Sep-2024
-inception it is +190% — either way the Standard-MA30 gate improves *every* period vs the
-prior `bull_regime` default. The live signal/position panel shows MSTR and MSTU entry
-signals separately because their gates fire on different bars; exit signals are shared.
-
-> Caveat: bull windows are in-sample for the CT model and ride ~2 big rally trades;
-> the asset-specific gains are real but small-sample. See `frontier` analysis in the
-> repo (bull-capture vs bear-defense sweep).
+**Important caveats (this is heavy in-sample optimization):**
+- These are the best of a ~200-config sweep on **~7 trades per period**; the bull window
+  is **in-sample** for the CT model, and MSTU's +534% rides ~2 large rally trades. The
+  gains are real in-sample but the out-of-sample confidence interval is wide.
+- MSTU's −3% stop on a **2× ETF** is deliberately tight; an even tighter −2% backtests
+  higher but is a hair-trigger (likely overfit / high real-world whipsaw) and was rejected.
+- Earlier turns evaluated a *trading-day-correct* grid that disagreed with the live 7-day
+  grid; the numbers above use the **live grid** so they match the app tabs.
 
 ---
 
@@ -100,7 +98,7 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 
 | Signal | Condition | Type |
 |--------|-----------|------|
-| **U1** | `err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
+| **U1** | `err_hi_ma3 > +0.9%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
 | **D1** | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > 0.5%` | Downtrend — actual lows consistently break predicted floor |
 | **D2** | `err_hi_ma3 < −1.3%` | Downtrend — predicted highs not being reached (exhaustion) |
 | **D3** | Today is a `lo_break` AND ≥ 3 consecutive `hi_break` days immediately precede it | Reversal canary — momentum-to-reversal handoff |

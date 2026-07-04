@@ -74,31 +74,34 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-v32-mstr_pureregime-mstu_ma30"
+_BT_LOGIC_VERSION = "sl5-v33-pureregime-u1_09-d2_10-mstu_stop3"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── Trend-signature signal thresholds (single source of truth) ──────────────
-# Re-tuned 2026-07 against the 12:00-UTC bars (see backtest_retune_12utc.py):
-# a higher U1 entry bar filters marginal whipsaw entries on the noisier 12:00-UTC
-# timeline, and a looser D2 exit holds confirmed trends longer. Previous values
-# (U1 +0.7% / D2 −0.75%) were fit to the retired midnight-UTC bars. Every live/
-# historical signal path, every backtest and every UI threshold label reads from
-# these two constants — change them here to re-tune the whole app consistently.
-U1_ERRHI_MIN =  1.1   # U1 entry: err_hi_ma3 must exceed +1.1%  (AND hi_breaks_3d ≥ 2)
+# Re-optimized 2026-07c on the 12:00-UTC bars (see backtest_retune_12utc.py /
+# backtest_gate_frontier.py + per-asset full-period optimization). Each asset's
+# config was swept (gate × U1 × D2 × stop) ON THE LIVE 7-day forward-fill backtest
+# grid to maximize FULL-period return while keeping the bear period non-negative.
+# All three assets converge on the SAME signal config — Pure Regime entry,
+# U1 > +0.9%, D2 < −1.3% — so entry/exit signals are unified; only the per-asset
+# STOP differs (below). Prior: U1 +1.1% (2026-07b); U1 +0.7% / D2 −0.75% (midnight).
+U1_ERRHI_MIN =  0.9   # U1 entry: err_hi_ma3 must exceed +0.9%  (AND hi_breaks_3d ≥ 2)
 D2_ERRHI_MAX = -1.3   # D2 exit:  err_hi_ma3 below −1.3%
 
-# ── Asset-specific default strategy (entry gate) — single source of truth ────
-# Re-tuned 2026-07 on the 12:00-UTC bars (see backtest_retune_12utc.py / frontier
-# analysis): each asset uses the entry gate that best captures its bull market
-# while staying defensive in bear. Exit logic (regime-adaptive D2/D3), U1/D2
-# thresholds and fixed stops are shared; only the ENTRY GATE differs per asset.
-#   MSTR → "pure_regime" (Bull Regime OR washed-out Clean Breakout)  — matches B&H in bull
-#   MSTU → "above_ma30"  (Standard: price above MA30 XOR Clean 7d)   — beats B&H in bull (2x)
+# ── Per-asset strategy (entry gate + fixed stop) — single source of truth ────
+# 2026-07c optimization: all assets use the Pure Regime gate (Bull Regime OR
+# washed-out Clean Breakout OR V-reversal); only the fixed stop differs.
+#   MSTR → Pure Regime · fixed −3%   (Full +205% vs B&H −2%)
+#   MSTU → Pure Regime · fixed −3%   (Full +534% vs B&H −76%; tightened from −7%)
+#   BTC  → Pure Regime · no stop     (D2/D3 exits manage risk)
 # These are the default-selected options in the MSTR/MSTU/options radio buttons.
 MSTR_STRATEGY_GATE = "pure_regime"
-MSTU_STRATEGY_GATE = "above_ma30"
+MSTU_STRATEGY_GATE = "pure_regime"
+BTC_STRATEGY_GATE  = "pure_regime"
 MSTR_STRATEGY_LABEL = "Pure Regime"
-MSTU_STRATEGY_LABEL = "Standard MA30"
+MSTU_STRATEGY_LABEL = "Pure Regime"
+MSTR_STOP_PCT = 0.03   # MSTR fixed stop −3%
+MSTU_STOP_PCT = 0.03   # MSTU fixed stop −3% (tightened from −7%; helps full & bear)
 
 # ── SATA idle-cash yield (Strive Variable Rate Series A Perpetual Preferred) ──
 # Strive's SATA is the first US-listed security to pay a cash dividend every
@@ -4208,7 +4211,7 @@ def run_mstr_backtest(end_date_iso: str,
             if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * 0.97
+                e_nav = nav; pos = "LONG"; stop_px = price * (1 - MSTR_STOP_PCT)
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
@@ -4808,7 +4811,7 @@ def run_mstu_backtest(end_date_iso: str,
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
                     entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-7%",
+                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                     was_reentry=e_reentry,
                 ))
@@ -4847,7 +4850,7 @@ def run_mstu_backtest(end_date_iso: str,
             if tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i):
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * 0.93
+                e_nav = nav; pos = "LONG"; stop_px = price * (1 - MSTU_STOP_PCT)
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
@@ -7871,7 +7874,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>Stop trigger</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−7%</b> from entry price — triggers on daily close below stop level
+          Fixed <b>−3%</b> from entry price — triggers on daily close below stop level
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
@@ -11140,12 +11143,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _v_gate_ok    = sigs.get("v_recent_gate", False)
     _trend_ok     = (_bull_regime != sigs["clean_10d"]) or _v_gate_ok
     _entry_signal = sigs["u1_triggered"] and _trend_ok   # BTC gate (Confirmed Uptrend / bull_regime XOR)
-    # ── Asset-specific entry gates (2026-07 re-tune) ─────────────────────────
-    #   MSTR → Pure Regime : U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev)
-    #   MSTU → Standard MA30: U1 AND ((above_MA30 XOR Clean 7d) OR V-rev)
+    # ── Entry gate (2026-07c: all assets use Pure Regime; only the stop differs) ─
+    #   Pure Regime: U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev)
     _above_ma30   = sigs.get("above_ma30", False)
     _entry_mstr   = sigs["u1_triggered"] and (_bull_regime or (sigs["clean_10d"] and not _above_ma30) or _v_gate_ok)
-    _entry_mstu   = sigs["u1_triggered"] and ((_above_ma30 != sigs["clean_10d"]) or _v_gate_ok)
+    _entry_mstu   = _entry_mstr   # MSTU now uses the same Pure Regime gate as MSTR
     _exit_d3      = sigs.get("exhaustion_active", False)
     _exit_d2      = (sigs.get("err_hi_ma3", 0) < D2_ERRHI_MAX) and not _bull_regime
     _exit_signal  = _exit_d3 or _exit_d2
@@ -11233,9 +11235,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         def _sl5_chip(pos_data: dict, entry_ok: bool, gate_blocked: bool):
             """Return (label, note, bg, brd, col) for one asset's current gate state.
 
-            entry_ok     = this asset's OWN entry gate fires today (MSTR=Pure Regime,
-                           MSTU=Standard MA30). gate_blocked = U1 active but this
-                           asset's trend gate not met.
+            entry_ok     = the (shared) Pure Regime entry gate fires today.
+                           gate_blocked = U1 active but the trend gate not met.
             """
             is_open  = pos_data.get("open_pos", False)
             from_sl  = pos_data.get("from_sl", False)
@@ -11277,18 +11278,17 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         else:
             _eq_bg, _eq_brd = "#f8fafc", "#94a3b8"
 
-        # Per-asset entry context — MSTR (Pure Regime) and MSTU (Standard MA30)
-        # fire on DIFFERENT bars because they use different entry gates.
+        # Unified entry (2026-07c): BTC/MSTR/MSTU all use the Pure Regime gate; only
+        # the fixed stop differs (MSTR/MSTU −3%, BTC none).
         def _entry_state(entry_ok):
             if entry_ok:               return "🟢 ENTRY FIRES"
             if sigs["u1_triggered"]:   return "🟡 U1 but gate not met"
             return "○ idle"
         _exit_txt = "🔴 EXIT active" if _exit_signal else "none"
         _eq_sub = (
-            f"Entry today (asset-specific) → "
-            f"<b>MSTR · Pure Regime:</b> {_entry_state(_entry_mstr)} &nbsp;·&nbsp; "
-            f"<b>MSTU · Standard MA30:</b> {_entry_state(_entry_mstu)}"
-            f" &nbsp;|&nbsp; Exit (shared, regime-adaptive D2/D3): {_exit_txt}"
+            f"Entry today → <b>🎯 Pure Regime:</b> {_entry_state(_entry_mstr)} "
+            f"(same signal for MSTR &amp; MSTU; stops MSTR/MSTU −3%)"
+            f" &nbsp;|&nbsp; Exit (regime-adaptive D2/D3): {_exit_txt}"
             f" &nbsp;|&nbsp; Regime: {_regime_label}"
         )
 
@@ -11311,11 +11311,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 border-radius:12px; padding:14px 20px; margin:2px 0 4px 0;">
               <div style="font-size:10px; font-weight:700; color:#64748b;
                   text-transform:uppercase; letter-spacing:0.9px; margin-bottom:8px;">
-                📈 MSTR (🎯 Pure Regime) · MSTU (📊 Standard MA30) — asset-specific entry · shared regime-adaptive D2/D3 exit · Fixed SL + SL5 re-entry
+                📈 MSTR &amp; MSTU (🎯 Pure Regime · fixed −3% · SL5 re-entry) — shared regime-adaptive D2/D3 exit
               </div>
               <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:7px; align-items:flex-start;">
                 {_chip_html(_mstr_lbl, _mstr_note, _mstr_bg, _mstr_brd, _mstr_col, "MSTR", "Pure Regime")}
-                {_chip_html(_mstu_lbl, _mstu_note, _mstu_bg, _mstu_brd, _mstu_col, "MSTU", "Standard MA30")}
+                {_chip_html(_mstu_lbl, _mstu_note, _mstu_bg, _mstu_brd, _mstu_col, "MSTU", "Pure Regime")}
               </div>
               <div style="font-size:12px; color:#334155; line-height:1.5;">{_eq_sub}</div>
             </div>
@@ -11980,14 +11980,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
-**Regime-Adaptive Strategy — asset-specific entry gates (re-tuned 2026-07 on 12:00-UTC bars):**
-- **Entry (asset-specific):** U1 (`err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2`) AND the asset's trend gate:
-  - **MSTR → 🎯 Pure Regime:** Bull Regime **OR** washed-out Clean Breakout (Clean 7d while below MA30) **OR** ⚡ V-reversal
-  - **MSTU → 📊 Standard MA30:** above MA30 **XOR** Clean 7d (not both) **OR** ⚡ V-reversal
-  - **BTC → 🔒 Confirmed Uptrend:** Bull Regime **XOR** Clean 7d **OR** ⚡ V-reversal
+**Regime-Adaptive Strategy — unified Pure Regime entry (2026-07c full-period optimization):**
+- **Entry (all assets):** U1 (`err_hi_ma3 > +0.9%` AND `hi_breaks_3d ≥ 2`) AND 🎯 **Pure Regime** trend gate:
+  Bull Regime **OR** washed-out Clean Breakout (Clean 7d while below MA30) **OR** ⚡ V-reversal
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
-- **Full period** (Jun 2024–May 2026): BTC +50% · **MSTR +176%** (Pure Regime) · **MSTU +427%** (Standard MA30)
-- **Bull vs Buy & Hold:** MSTR +113% ≈ B&H +127% · MSTU +145% > app-B&H +58% (2× decay avoided) · Bear stays positive (MSTR +26%, MSTU +115%)
+- **Stops (per-asset):** MSTR −3% · MSTU −3% (tightened from −7%) · BTC none — all with SL5 regime-adaptive re-entry
+- **Full period** (Jun 2024–May 2026): BTC +36% · **MSTR +205%** · **MSTU +534%** (vs B&H +6% / −2% / −76%)
+- **Bear period:** MSTR +27% · MSTU +66% · BTC +4% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%)
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -15735,9 +15734,9 @@ with tab_btc:
     _btc_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
-        index=1,
+        index=0,   # ⭐ BTC default = Pure Regime (2026-07c optimization)
         format_func=lambda x: (
-            "🎯 Pure Regime — Bull Regime or Clean Breakout"
+            "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ STRATEGY"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
@@ -15787,12 +15786,11 @@ with tab_mstr:
     st.markdown("## 📊 MSTR — BTC Signal-Driven Backtesting")
     st.markdown(
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
-        "**⭐ Default strategy: 🎯 Pure Regime** entry gate (re-tuned 2026-07 on the "
-        "12:00-UTC bars) — enters on Bull Regime *or* a washed-out Clean Breakout, which "
-        "roughly **matches Buy & Hold in bull markets** (Bull +113% vs B&H +127%) while "
-        "staying strongly positive in bear (+26% vs B&H −57%). Exit is the shared "
-        "regime-adaptive D2/D3 rule; stop is fixed −3% with SL5 re-entry. "
-        "Switch gates with the radio below."
+        "**⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
+        "optimization) — enters on Bull Regime *or* a washed-out Clean Breakout, delivering "
+        "**Full +205%** (vs B&H −2%), Bull +132%, while staying positive in bear (+27% vs "
+        "B&H −57%). Exit is the shared regime-adaptive D2/D3 rule; stop is fixed −3% with "
+        "SL5 re-entry. Switch gates with the radio below."
     )
     _ds_ver_mstr = _backtest_dataset_version()
     _ds_mtime_mstr = _backtest_dataset_mtime()
@@ -15852,11 +15850,11 @@ with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
     st.markdown(
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
-        "signals. **⭐ Default strategy: 📊 Standard MA30** entry gate (re-tuned 2026-07 on "
-        "the 12:00-UTC bars) — for the 2× fund this **beats Buy & Hold in bull** (Bull +145% "
-        "vs app-B&H +58%) *and* improves bear (+115% vs B&H −92%), because timing avoids the "
-        "leveraged-ETF volatility decay that B&H suffers. Exit is the shared regime-adaptive "
-        "D2/D3 rule; stop is fixed −7% with SL5 re-entry. MSTU launched Sep 18 2024; the Bull "
+        "signals. **⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
+        "optimization) with a **tightened fixed −3% stop** — for the 2× fund this delivers "
+        "**Full +534%** (vs B&H −76%), Bull +310%, and keeps Bear positive (+66% vs B&H −92%) "
+        "by avoiding the leveraged-ETF volatility decay B&H suffers. Exit is the shared "
+        "regime-adaptive D2/D3 rule with SL5 re-entry. MSTU launched Sep 18 2024; the Bull "
         "period uses synthetic MSTU prices (OLS from MSTR). Switch gates with the radio below."
     )
     _ds_ver_mstu = _backtest_dataset_version()
@@ -15865,15 +15863,15 @@ with tab_mstu:
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
-        index=3,   # ⭐ MSTU default = Standard MA30 (re-tuned 2026-07; beats B&H in 2x bull)
+        index=0,   # ⭐ MSTU default = Pure Regime (2026-07c: Full +534%, tightened stop −3%)
         format_func=lambda x: (
-            "🎯 Pure Regime — Bull Regime or Clean Breakout"
+            "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ MSTU STRATEGY"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
             "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
             if x == "bull_regime_sata" else
-            "📊 Standard — Above MA30  ⭐ MSTU STRATEGY"
+            "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="mstu_variant_radio",
@@ -15919,20 +15917,20 @@ with tab_mstu_opts:
     st.markdown(
         "Executes in **MSTU ATM call options** (strike = MSTU spot at entry, 596d expiry, "
         "Black-Scholes priced, σ = 60-day rolling MSTU vol, r = 4.5%). **⭐ Default strategy: "
-        "📊 Standard MA30** — same entry gate as the MSTU stock tab. Exit is the shared "
+        "🎯 Pure Regime** — same entry gate as the MSTU stock tab. Exit is the shared "
         "regime-adaptive D2/D3 rule. B&H benchmark is MSTU stock. MSTU launched ~Jun 2025; "
         "the Bull period uses synthetic MSTU prices (OLS from MSTR)."
     )
     _mstu_opts_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "above_ma30"],
-        index=2,   # ⭐ MSTU options default = Standard MA30 (matches MSTU stock strategy)
+        index=0,   # ⭐ MSTU options default = Pure Regime (matches MSTU stock strategy)
         format_func=lambda x: (
-            "🎯 Pure Regime — Bull Regime or Clean Breakout"
+            "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ MSTU STRATEGY"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
-            "📊 Standard — Above MA30  ⭐ MSTU STRATEGY"
+            "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="mstu_opts_variant_radio",
