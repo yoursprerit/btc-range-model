@@ -9532,7 +9532,7 @@ def render_mstr_options_trading_strategy_dashboard(
       • B&H benchmark: MSTR stock (unleveraged alternative)
     """
     st.markdown("---")
-    st.subheader("🎯 MSTR Options — Confirmed Uptrend (CU) Strategy Backtest (ATM Calls, 743d Expiry)")
+    st.subheader("🎯 MSTR Options — BTC Signal-Driven Backtest (ATM Calls, 743d Expiry)")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTR Options backtest computing … fetching MSTR data and pricing options. "
@@ -10308,7 +10308,7 @@ def render_mstu_options_trading_strategy_dashboard(
       • B&H benchmark: MSTU stock
     """
     st.markdown("---")
-    st.subheader("🎯 MSTU Options — Confirmed Uptrend (CU) Strategy Backtest (ATM Calls, 596d Expiry)")
+    st.subheader("🎯 MSTU Options — BTC Signal-Driven Backtest (ATM Calls, 596d Expiry)")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ MSTU Options backtest computing … fetching MSTU data and pricing options. "
@@ -12352,7 +12352,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
 
-    # ─────────────── Confirmed Uptrend (CU) Strategy Backtest Dashboard ────────────
+    # ─────────────── Pure Regime Strategy Backtest Dashboard ────────────
     # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
     _ds_mtime    = _backtest_dataset_mtime()
     _bt_mstr_bear = _run_fixed_period_mstr_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
