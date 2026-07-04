@@ -44,7 +44,70 @@ _ONCHAIN = [
 ]
 _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
+# Binance public hosts for hourly klines. `api.binance.com` returns HTTP 451 in
+# some regions; `api.binance.us` and the `data-api.binance.vision` mirror serve
+# the same public klines and are tried first.
+_BINANCE_HOSTS = ("https://api.binance.us", "https://data-api.binance.vision",
+                  "https://api.binance.com")
+ANCHOR_HOUR_UTC = 12  # 7am CDT / 6am CST — the daily model's bar boundary
+
 # ─── helpers ────────────────────────────────────────────────────────────────
+
+def _binance_klines(start_ms: int, limit: int = 1000, timeout: int = 30):
+    """GET /api/v3/klines from the first Binance host that answers 200."""
+    for host in _BINANCE_HOSTS:
+        try:
+            r = requests.get(host + "/api/v3/klines",
+                             params=dict(symbol="BTCUSDT", interval="1h",
+                                         startTime=start_ms, limit=limit),
+                             timeout=timeout)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            continue
+    return None
+
+
+def fetch_btc_12utc(start_iso: str) -> pd.DataFrame:
+    """BTC daily OHLCV anchored at 12:00 UTC (7am CT), rebucketed from Binance
+    hourly klines — the SAME bar boundary as the live app (_rebucket_12utc) and
+    the daily H/L model. Replaces yfinance's midnight-UTC daily bars so the
+    versioned dataset is consistent with the Live and Historical views.
+
+    Volume is the summed Binance base-asset (BTC) volume; every volume feature
+    downstream (log-diff, z-score, MA ratio) is scale-invariant.
+    """
+    start_ms = int(pd.Timestamp(start_iso, tz="UTC").timestamp() * 1000)
+    end_ms   = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
+    cursor, rows = start_ms, []
+    while cursor < end_ms:
+        batch = _binance_klines(cursor)
+        if not batch or not isinstance(batch[-1], (list, tuple)):
+            break
+        rows.extend(batch)
+        cursor = int(batch[-1][0]) + 3600_000
+        time.sleep(0.05)
+    if not rows:
+        raise RuntimeError("Binance hourly klines unavailable (all hosts failed)")
+    cols = ["open_time", "open", "high", "low", "close", "volume",
+            "close_time", "qv", "n", "tb", "tq", "ig"]
+    h = pd.DataFrame(rows, columns=cols)
+    h["ts"] = pd.to_datetime(h["open_time"], unit="ms", utc=True).dt.tz_convert(None)
+    for c in ["open", "high", "low", "close", "volume"]:
+        h[c] = h[c].astype(float)
+    h = h.set_index("ts")[["open", "high", "low", "close", "volume"]]
+    h = h[~h.index.duplicated(keep="last")].sort_index()
+    # Rebucket into 24h bars starting at ANCHOR_HOUR_UTC (identical to the app).
+    h["bucket"] = (h.index - pd.Timedelta(hours=ANCHOR_HOUR_UTC)).normalize()
+    g = h.groupby("bucket").agg(
+        open=("open", "first"), high=("high", "max"), low=("low", "min"),
+        close=("close", "last"), volume=("volume", "sum"), n_hours=("close", "size"))
+    g = g[g["n_hours"] == 24].drop(columns="n_hours")
+    g.index.name = "Date"
+    return g
+
 
 def _norm(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
@@ -162,10 +225,9 @@ def main() -> int:
 
     fetch_end = (pd.Timestamp.today() + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
 
-    # ── 1. BTC-USD OHLCV ──────────────────────────────────────────────────────
-    print("Downloading BTC-USD …")
-    btc_raw = _yf("BTC-USD", FETCH_FROM)
-    btc = btc_raw[["Open","High","Low","Close","Volume"]].rename(columns=str.lower).ffill()
+    # ── 1. BTC-USD OHLCV (12:00-UTC bars from Binance hourly) ─────────────────
+    print("Downloading BTC-USD (Binance hourly → 12:00-UTC daily bars) …")
+    btc = fetch_btc_12utc(FETCH_FROM)[["open","high","low","close","volume"]].ffill()
 
     # ── 2. Macro series ───────────────────────────────────────────────────────
     print("Downloading macro series …")
@@ -284,11 +346,15 @@ def main() -> int:
 
     # ── 9. Manifest ───────────────────────────────────────────────────────────
     manifest = {
-        "version":       "v2",
+        "version":       "v3",
         "pull_date":     pull_date,
         "pull_ts_utc":   pull_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "generated_by":  "scripts/pull_backtest_data.py",
         "qc_all_passed": all_ok,
+        "btc_bar_anchor": ("12:00 UTC (7am CT) — BTC OHLCV rebucketed from Binance "
+                           "hourly to match the daily model and live view. Macro/on-chain "
+                           "remain calendar-date joined. Equities (MSTR/MSTU) remain "
+                           "exchange-session daily."),
         "datasets": {
             "raw_features_daily": {
                 "file":            "raw_features_daily.csv",
@@ -302,7 +368,8 @@ def main() -> int:
             },
             "btc_usd_daily": {
                 "file":            "btc_usd_daily.csv",
-                "ticker":          "BTC-USD",
+                "ticker":          "BTC-USD (Binance BTCUSDT, 12:00-UTC bars)",
+                "note":            "volume is in BTC (base asset); all volume features are scale-invariant",
                 "rows":            len(btc),
                 "date_from":       str(btc.index[0].date()),
                 "date_to":         str(btc.index[-1].date()),

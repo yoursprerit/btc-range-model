@@ -3449,12 +3449,29 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                     data_mtime=data_mtime)
 
 
-def _yf_extend_raw_features(df: pd.DataFrame, end_iso: str) -> pd.DataFrame:
-    """Extend a stale raw-features DataFrame with fresh yfinance BTC + macro data.
+def _btc_daily_12utc_bars() -> pd.DataFrame:
+    """BTC 12:00-UTC (7am-CT) daily OHLCV bars — the SAME anchor as _fetch_daily_raw
+    and the versioned dataset.  Built by rebucketing Binance hourly via
+    _rebucket_12utc so any runtime extension of the versioned CSVs stays on the
+    model's bar boundary (never the midnight-UTC bars that yfinance daily returns).
+    Returns an empty frame if the hourly source is unavailable."""
+    try:
+        hourly = _fetch_binance_hourly()
+        if hourly is None or hourly.empty:
+            return pd.DataFrame()
+        return _rebucket_12utc(hourly)
+    except Exception:
+        return pd.DataFrame()
 
-    Fetches BTC OHLCV and 7 macro series for dates after df.index.max() up to
-    end_iso.  On-chain and Coinbase premium columns are forward-filled from the
-    last known row so feature engineering has complete columns to work with.
+
+def _yf_extend_raw_features(df: pd.DataFrame, end_iso: str) -> pd.DataFrame:
+    """Extend a stale raw-features DataFrame with fresh BTC + macro data.
+
+    BTC OHLCV is rebucketed to 12:00-UTC (7am-CT) bars from Binance hourly so the
+    extension matches the model's bar boundary and the live _fetch_daily_raw path;
+    the 7 macro series come from yfinance (calendar-date, anchor-independent).
+    On-chain and Coinbase premium columns are forward-filled from the last known
+    row so feature engineering has complete columns to work with.
     Returns df unchanged if already covers end_iso or if the live fetch fails.
     """
     end_ts  = pd.Timestamp(end_iso)
@@ -3465,22 +3482,18 @@ def _yf_extend_raw_features(df: pd.DataFrame, end_iso: str) -> pd.DataFrame:
     gap_start = (last_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     gap_end   = (end_ts  + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
 
-    try:
-        d_btc = yf.download("BTC-USD", start=gap_start, end=gap_end,
-                             progress=False, auto_adjust=True)
-        if isinstance(d_btc.columns, pd.MultiIndex):
-            d_btc.columns = [c[0] for c in d_btc.columns]
-        d_btc.index = pd.DatetimeIndex(d_btc.index).tz_localize(None).normalize()
-        if d_btc.empty or "Close" not in d_btc.columns:
-            return df
-    except Exception:
+    # BTC: 12:00-UTC bars (NOT yfinance midnight-UTC daily) for the gap window.
+    _b12 = _btc_daily_12utc_bars()
+    if _b12.empty:
         return df
-
+    _b12 = _b12.loc[(_b12.index > last_ts) & (_b12.index <= end_ts)]
+    if _b12.empty:
+        return df
     ext = pd.DataFrame({
-        "btc_close":  d_btc["Close"],
-        "btc_high":   d_btc["High"],
-        "btc_low":    d_btc["Low"],
-        "btc_volume": d_btc.get("Volume", pd.Series(dtype=float)),
+        "btc_close":  _b12["close"],
+        "btc_high":   _b12["high"],
+        "btc_low":    _b12["low"],
+        "btc_volume": _b12["volume"],
     })
 
     _MACRO_EXT = {"eth": "ETH-USD", "spx": "^GSPC", "ndx": "^IXIC",
@@ -3521,6 +3534,20 @@ def _yf_extend_price_df(df: pd.DataFrame, ticker: str, end_iso: str) -> pd.DataF
 
     gap_start = (last_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     gap_end   = (end_ts  + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+    # BTC-USD must extend on the 12:00-UTC (7am-CT) bar boundary to match the
+    # model / live path — NOT yfinance's midnight-UTC daily bars. Equities
+    # (MSTR/MSTU) keep exchange-session daily bars from yfinance.
+    if ticker == "BTC-USD":
+        _b12 = _btc_daily_12utc_bars()
+        if _b12.empty:
+            return df
+        ext = _b12.rename(columns=str.lower)
+        new_rows = ext.loc[(ext.index > last_ts) & (ext.index <= end_ts)
+                           & (~ext.index.isin(df.index))]
+        if new_rows.empty:
+            return df
+        return pd.concat([df, new_rows[new_rows.columns.intersection(df.columns)]]).sort_index()
 
     try:
         _d = yf.download(ticker, start=gap_start, end=gap_end,
@@ -3773,7 +3800,15 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
     for _cb_col in ["cb_premium","cb_premium_ma3","cb_premium_z7"]:
         feat[_cb_col] = df[_cb_col].fillna(0.0)
 
-    # ── 6. Predictions (ensemble, NO direction_head — matches research script) ─
+    # ── 6. Predictions (ensemble + direction_head — identical to the LIVE
+    #       compute_daily_forecast / _build_ct_batch_predictions pipeline) ──────
+    # The direction_head is applied here so backtest predictions match the Live
+    # and Historical signal panels exactly. With the shipped CT artefact
+    # (beta=0) the head REPLACES the ensemble's high/low asymmetry with the
+    # classifier-driven direction, shifting pred_high/low by ~0.5% of close —
+    # comparable to the 0.7% U1 threshold. Omitting it (the previous "matches
+    # research script" behaviour) made the backtest fire U1 on different bars
+    # than the live tab.
     fc = AD_bt["feat_cols"]
     feat = feat.replace([np.inf, -np.inf], np.nan)
     for col in fc:
@@ -3792,6 +3827,30 @@ def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
     else:
         yhi = AD_bt["hi_model"].predict(F)
         ylo = AD_bt["lo_model"].predict(F)
+
+    # Direction head — vectorised, identical to _build_ct_batch_predictions.
+    _dh = AD_bt.get("direction_head")
+    if _dh is not None and _dh.get("classifier") is not None:
+        try:
+            _clf        = _dh["classifier"]
+            _beta_base  = float(_dh.get("beta", 1.0))
+            _reduction  = float(_dh.get("beta_trend_reduction", 0.0))
+            _trend_sat  = float(_dh.get("trend_saturation", 0.05))
+            _trend_feat = _dh.get("trend_feature", "ret_5")
+            _d_bull     = float(_dh.get("d_bull_mean", 0.0))
+            _d_bear     = float(_dh.get("d_bear_mean", 0.0))
+            _p_bull     = _clf.predict_proba(F)[:, 1]
+            _t_vals     = F[_trend_feat].fillna(0).values if _trend_feat in F.columns else np.zeros(len(F))
+            _t_str      = np.minimum(np.abs(_t_vals) / _trend_sat, 1.0)
+            _b_eff      = np.clip(_beta_base * (1.0 - _reduction * _t_str), 0.0, 1.0)
+            _m_pred     = (yhi + ylo) / 2.0
+            _d_pred     = (yhi - ylo) / 2.0
+            _d_dir      = _p_bull * _d_bull + (1 - _p_bull) * _d_bear
+            _d_blnd     = _b_eff * _d_pred + (1 - _b_eff) * _d_dir
+            yhi         = _m_pred + _d_blnd
+            ylo         = _m_pred - _d_blnd
+        except Exception:
+            pass
 
     c_vals = c.reindex(F.index).values
     ph = c_vals * (1 + np.clip(yhi, 0, None))
