@@ -11937,15 +11937,23 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_end      = target_date.strftime("%Y-%m-%d")
     # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
     _model_mtime = float(os.path.getmtime(str(DAILY_MODEL_CT))) if os.path.exists(str(DAILY_MODEL_CT)) else 0.0
-    # Bear and Full periods are locked. OOS ends at yesterday in live mode so the
-    # window is consistent regardless of bar anchor time.  In historical mode, use
-    # the selected bar date so the Live Position Panel reflects position state and
-    # price at that exact date.
+    # Bear and Full periods are locked. The OOS backtest — and every signal /
+    # position-panel value derived from it — is anchored to the last COMPLETED
+    # bar, i.e. the bar whose close was the most recent data available at the
+    # moment the view is meant to represent.
+    #   Live      → target bar (today) is in progress, so the last completed bar
+    #               is yesterday (today − 1).
+    #   Historical→ picking date D replays the app "as it stood live on date D",
+    #               when bar D was still in progress. The last completed bar was
+    #               therefore D − 1. Anchoring here (rather than at D) removes the
+    #               one-bar look-ahead that let bar D's realized high/low leak into
+    #               the signal — the cause of "U1 active in historical replay of D"
+    #               when the Live tab on date D showed no U1 (it only saw D − 1).
     _bt_oos_end  = (
         (pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=1))
         .normalize().strftime("%Y-%m-%d")
         if is_live
-        else _bt_end
+        else (target_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     )
     _ds_mtime_live = _backtest_dataset_mtime()
     _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
@@ -11956,10 +11964,19 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # In historical mode use backtest-derived signals (yfinance daily, no direction_head)
     # so the signal panel matches exactly which bars the position entries fired on.
     # In live mode use compute_trend_signatures (Binance data, includes today's bar).
+    #
+    # Both paths anchor to the last COMPLETED bar (see _bt_oos_end above):
+    #   Live      → compute_trend_signatures(today) naturally excludes today's
+    #               in-progress bar (no realized H/L yet) → last completed = today − 1.
+    #   Historical→ the OOS backtest ends at _bt_oos_end (= target_date − 1), so its
+    #               last_bar_sigs is bar (D − 1). The fallback must use the same
+    #               anchor — calling compute_trend_signatures(D) would re-introduce
+    #               bar D's realized H/L (look-ahead vs the Live tab on date D).
     if is_live:
         sigs = compute_trend_signatures(_bt_end, data_end=_data_end)
     else:
-        sigs = (_bt_full_oos or {}).get("last_bar_sigs") or compute_trend_signatures(_bt_end, data_end=_data_end)
+        sigs = (_bt_full_oos or {}).get("last_bar_sigs") or \
+               compute_trend_signatures(_bt_oos_end, data_end=_data_end)
 
     # Rolling forecast target (now+1h in live, as_of+1h in historical)
     if is_live:
@@ -12141,8 +12158,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
 
         # Compute MSTR/MSTU OOS positions for the live position tracker.
-        # Uses _bt_oos_end (slider date in historical mode, yesterday in live mode)
-        # so last_price and open_pos reflect the selected date's state.
+        # Uses _bt_oos_end — the last COMPLETED bar (yesterday in live mode,
+        # selected-date − 1 in historical mode) — so open_pos/last_price reflect
+        # the same "as of last closed bar" state the Live tab showed on that date.
         _ds_mtime    = _backtest_dataset_mtime()
         _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
         _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate="bull_regime")
