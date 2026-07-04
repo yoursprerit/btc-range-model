@@ -6072,7 +6072,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     """
     st.markdown("---")
     _asset_full = {"BTC": "BTC (No SL)", "MSTR": "MSTR (3% SL)", "MSTU": "MSTU (7% SL)"}.get(asset_label, asset_label)
-    st.subheader(f"🎯 Confirmed Uptrend (CU) Strategy — {_asset_full} Backtest")
+    st.subheader(f"🎯 Pure Regime Strategy — {_asset_full} Backtest")
 
     if bt_bear is None and bt_bull is None:
         st.info("⚙️ Backtest computing … CT model batch predictions being built. "
@@ -6253,7 +6253,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
   <div style='font-size:14px; font-weight:700; color:#1e3a8a; margin-bottom:14px;
        letter-spacing:0.3px;'>
-    🎯 Confirmed Uptrend (CU) &nbsp;—&nbsp; Strategy Rules at a Glance
+    🎯 Pure Regime &nbsp;—&nbsp; Strategy Rules at a Glance
   </div>
 
   <!-- ENTRY -->
@@ -6687,9 +6687,9 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=nav_s.index, y=nav_s.values, name="Confirmed Uptrend (CU)",
+            x=nav_s.index, y=nav_s.values, name="Pure Regime",
             line=dict(color="#2563eb", width=2.5),
-            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Confirmed Uptrend (CU)</extra>",
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Pure Regime</extra>",
         ))
         btc_price = bt.get("btc_price_series")
         if btc_price is not None and len(btc_price) > 0:
@@ -7081,7 +7081,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>One of three independent paths must be active</b> (no XOR overlap zone):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px; font-weight:700;'>🐂 Bull Regime</span>
             &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
             <br>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
@@ -7956,7 +7956,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>One of three independent paths must be active</b> (no XOR overlap zone):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px; font-weight:700;'>🐂 Bull Regime</span>
             &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
             <br>
             <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
@@ -8800,7 +8800,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>One of three independent paths must be active</b> (no XOR overlap zone):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#fed7aa; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            <span style='background:#fed7aa; border-radius:4px; padding:1px 7px; font-weight:700;'>🐂 Bull Regime</span>
             &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
             <br>
             <span style='background:#ffedd5; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
@@ -9653,7 +9653,7 @@ def render_mstr_options_trading_strategy_dashboard(
   </div>""" + _mstr_opts_entry_hdr + """
           <b>One of three independent paths must be active</b> (no XOR overlap zone):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#fde68a; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            <span style='background:#fde68a; border-radius:4px; padding:1px 7px; font-weight:700;'>🐂 Bull Regime</span>
             &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
             <br>
             <span style='background:#fef3c7; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
@@ -10429,7 +10429,7 @@ def render_mstu_options_trading_strategy_dashboard(
   </div>""" + _mstu_opts_entry_hdr + """
           <b>One of three independent paths must be active</b> (no XOR overlap zone):
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
-            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px; font-weight:700;'>🎯 Confirmed Uptrend</span>
+            <span style='background:#bae6fd; border-radius:4px; padding:1px 7px; font-weight:700;'>🐂 Bull Regime</span>
             &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
             <br>
             <span style='background:#e0f2fe; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
