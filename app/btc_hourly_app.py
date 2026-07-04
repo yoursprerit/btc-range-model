@@ -12342,19 +12342,22 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _bt_mstu_bear = _run_fixed_period_mstu_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
     _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-08-16", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
     _bt_mstu_full = _run_fixed_period_mstu_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
-    _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (7% SL)"])
+    _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (3% SL)"])
     with _btab_btc:
         render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
                                            bt_full=_bt_full, key_suffix=_chart_key,
                                            sigs=sigs, asset_label="BTC")
     with _btab_mstr:
-        render_trading_strategy_dashboard(_bt_mstr_bear, _bt_mstr_bull, bt_full_oos=_bt_mstr_oos,
-                                           bt_full=_bt_mstr_full, key_suffix=f"{_chart_key}_mstr",
-                                           sigs=sigs, asset_label="MSTR", show_position_panel=False)
+        # Use the SAME asset-specific dashboard as the MSTR Backtesting tab so the
+        # strategy cards/titles/descriptions and results match exactly (Pure Regime).
+        render_mstr_trading_strategy_dashboard(_bt_mstr_bear, _bt_mstr_bull, bt_full_oos=_bt_mstr_oos,
+                                               bt_full=_bt_mstr_full, key_suffix=f"{_chart_key}_mstr",
+                                               strategy_variant=MSTR_STRATEGY_GATE)
     with _btab_mstu:
-        render_trading_strategy_dashboard(_bt_mstu_bear, _bt_mstu_bull, bt_full_oos=_bt_mstu_oos,
-                                           bt_full=_bt_mstu_full, key_suffix=f"{_chart_key}_mstu",
-                                           sigs=sigs, asset_label="MSTU", show_position_panel=False)
+        # Same asset-specific dashboard as the MSTU Backtesting tab (Pure Regime, −3% SL).
+        render_mstu_trading_strategy_dashboard(_bt_mstu_bear, bt_bull=_bt_mstu_bull, bt_full_oos=_bt_mstu_oos,
+                                               bt_full=_bt_mstu_full, key_suffix=f"{_chart_key}_mstu",
+                                               strategy_variant=MSTU_STRATEGY_GATE)
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
