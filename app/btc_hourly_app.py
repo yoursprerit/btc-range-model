@@ -11076,7 +11076,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
-      • Pure Regime full-width card (Confirmed Uptrend (CU) — live strategy)
+      • Pure Regime full-width card (live strategy — MSTR/MSTU/BTC)
       • V-reversal special signal
       • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
@@ -11099,7 +11099,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         "WATCH_DN":    {"bg": "#fffbeb", "border": "#f59e0b", "badge_bg": "#f59e0b",
                         "badge_txt": "👁 DOWNTREND WATCH",              "txt_col": "#92400e"},
         "STRATEGY_BUY":{"bg": "#eff6ff", "border": "#2563eb", "badge_bg": "#2563eb",
-                        "badge_txt": "🎯 CONFIRMED UPTREND BUY (CU)",  "txt_col": "#1e3a8a"},
+                        "badge_txt": "🎯 PURE REGIME BUY",  "txt_col": "#1e3a8a"},
         "WATCH_UP":    {"bg": "#f0fdf4", "border": "#16a34a", "badge_bg": "#16a34a",
                         "badge_txt": "📈 UPTREND SIGNAL (U1)",          "txt_col": "#14532d"},
         "NEUTRAL":     {"bg": "#f8fafc", "border": "#94a3b8", "badge_bg": "#64748b",
@@ -11123,7 +11123,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 </span>
                 <span style="color:{cfg['txt_col']}; font-size:13px;">
                     <b>{dnc}/3</b> DN · <b>{upc}/1</b> UP ·
-                    BTC entry (Confirmed Uptrend): <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
+                    Entry (Pure Regime): <b>{'✅ ACTIVE' if sigs['tf1_triggered'] else '○ inactive'}</b>
                     (U1={'✓' if sigs['u1_triggered'] else '✗'}
                     bull_regime={'✓' if sigs.get('bull_regime') else '✗'}
                     clean7d={'✓' if sigs['clean_10d'] else '✗'}
@@ -11224,7 +11224,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
           </div>
           <div style="margin-left:auto; font-size:11px; color:#64748b;
               text-align:right; line-height:1.6;">
-            <b>Confirmed Uptrend (CU) Strategy</b><br>Signal as of today's close
+            <b>Pure Regime Strategy</b><br>Signal as of today's close
           </div>
         </div>
         """,
@@ -11778,7 +11778,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          "✅ ACTIVE" if _u1 else "○ inactive",
          "= ACTIVE  (entry condition ① — err_hi_ma3 > +0.9% AND hi_breaks_3d ≥ 2)",
          _u1, True),
-        # ── Entry condition ② — Confirmed Uptrend gate ──
+        # ── Entry condition ② — Pure Regime gate (Bull Regime / Clean Breakout / V-rev) ──
         ("② 🐂 Bull Regime",
          _bull_disp,
          "= YES  (gate option A — BTC > MA30 AND MA30 rising 5-bar)",
@@ -11792,10 +11792,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          f"${sigs.get('ma30_5d_ago', sigs['ma30_value']):,.0f} ({_slope_pct:+.2f}%)",
          "rising  (Bull Regime sub-condition)",
          _rising, False),
-        ("② Clean 7d (no D1/D2)",
-         "YES — zero D1/D2 fires in prior 7 bars" if _clean else "NO — recent D1 or D2 fired",
-         "= YES  (gate option B — no D1/D2 in prior 7 bars)",
-         _clean, True),
+        ("② 🧹 Clean Breakout",
+         ("YES — Clean 7d (no D1/D2) AND BTC below MA30 (fresh thrust off a washout)"
+          if _clean_breakout else
+          ("NO — Clean 7d but BTC already above MA30 (that is Bull Regime, not a breakout)"
+           if _clean else "NO — a D1 or D2 fired in the prior 7 bars")),
+         "= YES  (gate option B — Clean 7d while BELOW MA30)",
+         _clean_breakout, True),
         ("② ⚡ V-reversal (3-bar)",
          (("ACTIVE today — dn_score={:.2f}, err_lo={:+.1f}% (threshold: >0.8 & >3%)"
            .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
@@ -11819,23 +11822,40 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          f"{_regime_label}  →  {_exit_mode}",
          "BULL (BTC > MA30 AND MA30 rising) exits D3 only; BEAR/Neutral exits D2 or D3",
          _bull_regime, False),
+        ("Exit signal now",
+         ("🔴 EXIT — " + ("D3 exhaustion" if _exit_d3 else "") +
+          (" + " if _exit_d3 and _exit_d2 else "") + ("D2 (bear regime)" if _exit_d2 else "")
+          if _exit_signal else "○ no exit signal"),
+         "D3 (any regime) OR D2 while BEAR/Neutral (err_hi_ma3 < −1.3%)",
+         _exit_signal, False),
+        # ── Risk management — per-asset (all share the same signals) ──
+        ("Fixed stop (per asset)",
+         "MSTR −3% · MSTU −3% · BTC none — close-triggered, filled at close",
+         "MSTR/MSTU exit if daily close ≤ entry × 0.97; BTC uses D2/D3 only",
+         False, False),
+        ("Re-entry after stop (SL5)",
+         "BULL regime → re-enter next valid signal · BEAR/Neutral → wait 10 bars",
+         "regime-adaptive cooldown avoids dead-cat re-entries",
+         False, False),
     ]
     st.markdown(
         _sig_card(
-            title="Confirmed Uptrend (CU) — Regime-Adaptive Strategy: U1 + Pure Regime gate + V-reversal + Regime Exit",
+            title="🎯 Pure Regime Strategy (MSTR · MSTU · BTC) — U1 + Bull Regime / Clean Breakout / V-reversal · Regime-Adaptive Exit",
             icon="🎯",
             color="#2563eb",
             triggered=sigs["tf1_triggered"],
             signal_rows=tf1_rows,
             interpretation=(
-                "The <b>Confirmed Uptrend (CU) regime-adaptive strategy</b> — the best-performing variant. "
-                "Entry: U1 (hi-band persistence) AND <b>Pure Regime gate (Bull Regime OR Clean Breakout)</b> "
-                "(Bull Regime = above MA30 AND MA30 rising; exactly one must fire — not both), "
-                "<b>or ⚡ V-reversal capitulation within 3 bars</b> (catches post-crash recoveries "
-                "before the regime condition is met; V-reversal always allows entry). "
-                "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 &amp; MA30 rising) → D3 only "
-                "(patient); <b>BEAR/Neutral</b> → D2 or D3 (defensive). "
-                "CU outperforms Standard and Pure Regime across full period Jun 2024–May 2026."
+                "The <b>Pure Regime strategy</b> — the current live gate for <b>MSTR, MSTU and BTC</b> "
+                "(each uses the same BTC-derived signals; only the fixed stop differs). "
+                "Entry: <b>U1</b> (hi-band persistence) AND the <b>Pure Regime gate</b>, which passes on "
+                "<b>any one</b> of three non-overlapping trend paths — "
+                "🐂 <b>Bull Regime</b> (BTC above MA30 AND MA30 rising), "
+                "🧹 <b>Clean Breakout</b> (Clean 7d while BTC is below MA30 — a fresh thrust off a washout), "
+                "or ⚡ <b>V-reversal</b> capitulation within 3 bars. Unlike the older Confirmed-Uptrend gate "
+                "there is <b>no XOR block</b>: any single path opens entry. "
+                "Exits adapt to regime: <b>BULL</b> → D3 only (patient); <b>BEAR/Neutral</b> → D2 or D3 (defensive). "
+                "Per-asset fixed stop: MSTR/MSTU −3% (SL5 re-entry), BTC none."
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
@@ -11844,17 +11864,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
             prob_txt=(
-                "2-year backtest (May 2024–May 2026): <b>+87.9% return</b>, Sharpe 0.90, MaxDD −23.6%. "
-                "B&amp;H: +23.5%. Alpha: <b>+$64,594</b>. "
-                "OOS bear period (Sep 25–May 26): +$30k alpha. "
-                "Bull period (in-sample ⚠️, Jun 2024–Aug 2025, extended to last open-trade close): "
-                "BTC strategy <b>+91%</b> vs B&amp;H +73% — beats B&amp;H."
+                "Full period (Jun 2024–May 2026), Pure Regime, live stops: "
+                "<b>BTC +96%</b> (B&amp;H +6%) · <b>MSTR +205%</b> (B&amp;H −2%) · <b>MSTU +534%</b> (B&amp;H −76%). "
+                "Bear period: MSTR +27% · MSTU +66% · BTC +3% — all positive vs deeply-negative B&amp;H. "
+                "Bull (Jun 2024–Aug 2025, extended to last open-trade close): BTC +91% · MSTR +131% · MSTU +260%."
             ),
             conf_txt=(
-                "⚠️ Bull-period test is in-sample (CT model trained through Sep 2025). "
-                "Bear-period test is fully OOS. V-gate adds 2 trades over 2 years — "
-                "both confirmed by U1 co-firing within 3 bars of capitulation. "
-                "No strategy outperforms B&amp;H in both a +93% bull AND a −33% bear without leverage."
+                "⚠️ Heavy in-sample optimization: bull window is in-sample for the CT model, "
+                "results ride ~7 trades/period and (for MSTU) ~2 large rally trades. "
+                "Bear period is partly OOS. MSTU's −3% stop on a 2× ETF is deliberately tight. "
+                "Treat magnitudes as illustrative, not forward guarantees."
             ),
         ),
         unsafe_allow_html=True,
@@ -11977,7 +11996,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **CONFIRMED UPTREND BUY (CU)**: U1 + Pure Regime gate (Bull Regime OR washed-out Clean Breakout OR ⚡V-reversal) → entry (see CU card below)
+- 🎯 **PURE REGIME BUY**: U1 + Pure Regime gate (Bull Regime OR washed-out Clean Breakout OR ⚡V-reversal) → entry (see Pure Regime card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
