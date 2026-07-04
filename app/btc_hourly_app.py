@@ -74,7 +74,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-v33-pureregime-u1_09-d2_10-mstu_stop3"
+_BT_LOGIC_VERSION = "sl5-v34-pureregime-unified-btc"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── Trend-signature signal thresholds (single source of truth) ──────────────
@@ -2493,7 +2493,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
       D3  exhaustion    — first lo_break after streak of ≥ 3 hi_breaks (reversal canary)
 
     UPTREND signals (p = 0.022):
-      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +1.1%
+      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.9%
 
     V-Reversal special signal:
       V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 3% today
@@ -2657,9 +2657,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
     # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
     # not an entry gate, to keep live signal consistent with backtest behaviour.
     v_gate_ok     = v_recent_gate
-    # Require bull_regime (above+rising MA30) for the trend-gate path; clean_7d and V-reversal unchanged.
-    # bull_regime replaces above_ma30 in the XOR: blocks dead-cat bounce entries on declining MA30.
-    tf1_triggered = u1_triggered and ((bull_regime != clean_10d) or v_gate_ok)
+    # 2026-07c: live/historical entry signal = Pure Regime gate (the live strategy
+    # for BTC/MSTR/MSTU). Matches every backtest exactly so live = historical =
+    # backtest. Pure Regime = U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev).
+    tf1_triggered = u1_triggered and (bull_regime or (clean_10d and not above_ma30) or v_gate_ok)
 
     # ── Composite alert level ───────────────────────────────────────────
     dn_count = int(d1_triggered) + int(d2_triggered) + int(d3_triggered)
@@ -3280,9 +3281,9 @@ def run_full_period_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
-    # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
-    tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
+    # 2026-07c: Pure Regime gate (live BTC strategy) — matches run_btc_backtest and
+    # the live/historical tf1_triggered so live = historical = backtest.
+    tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
     nav     = initial_capital; pos = "CASH"; btc_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -5783,7 +5784,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     """Run a trading strategy backtest on a configurable window.
 
     Entry (both TF1 and TF2):
-        U1 active (err_hi_ma3 > +1.1% AND hi_breaks_3d ≥ 2)
+        U1 active (err_hi_ma3 > +0.9% AND hi_breaks_3d ≥ 2)
         AND (BTC > MA30  OR  clean_7d  OR  V-gate)
 
     Exit — TF1 (conservative, bear-optimised):
@@ -6266,7 +6267,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active</b> — model's predicted highs are being beaten consistently<br>
           <span style='color:#3b82f6; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -6274,13 +6275,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#2563eb;'>②</td>
         <td style='vertical-align:top; padding:3px 0;'>
-          <b>Confirmed Uptrend gate</b> — bull_regime XOR clean_7d, or ⚡ V-reversal:
+          <b>Pure Regime gate</b> — Bull Regime <b>OR</b> washed-out Clean Breakout <b>OR</b> ⚡ V-reversal:
           <div style='margin:5px 0 0 4px; line-height:2.1;'>
             <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>🐂 Bull Regime</span>
             &nbsp; BTC above MA30 <b>AND</b> MA30 slope rising (5-bar) — confirmed uptrend
             <br>
-            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
-            &nbsp; No D1 or D2 signal in the prior 7 bars (no recent bearish fingerprint)
+            <span style='background:#dbeafe; border-radius:4px; padding:1px 7px;'>🧹 Clean Breakout</span>
+            &nbsp; Clean 7d (no D1/D2 in prior 7 bars) <b>while below MA30</b> — fresh thrust after a washout
             <br>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
             &nbsp; Capitulation spike detected within the last 3 bars
@@ -7070,7 +7071,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7121,7 +7122,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7180,7 +7181,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7945,7 +7946,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7996,7 +7997,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8055,7 +8056,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8789,7 +8790,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8839,7 +8840,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8897,7 +8898,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -9623,7 +9624,7 @@ def render_mstr_options_trading_strategy_dashboard(
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#d97706; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -10399,7 +10400,7 @@ def render_mstu_options_trading_strategy_dashboard(
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0284c7; font-size:11px;'>
-            err_hi_ma3 &gt; +1.1% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -11075,7 +11076,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
-      • TF1 full-width card (Confirmed Uptrend (CU) — best backtest strategy)
+      • Pure Regime full-width card (Confirmed Uptrend (CU) — live strategy)
       • V-reversal special signal
       • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
@@ -11138,16 +11139,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     )
 
     # ── ACTION SIGNAL banners — Row 1: BTC  /  Row 2: MSTR & MSTU ───────────
+    # 2026-07c: BTC, MSTR and MSTU all use the SAME Pure Regime entry gate
+    #   Pure Regime: U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev)
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
     _v_gate_ok    = sigs.get("v_recent_gate", False)
-    _trend_ok     = (_bull_regime != sigs["clean_10d"]) or _v_gate_ok
-    _entry_signal = sigs["u1_triggered"] and _trend_ok   # BTC gate (Confirmed Uptrend / bull_regime XOR)
-    # ── Entry gate (2026-07c: all assets use Pure Regime; only the stop differs) ─
-    #   Pure Regime: U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev)
     _above_ma30   = sigs.get("above_ma30", False)
-    _entry_mstr   = sigs["u1_triggered"] and (_bull_regime or (sigs["clean_10d"] and not _above_ma30) or _v_gate_ok)
-    _entry_mstu   = _entry_mstr   # MSTU now uses the same Pure Regime gate as MSTR
+    _trend_ok     = _bull_regime or (sigs["clean_10d"] and not _above_ma30) or _v_gate_ok
+    _entry_signal = sigs["u1_triggered"] and _trend_ok   # Pure Regime (same for all assets)
+    _entry_mstr   = _entry_signal
+    _entry_mstu   = _entry_signal
     _exit_d3      = sigs.get("exhaustion_active", False)
     _exit_d2      = (sigs.get("err_hi_ma3", 0) < D2_ERRHI_MAX) and not _bull_regime
     _exit_signal  = _exit_d3 or _exit_d2
@@ -11172,9 +11173,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _btc_bg, _btc_brd, _btc_emoji = "#f0fdf4", "#16a34a", "🟢"
         _btc_label = "ENTRY SIGNAL ACTIVE"
         _entry_gates = []
-        if _bull_regime:       _entry_gates.append("🐂Bull Regime")
-        if sigs["clean_10d"]:  _entry_gates.append("Clean 7d")
-        if _v_gate_ok:         _entry_gates.append("⚡V-reversal")
+        if _bull_regime:                              _entry_gates.append("🐂Bull Regime")
+        if sigs["clean_10d"] and not _above_ma30:     _entry_gates.append("🧹Clean Breakout")
+        if _v_gate_ok:                                _entry_gates.append("⚡V-reversal")
         _btc_sub   = (
             f"U1 confirmed · trend gate: {' + '.join(_entry_gates)}  |  "
             f"Regime: {_regime_label}"
@@ -11731,13 +11732,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             unsafe_allow_html=True,
         )
 
-    # ── TF2 full-width card (U1 + Bull Regime XOR Clean 7d + V-reversal + regime exit) ─
+    # ── Pure Regime full-width card (U1 + Pure Regime gate + V-reversal + regime exit) ─
     # Rows mirror the "Strategy Rules at a Glance" box exactly: the entry trigger is
-    #   tf1_triggered = U1 AND ((bull_regime XOR clean_7d) OR V-reversal)
-    # where bull_regime = (BTC > MA30) AND (MA30 rising 5-bar). The XOR uses
-    # bull_regime — NOT bare above_ma30 — so a dead-cat bounce above a *declining*
-    # MA30 does NOT satisfy the gate. above_ma30 / MA30-slope are shown as the two
-    # sub-conditions of Bull Regime for transparency.
+    #   tf1_triggered = U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-reversal)
+    # where bull_regime = (BTC > MA30) AND (MA30 rising 5-bar). Pure Regime has two
+    # non-overlapping trend paths: Bull Regime (uptrend continuation) and a washed-out
+    # Clean Breakout (Clean 7d while below MA30 — a fresh thrust off a bottom).
     # _bull_regime / _regime_label already computed above for ACTION SIGNAL
     _ma30_pct  = (sigs["current_close_sig"] / sigs["ma30_value"] - 1) * 100
     _slope_pct = (sigs["ma30_value"] / sigs["ma30_5d_ago"] - 1) * 100 if sigs.get("ma30_5d_ago") else 0.0
@@ -11749,8 +11749,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _bull   = sigs.get("bull_regime", False)        # _above AND _rising
     _clean  = sigs["clean_10d"]
     _vrev   = sigs.get("v_recent_gate", False)
-    _xor_one   = (_bull != _clean)                  # exactly one of Bull Regime / Clean 7d
-    _gate_pass = _xor_one or _vrev                  # final Confirmed Uptrend gate
+    _clean_breakout = _clean and not _above         # washed-out Clean thrust (below MA30)
+    _gate_pass = _bull or _clean_breakout or _vrev  # Pure Regime gate (2026-07c)
 
     # Bull Regime status text — explain *why* when it fails
     if _bull:
@@ -11762,21 +11762,21 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     else:
         _bull_disp = "NO — below MA30 and MA30 not rising"
 
-    # Confirmed Uptrend gate status text — match the box's BLOCKED cases
-    if _vrev:
+    # Pure Regime gate status text
+    if _bull:
+        _gate_disp = "PASS ✅ — 🐂 Bull Regime (BTC > MA30 AND rising)"
+    elif _clean_breakout:
+        _gate_disp = "PASS ✅ — 🧹 Clean Breakout (Clean 7d while below MA30)"
+    elif _vrev:
         _gate_disp = "PASS ✅ — ⚡ V-reversal override"
-    elif _bull and _clean:
-        _gate_disp = "BLOCKED ⚠️ — Bull Regime AND Clean 7d both active (late-cycle)"
-    elif not _bull and not _clean:
-        _gate_disp = "BLOCKED ✗ — neither Bull Regime nor Clean 7d (no momentum)"
     else:
-        _gate_disp = "PASS ✅ — exactly one of Bull Regime / Clean 7d active"
+        _gate_disp = "✗ — no trend path (not Bull Regime; no below-MA30 Clean Breakout)"
 
     tf1_rows = [
         # ── Entry condition ① — U1 (required) ──
         ("① U1 Signal",
          "✅ ACTIVE" if _u1 else "○ inactive",
-         "= ACTIVE  (entry condition ① — err_hi_ma3 > +1.1% AND hi_breaks_3d ≥ 2)",
+         "= ACTIVE  (entry condition ① — err_hi_ma3 > +0.9% AND hi_breaks_3d ≥ 2)",
          _u1, True),
         # ── Entry condition ② — Confirmed Uptrend gate ──
         ("② 🐂 Bull Regime",
@@ -11809,10 +11809,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
           else "○ not active — no capitulation spike in last 3 bars (dn_score < 0.8 or err_lo < 3%)"),
          "= ACTIVE  (gate override — capitulation dn_score > 0.8 AND err_lo > 3%)",
          _vrev, True),
-        ("② Confirmed Uptrend gate",
+        ("② Pure Regime gate",
          _gate_disp,
-         "= PASS when exactly one of Bull Regime / Clean 7d fires, or ⚡ V-reversal; "
-         "BLOCKED when both fire or neither fires",
+         "= PASS on 🐂 Bull Regime, OR 🧹 Clean Breakout (Clean 7d while below MA30), "
+         "OR ⚡ V-reversal",
          _gate_pass, True),
         # ── Exit — regime-adaptive ──
         ("Regime → exit mode",
@@ -11822,14 +11822,14 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     ]
     st.markdown(
         _sig_card(
-            title="Confirmed Uptrend (CU) — Regime-Adaptive Strategy: U1 + Bull Regime XOR Clean 7d + V-reversal + Regime Exit",
+            title="Confirmed Uptrend (CU) — Regime-Adaptive Strategy: U1 + Pure Regime gate + V-reversal + Regime Exit",
             icon="🎯",
             color="#2563eb",
             triggered=sigs["tf1_triggered"],
             signal_rows=tf1_rows,
             interpretation=(
                 "The <b>Confirmed Uptrend (CU) regime-adaptive strategy</b> — the best-performing variant. "
-                "Entry: U1 (hi-band persistence) AND <b>Bull Regime XOR Clean 7d</b> "
+                "Entry: U1 (hi-band persistence) AND <b>Pure Regime gate (Bull Regime OR Clean Breakout)</b> "
                 "(Bull Regime = above MA30 AND MA30 rising; exactly one must fire — not both), "
                 "<b>or ⚡ V-reversal capitulation within 3 bars</b> (catches post-crash recoveries "
                 "before the regime condition is met; V-reversal always allows entry). "
@@ -11872,7 +11872,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"<b>Today's</b> actual low massively overshot the predicted low "
                 f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
                 f"This is the <b>V-reversal capitulation pattern</b>. "
-                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +1.1% AND "
+                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.9% AND "
                 f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -11882,7 +11882,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"A capitulation spike fired <b>{_v_age} bar{'s' if _v_age != 1 else ''} ago</b> "
                 f"(not today — today's dn_score={sigs['dn_score_raw']:.2f}, err_lo={sigs['last_lo_err']:+.2f}%). "
                 f"The V-gate remains open for <b>{_bars_remaining} more bar{'s' if _bars_remaining != 1 else ''}</b>. "
-                f"If U1 fires (err_hi_ma3 &gt; +1.1% AND hi_breaks_3d ≥ 2) the strategy will enter "
+                f"If U1 fires (err_hi_ma3 &gt; +0.9% AND hi_breaks_3d ≥ 2) the strategy will enter "
                 f"even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -11976,7 +11976,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🔴 **HIGH DOWNTREND**: 3/3 or 2/3 + V-reversal → Highest-confidence downtrend signal (2.24× lift)
 - 🟠 **ELEVATED DOWNTREND**: 2/3 conditions active → Strong signal (1.75× lift on err_lo_ma3)
 - 🟡 **WATCH DOWNTREND**: 1 condition only → Monitor, not high-confidence alone
-- 🎯 **CONFIRMED UPTREND BUY (CU)**: U1 + (Bull Regime XOR Clean 7d — not both; OR ⚡V-reversal) → Confirmed Uptrend entry (see CU card below)
+- 🎯 **CONFIRMED UPTREND BUY (CU)**: U1 + Pure Regime gate (Bull Regime OR washed-out Clean Breakout OR ⚡V-reversal) → entry (see CU card below)
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
@@ -11985,8 +11985,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
   Bull Regime **OR** washed-out Clean Breakout (Clean 7d while below MA30) **OR** ⚡ V-reversal
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
 - **Stops (per-asset):** MSTR −3% · MSTU −3% (tightened from −7%) · BTC none — all with SL5 regime-adaptive re-entry
-- **Full period** (Jun 2024–May 2026): BTC +36% · **MSTR +205%** · **MSTU +534%** (vs B&H +6% / −2% / −76%)
-- **Bear period:** MSTR +27% · MSTU +66% · BTC +4% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%)
+- **Full period** (Jun 2024–May 2026): **BTC +96%** · **MSTR +205%** · **MSTU +534%** (vs B&H +6% / −2% / −76%)
+- **Bear period:** MSTR +27% · MSTU +66% · BTC +3% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%)
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -14453,7 +14453,7 @@ def render_retrain_dashboard():
                 help=(
                     "**Primary signal driver.**  "
                     "`err_hi = (actual_high − pred_high) / close × 100`.  "
-                    "**U1** fires when `err_hi_ma3 > +1.1%`.  "
+                    "**U1** fires when `err_hi_ma3 > +0.9%`.  "
                     "**D2** fires when `err_hi_ma3 < −1.3%`.  "
                     "Higher MAPE → more noise in these error terms → false signals."
                 ),
@@ -14613,10 +14613,10 @@ def render_retrain_dashboard():
         "🟢 U1 — Entry",
         "🔥 ACTIVE" if sigs.get("u1_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}  |  {_hb3}/3 hi-breaks"
-               if _ehi is not None else "threshold: err_hi_ma3 > +1.1%"),
+               if _ehi is not None else "threshold: err_hi_ma3 > +0.9%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 > +1.1%` AND `hi_breaks_3d ≥ 2`.  "
+            "**Threshold:** `err_hi_ma3 > +0.9%` AND `hi_breaks_3d ≥ 2`.  "
             "**Entry gate:** U1 confirmed by above-MA30, clean 7d, or V-reversal.  "
             "Statistical lift: 1.68× over base rate."
         ),
