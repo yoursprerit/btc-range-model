@@ -12341,23 +12341,36 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # entry price and current price are always on the same split-adjusted scale.
         # (yf.Ticker.history interval="1h" can apply split adjustments differently
         # from yf.download interval="1d", producing a false ×10 mismatch for MSTU.)
-        _panel_as_of = target_date  # date used for Days Held and P&L
+        # The position panel is a snapshot of the strategy's state as of the LAST
+        # COMPLETED bar (_bt_oos_end = selected date − 1 in historical, yesterday in
+        # live) — the same bar the OOS backtest ends on and the signals fire on.  To
+        # keep the panel's price / P&L / NAV internally consistent with that state —
+        # and byte-for-byte with the backtest's own mark-to-market — mark every asset
+        # at the backtest's last close (D − 1) rather than the viewing date's (D)
+        # close.  This reproduces exactly what the Live tab showed on the selected day,
+        # which was likewise based on the previous day's close.  (The top-of-page KPI
+        # metrics still show date D's close — that's the date being viewed.)
+        def _bt_mark(bt, series_key):
+            if not bt:
+                return None
+            _lp = bt.get("last_price")
+            if _lp is not None and np.isfinite(_lp):
+                return float(_lp)
+            _s = bt.get(series_key)
+            if _s is not None and len(_s):
+                _v = float(_s.iloc[-1])
+                return _v if np.isfinite(_v) else None
+            return None
         if is_live:
+            _panel_as_of   = target_date      # "today" — Days Held counts to now
             _btc_panel_px  = live_spot
             _mstr_panel_px = mstr_price
             _mstu_panel_px = mstu_price
         else:
-            _btc_panel_px  = latest_close
-            # Use the versioned CSV daily close (already looked up into _disp_mstr_px /
-            # _disp_mstu_px above).  This is on the same split-adjusted scale as the
-            # backtest entry prices so P&L is consistent.  It correctly updates when
-            # the DATE changes; it intentionally stays fixed within a day (matching the
-            # daily-close execution model of the backtest).
-            # Previously used _scaled_equity_px with yfinance hourly data, which returned
-            # a frozen bt_last_price whenever hourly data was unavailable — causing the
-            # panel to appear stuck regardless of the date slider.
-            _mstr_panel_px = _disp_mstr_px
-            _mstu_panel_px = _disp_mstu_px
+            _panel_as_of   = pd.Timestamp(_bt_oos_end)   # last completed bar (D − 1)
+            _btc_panel_px  = _bt_mark(_bt_full_oos, "btc_price_series")
+            _mstr_panel_px = _bt_mark(_bt_mstr_oos, "mstr_price_series")
+            _mstu_panel_px = _bt_mark(_bt_mstu_oos, "mstu_price_series")
 
         # Always populate all 3 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
@@ -12376,7 +12389,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 entry         = (_bt_mstr_oos or {}).get("open_entry"),
                 live_price    = _mstr_panel_px,
                 asset_label   = "MSTR",
-                stop_type     = "fixed-3%",
+                stop_type     = f"fixed-{int(round(MSTR_STOP_PCT*100))}%",
                 nav           = (_bt_mstr_oos or {}).get("stats", {}).get("final_nav"),
                 last_trade    = _last_closed_trade(_bt_mstr_oos),
                 from_sl       = (_bt_mstr_oos or {}).get("from_sl", False),
@@ -12387,7 +12400,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 entry         = (_bt_mstu_oos or {}).get("open_entry"),
                 live_price    = _mstu_panel_px,
                 asset_label   = "MSTU",
-                stop_type     = "fixed-7%",
+                stop_type     = f"fixed-{int(round(MSTU_STOP_PCT*100))}%",
                 nav           = (_bt_mstu_oos or {}).get("stats", {}).get("final_nav"),
                 last_trade    = _last_closed_trade(_bt_mstu_oos),
                 from_sl       = (_bt_mstu_oos or {}).get("from_sl", False),
