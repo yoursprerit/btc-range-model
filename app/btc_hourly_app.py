@@ -93,7 +93,7 @@ U1_ERRHI_MIN =  1.3   # U1 entry: err_hi_ma3 must exceed +1.3%  (AND hi_breaks_3
 D2_ERRHI_MAX = -1.3   # D2 exit:  err_hi_ma3 below −1.3%
 
 # ── Per-asset strategy (entry gate + fixed stop) — single source of truth ────
-# 2026-07c optimization: all assets use the Pure Regime gate (Bull Regime OR
+# 2026-07c gate / 07d threshold: all assets use the Pure Regime gate (Bull Regime OR
 # washed-out Clean Breakout OR V-reversal); only the fixed stop differs.
 #   MSTR → Pure Regime · fixed −3%   (Full +213% vs B&H −2%)
 #   MSTU → Pure Regime · fixed −3%   (Full +504% vs B&H −76%; tightened from −7%)
@@ -2661,7 +2661,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
     # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
     # not an entry gate, to keep live signal consistent with backtest behaviour.
     v_gate_ok     = v_recent_gate
-    # 2026-07c: live/historical entry signal = Pure Regime gate (the live strategy
+    # 2026-07c gate / 07d threshold: live/historical entry signal = Pure Regime gate (the live strategy
     # for BTC/MSTR/MSTU). Matches every backtest exactly so live = historical =
     # backtest. Pure Regime = U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev).
     tf1_triggered = u1_triggered and (bull_regime or (clean_10d and not above_ma30) or v_gate_ok)
@@ -3285,7 +3285,7 @@ def run_full_period_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # 2026-07c: Pure Regime gate (live BTC strategy) — matches run_btc_backtest and
+    # 2026-07c gate / 07d threshold: Pure Regime gate (live BTC strategy) — matches run_btc_backtest and
     # the live/historical tf1_triggered so live = historical = backtest.
     tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
@@ -11143,7 +11143,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     )
 
     # ── ACTION SIGNAL banners — Row 1: BTC  /  Row 2: MSTR & MSTU ───────────
-    # 2026-07c: BTC, MSTR and MSTU all use the SAME Pure Regime entry gate
+    # 2026-07c gate / 07d threshold: BTC, MSTR and MSTU all use the SAME Pure Regime entry gate
     #   Pure Regime: U1 AND (Bull Regime OR (Clean 7d & below MA30) OR V-rev)
     _bull_regime  = sigs.get("bull_regime", False)
     _regime_label = "🐂 BULL" if _bull_regime else "🐻 BEAR / NEUTRAL"
@@ -11283,7 +11283,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         else:
             _eq_bg, _eq_brd = "#f8fafc", "#94a3b8"
 
-        # Unified entry (2026-07c): BTC/MSTR/MSTU all use the Pure Regime gate; only
+        # Unified entry (2026-07c gate / 07d threshold): BTC/MSTR/MSTU all use the Pure Regime gate; only
         # the fixed stop differs (MSTR/MSTU −3%, BTC none).
         def _entry_state(entry_ok):
             if entry_ok:               return "🟢 ENTRY FIRES"
@@ -11754,7 +11754,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _clean  = sigs["clean_10d"]
     _vrev   = sigs.get("v_recent_gate", False)
     _clean_breakout = _clean and not _above         # washed-out Clean thrust (below MA30)
-    _gate_pass = _bull or _clean_breakout or _vrev  # Pure Regime gate (2026-07c)
+    _gate_pass = _bull or _clean_breakout or _vrev  # Pure Regime gate (2026-07c gate / 07d threshold)
 
     # Bull Regime status text — explain *why* when it fails
     if _bull:
@@ -12004,7 +12004,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - 🟢 **UPTREND SIGNAL (U1)**: U1 active but entry gate not yet met → Upside momentum (1.68× lift)
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
-**Regime-Adaptive Strategy — unified Pure Regime entry (2026-07c full-period optimization):**
+**Regime-Adaptive Strategy — unified Pure Regime entry (2026-07c gate / 07d threshold optimization):**
 - **Entry (all assets):** U1 (`err_hi_ma3 > +1.3%` AND `hi_breaks_3d ≥ 2`) AND 🎯 **Pure Regime** trend gate:
   Bull Regime **OR** washed-out Clean Breakout (Clean 7d while below MA30) **OR** ⚡ V-reversal
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
@@ -15761,7 +15761,7 @@ with tab_btc:
     _btc_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
-        index=0,   # ⭐ BTC default = Pure Regime (2026-07c optimization)
+        index=0,   # ⭐ BTC default = Pure Regime (2026-07c gate / 07d threshold)
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ STRATEGY"
             if x == "pure_regime" else
@@ -15813,7 +15813,7 @@ with tab_mstr:
     st.markdown("## 📊 MSTR — BTC Signal-Driven Backtesting")
     st.markdown(
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
-        "**⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
+        "**⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c gate / 07d threshold "
         "optimization) — enters on Bull Regime *or* a washed-out Clean Breakout, delivering "
         "**Full +213%** (vs B&H −2%), Bull +124%, while staying positive in bear (+35% vs "
         "B&H −57%). Exit is the shared regime-adaptive D2/D3 rule; stop is fixed −3% with "
@@ -15877,7 +15877,7 @@ with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
     st.markdown(
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
-        "signals. **⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
+        "signals. **⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c gate / 07d threshold "
         "optimization) with a **tightened fixed −3% stop** — for the 2× fund this delivers "
         "**Full +504%** (vs B&H −76%), Bull +232%, and keeps Bear positive (+71% vs B&H −92%) "
         "by avoiding the leveraged-ETF volatility decay B&H suffers. Exit is the shared "
