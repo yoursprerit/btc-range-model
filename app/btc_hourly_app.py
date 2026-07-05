@@ -3186,6 +3186,35 @@ def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = "")
 
 
 
+def _relabel_result_to_visible(result: dict) -> dict:
+    """Relabel a backtest result's DISPLAY dates from the signal-bar start date to
+    the day the trade is visible / executes live (bar close = signal bar + 1 day).
+
+    The daily H/L signal for bar B is computed from bar B's own realized high/low,
+    which is only known when bar B closes — one calendar day after B starts (bars
+    are anchored at 12:00 UTC).  The backtest enters at that close and, internally,
+    labels the trade by the signal bar B.  But live (and therefore the Historical
+    Replay tab, which anchors to the last completed bar) only surfaces that entry on
+    day B+1.  Shifting the trade log's entry/exit/open-entry dates by +1 day makes
+    the trade log and position panel agree with the Replay tab: a trade the engine
+    computed on bar 04-22 is shown as "04-23", the day it is actionable and the day
+    it appears on Replay.
+
+    Only the human-facing date fields on ``trades`` and ``open_entry`` are shifted;
+    every economic quantity (prices, NAV, P&L, duration_days, period attribution,
+    per-year tax) was computed on the original bar dates before this call and is
+    untouched, as are the stats' period start/end dates and ``as_of_date``.
+    """
+    _ONE = pd.Timedelta(days=1)
+    for _t in (result.get("trades") or []):
+        for _k in ("entry_date", "exit_date"):
+            if _t.get(_k) is not None:
+                _t[_k] = pd.Timestamp(_t[_k]) + _ONE
+    _oe = result.get("open_entry")
+    if _oe and _oe.get("date") is not None:
+        _oe["date"] = pd.Timestamp(_oe["date"]) + _ONE
+    return result
+
 
 def run_full_period_backtest(end_date_iso: str,
                              backtest_start_iso: str = "2024-05-26",
@@ -3470,7 +3499,7 @@ def run_full_period_backtest(end_date_iso: str,
         detail_rows=_detail, n_bars=N, as_of_date=dates[_L],
     )
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = "TF2",
         trades     = trades,
         nav_series = nav_series,
@@ -3499,7 +3528,7 @@ def run_full_period_backtest(end_date_iso: str,
             start_date      = start_dt,      # requested window start (for label display)
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 @st.cache_data(show_spinner="Loading fixed-period backtest …")
@@ -4307,7 +4336,7 @@ def run_mstr_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = "TF2+V-Gate (MSTR)",
         trades     = trades,
         nav_series = nav_series,
@@ -4343,7 +4372,7 @@ def run_mstr_backtest(end_date_iso: str,
             start_date      = start_dt,
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 @st.cache_data(show_spinner="Loading fixed-period MSTR backtest …")
@@ -4594,7 +4623,7 @@ def run_btc_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = "TF2+V-Gate (BTC)",
         trades     = trades,
         nav_series = nav_series,
@@ -4626,7 +4655,7 @@ def run_btc_backtest(end_date_iso: str,
             start_date      = start_dt,
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 @st.cache_data(show_spinner="Loading fixed-period BTC backtest …")
@@ -4946,7 +4975,7 @@ def run_mstu_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = "TF2+V-Gate (MSTU)",
         trades     = trades,
         nav_series = nav_series,
@@ -4982,7 +5011,7 @@ def run_mstu_backtest(end_date_iso: str,
             start_date      = start_dt,
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 @st.cache_data(show_spinner="Loading fixed-period MSTU backtest …")
@@ -5315,7 +5344,7 @@ def run_mstr_options_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = f"CU (MSTR Calls {option_days}d)",
         trades     = trades,
         nav_series = nav_series,
@@ -5342,7 +5371,7 @@ def run_mstr_options_backtest(end_date_iso: str,
             start_date      = start_dt,
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 @st.cache_data(show_spinner="Loading fixed-period MSTR Options backtest …")
@@ -5681,7 +5710,7 @@ def run_mstu_options_backtest(end_date_iso: str,
 
     bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = f"CU (MSTU Calls {option_days}d)",
         trades     = trades,
         nav_series = nav_series,
@@ -5708,7 +5737,7 @@ def run_mstu_options_backtest(end_date_iso: str,
             start_date      = start_dt,
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 @st.cache_data(show_spinner="Loading fixed-period MSTU Options backtest …")
@@ -6064,7 +6093,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
 
     bull_regime_series = pd.Series(bull_regime[WARMUP:].astype(bool), index=dates[WARMUP:])
 
-    return dict(
+    return _relabel_result_to_visible(dict(
         strategy   = strategy,
         trades     = trades,
         nav_series = nav_series,
@@ -6090,7 +6119,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
             start_date      = dates[WARMUP],
             end_date        = dates[N-1],
         ),
-    )
+    ))
 
 
 def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
@@ -12367,7 +12396,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _mstr_panel_px = mstr_price
             _mstu_panel_px = mstu_price
         else:
-            _panel_as_of   = pd.Timestamp(_bt_oos_end)   # last completed bar (D − 1)
+            # Days-Held anchor = viewing date D (the "visible today").  Trade entry
+            # dates are now on the visible convention (bar close = signal bar + 1),
+            # so a position that first appears on replay D was entered on bar D − 1
+            # and is labelled entered-D → Days Held = 0, never negative.  The MARK
+            # price stays the backtest's last close (bar D − 1) so P&L still equals
+            # the backtest's mark-to-market (unchanged from before).
+            _panel_as_of   = target_date
             _btc_panel_px  = _bt_mark(_bt_full_oos, "btc_price_series")
             _mstr_panel_px = _bt_mark(_bt_mstr_oos, "mstr_price_series")
             _mstu_panel_px = _bt_mark(_bt_mstu_oos, "mstu_price_series")
