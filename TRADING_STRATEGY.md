@@ -5,21 +5,25 @@
 
 ---
 
-## ⭐ 2026-07c — Unified Pure Regime + full-period per-asset optimization (CURRENT LIVE)
+## ⭐ 2026-07d — Raise U1 to +1.3% to cut bear losers (CURRENT LIVE)
 
-Each asset's config (gate × U1 × D2 × stop) was swept **on the live 7-day forward-fill
-backtest grid** — the grid the app actually runs — to maximize FULL-period return while
-keeping the bear period non-negative. All three assets converge on the **same signal
-config**: 🎯 **Pure Regime** entry, **U1 > +0.9%**, **D2 < −1.3%**, regime-adaptive D2/D3
-exit, SL5 re-entry. Only the **fixed stop** differs per asset. This supersedes the
-2026-07b asset-specific-gate scheme (MSTU moved from Standard-MA30 → Pure Regime, its
-stop tightened −7% → −3%; U1 lowered +1.1% → +0.9%).
+All three assets share the **same signal config**: 🎯 **Pure Regime** entry,
+**U1 > +1.3%**, **D2 < −1.3%**, regime-adaptive D2/D3 exit, SL5 re-entry. Only the
+**fixed stop** differs per asset. This raises U1 from +0.9% (2026-07c) to **+1.3%** — a
+higher entry bar that filters the marginal entries which become bear-market losers.
+The effect is consistent across every asset: **one fewer losing bear trade**, higher
+bear return and shallower bear drawdown, while **bull capture is nearly maintained**
+(a few points given up) and full-period return is flat-to-higher (MSTR/BTC up, MSTU
+slightly down). Config lineage: 07c raised MSTU to Pure Regime / −3% stop; 07d raises U1.
 
-| Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | prior Full |
+| Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | 07c (U1>0.9) |
 |-------|------|----|----|------|---------|---------|---------|-----------|
-| **MSTR** | Pure Regime | +0.9% | −1.3% | −3% | +131% | +27% | **+205%** | +176% |
-| **MSTU** | Pure Regime | +0.9% | −1.3% | **−3%** | +260% | +66% | **+534%** | +427% |
-| **BTC** | Pure Regime | +0.9% | −1.3% | none | +91% | +3% | +96% | +50% |
+| **MSTR** | Pure Regime | **+1.3%** | −1.3% | −3% | +124% | **+35%** | **+213%** | 131 / 27 / 205 |
+| **MSTU** | Pure Regime | **+1.3%** | −1.3% | **−3%** | +232% | **+71%** | **+504%** | 260 / 66 / 534 |
+| **BTC** | Pure Regime | **+1.3%** | −1.3% | none | +89% | **+7%** | **+102%** | 91 / 3 / 96 |
+
+Bear losing trades per asset dropped from 3/3/2 (MSTR/MSTU/BTC at U1>0.9) to **2/2/1**
+at U1>1.3; bear max-drawdown improved (e.g. BTC −16% → −9%, MSTR −22% → −18%).
 
 **Bull-period end extended to 2025-08-16** (was 2025-06-05): all three assets held an open
 trade at the old bull cutoff (entered 2025-04-22). The window now runs until that trade
@@ -33,7 +37,7 @@ Buy & Hold on the full period.
 
 **Important caveats (this is heavy in-sample optimization):**
 - These are the best of a ~200-config sweep on **~7 trades per period**; the bull window
-  is **in-sample** for the CT model, and MSTU's +534% rides ~2 large rally trades. The
+  is **in-sample** for the CT model, and MSTU's +504% rides ~2 large rally trades. The
   gains are real in-sample but the out-of-sample confidence interval is wide.
 - MSTU's −3% stop on a **2× ETF** is deliberately tight; an even tighter −2% backtests
   higher but is a hair-trigger (likely overfit / high real-world whipsaw) and was rejected.
@@ -105,7 +109,7 @@ is now implemented live in the Streamlit dashboard as the **🎯 STRATEGY BUY (T
 
 | Signal | Condition | Type |
 |--------|-----------|------|
-| **U1** | `err_hi_ma3 > +0.9%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
+| **U1** | `err_hi_ma3 > +1.3%` AND `hi_breaks_3d ≥ 2` | Uptrend — actual highs consistently exceed predictions |
 | **D1** | `lo_breaks_3d ≥ 2` AND `err_lo_ma3 > 0.5%` | Downtrend — actual lows consistently break predicted floor |
 | **D2** | `err_hi_ma3 < −1.3%` | Downtrend — predicted highs not being reached (exhaustion) |
 | **D3** | Today is a `lo_break` AND ≥ 3 consecutive `hi_break` days immediately precede it | Reversal canary — momentum-to-reversal handoff |
