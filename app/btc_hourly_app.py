@@ -914,7 +914,47 @@ def _fetch_daily_raw_inner(bar_start_iso: str, hourly_end_iso: str = "", utc_hou
     if coinbase_close.notna().any():
         df = df.join(coinbase_close.to_frame("coinbase_close"), how="left")
     df = df.loc[df["btc_close"].notna()].ffill(limit=5)
+
+    # 7. Deep-history seed — back-fill any dates the live window doesn't cover.
+    df = _seed_daily_raw_from_versioned(df)
     return df
+
+
+def _seed_daily_raw_from_versioned(df: pd.DataFrame) -> pd.DataFrame:
+    """Back-fill _fetch_daily_raw()'s deep history from the versioned dataset.
+
+    _fetch_binance_hourly() serves only a ~400-day API window when the committed
+    binance_hourly_btc.csv is absent — too short for the historical-replay picker,
+    which reaches ~2 years back.  compute_daily_forecast() needs ~90–135 trailing
+    daily bars, so a pick ~1y+ back yielded <3 completed bars and
+    compute_trend_signatures() returned None, silently hiding the signal /
+    position / signature panels for those dates.
+
+    data/backtest/raw_features_daily.csv is a git-tracked, 12:00-UTC-aligned daily
+    feature set (2023-11 →, the same file the backtests read) with this function's
+    exact raw schema.  We fill any date the live window doesn't already cover so
+    every picker date is fully featured.  Live (fresh) rows always take
+    precedence; the CSV only supplies older dates it doesn't reach.
+    """
+    try:
+        seed = _load_raw_features()
+        if seed is None or seed.empty:
+            return df
+        seed = seed.copy()
+        # The CSV stores the DERIVED Coinbase premium, not the raw close, but
+        # compute_daily_forecast() recomputes cb_premium from `coinbase_close`.
+        # Reconstruct the raw close (coinbase_close = btc_close·(1 + prem/100))
+        # and drop the derived columns so they can't clash / go NaN downstream.
+        if "cb_premium" in seed.columns and "btc_close" in seed.columns:
+            seed["coinbase_close"] = seed["btc_close"] * (1.0 + seed["cb_premium"] / 100.0)
+        seed = seed.drop(columns=[c for c in ("cb_premium", "cb_premium_ma3", "cb_premium_z7")
+                                  if c in seed.columns])
+        # Keep only columns the live frame also produces (schema alignment).
+        seed = seed[[c for c in seed.columns if c in df.columns or c == "coinbase_close"]]
+        # combine_first: live values win where present; CSV fills older dates.
+        return df.combine_first(seed).sort_index()
+    except Exception:
+        return df
 
 
 def _fetch_daily_raw():
@@ -12355,6 +12395,18 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             ),
         }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
+    else:
+        # sigs is None → not enough daily signal history to compute the panels
+        # for this date (compute_trend_signatures needs ≥3 completed bars plus
+        # ~90 trailing bars for the forecast).  With the versioned-dataset seed
+        # this only happens at the very oldest edge of the picker range; surface
+        # a note instead of silently omitting the signal / position / signature
+        # panels the way the tab used to.
+        st.info(
+            "📊 **Signal, position, and signature panels aren't available for this "
+            "date** — the daily signal history doesn't extend far enough back to "
+            "compute them here. Pick a more recent date to see them."
+        )
 
     # ─────────────── Pure Regime Strategy Backtest Dashboard ────────────
     # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
