@@ -12149,10 +12149,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         else (target_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     )
     _ds_mtime_live = _backtest_dataset_mtime()
-    _bt_bear     = _run_fixed_period_backtest("2026-05-31", "2025-06-01",  _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2025–May 2026
-    _bt_bull     = _run_fixed_period_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # Jun 2024–May 31 2025 (bull)
+    # Only the rolling OOS backtest is needed here — it drives the open-position
+    # panel. The fixed-period (bear/bull/full) strategy backtests are computed and
+    # shown only in the dedicated Backtesting tabs, not on Live / Historical Replay.
     _bt_full_oos = run_full_period_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # OOS ends prior day (rolling)
-    _bt_full     = _run_fixed_period_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime_live)  # locked Jun 2024–May 2026
     _chart_key   = "live" if is_live else "hist"
     # Build the signal panel from the SAME function and the SAME data on both tabs:
     # compute_trend_signatures() → _fetch_daily_raw() (Binance hourly rebucketed to
@@ -12464,31 +12464,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             "compute them here. Pick a more recent date to see them."
         )
 
-    # ─────────────── Pure Regime Strategy Backtest Dashboard ────────────
-    # CU fixed-period backtests for MSTR and MSTU (bear/bull/full periods)
-    _ds_mtime    = _backtest_dataset_mtime()
-    _bt_mstr_bear = _run_fixed_period_mstr_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
-    _bt_mstr_bull = _run_fixed_period_mstr_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
-    _bt_mstr_full = _run_fixed_period_mstr_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
-    _bt_mstu_bear = _run_fixed_period_mstu_backtest("2026-05-31", "2025-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
-    _bt_mstu_bull = _run_fixed_period_mstu_backtest("2025-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
-    _bt_mstu_full = _run_fixed_period_mstu_backtest("2026-05-31", "2024-06-01", _model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
-    _btab_btc, _btab_mstr, _btab_mstu = st.tabs(["🪙 BTC (No SL)", "📈 MSTR (3% SL)", "📊 MSTU (3% SL)"])
-    with _btab_btc:
-        render_trading_strategy_dashboard(_bt_bear, _bt_bull, bt_full_oos=_bt_full_oos,
-                                           bt_full=_bt_full, key_suffix=_chart_key,
-                                           sigs=sigs, asset_label="BTC")
-    with _btab_mstr:
-        # Use the SAME asset-specific dashboard as the MSTR Backtesting tab so the
-        # strategy cards/titles/descriptions and results match exactly (Pure Regime).
-        render_mstr_trading_strategy_dashboard(_bt_mstr_bear, _bt_mstr_bull, bt_full_oos=_bt_mstr_oos,
-                                               bt_full=_bt_mstr_full, key_suffix=f"{_chart_key}_mstr",
-                                               strategy_variant=MSTR_STRATEGY_GATE)
-    with _btab_mstu:
-        # Same asset-specific dashboard as the MSTU Backtesting tab (Pure Regime, −3% SL).
-        render_mstu_trading_strategy_dashboard(_bt_mstu_bear, bt_bull=_bt_mstu_bull, bt_full_oos=_bt_mstu_oos,
-                                               bt_full=_bt_mstu_full, key_suffix=f"{_chart_key}_mstu",
-                                               strategy_variant=MSTU_STRATEGY_GATE)
+    # NOTE: The strategy backtest dashboards (BTC / MSTR / MSTU period results,
+    # equity curves, trade logs) are intentionally NOT rendered on the Live or
+    # Historical Replay tabs — they live only in the dedicated Backtesting tabs.
+    # The Live/Historical tabs keep the live signal + open-position panels above.
 
     # ---------- Daily H/L forecast KPIs (12:00-UTC = 7am-CT bars) ----------
     if daily is not None:
