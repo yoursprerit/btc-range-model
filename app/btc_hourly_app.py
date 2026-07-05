@@ -12357,9 +12357,17 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # Uses _bt_oos_end — the last COMPLETED bar (yesterday in live mode,
         # selected-date − 1 in historical mode) — so open_pos/last_price reflect
         # the same "as of last closed bar" state the Live tab showed on that date.
+        #
+        # Pin backtest_start_iso to the strategy start (2024-06-01, the same window
+        # as _bt_mstr_full / _bt_mstu_full) rather than each function's default.
+        # run_mstu_backtest defaults to 2025-06-04, so for a Historical Replay date
+        # before that (e.g. 2025-04-23) the end date fell before the start and the
+        # function returned None → the panel showed MSTU as "ENTRY READY" (no
+        # position) even though the shared Pure Regime signal had opened a position,
+        # while MSTR (default start 2024-05-26) correctly showed "LONG".
         _ds_mtime    = _backtest_dataset_mtime()
-        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
-        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
+        _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, backtest_start_iso="2024-06-01", model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
+        _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, backtest_start_iso="2024-06-01", model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
 
         def _last_closed_trade(bt: dict | None) -> dict | None:
             _tl = (bt or {}).get("trades") or []
