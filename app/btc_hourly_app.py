@@ -12378,15 +12378,16 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         # entry price and current price are always on the same split-adjusted scale.
         # (yf.Ticker.history interval="1h" can apply split adjustments differently
         # from yf.download interval="1d", producing a false ×10 mismatch for MSTU.)
-        # The position panel is a snapshot of the strategy's state as of the LAST
-        # COMPLETED bar (_bt_oos_end = selected date − 1 in historical, yesterday in
-        # live) — the same bar the OOS backtest ends on and the signals fire on.  To
-        # keep the panel's price / P&L / NAV internally consistent with that state —
-        # and byte-for-byte with the backtest's own mark-to-market — mark every asset
-        # at the backtest's last close (D − 1) rather than the viewing date's (D)
-        # close.  This reproduces exactly what the Live tab showed on the selected day,
-        # which was likewise based on the previous day's close.  (The top-of-page KPI
-        # metrics still show date D's close — that's the date being viewed.)
+        # The open-position state (which trade is open, its entry price) is a
+        # snapshot as of the LAST COMPLETED bar (_bt_oos_end = selected date − 1 in
+        # historical, yesterday in live) — the same bar the OOS backtest ends on and
+        # the signals fire on.  MSTR/MSTU are MARKED at that backtest close (D − 1),
+        # keeping their P&L byte-for-byte with the backtest's mark-to-market, since
+        # no finer intraday equity data exists for a replayed date.  BTC, which does
+        # have hourly data in the replay window, is instead marked at the hour the
+        # slider is pointing at (see below) so its live price / P&L update as the
+        # user scrubs time.  (The top-of-page KPI metrics still show date D's close —
+        # that's the date being viewed.)
         def _bt_mark(bt, series_key):
             if not bt:
                 return None
@@ -12407,11 +12408,20 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             # Days-Held anchor = viewing date D (the "visible today").  Trade entry
             # dates are now on the visible convention (bar close = signal bar + 1),
             # so a position that first appears on replay D was entered on bar D − 1
-            # and is labelled entered-D → Days Held = 0, never negative.  The MARK
-            # price stays the backtest's last close (bar D − 1) so P&L still equals
-            # the backtest's mark-to-market (unchanged from before).
+            # and is labelled entered-D → Days Held = 0, never negative.
             _panel_as_of   = target_date
-            _btc_panel_px  = _bt_mark(_bt_full_oos, "btc_price_series")
+            # BTC: mark at the slider-selected hour's close so the panel's live
+            # price + unrealized P&L track the hour slider.  latest_close is the
+            # hourly BTC close at actual_t (= the slider position), so moving the
+            # slider re-marks BTC intraday instead of freezing it at the D − 1
+            # daily close.  BTC has no splits, so the Binance-hourly mark and the
+            # backtest's entry price are on the same scale.  MSTR/MSTU only have
+            # daily closes historically, so they stay marked at the backtest's
+            # last close (bar D − 1) — no finer intraday data exists to track the
+            # slider with.
+            _btc_panel_px  = (float(latest_close)
+                              if latest_close is not None and np.isfinite(latest_close)
+                              else _bt_mark(_bt_full_oos, "btc_price_series"))
             _mstr_panel_px = _bt_mark(_bt_mstr_oos, "mstr_price_series")
             _mstu_panel_px = _bt_mark(_bt_mstu_oos, "mstu_price_series")
 
