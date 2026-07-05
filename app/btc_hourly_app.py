@@ -74,7 +74,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl5-v35-bull-extended-0816"
+_BT_LOGIC_VERSION = "sl5-v36-u1_13-bear-filter"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── Trend-signature signal thresholds (single source of truth) ──────────────
@@ -82,17 +82,21 @@ _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 # backtest_gate_frontier.py + per-asset full-period optimization). Each asset's
 # config was swept (gate × U1 × D2 × stop) ON THE LIVE 7-day forward-fill backtest
 # grid to maximize FULL-period return while keeping the bear period non-negative.
-# All three assets converge on the SAME signal config — Pure Regime entry,
-# U1 > +0.9%, D2 < −1.3% — so entry/exit signals are unified; only the per-asset
-# STOP differs (below). Prior: U1 +1.1% (2026-07b); U1 +0.7% / D2 −0.75% (midnight).
-U1_ERRHI_MIN =  0.9   # U1 entry: err_hi_ma3 must exceed +0.9%  (AND hi_breaks_3d ≥ 2)
+# All three assets share the SAME signal config — Pure Regime entry, U1 > +1.3%,
+# D2 < −1.3% — so entry/exit signals are unified; only the per-asset STOP differs
+# (below). U1 was raised +0.9% → +1.3% (2026-07d) to minimize bear-market losing
+# trades while nearly maintaining bull capture: a higher entry bar filters the
+# marginal entries that become bear losers, cutting one loser per asset, deepening
+# bear return and drawdown protection, with only a few points of bull given up.
+# Prior: U1 +0.9% (2026-07c); +1.1% (2026-07b); +0.7% / D2 −0.75% (retired midnight).
+U1_ERRHI_MIN =  1.3   # U1 entry: err_hi_ma3 must exceed +1.3%  (AND hi_breaks_3d ≥ 2)
 D2_ERRHI_MAX = -1.3   # D2 exit:  err_hi_ma3 below −1.3%
 
 # ── Per-asset strategy (entry gate + fixed stop) — single source of truth ────
 # 2026-07c optimization: all assets use the Pure Regime gate (Bull Regime OR
 # washed-out Clean Breakout OR V-reversal); only the fixed stop differs.
-#   MSTR → Pure Regime · fixed −3%   (Full +205% vs B&H −2%)
-#   MSTU → Pure Regime · fixed −3%   (Full +534% vs B&H −76%; tightened from −7%)
+#   MSTR → Pure Regime · fixed −3%   (Full +213% vs B&H −2%)
+#   MSTU → Pure Regime · fixed −3%   (Full +504% vs B&H −76%; tightened from −7%)
 #   BTC  → Pure Regime · no stop     (D2/D3 exits manage risk)
 # These are the default-selected options in the MSTR/MSTU/options radio buttons.
 MSTR_STRATEGY_GATE = "pure_regime"
@@ -2493,7 +2497,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
       D3  exhaustion    — first lo_break after streak of ≥ 3 hi_breaks (reversal canary)
 
     UPTREND signals (p = 0.022):
-      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +0.9%
+      U1  err_hi_ma3    — 3d avg (actual_high − pred_high)/close > +1.3%
 
     V-Reversal special signal:
       V   capitulation  — downtrend score ≥ 0.9 followed by lo_err > 3% today
@@ -5784,7 +5788,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     """Run a trading strategy backtest on a configurable window.
 
     Entry (both TF1 and TF2):
-        U1 active (err_hi_ma3 > +0.9% AND hi_breaks_3d ≥ 2)
+        U1 active (err_hi_ma3 > +1.3% AND hi_breaks_3d ≥ 2)
         AND (BTC > MA30  OR  clean_7d  OR  V-gate)
 
     Exit — TF1 (conservative, bear-optimised):
@@ -6267,7 +6271,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active</b> — model's predicted highs are being beaten consistently<br>
           <span style='color:#3b82f6; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7071,7 +7075,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7122,7 +7126,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7181,7 +7185,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#7c3aed; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7946,7 +7950,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -7997,7 +8001,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8056,7 +8060,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0d9488; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8790,7 +8794,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8840,7 +8844,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -8898,7 +8902,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#ea580c; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -9624,7 +9628,7 @@ def render_mstr_options_trading_strategy_dashboard(
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#d97706; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -10400,7 +10404,7 @@ def render_mstu_options_trading_strategy_dashboard(
         <td style='vertical-align:top; padding:3px 0;'>
           <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
           <span style='color:#0284c7; font-size:11px;'>
-            err_hi_ma3 &gt; +0.9% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
           </span>
         </td>
       </tr>
@@ -11776,7 +11780,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         # ── Entry condition ① — U1 (required) ──
         ("① U1 Signal",
          "✅ ACTIVE" if _u1 else "○ inactive",
-         "= ACTIVE  (entry condition ① — err_hi_ma3 > +0.9% AND hi_breaks_3d ≥ 2)",
+         "= ACTIVE  (entry condition ① — err_hi_ma3 > +1.3% AND hi_breaks_3d ≥ 2)",
          _u1, True),
         # ── Entry condition ② — Pure Regime gate (Bull Regime / Clean Breakout / V-rev) ──
         ("② 🐂 Bull Regime",
@@ -11865,9 +11869,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             ),
             prob_txt=(
                 "Full period (Jun 2024–May 2026), Pure Regime, live stops: "
-                "<b>BTC +96%</b> (B&amp;H +6%) · <b>MSTR +205%</b> (B&amp;H −2%) · <b>MSTU +534%</b> (B&amp;H −76%). "
-                "Bear period: MSTR +27% · MSTU +66% · BTC +3% — all positive vs deeply-negative B&amp;H. "
-                "Bull (Jun 2024–Aug 2025, extended to last open-trade close): BTC +91% · MSTR +131% · MSTU +260%."
+                "<b>BTC +102%</b> (B&amp;H +6%) · <b>MSTR +213%</b> (B&amp;H −2%) · <b>MSTU +504%</b> (B&amp;H −76%). "
+                "Bear period: MSTR +35% · MSTU +71% · BTC +7% — all positive vs deeply-negative B&amp;H. "
+                "Bull (Jun 2024–Aug 2025, extended to last open-trade close): BTC +89% · MSTR +124% · MSTU +232%."
             ),
             conf_txt=(
                 "⚠️ Heavy in-sample optimization: bull window is in-sample for the CT model, "
@@ -11892,7 +11896,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"<b>Today's</b> actual low massively overshot the predicted low "
                 f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
                 f"This is the <b>V-reversal capitulation pattern</b>. "
-                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +0.9% AND "
+                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +1.3% AND "
                 f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -11902,7 +11906,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"A capitulation spike fired <b>{_v_age} bar{'s' if _v_age != 1 else ''} ago</b> "
                 f"(not today — today's dn_score={sigs['dn_score_raw']:.2f}, err_lo={sigs['last_lo_err']:+.2f}%). "
                 f"The V-gate remains open for <b>{_bars_remaining} more bar{'s' if _bars_remaining != 1 else ''}</b>. "
-                f"If U1 fires (err_hi_ma3 &gt; +0.9% AND hi_breaks_3d ≥ 2) the strategy will enter "
+                f"If U1 fires (err_hi_ma3 &gt; +1.3% AND hi_breaks_3d ≥ 2) the strategy will enter "
                 f"even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -12001,12 +12005,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - ⬜ **NEUTRAL**: No conditions active → Normal market, no strong directional signal
 
 **Regime-Adaptive Strategy — unified Pure Regime entry (2026-07c full-period optimization):**
-- **Entry (all assets):** U1 (`err_hi_ma3 > +0.9%` AND `hi_breaks_3d ≥ 2`) AND 🎯 **Pure Regime** trend gate:
+- **Entry (all assets):** U1 (`err_hi_ma3 > +1.3%` AND `hi_breaks_3d ≥ 2`) AND 🎯 **Pure Regime** trend gate:
   Bull Regime **OR** washed-out Clean Breakout (Clean 7d while below MA30) **OR** ⚡ V-reversal
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
 - **Stops (per-asset):** MSTR −3% · MSTU −3% (tightened from −7%) · BTC none — all with SL5 regime-adaptive re-entry
-- **Full period** (Jun 2024–May 2026): **BTC +96%** · **MSTR +205%** · **MSTU +534%** (vs B&H +6% / −2% / −76%)
-- **Bear period:** MSTR +27% · MSTU +66% · BTC +3% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%)
+- **Full period** (Jun 2024–May 2026): **BTC +102%** · **MSTR +213%** · **MSTU +504%** (vs B&H +6% / −2% / −76%)
+- **Bear period:** MSTR +35% · MSTU +71% · BTC +7% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%)
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -14476,7 +14480,7 @@ def render_retrain_dashboard():
                 help=(
                     "**Primary signal driver.**  "
                     "`err_hi = (actual_high − pred_high) / close × 100`.  "
-                    "**U1** fires when `err_hi_ma3 > +0.9%`.  "
+                    "**U1** fires when `err_hi_ma3 > +1.3%`.  "
                     "**D2** fires when `err_hi_ma3 < −1.3%`.  "
                     "Higher MAPE → more noise in these error terms → false signals."
                 ),
@@ -14636,10 +14640,10 @@ def render_retrain_dashboard():
         "🟢 U1 — Entry",
         "🔥 ACTIVE" if sigs.get("u1_triggered") else "💤 inactive",
         delta=(f"err_hi_ma3 {_sig_val(_ehi)}  |  {_hb3}/3 hi-breaks"
-               if _ehi is not None else "threshold: err_hi_ma3 > +0.9%"),
+               if _ehi is not None else "threshold: err_hi_ma3 > +1.3%"),
         delta_color="off",
         help=(
-            "**Threshold:** `err_hi_ma3 > +0.9%` AND `hi_breaks_3d ≥ 2`.  "
+            "**Threshold:** `err_hi_ma3 > +1.3%` AND `hi_breaks_3d ≥ 2`.  "
             "**Entry gate:** U1 confirmed by above-MA30, clean 7d, or V-reversal.  "
             "Statistical lift: 1.68× over base rate."
         ),
@@ -15811,7 +15815,7 @@ with tab_mstr:
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
         "**⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
         "optimization) — enters on Bull Regime *or* a washed-out Clean Breakout, delivering "
-        "**Full +205%** (vs B&H −2%), Bull +131%, while staying positive in bear (+27% vs "
+        "**Full +213%** (vs B&H −2%), Bull +124%, while staying positive in bear (+35% vs "
         "B&H −57%). Exit is the shared regime-adaptive D2/D3 rule; stop is fixed −3% with "
         "SL5 re-entry. Switch gates with the radio below."
     )
@@ -15875,7 +15879,7 @@ with tab_mstu:
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
         "signals. **⭐ Default strategy: 🎯 Pure Regime** entry gate (2026-07c full-period "
         "optimization) with a **tightened fixed −3% stop** — for the 2× fund this delivers "
-        "**Full +534%** (vs B&H −76%), Bull +260%, and keeps Bear positive (+66% vs B&H −92%) "
+        "**Full +504%** (vs B&H −76%), Bull +232%, and keeps Bear positive (+71% vs B&H −92%) "
         "by avoiding the leveraged-ETF volatility decay B&H suffers. Exit is the shared "
         "regime-adaptive D2/D3 rule with SL5 re-entry. MSTU launched Sep 18 2024; the Bull "
         "period uses synthetic MSTU prices (OLS from MSTR). Switch gates with the radio below."
@@ -15886,7 +15890,7 @@ with tab_mstu:
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
-        index=0,   # ⭐ MSTU default = Pure Regime (2026-07c: Full +534%, tightened stop −3%)
+        index=0,   # ⭐ MSTU default = Pure Regime (2026-07d: Full +504%, U1>+1.3%, stop −3%)
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ MSTU STRATEGY"
             if x == "pure_regime" else
