@@ -36,16 +36,20 @@ _APP_DIR = Path(__file__).resolve().parent / "app"
 sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
-_ALL_APPS = ["BTC", "GLDM"] + ticker_config.APP_KEYS
-_LABELS = {"BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)"}
+_ALL_APPS = ["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+_LABELS = {"OVERALL": "🧭  Overall Trading",
+           "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)"}
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
-_choice = st.session_state.get("gldm_active_app", "BTC")
+_choice = st.session_state.get("gldm_active_app", "OVERALL")
 if _choice not in _ALL_APPS:
-    _choice = "BTC"
+    _choice = "OVERALL"
 
-if _choice in ("BTC", "GLDM"):
+if _choice == "OVERALL":
+    # The combined cross-asset cockpit renders its own full selector.
+    runpy.run_path(str(_APP_DIR / "overall_app.py"), run_name="__main__")
+elif _choice in ("BTC", "GLDM"):
     # Upgrade the original app's built-in BTC/GLDM selector to the full list,
     # without touching the app source.  Only the ``gldm_active_app`` widget is
     # rewritten; all other st.radio calls are untouched.

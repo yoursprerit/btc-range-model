@@ -51,8 +51,9 @@ if not hasattr(backtest_ticker, "run_strategy"):
 tc = ticker_core
 bt = backtest_ticker
 
-_ALL_APPS = ["BTC", "GLDM"] + ticker_config.APP_KEYS
-_APP_LABELS = {"BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)"}
+_ALL_APPS = ["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+_APP_LABELS = {"OVERALL": "🧭  Overall Trading",
+               "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)"}
 for _k, _c in ticker_config.CONFIGS.items():
     _APP_LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
