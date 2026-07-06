@@ -1,0 +1,36 @@
+{
+  "XLE": {
+    "mode": "divergence",
+    "U1": 0.12,
+    "D2": -0.12,
+    "stop": 0.12,
+    "total_ret": 0.9521815194286578,
+    "mdd": -0.08847922723627044,
+    "sharpe": 1.1091672869315627,
+    "cagr": 0.1293240253221999,
+    "trades": 83,
+    "beats_loss": true,
+    "mdd_ok": true,
+    "participate": false,
+    "bh_ret": 1.799262505243199,
+    "bh_mdd": -0.26863893848564946,
+    "bh_sharpe": 0.8440861032947989
+  },
+  "OIH": {
+    "mode": "divergence",
+    "U1": 0.08,
+    "D2": -0.12,
+    "stop": 0.12,
+    "total_ret": 0.3871102943504403,
+    "mdd": -0.21522588452798008,
+    "sharpe": 0.43432663873715294,
+    "cagr": 0.06129655630565556,
+    "trades": 90,
+    "beats_loss": true,
+    "mdd_ok": true,
+    "participate": false,
+    "bh_ret": 1.2951082435905832,
+    "bh_mdd": -0.4570245436135205,
+    "bh_sharpe": 0.59121285715153
+  }
+}

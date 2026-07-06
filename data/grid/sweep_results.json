@@ -1,0 +1,18 @@
+{
+  "GRID": {
+    "mode": "ma",
+    "ma_window": 200,
+    "stop": 0.1,
+    "total_ret": 1.1468568466056093,
+    "mdd": -0.14886552429248845,
+    "sharpe": 0.9231357577947602,
+    "cagr": 0.14901071928159748,
+    "trades": 13,
+    "beats_loss": true,
+    "mdd_ok": true,
+    "participate": true,
+    "bh_ret": 1.3244450521297821,
+    "bh_mdd": -0.3038058207042561,
+    "bh_sharpe": 0.8299273817009979
+  }
+}

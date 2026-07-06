@@ -1,0 +1,18 @@
+{
+  "SOXX": {
+    "mode": "ma",
+    "ma_window": 50,
+    "stop": 0.1,
+    "total_ret": 2.2335306980346314,
+    "mdd": -0.38711094894763187,
+    "sharpe": 0.9131567440692894,
+    "cagr": 0.23783505476841782,
+    "trades": 46,
+    "beats_loss": true,
+    "mdd_ok": true,
+    "participate": true,
+    "bh_ret": 3.6201700547348787,
+    "bh_mdd": -0.4624480646318154,
+    "bh_sharpe": 0.9348998795502004
+  }
+}
