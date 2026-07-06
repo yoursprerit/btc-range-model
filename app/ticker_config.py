@@ -331,8 +331,61 @@ CONFIGS["REMX"] = TickerConfig(
 )
 
 
+# ════════════════════════════════════════════════════════════════════════
+# WGMI — CoinShares Valkyrie Bitcoin Miners ETF
+# ════════════════════════════════════════════════════════════════════════
+CONFIGS["WGMI"] = TickerConfig(
+    key="WGMI",
+    name="CoinShares Valkyrie Bitcoin Miners ETF",
+    blurb=("WGMI holds Bitcoin-mining companies (MARA, CLSK, RIOT, IREN…). It is "
+           "a high-beta play on Bitcoin — it amplifies BTC's moves roughly 2–3× in "
+           "both directions, so its up-cycles are explosive and its drawdowns are "
+           "brutal. It is an ordinary equity ETF (not a leveraged fund), and it "
+           "trades itself off its own signal."),
+    emoji="⛏️",
+    accent="#0891b2", accent_dark="#155e75", accent_bg="#ecfeff", accent_bg2="#cffafe",
+    primary_symbol="WGMI",
+    macro_syms={
+        "btc": "BTC-USD",      # spot Bitcoin — the dominant driver of miners
+        "mara": "MARA",        # Marathon Digital — bellwether miner
+        "riot": "RIOT",        # Riot Platforms — bellwether miner
+        "coin": "COIN",        # Coinbase — crypto-equity beta
+        "eth": "ETH-USD",      # Ether — crypto complex
+        "qqq": "QQQ",          # Nasdaq-100 — risk-on tech backdrop
+        "vix": "^VIX",         # equity vol (risk-off = bearish miners)
+    },
+    extra_syms={},
+    sentiment=[("btc_close", "mom", +1.0), ("qqq_close", "mom", +1.0),
+               ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
+    sentiment_label="Bitcoin-miner sentiment",
+    traded_assets=[("WGMI", "px_close")],
+    asset_labels={"px_close": "WGMI · Bitcoin Miners"},
+    strategy_mode="ma", strategy_name="Miner Trend-Regime",
+    ma_window=30, fixed_stop=0.10,
+    hl_band_pct=0.020,
+    # WGMI launched Feb-2022; its 52-week features don't warm up until ~Feb-2023,
+    # so fetch from inception but hold the OOS start to 2024 — that leaves ~11
+    # months of feature-complete pre-OOS training for the daily H/L signal model.
+    fetch_start="2022-02-07", oos_start="2024-01-01",
+    periods=[
+        ("🚀 2024 Rally (H1)", "2024-01-01", "2024-06-30"),
+        ("📉 2024 Drawdown (H2)", "2024-07-01", "2024-12-31"),
+        ("🌐 Full Out-of-Sample (2024 → now)", "2024-01-01", None),
+        ("🔬 Most-recent OOS (2025 → now)", "2025-01-01", None),
+    ],
+    day_up_thresh=0.015, day_down_thresh=-0.015,
+    results_note=("OOS 2024→now: +191% vs Buy&Hold +223% while cutting the max "
+                  "drawdown from a brutal −63% to −40% and beating its Sharpe "
+                  "(1.02 vs 0.98). A fast 30-day trend filter that rides the "
+                  "Bitcoin-miner up-cycles but bails to cash when BTC rolls over "
+                  "— essential risk control on a 2–3× BTC-beta basket. (Short "
+                  "history: WGMI listed Feb-2022, so the pre-OOS training window "
+                  "is ~11 months.)"),
+)
+
+
 def get_config(key: str) -> TickerConfig:
     return CONFIGS[key]
 
 
-APP_KEYS = list(CONFIGS.keys())     # ["SOXX","VEGN","GRID","XLE","REMX"]
+APP_KEYS = list(CONFIGS.keys())     # + WGMI

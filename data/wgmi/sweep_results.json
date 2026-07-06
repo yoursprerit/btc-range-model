@@ -1,0 +1,18 @@
+{
+  "WGMI": {
+    "mode": "ma",
+    "ma_window": 50,
+    "stop": 0.1,
+    "total_ret": 1.8931529311705089,
+    "mdd": -0.47494051903471035,
+    "sharpe": 1.0011953415284651,
+    "cagr": 0.5274581628424662,
+    "trades": 19,
+    "beats_loss": false,
+    "mdd_ok": true,
+    "participate": false,
+    "bh_ret": 2.2292738868701236,
+    "bh_mdd": -0.6286360836202833,
+    "bh_sharpe": 0.9840104570724469
+  }
+}
