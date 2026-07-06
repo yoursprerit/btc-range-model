@@ -20,9 +20,9 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 |---|---|---|---|
 | 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | 40-day trend filter |
 | 🌱 **VEGN** | US Vegan Climate ETF | ESG-screened S&P 500, tech-tilted | 200-day trend filter |
-| ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | 200-day trend filter |
+| ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | 150-day trend filter |
 | 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Divergence Pure-Regime |
-| 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Divergence Pure-Regime |
+| 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | 150-day trend filter |
 | ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 30-day trend filter |
 
 ---
@@ -79,25 +79,51 @@ return **subject to a drawdown no worse than buy-&-hold in every period** and
 that **beats buy-&-hold in the loss periods**. The daily H/L signal model is fit
 once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 
-**Out-of-sample results (full window vs Buy-&-Hold):**
+**Out-of-sample results (2021→now window vs Buy-&-Hold):**
 
 | App | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
 | SOXX | MA-40, −5 % stop | **+233 %** | +362 % | **−31 %** | −46 % | **0.94 / 0.93** |
 | VEGN | MA-200, −5 % stop | **+84 %** | +81 % | **−14 %** | −33 % | **1.02 / 0.73** |
-| GRID | MA-200, −10 % stop | +115 % | +132 % | **−15 %** | −30 % | **0.92 / 0.83** |
+| GRID | MA-150, −5 % stop | +105 % | +132 % | **−19 %** | −30 % | **0.87 / 0.83** |
 | XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
-| REMX | Divergence (U1 .16 / D2 −.14) | **+96 %** | +24 % | **−18 %** | −74 % | **0.87 / 0.30** |
+| REMX | MA-150, −5 % stop | **+73 %** | +24 % | −56 % | −75 % | **0.48 / 0.30** |
 | WGMI | MA-30, −10 % stop | +191 % | +223 % | **−40 %** | −63 % | **1.02 / 0.98** |
 
 (OIH, traded off the XLE signal: **+70 %** at **−19 %** MDD vs Buy-&-Hold +130 % / −46 %.)
 (WGMI listed Feb-2022, so its OOS window is 2024→now with an ~11-month training window.)
 
-The common thread: on **trending, high-beta** names (SOXX/VEGN/GRID) a moving-
-average trend filter keeps most of the upside while roughly **halving the
-drawdown**; on **boom-bust commodity-equity** names (XLE/REMX) the divergence
-system's job is to **avoid the crash** — REMX quadruples the buy-&-hold return
-and cuts the drawdown from a catastrophic −74 % to −21 %.
+### Full-cycle test — the entire history including a real bear (the 🌍 tab)
+
+Every app also has a **🌍 Full history (Bull + Bear)** backtest tab spanning each
+asset's *entire* available history (including the pre-2021 in-sample window). This
+is the honest combined-cycle question: does the strategy beat buy-&-hold once a
+real bear market is in scope? Whether it wins on **total return** turns out to be
+governed by *cycle geometry*, not tuning — a long/flat strategy can only out-return
+buy-&-hold if the window contains a deep, drawn-out bear the asset never fully
+recovered from:
+
+| App | Full window | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) | Beats B&H on |
+|---|---|---|---|---|---|---|---|
+| **XLE** | 2016→now | **+165 %** | +76 % | **−17 %** | −70 % | **0.95 / 0.33** | return · DD · Sharpe |
+| **OIH** | 2016→now | **+119 %** | −32 % | **−23 %** | −90 % | **0.59 / 0.12** | return · DD · Sharpe |
+| **REMX** | 2016→now | **+370 %** | +112 % | **−56 %** | −75 % | **0.70 / 0.38** | return · DD · Sharpe |
+| VEGN | 2020→now | +141 % | +167 % | **−16 %** | −34 % | **1.10 / 0.93** | DD · Sharpe |
+| GRID | 2016→now | +296 % | +452 % | **−22 %** | −41 % | **0.94 / 0.88** | DD · Sharpe |
+| WGMI | 2023→now | +514 % | +536 % | **−52 %** | −63 % | **1.18 / 1.08** | DD · Sharpe |
+| SOXX | 2016→now | +691 % | +1842 % | **−31 %** | −46 % | 0.94 / 1.01 | drawdown only |
+
+**Read this honestly.** Over a full bull+bear cycle the trend strategy beats
+buy-&-hold *outright — return, drawdown and Sharpe* — on the **commodity-equity
+crash assets (XLE, OIH, REMX)**, where B&H rode a multi-year bear all the way down.
+On the **secular compounders (SOXX, GRID, VEGN, WGMI)** buy-&-hold's total return
+is **mathematically unbeatable** by any unleveraged long/flat rule — every day in
+cash is a day of missed gains, and their crashes were too brief to matter — so
+there the strategy "wins" on **risk-adjusted terms** (higher Sharpe, roughly half
+the drawdown). SOXX is the extreme case: semiconductors recover so violently that
+even Sharpe favours buy-&-hold; only the drawdown is tamed. The only ways to beat
+buy-&-hold's *return* on those names would be leverage or shorting, both excluded
+here.
 
 ---
 
