@@ -1,6 +1,6 @@
-# 📊 Multi-ticker forecasting apps (SOXX · VEGN · GRID · XLE · REMX)
+# 📊 Multi-ticker forecasting apps (SOXX · VEGN · GRID · XLE · REMX · WGMI)
 
-Five new forecasting + trading applications, each built as a faithful sibling of
+Six new forecasting + trading applications, each built as a faithful sibling of
 the **Gold (GLDM)** app in this repo — same layout, styling, colour coding, cards,
 plots and backtesting dashboard — but with every feature, model, threshold and
 strategy **re-derived for the specific asset**. The BTC and GLDM apps are
@@ -9,7 +9,7 @@ strategy **re-derived for the specific asset**. The BTC and GLDM apps are
 Pick any app from the **Application radio at the top of the sidebar** (grey panel):
 
 ```
-₿  Bitcoin (BTC)   🥇  Gold (GLDM)   🖥️ SOXX   🌱 VEGN   ⚡ GRID   🛢️ XLE   🧲 REMX
+₿ Bitcoin (BTC)  🥇 Gold (GLDM)  🖥️ SOXX  🌱 VEGN  ⚡ GRID  🛢️ XLE  🧲 REMX  ⛏️ WGMI
 ```
 
 ```bash
@@ -18,32 +18,33 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 
 | App | Asset | What it is | Chosen strategy |
 |---|---|---|---|
-| 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | 50-day trend filter |
+| 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | 40-day trend filter |
 | 🌱 **VEGN** | US Vegan Climate ETF | ESG-screened S&P 500, tech-tilted | 200-day trend filter |
 | ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | 200-day trend filter |
 | 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Divergence Pure-Regime |
 | 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Divergence Pure-Regime |
+| ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 30-day trend filter |
 
 ---
 
-## Architecture — one engine, five configs (no app touched twice)
+## Architecture — one engine, six configs (no app touched twice)
 
-Rather than copy the ~1,400-line Gold app five times, everything asset-specific
+Rather than copy the ~1,400-line Gold app six times, everything asset-specific
 lives in a single `TickerConfig`, and one generic engine renders each app:
 
 ```
-app/ticker_config.py        the five TickerConfigs (drivers, thresholds, theme, windows)
+app/ticker_config.py        the six TickerConfigs (drivers, thresholds, theme, windows)
 app/ticker_core.py          data fetch (Yahoo) + features + macro-sentiment + signals
 backtest_ticker.py          backtest engine (2 strategy engines) + threshold/strategy sweep
 src/tickers/train_ticker.py trains the 5-model suite → models/<key>/*.joblib
 app/ticker_app.py           the Streamlit UI — identical layout to Gold, themed per ticker
-streamlit_app.py            root router: one radio for all seven apps
-models/<key>/*.joblib       trained artefacts (soxx / vegn / grid / xle / remx)
+streamlit_app.py            root router: one radio for all eight apps
+models/<key>/*.joblib       trained artefacts (soxx / vegn / grid / xle / remx / wgmi)
 data/<key>/*.csv|json       cached snapshots + backtest results
 ```
 
 The BTC and GLDM apps are **byte-for-byte unchanged**. Their built-in two-option
-selector is transparently upgraded to the full seven-app list by a tiny
+selector is transparently upgraded to the full eight-app list by a tiny
 `st.radio` wrapper in the router — no edit to either original file.
 
 ---
@@ -61,6 +62,7 @@ plus a purpose-built **0–100 macro-sentiment** composite (each driver signed s
 | GRID | XLU, ICLN, TAN, CPER, ^TNX, ^GSPC, ^VIX | +SPX mom + copper − yields + own mom |
 | XLE | CL=F, BZ=F, XOM, DXY, ^GSPC, ^VIX (+OIH) | +crude − USD − VIX + own mom |
 | REMX | LIT, CPER, FXI, SLV, DXY, ^GSPC, ^VIX | +copper + lithium − USD + own mom |
+| WGMI | BTC-USD, MARA, RIOT, COIN, ETH-USD, QQQ, ^VIX | +BTC mom + QQQ mom − VIX + own mom |
 
 Each app trains the same **five models** (`src/tickers/train_ticker.py <KEY>`):
 hourly next-close (ridge + 95 % CI), daily High/Low (calibrated ridge bands),
@@ -86,8 +88,10 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 | GRID | MA-200, −10 % stop | +115 % | +132 % | **−15 %** | −30 % | **0.92 / 0.83** |
 | XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
 | REMX | Divergence (U1 .16 / D2 −.14) | **+96 %** | +24 % | **−18 %** | −74 % | **0.87 / 0.30** |
+| WGMI | MA-30, −10 % stop | +191 % | +223 % | **−40 %** | −63 % | **1.02 / 0.98** |
 
 (OIH, traded off the XLE signal: **+70 %** at **−19 %** MDD vs Buy-&-Hold +130 % / −46 %.)
+(WGMI listed Feb-2022, so its OOS window is 2024→now with an ~11-month training window.)
 
 The common thread: on **trending, high-beta** names (SOXX/VEGN/GRID) a moving-
 average trend filter keeps most of the upside while roughly **halving the
@@ -120,7 +124,7 @@ gold signal. The XLE app therefore trades **both XLE and OIH off the XLE signal*
 ## Reproduce
 
 ```bash
-python src/tickers/train_ticker.py ALL        # fetch + train all five model suites
+python src/tickers/train_ticker.py ALL        # fetch + train all six model suites
 python backtest_ticker.py SOXX --sweep        # per-ticker strategy/threshold sweep
 python backtest_ticker.py XLE                 # per-period backtest (XLE + OIH)
 streamlit run streamlit_app.py                # launch, pick a ticker in the sidebar
