@@ -755,12 +755,13 @@ def _cone_forecast_fig(as_of_iso, horizon, lookback, title, band_rgba, line_col)
     return fig
 
 
-_HR_LOOKBACK = 24   # hourly bars shown in the look-back window (matches BTC LOOKBACK_HOURS)
+_HR_LOOKBACK_HOURS = 23   # rolling look-back window (hours). 23h actuals + ~1h
+                          # forecast ≈ a 24h span, matching the BTC daily bar view.
 
 
 def _hourly_forecast_fig(as_of_date, is_live):
     """Rolling next-hour GLDM close forecast — a faithful gold copy of the BTC
-    hourly chart: the last 24 hourly bars with the actual close (black), the
+    hourly chart: the last 23 hours of bars with the actual close (black), the
     per-bar past predictions (● purple line, colored green=correct-direction /
     red=miscalled), the realized closes (◆ teal line), a 95% CI tint, a khaki
     forecast zone with a darkorange connector to the ⭐ forecast star (±95% CI
@@ -781,7 +782,11 @@ def _hourly_forecast_fig(as_of_date, is_live):
     valid = X.index[~X.isna().any(axis=1)]
     if len(valid) < 5:
         return None
-    look = valid[-(_HR_LOOKBACK + 1):]          # +1: last bar is the live anchor
+    # Rolling window: keep only bars from the last 23 hours (plus the anchor).
+    anchor = valid[-1]
+    look = valid[valid >= anchor - pd.Timedelta(hours=_HR_LOOKBACK_HOURS)]
+    if len(look) < 3:                            # sparse data → keep a few bars
+        look = valid[-8:]
     sigma = float(M_HOURLY["sigma"])
     yhat = M_HOURLY["model"].predict(X.loc[look])
 
@@ -815,7 +820,7 @@ def _hourly_forecast_fig(as_of_date, is_live):
     fig.add_trace(go.Scatter(x=tgt_ts, y=np.array(pred_c) * np.exp(-1.96 * sigma), fill="tonexty",
                              fillcolor="rgba(65,105,225,0.18)", line=dict(color="rgba(65,105,225,0)"),
                              name=f"Pred ±{1.96*sigma*100:.2f}% (95% CI) band", hoverinfo="skip"))
-    # Actual close line (last 24 bars) — black
+    # Actual close line (last 23h of bars) — black
     act_win = close.loc[look]
     fig.add_trace(go.Scatter(x=act_win.index, y=act_win.values, mode="lines",
                              line=dict(color="black", width=2), name="Actual close (hourly)",
@@ -845,7 +850,7 @@ def _hourly_forecast_fig(as_of_date, is_live):
                                             f"$%{{y:,.2f}} ({fc_ret*100:+.2f}%)<br>"
                                             f"95% CI ${fc_lo:,.2f} – ${fc_hi:,.2f}<extra></extra>")))
     fig.add_vline(x=last_ts, line=dict(color="crimson", width=1.5, dash="dash"))
-    title = ("🕐 GLDM — rolling next-hour close forecast (last 24 hourly bars)"
+    title = ("🕐 GLDM — rolling next-hour close forecast (last 23 hours)"
              if is_live else f"🕐 GLDM hourly forecast as of {pd.Timestamp(as_of_date).date()}")
     fig.update_layout(template="plotly_white", height=420,
                       title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
