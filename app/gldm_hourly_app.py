@@ -255,36 +255,42 @@ def strategy_position(asset, end=None):
 # ════════════════════════════════════════════════════════════════════════
 # Trend-signature alert renderer (mirrors the BTC Live-tab card layout)
 # ════════════════════════════════════════════════════════════════════════
-_ALERT_CFG = {
-    "HIGH_DN":     {"bg": "#fee2e2", "border": "#dc2626", "badge": "#dc2626",
-                    "txt": "⚠️ HIGH DOWNTREND ALERT", "col": "#7f1d1d"},
-    "ELEVATED_DN": {"bg": "#fef3c7", "border": "#d97706", "badge": "#d97706",
-                    "txt": "🟠 ELEVATED DOWNTREND RISK", "col": "#78350f"},
-    "WATCH_DN":    {"bg": "#fffbeb", "border": "#f59e0b", "badge": "#f59e0b",
-                    "txt": "👁 DOWNTREND WATCH", "col": "#92400e"},
-    "STRATEGY_BUY":{"bg": "#fff7e6", "border": "#b8860b", "badge": "#b8860b",
-                    "txt": "🎯 PURE-REGIME BUY", "col": "#7a5901"},
-    "WATCH_UP":    {"bg": "#f0fdf4", "border": "#16a34a", "badge": "#16a34a",
-                    "txt": "📈 UPTREND SIGNAL (U1)", "col": "#14532d"},
-    "NEUTRAL":     {"bg": "#f8fafc", "border": "#94a3b8", "badge": "#64748b",
-                    "txt": "⬜ NO ACTIVE SIGNAL", "col": "#334155"},
-}
 
 
-def _sig_card(title, active, subtitle, value_line, good):
-    """One signature card as styled HTML (green if bullish-active, red if
-    bearish-active, grey if idle) — matches the BTC 2×2 card grid."""
-    if not active:
-        bg, brd, ico = "#f1f5f9", "#cbd5e1", "○"
-    elif good:
-        bg, brd, ico = "#dcfce7", "#16a34a", "✅"
-    else:
-        bg, brd, ico = "#fee2e2", "#dc2626", "⚠️"
-    return (f"<div style='background:{bg};border:1.5px solid {brd};border-radius:9px;"
-            f"padding:10px 12px;height:100%;'>"
-            f"<div style='font-weight:700;font-size:13px;'>{ico} {title}</div>"
-            f"<div style='font-size:11px;color:#475569;margin:2px 0 4px;'>{subtitle}</div>"
-            f"<div style='font-size:12px;font-family:monospace;'>{value_line}</div></div>")
+def _sig_card(title, icon, color, triggered, rows, interpretation):
+    """One trend-signature card as styled HTML (mirrors the BTC 2×2 grid).
+
+    ``rows`` = list of (label, current_value_str, threshold_str, fired_bool).
+    Each row shows the condition's live value against its trigger threshold with
+    a ✓ TRIGGERED / ○ badge, so the criteria AND current values are explicit.
+    """
+    border = color if triggered else "#cbd5e1"
+    bg = ("#f0fdf4" if (triggered and color == "#16a34a")
+          else "#fff7ed" if triggered else "#f8fafc")
+    status = "● ACTIVE" if triggered else "○ CLEAR"
+    badge = (f"<span style='background:{color};color:white;border-radius:12px;"
+             f"padding:2px 10px;font-size:11px;font-weight:700;margin-left:8px;'>{status}</span>")
+    rows_html = ""
+    for label, val, thr, fired in rows:
+        vcol = color if fired else "#64748b"
+        bd = (f"<span style='color:{color};font-weight:700;margin-left:auto;'>✓ TRIGGERED</span>"
+              if fired else "<span style='color:#94a3b8;margin-left:auto;'>○</span>")
+        rows_html += (
+            "<div style='display:flex;align-items:center;gap:8px;padding:4px 0;"
+            "border-bottom:1px solid #e2e8f0;'>"
+            f"<span style='font-size:12px;color:#64748b;width:150px;flex-shrink:0;'>{label}</span>"
+            f"<span style='font-weight:700;color:{vcol};font-size:13px;min-width:74px;'>{val}</span>"
+            f"<span style='font-size:11px;color:#94a3b8;'>need: {thr}</span>{bd}</div>")
+    tcol = color if triggered else "#475569"
+    return (
+        f"<div style='background:{bg};border:2px solid {border};border-radius:10px;"
+        f"padding:14px;height:100%;box-sizing:border-box;'>"
+        f"<div style='font-size:14px;font-weight:700;color:{tcol};margin-bottom:8px;'>"
+        f"{icon} {title}{badge}</div>"
+        f"<div style='margin-bottom:8px;'>{rows_html}</div>"
+        f"<div style='font-size:11.5px;color:#1e293b;background:rgba(0,0,0,0.04);"
+        f"border-radius:6px;padding:7px 9px;line-height:1.45;'>"
+        f"<b>📊 What it means:</b> {interpretation}</div></div>")
 
 
 def net_signal(sigs):
@@ -470,44 +476,72 @@ def render_gldm_signatures(sigs):
         · as-of <b>{as_of}</b> · <b>{sigs['n_bars']}</b> bars</span></div>""",
         unsafe_allow_html=True)
 
-    # 2×2 signature cards: D1 / D2 / D3 / U1
+    # 2×2 signature cards: U1 / D2 / D1 / D3 — each shows criteria + live values
     r1c1, r1c2 = st.columns(2)
     r2c1, r2c2 = st.columns(2)
     r1c1.markdown(_sig_card(
-        "D1 — Downtrend pressure", sigs["d1_triggered"],
-        f"≥2 low-breaks (3d) & err_lo 3d-avg > +{gc.D1_ERRLO_MIN:.2f}%",
-        f"err_lo_ma3={sigs['err_lo_ma3']:+.3f}%  lo_breaks_3d={sigs['lo_breaks_3d']}",
-        good=False), unsafe_allow_html=True)
-    r1c2.markdown(_sig_card(
-        "D2 — Momentum fading", sigs["d2_triggered"],
-        f"err_hi 3d-avg < {gc.D2_ERRHI_MAX:+.2f}%",
-        f"err_hi_ma3={sigs['err_hi_ma3']:+.3f}%", good=False),
+        "U1 — Bullish pressure", "📈", "#16a34a", sigs["u1_triggered"],
+        [("err_hi 3d-avg", f"{sigs['err_hi_ma3']:+.3f}%", f"> +{gc.U1_ERRHI_MIN:.2f}%",
+          sigs['err_hi_ma3'] > gc.U1_ERRHI_MIN),
+         ("high-breaks (3d)", f"{sigs['hi_breaks_3d']}/3", "≥ 2", sigs['hi_breaks_3d'] >= 2)],
+        "GLDM's actual highs keep beating the model's predicted highs → upside "
+        "momentum. This is the entry trigger (needs a trend gate too)."),
         unsafe_allow_html=True)
+    r1c2.markdown(_sig_card(
+        "D2 — Momentum fading", "📉", "#dc2626", sigs["d2_triggered"],
+        [("err_hi 3d-avg", f"{sigs['err_hi_ma3']:+.3f}%", f"< {gc.D2_ERRHI_MAX:+.2f}%",
+          sigs['err_hi_ma3'] < gc.D2_ERRHI_MAX)],
+        "Predicted highs are no longer being beaten — upside momentum is "
+        "collapsing. Primary exit signal."), unsafe_allow_html=True)
     r2c1.markdown(_sig_card(
-        "D3 — Exhaustion canary", sigs["d3_triggered"],
-        "first low-break after ≥3 high-break streak",
-        f"consec_hi={sigs['consec_hi']}  exhaustion={'yes' if sigs['exhaustion_active'] else 'no'}",
-        good=False), unsafe_allow_html=True)
+        "D1 — Downtrend pressure", "📉", "#dc2626", sigs["d1_triggered"],
+        [("err_lo 3d-avg", f"{sigs['err_lo_ma3']:+.3f}%", f"> +{gc.D1_ERRLO_MIN:.2f}%",
+          sigs['err_lo_ma3'] > gc.D1_ERRLO_MIN),
+         ("low-breaks (3d)", f"{sigs['lo_breaks_3d']}/3", "≥ 2", sigs['lo_breaks_3d'] >= 2)],
+        "GLDM's actual lows keep undershooting the predicted floor → the trend is "
+        "deteriorating."), unsafe_allow_html=True)
     r2c2.markdown(_sig_card(
-        "U1 — Bullish pressure", sigs["u1_triggered"],
-        f"err_hi 3d-avg > +{gc.U1_ERRHI_MIN:.2f}% & ≥2 high-breaks",
-        f"err_hi_ma3={sigs['err_hi_ma3']:+.3f}%  hi_breaks_3d={sigs['hi_breaks_3d']}",
-        good=True), unsafe_allow_html=True)
+        "D3 — Exhaustion canary", "📉", "#dc2626", sigs["d3_triggered"],
+        [("consec high-breaks", f"{sigs['consec_hi']}", "≥ 3 then a low-break",
+          sigs['consec_hi'] >= 3),
+         ("low-break today", "yes" if sigs['detail_rows'] and sigs['detail_rows'][-1]['lo_break'] else "no",
+          "required", bool(sigs['exhaustion_active']))],
+        "A first downside break after a run of upside breaks — classic blow-off / "
+        "exhaustion reversal. Exit signal (fires even in a bull regime)."),
+        unsafe_allow_html=True)
 
     if sigs.get("v_reversal_likely"):
-        st.markdown("⚡ **V-reversal likely** — capitulation low undershoot detected.")
+        st.markdown("⚡ **V-reversal likely** — capitulation low undershoot detected "
+                    "(a fresh V-reversal within 3 bars satisfies the entry trend gate).")
 
-    # Last-5-bars table
-    rows = pd.DataFrame(sigs["detail_rows"])
-    if not rows.empty:
-        rows["date"] = pd.to_datetime(rows["date"]).dt.date
-        show = rows[["date", "close", "pred_hi", "actual_hi", "err_hi_pct",
-                     "pred_lo", "actual_lo", "err_lo_pct", "hi_break", "lo_break"]]
-        st.dataframe(show.round(2), use_container_width=True, hide_index=True)
+    # Last-5-bars mini-table (collapsible, all err columns) — like the BTC Live tab
+    if sigs["detail_rows"]:
+        with st.expander("📋 Last 5 bars — signal detail", expanded=False):
+            st.caption(
+                "Each row is a **completed** GLDM daily bar (actual H/L known); signals use "
+                "these bars only. err_hi (bar) = (actual_high − pred_high)/close × 100 "
+                "(regime-centered; + = bullish pressure). err_hi 3d-avg = rolling 3-bar mean "
+                "(the bottom row equals the U1/D2 card value). Break = actual H > pred_H "
+                "(Hi) or actual L < pred_L (Lo).")
+            disp = []
+            for r in sigs["detail_rows"]:
+                disp.append({
+                    "Date": pd.Timestamp(r["date"]).strftime("%Y-%m-%d"),
+                    "Close": f"${r['close']:,.2f}",
+                    "Pred H": f"${r['pred_hi']:,.2f}", "Actual H": f"${r['actual_hi']:,.2f}",
+                    "err_hi (bar)": f"{r['err_hi_pct']:+.3f}%", "err_hi 3d-avg": f"{r['err_hi_ma3']:+.3f}%",
+                    "Hi Brk": "✓" if r["hi_break"] else "–",
+                    "Pred L": f"${r['pred_lo']:,.2f}", "Actual L": f"${r['actual_lo']:,.2f}",
+                    "err_lo (bar)": f"{r['err_lo_pct']:+.3f}%", "err_lo 3d-avg": f"{r['err_lo_ma3']:+.3f}%",
+                    "Lo Brk": "✓" if r["lo_break"] else "–",
+                })
+            st.dataframe(pd.DataFrame(disp[::-1]), hide_index=True, use_container_width=True)
 
 
 def position_panel(asset, col_container, end=None):
-    """Open-position / current-signal panel for one traded asset."""
+    """Rich open-position / last-trade card for one traded asset — same look &
+    fields as the BTC app's MSTR / MSTU panels (LONG green card, or CLOSED
+    win/loss card, or a FLAT card)."""
     r = strategy_position(asset, end=end)
     label = ASSET_LABELS[asset]
     col = f"{asset.lower()}_close"
@@ -515,107 +549,271 @@ def position_panel(asset, col_container, end=None):
         col_container.info(f"{label}: price series unavailable.")
         return
     if end is None:
-        px = float(preds[col].iloc[-1])
+        px = float(preds[col].iloc[-1]); as_of = pd.Timestamp(preds["target_date"].iloc[-1])
     else:
         sub = preds[preds["target_date"] <= pd.Timestamp(end)]
-        px = float(sub[col].iloc[-1])
+        px = float(sub[col].iloc[-1]); as_of = pd.Timestamp(end)
+
+    def _tbl(rows):
+        body = "".join(
+            f"<tr><td style='color:#64748b;padding:1px 8px 1px 0;white-space:nowrap'>{k}</td>"
+            f"<td style='font-weight:600'>{v}</td></tr>" for k, v in rows)
+        return f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>{body}</table>"
+
     if r["in_pos_now"] and r["entry_px"]:
-        upnl = (px / r["entry_px"] - 1) * 100
-        col_container.markdown(
-            f"**{label} — 🟢 LONG**  \n"
-            f"entry ${r['entry_px']:,.2f} on {pd.Timestamp(r['entry_date']).date()}  \n"
-            f"now ${px:,.2f} · unrealized **{upnl:+.2f}%**")
+        e_px = r["entry_px"]; e_date = pd.Timestamp(r["entry_date"])
+        upnl = (px / e_px - 1) * 100
+        col_pnl = "#16a34a" if upnl >= 0 else "#dc2626"
+        stop_px = e_px * (1 - gc.FIXED_STOP)
+        days = (as_of - e_date).days
+        html = (
+            f"<div style='background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
+            f"<div style='font-size:13px;font-weight:700;color:#15803d;margin-bottom:6px;'>"
+            f"📍 {label} — LONG</div>"
+            + _tbl([("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
+                    ("Trigger", "U1 + Pure-Regime gate"),
+                    ("Live price", f"${px:,.2f}"),
+                    ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>"),
+                    ("Stop (−%.0f%%)" % (gc.FIXED_STOP * 100), f"${stop_px:,.2f}"),
+                    ("Days held", f"{days}d")]) + "</div>")
+        col_container.markdown(html, unsafe_allow_html=True)
+        return
+
+    # Flat: show the most recent CLOSED trade card if one exists
+    tl = r.get("trade_log") or []
+    if tl:
+        lt = tl[-1]
+        ret = lt["ret"] * 100; profit = ret > 0
+        bg = "#f0fdf4" if profit else "#fef2f2"; brd = "#16a34a" if profit else "#dc2626"
+        hdr = "#15803d" if profit else "#991b1b"; pcol = "#16a34a" if profit else "#dc2626"
+        badge = "✅ CLOSED — PROFIT" if profit else "🔴 CLOSED — LOSS"
+        e_date = pd.Timestamp(lt["entry_date"]); x_date = pd.Timestamp(lt["exit_date"])
+        html = (
+            f"<div style='background:{bg};border:2.5px solid {brd};border-radius:10px;padding:12px 14px;'>"
+            f"<div style='font-size:12px;font-weight:700;color:{hdr};margin-bottom:6px;'>"
+            f"{badge} — {label}</div>"
+            f"<div style='background:#fff7ed;border:1.5px solid #ea580c;border-radius:6px;"
+            f"padding:4px 9px;margin-bottom:7px;font-size:12px;font-weight:700;color:#9a3412;'>"
+            f"📤 Exit: {lt['reason']}</div>"
+            + _tbl([("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${lt['entry_px']:,.2f}"),
+                    ("Exit", f"{x_date.strftime('%b %d, %Y')} @ ${lt['exit_px']:,.2f}"),
+                    ("Trade P&amp;L", f"<b style='color:{pcol}'>{ret:+.2f}%</b>"),
+                    ("Days held", f"{(x_date - e_date).days}d"),
+                    ("Now", f"⚪ FLAT · ${px:,.2f}, awaiting next entry")]) + "</div>")
+        col_container.markdown(html, unsafe_allow_html=True)
     else:
-        col_container.markdown(f"**{label} — ⚪ CASH**  \nlast close ${px:,.2f} · flat, awaiting entry")
+        col_container.markdown(
+            f"<div style='background:#f8fafc;border:2px solid #94a3b8;border-radius:10px;"
+            f"padding:12px 14px;font-size:13px;'><b>⚪ {label} — FLAT</b><br>"
+            f"<span style='color:#475569'>last close ${px:,.2f} · no trades yet, awaiting entry</span></div>",
+            unsafe_allow_html=True)
+
+
+def _hl_forecast_fig(d_df, hist_bars=45):
+    """Candlestick of recent GLDM bars + next-day predicted High/Low band."""
+    hl = predict_next_daily_hl(d_df)
+    recent = d_df.tail(hist_bars)
+    fig = go.Figure(go.Candlestick(
+        x=recent.index, open=recent["gldm_open"], high=recent["gldm_high"],
+        low=recent["gldm_low"], close=recent["gldm_close"], name="GLDM",
+        increasing_line_color="#16a34a", decreasing_line_color="#dc2626"))
+    if hl:
+        nx = recent.index[-1] + pd.tseries.offsets.BDay(1)
+        fig.add_hline(y=hl["pred_high"], line=dict(color="#c0392b", dash="dot"),
+                      annotation_text=f"pred High ${hl['pred_high']:,.2f}",
+                      annotation_position="top left")
+        fig.add_hline(y=hl["pred_low"], line=dict(color="#2563eb", dash="dot"),
+                      annotation_text=f"pred Low ${hl['pred_low']:,.2f}",
+                      annotation_position="bottom left")
+        fig.add_trace(go.Scatter(
+            x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]], mode="markers+lines",
+            marker=dict(size=9, color="#b8860b", symbol="diamond"),
+            line=dict(color="#b8860b", width=3), name="next-day band"))
+    fig.update_layout(height=340, margin=dict(l=0, r=0, t=28, b=0),
+                      title="Daily High / Low forecast (next bar)",
+                      xaxis_rangeslider_visible=False, showlegend=False)
+    return fig
+
+
+def _cone_forecast_fig(art, d_df, hist_bars, title):
+    """Recent closes + forward close cone (central path + P5–P95 / P25–P75 fills)."""
+    cone = predict_cone(art, d_df)
+    if not cone:
+        return None
+    hist = d_df["gldm_close"].tail(hist_bars)
+    horizon = cone["horizon"]
+    future = pd.date_range(hist.index[-1], periods=horizon + 1, freq="B")[1:]
+    xall = [hist.index[-1]] + list(future)
+    y0 = cone["last_close"]
+
+    def path(key):
+        return [y0] + list(np.linspace(y0, cone[key], horizon + 1)[1:])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hist.index, y=hist.values, name="GLDM",
+                             line=dict(color="#b8860b", width=2)))
+    fig.add_trace(go.Scatter(x=xall, y=path("p95"), line=dict(width=0),
+                             showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=xall, y=path("p5"), fill="tonexty",
+                             fillcolor="rgba(184,134,11,0.12)", line=dict(width=0),
+                             name="P5–P95"))
+    fig.add_trace(go.Scatter(x=xall, y=path("p75"), line=dict(width=0),
+                             showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=xall, y=path("p25"), fill="tonexty",
+                             fillcolor="rgba(184,134,11,0.28)", line=dict(width=0),
+                             name="P25–P75"))
+    fig.add_trace(go.Scatter(x=xall, y=path("central"), name="central path",
+                             line=dict(color="#c0392b", width=2, dash="dash")))
+    fig.update_layout(height=300, margin=dict(l=0, r=0, t=28, b=0), title=title,
+                      legend=dict(orientation="h", y=-0.15))
+    return fig
+
+
+def render_prediction_plots(d_df, key_prefix):
+    """Daily H/L + 7-day cone + 14-day cone forecast charts (Live & Replay)."""
+    st.markdown("### 🔮 Model forecast charts (GLDM)")
+    st.plotly_chart(_hl_forecast_fig(d_df), use_container_width=True,
+                    key=f"{key_prefix}_hl")
+    cc7, cc14 = st.columns(2)
+    f7 = _cone_forecast_fig(M_7D, d_df, 60, "7-day close cone")
+    f14 = _cone_forecast_fig(M_14D, d_df, 90, "14-day close cone")
+    if f7:
+        cc7.plotly_chart(f7, use_container_width=True, key=f"{key_prefix}_c7")
+    if f14:
+        cc14.plotly_chart(f14, use_container_width=True, key=f"{key_prefix}_c14")
 
 
 # ════════════════════════════════════════════════════════════════════════
 # Backtesting dashboard (mirrors BTC/MSTR backtesting tabs)
 # ════════════════════════════════════════════════════════════════════════
-_PERIODS = {"Full (2021 → now)": ("2021-01-01", None),
-            "Chop (2021–2022)": ("2021-01-01", "2022-12-31"),
-            "Bull (2023 → now)": ("2023-01-01", None)}
+# Four periods, mirroring the BTC/MSTR tabs.  NOTE: the daily H/L signal model
+# is fit only on pre-2021 data, so EVERY window below is genuinely out-of-sample
+# — the "OOS — Recent" tab simply isolates the most recent fully-blind slice.
+_PERIODS = [
+    ("🐻 Choppy / Bear (2021–2022)", "2021-01-01", "2022-12-31"),
+    ("🐂 Bull Market (2023 → now)", "2023-01-01", None),
+    ("🌐 Full Market (2021 → now)", "2021-01-01", None),
+    ("🔬 OOS — Recent (2025 → now)", "2025-01-01", None),
+]
+
+
+def _equity_fig(r, asset, title):
+    """Strategy-vs-B&H equity curve with entry (▲) and exit (▼ win/loss) markers,
+    plus a marker for a still-open position — same idea as the BTC/MSTR plot."""
+    dts = pd.to_datetime(r["dates"])
+    date_to_eq = dict(zip([pd.Timestamp(d) for d in r["dates"]], r["strat"]))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=dts, y=r["strat"], name=f"Strategy ({asset})",
+                             line=dict(color="#b8860b", width=2)))
+    fig.add_trace(go.Scatter(x=dts, y=r["bh"], name=f"Buy & Hold ({asset})",
+                             line=dict(color="#9ca3af", dash="dash")))
+    ent_x, ent_y, xw_x, xw_y, xl_x, xl_y = [], [], [], [], [], []
+    for t in r["trade_log"]:
+        ed = pd.Timestamp(t["entry_date"]); xd = pd.Timestamp(t["exit_date"])
+        if ed in date_to_eq:
+            ent_x.append(ed); ent_y.append(date_to_eq[ed])
+        if xd in date_to_eq:
+            (xw_x if t["ret"] > 0 else xl_x).append(xd)
+            (xw_y if t["ret"] > 0 else xl_y).append(date_to_eq[xd])
+    if ent_x:
+        fig.add_trace(go.Scatter(x=ent_x, y=ent_y, mode="markers", name="Entry",
+                                 marker=dict(symbol="triangle-up", size=11, color="#16a34a",
+                                             line=dict(width=1, color="#065f46"))))
+    if xw_x:
+        fig.add_trace(go.Scatter(x=xw_x, y=xw_y, mode="markers", name="Exit (win)",
+                                 marker=dict(symbol="triangle-down", size=11, color="#16a34a",
+                                             line=dict(width=1, color="#065f46"))))
+    if xl_x:
+        fig.add_trace(go.Scatter(x=xl_x, y=xl_y, mode="markers", name="Exit (loss)",
+                                 marker=dict(symbol="triangle-down", size=11, color="#dc2626",
+                                             line=dict(width=1, color="#7f1d1d"))))
+    if r.get("in_pos_now") and r.get("entry_date") is not None:
+        ed = pd.Timestamp(r["entry_date"])
+        if ed in date_to_eq:
+            fig.add_trace(go.Scatter(x=[ed], y=[date_to_eq[ed]], mode="markers",
+                                     name="Open entry",
+                                     marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
+                                                 line=dict(width=1.5, color="#b45309"))))
+    fig.update_layout(height=360, margin=dict(l=0, r=0, t=30, b=0), title=title,
+                      yaxis_title="Growth of $1", legend=dict(orientation="h", y=-0.14))
+    return fig
+
+
+def _trade_log_table(r):
+    tl = pd.DataFrame(r["trade_log"])
+    if tl.empty:
+        st.caption("No completed trades in this window.")
+        return
+    tl["entry_date"] = pd.to_datetime(tl["entry_date"]).dt.date
+    tl["exit_date"] = pd.to_datetime(tl["exit_date"]).dt.date
+    tl["ret"] = (tl["ret"] * 100).round(2)
+    tl["entry_px"] = tl["entry_px"].round(2); tl["exit_px"] = tl["exit_px"].round(2)
+    tl = tl.rename(columns={"entry_date": "Entry", "exit_date": "Exit",
+                            "entry_px": "Entry $", "exit_px": "Exit $",
+                            "ret": "Return %", "reason": "Exit reason"})
+    st.dataframe(tl[::-1], use_container_width=True, hide_index=True, height=280)
+    wins = tl[tl["Return %"] > 0]["Return %"]; losses = tl[tl["Return %"] <= 0]["Return %"]
+    st.caption(f"{len(tl)} trades · win rate {len(wins)/len(tl)*100:.0f}% · "
+               f"avg win {wins.mean() if len(wins) else 0:.2f}% · "
+               f"avg loss {losses.mean() if len(losses) else 0:.2f}% · "
+               f"best {tl['Return %'].max():.1f}% · worst {tl['Return %'].min():.1f}%")
 
 
 def render_backtest_dashboard(asset):
     col = f"{asset.lower()}_close"
     st.markdown(f"## {'📊' if asset == 'GDX' else '📈'} {ASSET_LABELS[asset]} — "
                 "Gold Signal-Driven Backtesting")
-    st.markdown(
-        f"Trades **{asset}** off the **GLDM {gc.STRATEGY_NAME}** signal — entry when "
-        f"U1 bullish divergence (> +{gc.U1_ERRHI_MIN:.2f}%) confirms inside the Pure-Regime "
-        f"gate (Bull Regime *or* washed-out Clean Breakout *or* V-reversal); exit on "
-        f"D2 (< {gc.D2_ERRHI_MAX:+.2f}%) / D3 exhaustion or a fixed **−{gc.FIXED_STOP*100:.0f}%** stop. "
-        "Signals and forecasts come from gold (GLDM); execution is in the traded asset — "
-        "the way the BTC app runs one BTC signal across MSTR / MSTU.")
-    st.caption("All trades are out-of-sample: the daily H/L model is fit once on the "
-               "pre-2021 window and predicts every later bar. Costs/slippage not modelled.")
+    render_strategy_card()
+    st.caption("All trades are out-of-sample: the GLDM daily H/L signal model is fit once "
+               "on the pre-2021 window and predicts every later bar, so all four periods "
+               "below are genuinely blind. Costs/slippage not modelled.")
 
-    # KPI table across the three periods
+    # ── summary KPI table across all four periods ──
     rows = []
-    for lbl, (s, e) in _PERIODS.items():
+    for lbl, s, e in _PERIODS:
         r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
                          gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
         sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
         wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
-        rows.append(dict(Period=lbl,
-                         Strategy=f"{sm['total_ret']*100:+.1f}%",
-                         **{"Buy&Hold": f"{bm['total_ret']*100:+.1f}%"},
-                         **{"Strat MDD": f"{sm['mdd']*100:.1f}%",
-                            "B&H MDD": f"{bm['mdd']*100:.1f}%",
-                            "Sharpe": f"{sm['sharpe']:.2f}",
-                            "Trades": len(r["trades"]),
-                            "Win%": f"{wr:.0f}%"}))
+        rows.append({"Period": lbl,
+                     "Strategy": f"{sm['total_ret']*100:+.1f}%",
+                     "Buy & Hold": f"{bm['total_ret']*100:+.1f}%",
+                     "Strat MDD": f"{sm['mdd']*100:.1f}%",
+                     "B&H MDD": f"{bm['mdd']*100:.1f}%",
+                     "Strat Sharpe": f"{sm['sharpe']:.2f}",
+                     "B&H Sharpe": f"{bm['sharpe']:.2f}",
+                     "Trades": len(r["trades"]), "Win%": f"{wr:.0f}%"})
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # headline metrics (full period)
-    rf = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
-                      gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start="2021-01-01")
-    sm = btg._metrics(rf["strat"], rf["dates"]); bm = btg._metrics(rf["bh"], rf["dates"])
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Strategy total return", f"{sm['total_ret']*100:+.1f}%", f"CAGR {sm['cagr']*100:+.1f}%")
-    k2.metric("Buy & Hold return", f"{bm['total_ret']*100:+.1f}%", f"CAGR {bm['cagr']*100:+.1f}%")
-    k3.metric("Max drawdown", f"{sm['mdd']*100:.1f}%", f"vs B&H {bm['mdd']*100:.1f}%",
-              delta_color="inverse")
-    k4.metric("Sharpe", f"{sm['sharpe']:.2f}", f"vs B&H {bm['sharpe']:.2f}")
+    # ── one tab per period (mirrors the BTC/MSTR period tabs) ──
+    period_tabs = st.tabs([lbl for lbl, _, _ in _PERIODS])
+    for (lbl, s, e), tb in zip(_PERIODS, period_tabs):
+        with tb:
+            r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
+                             gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
+            if len(r["strat"]) < 2:
+                st.info("Not enough bars in this window.")
+                continue
+            sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Strategy return", f"{sm['total_ret']*100:+.1f}%", f"CAGR {sm['cagr']*100:+.1f}%")
+            k2.metric("Buy & Hold", f"{bm['total_ret']*100:+.1f}%", f"CAGR {bm['cagr']*100:+.1f}%")
+            k3.metric("Max drawdown", f"{sm['mdd']*100:.1f}%", f"vs B&H {bm['mdd']*100:.1f}%",
+                      delta_color="inverse")
+            k4.metric("Sharpe", f"{sm['sharpe']:.2f}", f"vs B&H {bm['sharpe']:.2f}")
 
-    # equity + drawdown
-    dts = pd.to_datetime(rf["dates"])
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=dts, y=rf["strat"], name="Strategy",
-                             line=dict(color="#b8860b", width=2)))
-    fig.add_trace(go.Scatter(x=dts, y=rf["bh"], name="Buy & Hold",
-                             line=dict(color="#888", dash="dash")))
-    fig.update_layout(height=340, margin=dict(l=0, r=0, t=10, b=0),
-                      yaxis_title="Growth of $1", legend=dict(orientation="h"))
-    st.plotly_chart(fig, use_container_width=True)
-
-    dd = btg.drawdown_series(rf["strat"]); ddb = btg.drawdown_series(rf["bh"])
-    figd = go.Figure()
-    figd.add_trace(go.Scatter(x=dts, y=dd * 100, name="Strategy DD", fill="tozeroy",
-                              line=dict(color="#b8860b")))
-    figd.add_trace(go.Scatter(x=dts, y=ddb * 100, name="Buy & Hold DD",
-                              line=dict(color="#bbb", dash="dash")))
-    figd.update_layout(height=200, margin=dict(l=0, r=0, t=6, b=0),
-                       yaxis_title="Drawdown %", legend=dict(orientation="h"))
-    st.plotly_chart(figd, use_container_width=True)
-
-    # trade log
-    st.markdown("#### Trade log (full period)")
-    tl = pd.DataFrame(rf["trade_log"])
-    if not tl.empty:
-        tl["entry_date"] = pd.to_datetime(tl["entry_date"]).dt.date
-        tl["exit_date"] = pd.to_datetime(tl["exit_date"]).dt.date
-        tl["ret"] = (tl["ret"] * 100).round(2)
-        tl = tl.rename(columns={"entry_date": "Entry", "exit_date": "Exit",
-                                "entry_px": "Entry $", "exit_px": "Exit $",
-                                "ret": "Return %", "reason": "Exit reason"})
-        tl["Entry $"] = tl["Entry $"].round(2); tl["Exit $"] = tl["Exit $"].round(2)
-        st.dataframe(tl[::-1], use_container_width=True, hide_index=True, height=300)
-        wins = tl[tl["Return %"] > 0]["Return %"]; losses = tl[tl["Return %"] <= 0]["Return %"]
-        st.caption(f"{len(tl)} trades · avg win {wins.mean():.2f}% · avg loss "
-                   f"{losses.mean() if len(losses) else 0:.2f}% · "
-                   f"best {tl['Return %'].max():.1f}% · worst {tl['Return %'].min():.1f}%")
+            st.plotly_chart(_equity_fig(r, asset, f"{asset} strategy vs Buy & Hold — {lbl}"),
+                            use_container_width=True, key=f"{asset}_{s}_{e}_eq")
+            dts = pd.to_datetime(r["dates"])
+            figd = go.Figure()
+            figd.add_trace(go.Scatter(x=dts, y=btg.drawdown_series(r["strat"]) * 100,
+                                      name="Strategy DD", fill="tozeroy", line=dict(color="#b8860b")))
+            figd.add_trace(go.Scatter(x=dts, y=btg.drawdown_series(r["bh"]) * 100,
+                                      name="Buy & Hold DD", line=dict(color="#bbb", dash="dash")))
+            figd.update_layout(height=190, margin=dict(l=0, r=0, t=6, b=0),
+                               yaxis_title="Drawdown %", legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(figd, use_container_width=True, key=f"{asset}_{s}_{e}_dd")
+            st.markdown("#### Trade log")
+            _trade_log_table(r)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -709,6 +907,10 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     end = None if is_live else as_of_date
     position_panel("GDX", p1, end=end)
     position_panel("UGL", p2, end=end)
+
+    # ── model forecast charts (Daily H/L + 7d & 14d close cones) ──
+    st.markdown("---")
+    render_prediction_plots(d_df, key_prefix=("live" if is_live else "hist"))
 
 
 with tab_live:
