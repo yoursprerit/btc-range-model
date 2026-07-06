@@ -759,7 +759,7 @@ _HR_LOOKBACK_HOURS = 23   # rolling look-back window (hours). 23h actuals + ~1h
                           # forecast ≈ a 24h span, matching the BTC daily bar view.
 
 
-def _hourly_forecast_fig(as_of_date, is_live):
+def _hourly_forecast_fig(as_of_date, is_live, hl=None):
     """Rolling next-hour GLDM close forecast — a faithful gold copy of the BTC
     hourly chart: the last 23 hours of bars with the actual close (black), the
     per-bar past predictions (● purple line, colored green=correct-direction /
@@ -859,6 +859,30 @@ def _hourly_forecast_fig(as_of_date, is_live):
                                             f"$%{{y:,.2f}} ({fc_ret*100:+.2f}%)<br>"
                                             f"95% CI ${fc_lo:,.2f} – ${fc_hi:,.2f}<extra></extra>")))
     fig.add_vline(x=last_ct, line=dict(color="crimson", width=1.5, dash="dash"))
+
+    # ── overlay the predicted daily HIGH / LOW as full-width threshold lines
+    #    with ±band, clipped at the midpoint (same as the BTC hourly chart) ──
+    if hl:
+        fig.add_hline(y=hl["pred_high"], line=dict(color="green", width=2.5, dash="dot"),
+                      annotation_text=f"Daily Pred HIGH ${hl['pred_high']:,.2f}",
+                      annotation_position="top right", annotation_font=dict(color="green", size=12),
+                      annotation_bgcolor="rgba(255,255,255,0.92)", annotation_bordercolor="green",
+                      annotation_borderwidth=1)
+        fig.add_hline(y=hl["pred_low"], line=dict(color="red", width=2.5, dash="dot"),
+                      annotation_text=f"Daily Pred LOW ${hl['pred_low']:,.2f}",
+                      annotation_position="bottom right", annotation_font=dict(color="red", size=12),
+                      annotation_bgcolor="rgba(255,255,255,0.92)", annotation_bordercolor="red",
+                      annotation_borderwidth=1)
+        mid = (hl["pred_high"] + hl["pred_low"]) / 2
+        hi_dn = max(hl["pred_high"] - hl["band_hi"], mid)   # clip green band at mid
+        lo_up = min(hl["pred_low"] + hl["band_lo"], mid)    # clip red band at mid
+        if hl["pred_high"] + hl["band_hi"] > hi_dn:
+            fig.add_hrect(y0=hi_dn, y1=hl["pred_high"] + hl["band_hi"],
+                          fillcolor="rgba(0,170,0,0.12)", line_width=0, layer="below")
+        if lo_up > hl["pred_low"] - hl["band_lo"]:
+            fig.add_hrect(y0=hl["pred_low"] - hl["band_lo"], y1=lo_up,
+                          fillcolor="rgba(220,30,30,0.12)", line_width=0, layer="below")
+
     title = ("🕐 GLDM — rolling next-hour close forecast (last 23 hours)"
              if is_live else f"🕐 GLDM hourly forecast as of {pd.Timestamp(as_of_date).date()}")
     fig.update_layout(template="plotly_white", height=420,
@@ -874,7 +898,8 @@ def _hourly_forecast_fig(as_of_date, is_live):
 def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None):
     """Hourly + Daily H/L + 7-day + 14-day forecast charts (Live & Replay)."""
     st.markdown("### 🔮 Model forecast charts (GLDM)")
-    fhr = _hourly_forecast_fig(as_of_date, is_live)
+    hl = predict_next_daily_hl(d_df)   # overlaid on the hourly chart as H/L lines
+    fhr = _hourly_forecast_fig(as_of_date, is_live, hl=hl)
     if fhr:
         st.plotly_chart(fhr, use_container_width=True, key=f"{key_prefix}_hr")
     else:
