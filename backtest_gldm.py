@@ -213,23 +213,28 @@ def _clean_flags(sig, i, U1, D2, D1):
 
 # ── strategy simulation on one price series ───────────────────────────────
 def simulate(preds, sig, price_col, stop_pct, U1, D2, D1,
-             use_d1_exit=False, oos_start=OOS_START):
-    """Walk bars; long when entry gate fires, exit on D2/D3 (+optional D1) or
-    stop.  Returns equity curve (strategy) + buy&hold, both starting at 1.0,
-    over the OOS window."""
+             use_d1_exit=False, oos_start=OOS_START, end=None):
+    """Walk bars; long when the Pure-Regime entry gate fires, exit on D2/D3
+    (+optional D1) or the fixed stop.  Window = [oos_start, end].
+
+    Returns, over the window: strategy & buy&hold equity curves (start 1.0), a
+    per-bar long/flat position array, the completed-trade log (entry/exit date,
+    price, return, exit reason) and the trade-return array.
+    """
     price = preds[price_col].to_numpy(float)
     dates = preds["target_date"].to_numpy()
     n = len(price)
-    oos_i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
+    i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
+    i1 = n if end is None else int(np.searchsorted(
+        dates, np.datetime64(pd.Timestamp(end)), side="right"))
 
     in_pos = False
-    entry_px = np.nan
+    entry_px = np.nan; entry_date = None
     eq = 1.0
-    strat_eq = []; bh_eq = []; used_dates = []
-    trades = []
-    bh0 = price[oos_i0]
-    for i in range(oos_i0, n):
-        # mark-to-market on close-to-close while in position
+    strat_eq = []; bh_eq = []; used_dates = []; pos_series = []
+    trades = []; trade_log = []
+    bh0 = price[i0]
+    for i in range(i0, i1):
         if in_pos:
             eq *= price[i] / price[i - 1]
         strat_eq.append(eq)
@@ -245,21 +250,34 @@ def simulate(preds, sig, price_col, stop_pct, U1, D2, D1,
                              (clean and not sig["above_ma20"][i]) or sig["v_recent"][i])
 
         if in_pos:
-            # stop check (intrabar low vs entry)
             stop_hit = price[i] <= entry_px * (1 - stop_pct)
             exit_sig = d2 or d3 or (use_d1_exit and d1)
             if stop_hit or exit_sig:
                 ret = price[i] / entry_px - 1
+                reason = ("stop −%.0f%%" % (stop_pct * 100) if stop_hit else
+                          "D3 exhaustion" if d3 else
+                          "D2 fade" if d2 else "D1")
                 trades.append(ret)
-                in_pos = False
-                entry_px = np.nan
+                trade_log.append(dict(entry_date=entry_date, exit_date=dates[i],
+                                      entry_px=float(entry_px), exit_px=float(price[i]),
+                                      ret=float(ret), reason=reason))
+                in_pos = False; entry_px = np.nan; entry_date = None
         elif entry_gate:
-            in_pos = True
-            entry_px = price[i]
+            in_pos = True; entry_px = price[i]; entry_date = dates[i]
+        pos_series.append(1 if in_pos else 0)
 
-    strat_eq = np.array(strat_eq); bh_eq = np.array(bh_eq)
-    return dict(dates=used_dates, strat=strat_eq, bh=bh_eq,
-                trades=np.array(trades))
+    return dict(dates=used_dates, strat=np.array(strat_eq), bh=np.array(bh_eq),
+                pos=np.array(pos_series), trades=np.array(trades),
+                trade_log=trade_log, in_pos_now=in_pos,
+                entry_px=(float(entry_px) if in_pos else None),
+                entry_date=entry_date)
+
+
+def drawdown_series(eq):
+    """Running drawdown (fraction, ≤0) of an equity curve."""
+    eq = np.asarray(eq, float)
+    peak = np.maximum.accumulate(eq)
+    return eq / peak - 1.0
 
 
 def _metrics(eq, dates):
@@ -376,11 +394,13 @@ def main():
         out["assets"][asset] = dict(strategy=res["strat"], buy_hold=res["bh"],
                                     n_trades=res["n_trades"], win_rate=res["win_rate"])
 
-    print("\n=== ALTERNATIVE: divergence Pure-Regime (BTC-style) — for reference ===")
+    print(f"\n=== CHOSEN STRATEGY: {gc.STRATEGY_NAME} "
+          f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} stop={gc.FIXED_STOP*100:.0f}%) "
+          f"— traded on GDX & UGL ===")
     out["divergence_alt"] = {}
     for asset in ("GLDM", "UGL", "GDX"):
         res = run_asset(preds, sig, asset, strategy="divergence",
-                        stop_pct=gc.STOP_BY_ASSET[asset], U1=0.10, D2=-0.15)
+                        stop_pct=gc.FIXED_STOP, U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)
         if res is None:
             continue
         print_asset(res)

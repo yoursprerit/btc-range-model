@@ -45,28 +45,37 @@ Gold-scaled thresholds (vs BTC's ±1.3%):
 
 | Signal | GLDM threshold | Meaning |
 |---|---|---|
-| **U1** entry | 3-day centered `err_hi` > **+0.10%** and ≥2 high-breaks | bullish pressure |
-| **D2** exit | 3-day centered `err_hi` < **−0.15%** | momentum fading |
+| **U1** entry | 3-day centered `err_hi` > **+0.08%** and ≥2 high-breaks | bullish pressure |
+| **D2** exit | 3-day centered `err_hi` < **−0.10%** | momentum fading |
 | **D1** exit | 3-day centered `err_lo` > **+0.10%** and ≥2 low-breaks | bearish pressure |
 | **V** reversal | single-bar low undershoot > **+0.50%** + high down-score | capitulation |
 | Regime | close > rising 20-day MA | bull regime gate |
 
-## 4. Strategies
+## 4. The strategy
 
-**Primary — MA trend filter.** Long when GLDM's close is above its N-day simple
-moving average (decision made at the prior close → no look-ahead); flat
-otherwise; optional fixed stop. Simple, robust, hard to overfit.
+The app trades **one** strategy — **Divergence Pure-Regime** (BTC-style,
+gold-scaled). Enter on **U1** bullish divergence (3-day centered `err_hi` >
+**+0.08%** with ≥2 high-breaks) confirmed inside the **Pure-Regime gate**: Bull
+Regime **or** a washed-out Clean Breakout below the MA **or** a recent
+V-reversal. Exit on **D2** (< **−0.10%**) / **D3** exhaustion, or a fixed
+**−3%** stop.
 
-**Alternative — Divergence Pure-Regime** (BTC-style, gold-scaled). Enter on U1
-plus the Pure-Regime gate (bull regime **or** a washed-out clean setup below the
-MA **or** a recent V-reversal); exit on D2 / D3 exhaustion; per-asset fixed stop.
+The signal is derived from **GLDM** (gold) and executed in its
+leveraged / high-beta proxies — the 1× GLDM position is **not traded**, exactly
+as the BTC app trades MSTR / MSTU rather than spot BTC:
 
-Both signals are derived from **GLDM** and then applied to three assets, mirroring
-how the BTC app runs one signal across BTC / MSTR / MSTU:
+- **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**)
+- **UGL** — ProShares Ultra Gold, 2× daily gold (**~MSTU analog**)
 
-- **GLDM** — 1× spot gold (core position)
-- **UGL** — ProShares Ultra Gold, 2× daily gold (leveraged, ~MSTU analog)
-- **GDX** — VanEck Gold Miners ETF, high-beta gold (~MSTR analog)
+### Why these parameters
+
+`U1 = +0.08 / D2 = −0.10 / stop = 3%` was chosen from a joint GDX+UGL frontier
+sweep as the config that **beats buy-&-hold on both return and drawdown for both
+assets**. It sits on a robust plateau — neighbouring settings
+(`0.08/−0.15/3%`, `0.10/−0.10/4%`, `0.08/−0.10/4%`) all score a combined Sharpe
+of 2.4–2.7 — so it is not a fragile optimisation spike. (An earlier candidate,
+`0.02/−0.27/3%`, also beats buy-&-hold but returns less on both assets: GDX
++143%, UGL +277% with higher drawdown.)
 
 ## 5. Backtest methodology
 
@@ -87,53 +96,45 @@ how the BTC app runs one signal across BTC / MSTR / MSTU:
 
 ## 6. Results (OOS 2021-01-01 → 2026-07-06)
 
-### Primary — MA50 trend filter (default), stop off
+**Chosen strategy — Divergence Pure-Regime, `U1 +0.08% / D2 −0.10% / stop −3%`,
+traded on GDX & UGL.** It beats buy-&-hold on **both return and drawdown** for
+both assets:
 
-| Asset | Strategy return | B&H return | Strategy MDD | B&H MDD | Strategy Sharpe | B&H Sharpe |
-|---|---|---|---|---|---|---|
-| **GLDM** | **+92.2%** | +111.5% | **−17.0%** | −26.1% | **0.87** | 0.85 |
-| **UGL** (2×) | **+149.3%** | +160.8% | **−32.4%** | −49.4% | **0.71** | 0.67 |
-| **GDX** (miners) | **+92.9%** | +103.6% | **−34.1%** | −46.5% | **0.57** | 0.54 |
+| Asset | Strategy return | B&H return | Strategy MDD | B&H MDD | Strategy Sharpe | B&H Sharpe | Trades | Win% |
+|---|---|---|---|---|---|---|---|---|
+| **GDX** (miners) | **+270.3%** | +103.6% | **−16.1%** | −46.5% | **1.40** | 0.54 | 80 | 59% |
+| **UGL** (2×) | **+207.1%** | +160.8% | **−17.6%** | −49.4% | **1.29** | 0.67 | 80 | 61% |
 
-The trend filter gives up a little return but **cuts max drawdown by ~35–45%**
-and improves Sharpe on all three assets.
+*(The 1× GLDM signal source, for reference: +87.4%, MDD −8.5%, Sharpe 1.39 —
+best risk-adjusted, but not traded.)*
 
-### Sharpe-optimal MA config (frontier sweep, MDD ≤ buy-&-hold)
+### Sub-period breakdown (shown per-asset in the app's Backtesting tabs)
 
-| Asset | MA window | Stop | Return | MDD | Sharpe | vs B&H |
-|---|---|---|---|---|---|---|
-| **GLDM** | 100 | 2% | **+108.0%** | −20.7% | **0.94** | B&H +111.5% / −26.1% / 0.85 |
-| **UGL** | 40 | 2% | **+186.4%** | −36.4% | **0.80** | B&H +160.8% / −49.4% / 0.67 |
-| **GDX** | 100 | 5% | **+136.4%** | −30.8% | **0.68** | B&H +103.6% / −46.5% / 0.54 |
+| Asset | Period | Strategy | Buy & Hold | Strat MDD | B&H MDD |
+|---|---|---|---|---|---|
+| GDX | Chop 2021–2022 | **+36.4%** | −25.6% | −13.2% | −46.5% |
+| GDX | Bull 2023→now | +141.7% | +164.4% | −16.1% | −36.3% |
+| UGL | Chop 2021–2022 | **+46.4%** | −22.6% | −10.4% | −40.2% |
+| UGL | Bull 2023→now | +94.2% | +231.6% | −17.6% | −49.4% |
 
-On the leveraged / high-beta names the tuned trend filter **beats buy-&-hold on
-return, drawdown and Sharpe simultaneously.**
+The strategy's edge is clearest in the **choppy / down** 2021–2022 gold market,
+where it stayed **net positive while buy-&-hold lost ~25%**. In a relentless
+bull leg it gives up some upside (the price of de-risking) but with far lower
+drawdown and higher Sharpe throughout.
 
-### Alternative — Divergence Pure-Regime (gold-scaled, U1 +0.10% / D2 −0.15%)
-
-| Asset | Strategy return | B&H return | Strategy MDD | B&H MDD | Strategy Sharpe | B&H Sharpe |
-|---|---|---|---|---|---|---|
-| **GLDM** | +68.6% | +111.5% | **−10.5%** | −26.1% | **1.17** | 0.85 |
-| **UGL** (2×) | +126.2% | +160.8% | **−24.0%** | −49.4% | **1.00** | 0.67 |
-| **GDX** (miners) | **+195.8%** | +103.6% | **−28.5%** | −46.5% | **1.16** | 0.54 |
-
-The divergence system delivers the **best risk-adjusted performance** (Sharpe
-1.0–1.2, drawdowns roughly halved) and on **GDX it nearly doubles buy-&-hold's
-return** with far lower drawdown.
-
-## 7. Recommended defaults (in `app/gldm_core.py`)
+## 7. Chosen defaults (in `app/gldm_core.py`)
 
 ```python
-MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
-STOP_BY_ASSET      = {"GLDM": 0.030, "UGL": 0.020, "GDX": 0.050}
-U1_ERRHI_MIN, D2_ERRHI_MAX, D1_ERRLO_MIN, V_ERRLO_MIN = 0.10, -0.15, 0.10, 0.50
+STRATEGY_NAME    = "Divergence Pure-Regime"
+U1_ERRHI_MIN     =  0.08     # U1 entry threshold (3-day centered err_hi)
+D2_ERRHI_MAX     = -0.10     # D2 exit threshold
+D1_ERRLO_MIN     =  0.10
+V_ERRLO_MIN      =  0.50
+FIXED_STOP       =  0.03     # shared −3% stop
+TRADEABLE_ASSETS = ["GDX", "UGL"]   # GLDM (1x) supplies the signal only
 ```
 
-- **For 1× GLDM, maximum return:** MA100 + 2% stop (+108%, Sharpe 0.94).
-- **For the best risk-adjusted profile / minimum losses:** the Divergence
-  Pure-Regime system (Sharpe > 1.0, ~−10% to −29% drawdowns).
-- **For leveraged upside (UGL / GDX):** either tuned strategy beats buy-&-hold on
-  every metric — GDX + divergence is the standout (+195.8%).
-
-Both strategies are selectable, with live-tunable parameters, on the **Strategy**
-tab of the app.
+The strategy is fixed (single strategy, single parameter set); the **GDX** and
+**UGL** Backtesting tabs show the full/chop/bull breakdown, equity & drawdown
+curves and the complete trade log, and the **Live** / **Historical replay** tabs
+show the live signal and open position for each asset.

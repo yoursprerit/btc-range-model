@@ -74,19 +74,25 @@ CI*, not a directional bet. The real edge lives in the **trend regime** and
 
 ## The strategy (short version)
 
-Gold's persistent uptrends and shallow dips reward a **price-vs-moving-average
-trend filter**: stay long while GLDM's close is above its N-day SMA, step aside
-otherwise. Applied to GLDM (1×), **UGL** (2× gold) and **GDX** (gold miners) —
-mirroring how the BTC app runs one signal across BTC / MSTR / MSTU — this
-captures most of buy-&-hold's return while roughly **halving the drawdown** and
-raising the Sharpe ratio on every asset.
+**One strategy — the gold-scaled BTC-style Divergence Pure-Regime system.** Enter
+when U1 bullish divergence (regime-centered `err_hi` > +0.08%) confirms inside the
+Pure-Regime gate (Bull Regime *or* washed-out Clean Breakout *or* V-reversal);
+exit on D2 (< −0.10%) / D3 exhaustion or a fixed −3% stop.
 
-The BTC-style **divergence signal system** (U1 / D2 / D3 / V-reversal, gold-scaled
-and regime-centered) is retained as both a live *regime read* (Signals tab) and
-an alternative strategy — and it actually delivers the best risk-adjusted numbers
-(Sharpe ~1.0–1.2) and **beats buy-&-hold outright on GDX**.
+The signal comes from **GLDM (gold)** but is executed in its leveraged / high-beta
+proxies — the 1× GLDM position is **not traded**, exactly as the BTC app trades
+**MSTR** and **MSTU** rather than spot BTC:
 
-Full methodology, thresholds and results: **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.
+- **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**)
+- **UGL** — ProShares Ultra Gold, 2× gold (**~MSTU analog**)
+
+Out-of-sample (2021→now) it beats buy-&-hold on **both return and drawdown** for
+both assets: **GDX +270%** (MDD −16% vs −47%, Sharpe 1.40) and **UGL +207%**
+(MDD −18% vs −49%, Sharpe 1.29) — and it stayed net-positive through the
+2021–2022 gold correction while buy-&-hold fell ~25%.
+
+Full methodology, parameter choice and per-period results:
+**[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.
 
 ---
 

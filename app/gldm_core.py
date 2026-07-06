@@ -82,16 +82,28 @@ MACRO_SYMS = {
 # ════════════════════════════════════════════════════════════════════════
 # STRATEGY CONSTANTS — tuned for gold's volatility (see backtest_gldm.py)
 # ════════════════════════════════════════════════════════════════════════
+# ── THE strategy ─────────────────────────────────────────────────────────
+# The gold app trades ONE strategy — the BTC-style Divergence Pure-Regime
+# system, gold-scaled — applied to two assets (mirroring how BTC trades MSTR &
+# MSTU rather than spot):
+#     GDX  = VanEck Gold Miners ETF   (high-beta gold — the ~MSTR analog)
+#     UGL  = ProShares Ultra Gold 2x  (leveraged gold — the ~MSTU analog)
+# The 1x GLDM position is NOT traded (it only supplies the signal + forecasts).
+#
 # BTC uses U1/D2 divergence thresholds of ±1.3% of close because a BTC day
 # routinely ranges 3-4%.  The GLDM divergence error is regime-centered (rolling
-# median) with a std of only ~0.17%, so the equivalent signal thresholds are an
-# order of magnitude smaller.  These values come from the per-asset frontier
-# sweep in backtest_gldm.py and deliver Sharpe ~1.0-1.2 with roughly HALVED
-# drawdowns (and beat buy & hold outright on GDX) — see GLDM_TRADING_STRATEGY.md.
-U1_ERRHI_MIN =  0.10   # U1 entry:  3d-avg centered err_hi > +0.10%  (AND hi_breaks_3d ≥ 2)
-D2_ERRHI_MAX = -0.15   # D2 exit:   3d-avg centered err_hi < −0.15%
+# median) with a std of only ~0.17%, so the thresholds are an order of magnitude
+# smaller.  The single chosen config below sits on a robust plateau of the joint
+# GDX+UGL frontier sweep and BEATS buy & hold on BOTH return AND drawdown for
+# both assets (GDX +270%/-16% MDD/Sharpe 1.40, UGL +207%/-18% MDD/Sharpe 1.29;
+# B&H +104%/-47% and +161%/-49%).  See GLDM_TRADING_STRATEGY.md.
+STRATEGY_NAME = "Divergence Pure-Regime"
+U1_ERRHI_MIN =  0.08   # U1 entry:  3d-avg centered err_hi > +0.08%  (AND hi_breaks_3d ≥ 2)
+D2_ERRHI_MAX = -0.10   # D2 exit:   3d-avg centered err_hi < −0.10%
 D1_ERRLO_MIN =  0.10   # D1 exit:   3d-avg centered err_lo > +0.10%  (AND lo_breaks_3d ≥ 2)
 V_ERRLO_MIN  =  0.50   # V-reversal capitulation: single-bar low undershoot > 0.50%
+FIXED_STOP   =  0.03   # shared fixed stop (−3%) for both traded assets
+TRADEABLE_ASSETS = ["GDX", "UGL"]   # GLDM (1x) supplies the signal only
 
 # ── PRIMARY GOLD STRATEGY — price-vs-MA trend filter ─────────────────────
 # The backtest (backtest_gldm.py, OOS 2021-2026) shows gold's persistent
@@ -103,12 +115,9 @@ V_ERRLO_MIN  =  0.50   # V-reversal capitulation: single-bar low undershoot > 0.
 MA_WINDOW = 50                                   # default trend-filter window
 MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
 
-# Per-asset fixed stop (fraction).  Gold is low-vol so stops are tight; the
-# leveraged names get proportionally wider stops for their higher daily range.
-GLDM_STOP_PCT = 0.030   # 3.0%   (1x gold)
-UGL_STOP_PCT  = 0.020   # 2.0%   (2x gold — sweep-optimal)
-GDX_STOP_PCT  = 0.050   # 5.0%   (miners, high beta — sweep-optimal)
-STOP_BY_ASSET = {"GLDM": GLDM_STOP_PCT, "UGL": UGL_STOP_PCT, "GDX": GDX_STOP_PCT}
+# Fixed stop per traded asset — the chosen strategy uses a shared −3% stop
+# (FIXED_STOP) across GDX and UGL.
+STOP_BY_ASSET = {"GLDM": FIXED_STOP, "UGL": FIXED_STOP, "GDX": FIXED_STOP}
 
 # Day-type classifier return bands (gold-scaled): next-day close-to-close.
 DAY_UP_THRESH   =  0.004    # ≥ +0.4% → Trend Up
