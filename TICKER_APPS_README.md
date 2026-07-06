@@ -81,11 +81,13 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 
 | App | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
-| SOXX | MA-50, −10 % stop | **+223 %** | +362 % | **−39 %** | −46 % | 0.91 / 0.93 |
-| VEGN | MA-200, −8 % stop | **+82 %** | +81 % | **−15 %** | −33 % | **1.00 / 0.73** |
+| SOXX | MA-40, −5 % stop | **+233 %** | +362 % | **−31 %** | −46 % | **0.94 / 0.93** |
+| VEGN | MA-200, −5 % stop | **+84 %** | +81 % | **−14 %** | −33 % | **1.02 / 0.73** |
 | GRID | MA-200, −10 % stop | +115 % | +132 % | **−15 %** | −30 % | **0.92 / 0.83** |
-| XLE | Divergence (U1 .12 / D2 −.12) | +95 % | +180 % | **−9 %** | −27 % | **1.11 / 0.84** |
-| REMX | Divergence (U1 .12 / D2 −.18) | **+99 %** | +24 % | **−21 %** | −74 % | **0.81 / 0.30** |
+| XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
+| REMX | Divergence (U1 .16 / D2 −.14) | **+96 %** | +24 % | **−18 %** | −74 % | **0.87 / 0.30** |
+
+(OIH, traded off the XLE signal: **+70 %** at **−19 %** MDD vs Buy-&-Hold +130 % / −46 %.)
 
 The common thread: on **trending, high-beta** names (SOXX/VEGN/GRID) a moving-
 average trend filter keeps most of the upside while roughly **halving the

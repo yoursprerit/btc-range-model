@@ -298,8 +298,10 @@ def net_signal_div(sigs):
                     bg="#f8fafc", brd="#94a3b8", reason="insufficient completed bars")
     d1, d2, d3 = sigs["d1_triggered"], sigs["d2_triggered"], sigs["d3_triggered"]
     u1, entry = sigs["u1_triggered"], sigs["entry_triggered"]
-    if d2 or d3:
-        parts = [p for p, f in [("D3 exhaustion", d3), ("D2 momentum fade", d2)] if f]
+    d1_exit = d1 and cfg.use_d1_exit
+    if d2 or d3 or d1_exit:
+        parts = [p for p, f in [("D3 exhaustion", d3), ("D2 momentum fade", d2),
+                                ("D1 downtrend", d1_exit)] if f]
         note = " — entry is blocked while an exit is active" if entry else ""
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
@@ -378,7 +380,8 @@ def render_strategy_card():
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① <b>D2 fade</b> — err_hi 3d-avg &lt; {cfg.d2_errhi_max:+.2f}%<br>
         ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
-        ③ <b>fixed stop</b> — −{cfg.fixed_stop*100:.0f}% from entry
+        {'③ <b>D1 downtrend</b> — err_lo 3d-avg &gt; +' + f'{cfg.d1_errlo_min:.2f}' + '% &amp; ≥2 low-breaks<br>' if cfg.use_d1_exit else ''}
+        {'④' if cfg.use_d1_exit else '③'} <b>fixed stop</b> — −{cfg.fixed_stop*100:.0f}% from entry
       </div>
     </div>
   </div>
@@ -440,7 +443,9 @@ def render_conditions_box(sigs, mst):
         gate_clean = bool(sigs["clean_10d"] and not sigs["above_ma20"])
         gate_v = bool(sigs.get("v_recent_gate"))
         gate_any = gate_bull or gate_clean or gate_v
-        entry_ready = sigs["u1_triggered"] and gate_any and not (sigs["d2_triggered"] or sigs["d3_triggered"])
+        d1_exit = sigs["d1_triggered"] and cfg.use_d1_exit
+        exit_active = sigs["d2_triggered"] or sigs["d3_triggered"] or d1_exit
+        entry_ready = sigs["u1_triggered"] and gate_any and not exit_active
         entry_html = "<table style='border-collapse:collapse;'>" + \
             row(sigs["u1_triggered"], "U1 trigger",
                 f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (need &gt; +{cfg.u1_errhi_min:.2f}%) "
@@ -456,6 +461,9 @@ def render_conditions_box(sigs, mst):
                 f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (exit &lt; {cfg.d2_errhi_max:+.2f}%)") + \
             row(sigs["d3_triggered"], "D3 exhaustion",
                 f"consec high-breaks = {sigs['consec_hi']} then a low-break") + \
+            (row(d1_exit, "D1 downtrend pressure",
+                 f"err_lo 3d-avg = {sigs['err_lo_ma3']:+.3f}% (exit &gt; +{cfg.d1_errlo_min:.2f}%) "
+                 f"&amp; ≥2 low-breaks") if cfg.use_d1_exit else "") + \
             row(False, f"Fixed stop −{cfg.fixed_stop*100:.0f}%",
                 "position-level — checked per open trade") + "</table>"
         st.markdown(f"""
@@ -471,7 +479,7 @@ def render_conditions_box(sigs, mst):
   <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
        border-radius:10px; padding:10px 14px;'>
     <div style='font-weight:700; color:#b91c1c; margin-bottom:6px;'>
-      📤 EXIT conditions {'— 🔴 ACTIVE' if (sigs['d2_triggered'] or sigs['d3_triggered']) else '— clear'}</div>
+      📤 EXIT conditions {'— 🔴 ACTIVE' if exit_active else '— clear'}</div>
     {exit_html}
     <div style='font-size:11px;color:#64748b;margin-top:6px;'>Any one exit (or the stop)
       closes the position and <b>overrides</b> a simultaneous entry.</div>
@@ -1279,7 +1287,7 @@ Bollinger width, distance from moving averages / extremes) and seasonality.
 (ridge + 95% CI), daily High/Low (calibrated ridge bands), 7-day & 14-day close
 cones, and a 3-class day-type classifier.
 
-**Strategy — {cfg.strategy_name}.** {'The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%) / D3 exhaustion or a fixed −' + f'{cfg.fixed_stop*100:.0f}' + '% stop.' if IS_DIV else 'A long-above-the-' + f'{cfg.ma_window}' + '-day-SMA trend filter: hold ' + PRIMARY_LABEL + ' only while the ' + cfg.key + ' close is above its ' + f'{cfg.ma_window}' + '-day simple moving average, otherwise move to cash (with a −' + f'{cfg.fixed_stop*100:.0f}' + '% fixed stop).'} The strategy and its thresholds were chosen by a frontier sweep (`backtest_ticker.py {cfg.key} --sweep`) to maximise return subject to a drawdown no worse than buy-&-hold across every backtest period.
+**Strategy — {cfg.strategy_name}.** {'The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%)' + (' / D1 downtrend' if cfg.use_d1_exit else '') + ' / D3 exhaustion or a fixed −' + f'{cfg.fixed_stop*100:.0f}' + '% stop.' if IS_DIV else 'A long-above-the-' + f'{cfg.ma_window}' + '-day-SMA trend filter: hold ' + PRIMARY_LABEL + ' only while the ' + cfg.key + ' close is above its ' + f'{cfg.ma_window}' + '-day simple moving average, otherwise move to cash (with a −' + f'{cfg.fixed_stop*100:.0f}' + '% fixed stop).'} The strategy and its thresholds were chosen by a frontier sweep (`backtest_ticker.py {cfg.key} --sweep`) to maximise return subject to a drawdown no worse than buy-&-hold across every backtest period.
 
 {cfg.results_note}
 

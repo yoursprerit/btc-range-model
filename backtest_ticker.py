@@ -256,6 +256,7 @@ def simulate(cfg, preds, sig, price_col, stop_pct=None, U1=None, D2=None, D1=Non
 def run_strategy(cfg, preds, sig, price_col, oos_start=None, end=None, **kw):
     """Dispatch to the config's chosen strategy engine."""
     if cfg.strategy_mode == "divergence":
+        kw.setdefault("use_d1_exit", getattr(cfg, "use_d1_exit", False))
         return simulate(cfg, preds, sig, price_col, oos_start=oos_start, end=end, **kw)
     return simulate_regime(cfg, preds, sig, price_col, stop_pct=cfg.fixed_stop,
                            oos_start=oos_start, end=end, **kw)

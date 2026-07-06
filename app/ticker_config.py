@@ -74,6 +74,7 @@ class TickerConfig:
     d2_errhi_max: float = -0.10
     d1_errlo_min: float = 0.10
     v_errlo_min: float = 0.50
+    use_d1_exit: bool = False      # if True, D1 downtrend pressure is also an exit
     hl_band_pct: float = 0.010     # ±band tint on the daily H/L chart
 
     # ── windows ──────────────────────────────────────────────────────────
@@ -138,13 +139,13 @@ CONFIGS["SOXX"] = TickerConfig(
     traded_assets=[("SOXX", "px_close")],
     asset_labels={"px_close": "SOXX · Semiconductors"},
     strategy_mode="ma", strategy_name="Semis Trend-Regime",
-    ma_window=50, fixed_stop=0.10,
+    ma_window=40, fixed_stop=0.05,
     hl_band_pct=0.012,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.010, day_down_thresh=-0.010,
-    results_note=("OOS 2021→now: +223% vs Buy&Hold +362%, but max drawdown "
-                  "−39% vs −46% and it turned the brutal 2021–22 semis drawdown "
-                  "positive (+4% vs −8%). A long-above-the-50-day-SMA filter that "
+    results_note=("OOS 2021→now: +233% vs Buy&Hold +362%, but max drawdown "
+                  "−31% vs −46% and a higher Sharpe (0.94 vs 0.93). A "
+                  "long-above-the-40-day-SMA filter with a tight −5% stop that "
                   "sidesteps the worst of every chip down-cycle."),
 )
 
@@ -177,7 +178,7 @@ CONFIGS["VEGN"] = TickerConfig(
     traded_assets=[("VEGN", "px_close")],
     asset_labels={"px_close": "VEGN · ESG Large-Cap"},
     strategy_mode="ma", strategy_name="Large-Cap Trend-Regime",
-    ma_window=200, fixed_stop=0.08,
+    ma_window=200, fixed_stop=0.05,
     hl_band_pct=0.007,
     # VEGN launched Sept-2019: fetch from inception, hold OOS start to 2022 so the
     # signal model has ~2.3y of pre-OOS training.
@@ -265,16 +266,18 @@ CONFIGS["XLE"] = TickerConfig(
     traded_assets=[("XLE", "px_close"), ("OIH", "oih_close")],
     asset_labels={"px_close": "XLE · Energy", "oih_close": "OIH · Oil Services"},
     strategy_mode="divergence", strategy_name="Energy Divergence Pure-Regime",
-    ma_window=80, fixed_stop=0.12,
-    u1_errhi_min=0.12, d2_errhi_max=-0.12, d1_errlo_min=0.10, v_errlo_min=0.50,
+    ma_window=80, fixed_stop=0.08,
+    u1_errhi_min=0.16, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
+    use_d1_exit=True,
     hl_band_pct=0.014,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.010, day_down_thresh=-0.010,
-    results_note=("OOS 2021→now on XLE: +95% with a max drawdown of just −9% "
-                  "(vs Buy&Hold +180% / −27%), Sharpe 1.11 vs 0.84. The "
-                  "divergence system trades the crude-driven swings and stays "
-                  "out of the deep energy drawdowns. Same XLE signal drives the "
-                  "higher-beta OIH sibling (see the OIH tab)."),
+    results_note=("OOS 2021→now on XLE: +105% with a max drawdown of just −9% "
+                  "(vs Buy&Hold +180% / −27%), Sharpe 1.37 vs 0.84. The "
+                  "divergence system (with a D1 downtrend exit) trades the "
+                  "crude-driven swings and stays out of the deep energy "
+                  "drawdowns. The same XLE signal drives the higher-beta OIH "
+                  "sibling to +70% at −19% MDD (see the OIH tab)."),
     eval_note=("**Trade OIH on the XLE signal, not on OIH's own.** Back-tested "
                "both ways (2021→now): OIH driven by the XLE divergence signal "
                "returns **+36%** (Sharpe 0.43) and wins the 2021–22 energy "
@@ -315,13 +318,13 @@ CONFIGS["REMX"] = TickerConfig(
     traded_assets=[("REMX", "px_close")],
     asset_labels={"px_close": "REMX · Rare-Earth Metals"},
     strategy_mode="divergence", strategy_name="Metals Divergence Pure-Regime",
-    ma_window=100, fixed_stop=0.12,
-    u1_errhi_min=0.12, d2_errhi_max=-0.18, d1_errlo_min=0.10, v_errlo_min=0.50,
+    ma_window=100, fixed_stop=0.08,
+    u1_errhi_min=0.16, d2_errhi_max=-0.14, d1_errlo_min=0.10, v_errlo_min=0.50,
     hl_band_pct=0.016,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.012, day_down_thresh=-0.012,
-    results_note=("OOS 2021→now: +99% vs Buy&Hold +24% — and a max drawdown of "
-                  "−21% vs a catastrophic −74% — with Sharpe 0.81 vs 0.30. On a "
+    results_note=("OOS 2021→now: +96% vs Buy&Hold +24% — and a max drawdown of "
+                  "−18% vs a catastrophic −74% — with Sharpe 0.87 vs 0.30. On a "
                   "boom-bust rare-earth basket the divergence system's job is to "
                   "avoid the crash, and it does: it more than quadruples the "
                   "return while cutting the drawdown by two-thirds."),
