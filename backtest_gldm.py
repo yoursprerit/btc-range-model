@@ -249,9 +249,9 @@ def simulate(preds, sig, price_col, stop_pct, U1, D2, D1,
         entry_gate = u1 and (sig["bull_regime"][i] or
                              (clean and not sig["above_ma20"][i]) or sig["v_recent"][i])
 
+        exit_sig = d2 or d3 or (use_d1_exit and d1)
         if in_pos:
             stop_hit = price[i] <= entry_px * (1 - stop_pct)
-            exit_sig = d2 or d3 or (use_d1_exit and d1)
             if stop_hit or exit_sig:
                 ret = price[i] / entry_px - 1
                 reason = ("stop −%.0f%%" % (stop_pct * 100) if stop_hit else
@@ -262,7 +262,9 @@ def simulate(preds, sig, price_col, stop_pct, U1, D2, D1,
                                       entry_px=float(entry_px), exit_px=float(price[i]),
                                       ret=float(ret), reason=reason))
                 in_pos = False; entry_px = np.nan; entry_date = None
-        elif entry_gate:
+        # Exit ALWAYS overrides entry: never open a new position on a bar that is
+        # simultaneously flashing an exit signal (keeps live UI == backtest).
+        elif entry_gate and not exit_sig:
             in_pos = True; entry_px = price[i]; entry_date = dates[i]
         pos_series.append(1 if in_pos else 0)
 

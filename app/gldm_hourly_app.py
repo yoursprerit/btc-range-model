@@ -287,25 +287,186 @@ def _sig_card(title, active, subtitle, value_line, good):
             f"<div style='font-size:12px;font-family:monospace;'>{value_line}</div></div>")
 
 
+def net_signal(sigs):
+    """Resolve the many raw signatures into ONE actionable state with a clear
+    precedence — exit ALWAYS overrides entry — so the UI can never show an
+    entry and an exit as simultaneously active (matches backtest execution).
+
+    Returns dict(state, label, ico, bg, brd, reason).  state ∈
+    {EXIT, ENTRY, WATCH_UP, WATCH_DN, NEUTRAL}.
+    """
+    if not sigs:
+        return dict(state="NEUTRAL", label="NO DATA", ico="⬜",
+                    bg="#f8fafc", brd="#94a3b8", reason="insufficient completed bars")
+    d1, d2, d3 = sigs["d1_triggered"], sigs["d2_triggered"], sigs["d3_triggered"]
+    u1, entry = sigs["u1_triggered"], sigs["entry_triggered"]
+    if d2 or d3:                                   # EXIT overrides everything
+        parts = [p for p, f in [("D3 exhaustion", d3), ("D2 momentum fade", d2)] if f]
+        note = " — entry is blocked while an exit is active" if entry else ""
+        return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
+                    bg="#fef2f2", brd="#dc2626",
+                    reason="Exit signal: " + " + ".join(parts) + note)
+    if entry:
+        gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
+                                ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
+                                ("⚡ V-reversal", sigs.get("v_recent_gate"))] if f]
+        return dict(state="ENTRY", label="ENTRY / GO LONG", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason="U1 confirmed inside the Pure-Regime gate: " + " + ".join(gates))
+    if u1:
+        return dict(state="WATCH_UP", label="U1 WATCH — GATE NOT MET", ico="🟡",
+                    bg="#fefce8", brd="#ca8a04",
+                    reason="Bullish pressure, but no Bull-Regime / Clean-Breakout / V-reversal yet")
+    if d1:
+        return dict(state="WATCH_DN", label="DOWNTREND WATCH (D1)", ico="🟠",
+                    bg="#fff7ed", brd="#f59e0b",
+                    reason="Low-break pressure building — no exit trigger yet")
+    return dict(state="NEUTRAL", label="NO ACTION SIGNAL", ico="⬜",
+                bg="#f8fafc", brd="#94a3b8",
+                reason="Flat — awaiting a Pure-Regime entry")
+
+
+def render_strategy_card():
+    """Static BTC-style strategy-description card (gold theme)."""
+    st.markdown(f"""
+<div style='background:#fffaf0; border:2px solid #b8860b; border-radius:12px;
+     padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
+  <div style='font-size:15px; font-weight:800; color:#7a5901; margin-bottom:12px;
+       letter-spacing:0.3px;'>
+    🥇 {gc.STRATEGY_NAME} &nbsp;—&nbsp;
+    <span style='color:#b8860b;'>GLDM signals · GDX &amp; UGL execution</span>
+  </div>
+  <div style='background:#fdf0d5; border-radius:8px; padding:10px 14px; margin-bottom:12px;
+       font-size:12.5px; color:#5c4400; font-weight:600;'>
+    🔁 <b>Core idea:</b> Gold trends smoothly with shallow dips, so the same divergence
+    signatures (U1 / D2 / D3 / V-reversal) that read <b>GLDM's</b> predicted-vs-actual
+    highs/lows are used as the signal engine, then executed in gold's higher-octane
+    proxies — <b>GDX</b> (miners, ~MSTR analog) and <b>UGL</b> (2× gold, ~MSTU analog).
+    The 1× GLDM position itself is not traded.
+  </div>
+  <div style='background:#fdf0d5; border:1px solid #b8860b; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#5c4400;'>
+    🎯 <b>Pure-Regime entry:</b> a U1 bullish-divergence trigger must be confirmed by
+    <b>one</b> of three non-overlapping trend paths — a bull regime (above a rising
+    20-day MA), a washed-out clean breakout from below the MA, or a fresh V-reversal.
+  </div>
+  <div style='display:flex; gap:14px; flex-wrap:wrap;'>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long GDX &amp; UGL</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① <b>U1 active</b> — err_hi 3d-avg &gt; +{gc.U1_ERRHI_MIN:.2f}% &amp;&amp; ≥2 high-breaks<br>
+        ② <b>one gate</b>: 🐂 Bull Regime · 🧹 Clean Breakout · ⚡ V-reversal
+      </div>
+    </div>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash (overrides entry)</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① <b>D2 fade</b> — err_hi 3d-avg &lt; {gc.D2_ERRHI_MAX:+.2f}%<br>
+        ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
+        ③ <b>fixed stop</b> — −{gc.FIXED_STOP*100:.0f}% from entry
+      </div>
+    </div>
+  </div>
+  <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
+    📈 <b>Out-of-sample 2021→now</b> (beats buy &amp; hold on return <i>and</i> drawdown):
+    GDX <b>+270%</b> vs +104% · MDD −16% vs −47% · Sharpe 1.40 &nbsp;|&nbsp;
+    UGL <b>+207%</b> vs +161% · MDD −18% vs −49% · Sharpe 1.29
+  </div>
+</div>""", unsafe_allow_html=True)
+
+
+def render_conditions_box(sigs):
+    """Dynamic checklist: every entry & exit condition with its live on/off
+    state, and the single resolved net decision."""
+    ns = net_signal(sigs)
+    if not sigs:
+        st.info("Strategy conditions unavailable — need ≥ 3 completed bars.")
+        return
+
+    def row(active, name, detail):
+        ico = "✅" if active else "○"
+        col = "#15803d" if active else "#94a3b8"
+        weight = "700" if active else "500"
+        return (f"<tr><td style='padding:3px 8px 3px 0;font-size:14px;'>{ico}</td>"
+                f"<td style='padding:3px 10px 3px 0;font-weight:{weight};color:{col};"
+                f"white-space:nowrap;'>{name}</td>"
+                f"<td style='padding:3px 0;font-size:11.5px;color:#475569;'>{detail}</td></tr>")
+
+    gate_bull = bool(sigs.get("bull_regime"))
+    gate_clean = bool(sigs["clean_10d"] and not sigs["above_ma20"])
+    gate_v = bool(sigs.get("v_recent_gate"))
+    gate_any = gate_bull or gate_clean or gate_v
+    entry_ready = sigs["u1_triggered"] and gate_any and not (sigs["d2_triggered"] or sigs["d3_triggered"])
+
+    entry_html = "<table style='border-collapse:collapse;'>" + \
+        row(sigs["u1_triggered"], "U1 trigger",
+            f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (need &gt; +{gc.U1_ERRHI_MIN:.2f}%) "
+            f"&amp; high-breaks = {sigs['hi_breaks_3d']}/3 (need ≥2)") + \
+        row(gate_any, "Trend gate (any one)",
+            f"{'🐂 Bull ' if gate_bull else ''}{'🧹 Clean ' if gate_clean else ''}"
+            f"{'⚡ V-rev' if gate_v else ''}".strip() or "none active") + \
+        "<tr><td></td><td colspan='2' style='padding-left:22px;font-size:11px;color:#64748b;'>" + \
+        f"{'✓' if gate_bull else '○'} Bull Regime &nbsp; " + \
+        f"{'✓' if gate_clean else '○'} Clean Breakout &nbsp; " + \
+        f"{'✓' if gate_v else '○'} V-reversal</td></tr>" + \
+        "</table>"
+
+    exit_html = "<table style='border-collapse:collapse;'>" + \
+        row(sigs["d2_triggered"], "D2 momentum fade",
+            f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (exit &lt; {gc.D2_ERRHI_MAX:+.2f}%)") + \
+        row(sigs["d3_triggered"], "D3 exhaustion",
+            f"consec high-breaks = {sigs['consec_hi']} then a low-break") + \
+        row(False, f"Fixed stop −{gc.FIXED_STOP*100:.0f}%",
+            "position-level — checked per open trade") + \
+        "</table>"
+
+    st.markdown(f"""
+<div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
+  <div style='flex:1; min-width:280px; background:#f0fdf4; border:1.5px solid #86efac;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#15803d; margin-bottom:6px;'>
+      📥 ENTRY conditions {'— ✅ ALL MET' if entry_ready else '— not met'}</div>
+    {entry_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Entry fires when
+      <b>U1 AND one gate</b> are true and no exit is active.</div>
+  </div>
+  <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#b91c1c; margin-bottom:6px;'>
+      📤 EXIT conditions {'— 🔴 ACTIVE' if (sigs['d2_triggered'] or sigs['d3_triggered']) else '— clear'}</div>
+    {exit_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Any one exit (or the stop)
+      closes the position and <b>overrides</b> a simultaneous entry.</div>
+  </div>
+</div>
+<div style='background:{ns['bg']}; border:2px solid {ns['brd']}; border-radius:10px;
+     padding:10px 16px; margin:4px 0;'>
+  <b style='font-size:15px;'>{ns['ico']} NET DECISION: {ns['label']}</b>
+  <span style='color:#475569; font-size:12.5px; margin-left:8px;'>{ns['reason']}</span>
+</div>""", unsafe_allow_html=True)
+
+
 def render_gldm_signatures(sigs):
     if not sigs:
         st.info("Not enough completed bars for trend signatures yet (need ≥ 3).")
         return
-    cfg = _ALERT_CFG[sigs["alert_level"]]
+    ns = net_signal(sigs)
     as_of = pd.Timestamp(sigs["as_of_date"]).strftime("%Y-%m-%d")
-    entry = sigs["entry_triggered"]
+    # Single composite banner driven by the ONE resolved net signal (no separate
+    # "entry active" text that could contradict an active exit).
     st.markdown(
-        f"""<div style="background:{cfg['bg']};border:2px solid {cfg['border']};
+        f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
         border-radius:10px;padding:12px 16px;margin:8px 0;">
-        <span style="background:{cfg['badge']};color:white;font-weight:700;font-size:14px;
-        padding:5px 14px;border-radius:20px;">{cfg['txt']}</span>
-        <span style="color:{cfg['col']};font-size:13px;margin-left:10px;">
+        <span style="background:{ns['brd']};color:white;font-weight:700;font-size:14px;
+        padding:5px 14px;border-radius:20px;">{ns['ico']} {ns['label']}</span>
+        <span style="color:#334155;font-size:13px;margin-left:10px;">
         <b>{sigs['dn_count']}/3</b> DN · <b>{sigs['up_count']}/1</b> UP ·
-        Entry (Pure-Regime): <b>{'✅ ACTIVE' if entry else '○ inactive'}</b>
-        (U1={'✓' if sigs['u1_triggered'] else '✗'}
-        bull_regime={'✓' if sigs.get('bull_regime') else '✗'}
-        clean7d={'✓' if sigs['clean_10d'] else '✗'}
-        V-rev={'✓' if sigs.get('v_recent_gate') else '✗'})
+        raw flags: U1={'✓' if sigs['u1_triggered'] else '✗'}
+        D2={'✓' if sigs['d2_triggered'] else '✗'}
+        D3={'✓' if sigs['d3_triggered'] else '✗'}
+        · bull_regime={'✓' if sigs.get('bull_regime') else '✗'}
         · as-of <b>{as_of}</b> · <b>{sigs['n_bars']}</b> bars</span></div>""",
         unsafe_allow_html=True)
 
@@ -333,28 +494,6 @@ def render_gldm_signatures(sigs):
         f"err_hi_ma3={sigs['err_hi_ma3']:+.3f}%  hi_breaks_3d={sigs['hi_breaks_3d']}",
         good=True), unsafe_allow_html=True)
 
-    # Full-width action banner
-    if sigs["d2_triggered"] or sigs["d3_triggered"]:
-        bg, brd, ico, lab = "#fef2f2", "#dc2626", "🔴", "EXIT SIGNAL ACTIVE"
-        sub = " · ".join([s for s, f in [("D3 exhaustion", sigs["d3_triggered"]),
-                                         ("D2 fade", sigs["d2_triggered"])] if f])
-    elif entry:
-        bg, brd, ico, lab = "#f0fdf4", "#16a34a", "🟢", "ENTRY SIGNAL ACTIVE"
-        gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
-                                ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
-                                ("⚡ V-reversal", sigs.get("v_recent_gate"))] if f]
-        sub = f"U1 confirmed · trend gate: {' + '.join(gates) or '—'}"
-    elif sigs["u1_triggered"]:
-        bg, brd, ico, lab = "#fefce8", "#ca8a04", "🟡", "U1 ACTIVE — TREND GATE NOT MET"
-        sub = "bullish pressure, but no regime/clean/V-reversal confirmation yet"
-    else:
-        bg, brd, ico, lab = "#f8fafc", "#94a3b8", "⬜", "NO ACTION SIGNAL"
-        sub = "waiting for a Pure-Regime entry or a regime-exit signal"
-    st.markdown(
-        f"""<div style="background:{bg};border:2px solid {brd};border-radius:10px;
-        padding:10px 16px;margin:8px 0;"><b style="font-size:15px;">{ico} {lab}</b>
-        <span style="color:#475569;font-size:13px;margin-left:8px;">{sub}</span></div>""",
-        unsafe_allow_html=True)
     if sigs.get("v_reversal_likely"):
         st.markdown("⚡ **V-reversal likely** — capitulation low undershoot detected.")
 
@@ -507,58 +646,65 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     last_px = float(d_df["gldm_close"].iloc[-1])
     prev_px = float(d_df["gldm_close"].iloc[-2])
 
-    # ── headline KPI row (5 cols) ──
+    def _px_chg(col):
+        """(last, day-change%) for a price column in d_df, or (None,None)."""
+        if col not in d_df or d_df[col].dropna().shape[0] < 2:
+            return None, None
+        s = d_df[col].dropna()
+        return float(s.iloc[-1]), (float(s.iloc[-1]) / float(s.iloc[-2]) - 1) * 100
+
+    gdx_px, gdx_chg = _px_chg("gdx_close")
+    ugl_px, ugl_chg = _px_chg("ugl_close")
+
+    # ── Row 1: the three asset prices + sentiment + regime ──
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("GLDM close", f"${last_px:,.2f}", f"{(last_px/prev_px-1)*100:+.2f}% d/d")
-    if ph:
-        c2.metric("Next-hour close (pred)", f"${ph['pred_close']:,.2f}", f"{ph['ret']*100:+.2f}%")
-    else:
-        c2.metric("Next-hour close (pred)", "— (replay)")
-    if ph:
-        c3.metric("95% CI band", f"${ph['lo']:,.2f}–${ph['hi']:,.2f}",
-                  f"±{1.96*ph['sigma']*100:.2f}%")
-    else:
-        c3.metric("95% CI band", "—")
+    c1.metric("GLDM (gold) close", f"${last_px:,.2f}", f"{(last_px/prev_px-1)*100:+.2f}% d/d")
+    c2.metric("GDX · miners (traded)", f"${gdx_px:,.2f}" if gdx_px else "—",
+              f"{gdx_chg:+.2f}% d/d" if gdx_chg is not None else None)
+    c3.metric("UGL · 2× gold (traded)", f"${ugl_px:,.2f}" if ugl_px else "—",
+              f"{ugl_chg:+.2f}% d/d" if ugl_chg is not None else None)
     if not np.isnan(sent_now):
         mood = ("Bullish" if sent_now >= 60 else "Bearish" if sent_now <= 40 else "Neutral")
         c4.metric("Gold macro sentiment", f"{sent_now:.0f}/100", mood)
+    else:
+        c4.metric("Gold macro sentiment", "—")
     _bull = sigs.get("bull_regime") if sigs else None
     c5.metric("Market regime", ("🐂 BULL" if _bull else "🐻 BEAR/NEUTRAL") if _bull is not None else "—",
               delta=("↑MA20 & rising" if _bull else "below MA20 or flat") if _bull is not None else None,
               delta_color="normal" if _bull else "inverse")
 
-    # ── second row: MA20 · Daily High pred · Daily Low pred ──
-    f1, f2, f3 = st.columns(3)
+    # ── Row 2: GLDM next-hour forecast + CI + MA20 + predicted daily H/L ──
+    d1c, d2c, d3c, d4c, d5c = st.columns(5)
+    if ph:
+        d1c.metric("GLDM next-hour (pred)", f"${ph['pred_close']:,.2f}", f"{ph['ret']*100:+.2f}%")
+        d2c.metric("95% CI band", f"${ph['lo']:,.2f}–${ph['hi']:,.2f}", f"±{1.96*ph['sigma']*100:.2f}%")
+    else:
+        d1c.metric("GLDM next-hour (pred)", "— (replay)")
+        d2c.metric("95% CI band", "—")
     _ma = sigs.get("ma20_value") if sigs else None
-    if _ma:
-        f1.metric("20-day MA", f"${_ma:,.2f}", f"${last_px-_ma:+,.2f} vs close",
-                  delta_color="normal" if last_px >= _ma else "inverse")
-    else:
-        f1.metric("20-day MA", "—")
+    d3c.metric("GLDM 20-day MA", f"${_ma:,.2f}" if _ma else "—",
+               (f"${last_px-_ma:+,.2f} vs close" if _ma else None),
+               delta_color="normal" if (_ma and last_px >= _ma) else "inverse")
     if hl:
-        f2.metric("Daily High — predicted", f"${hl['pred_high']:,.2f}",
-                  f"{(hl['pred_high']/hl['last_close']-1)*100:+.2f}% vs close")
-        f3.metric("Daily Low — predicted", f"${hl['pred_low']:,.2f}",
-                  f"{(hl['pred_low']/hl['last_close']-1)*100:+.2f}% vs close")
+        d4c.metric("GLDM daily High (pred)", f"${hl['pred_high']:,.2f}",
+                   f"{(hl['pred_high']/hl['last_close']-1)*100:+.2f}% vs close")
+        d5c.metric("GLDM daily Low (pred)", f"${hl['pred_low']:,.2f}",
+                   f"{(hl['pred_low']/hl['last_close']-1)*100:+.2f}% vs close")
         if dt:
-            f2.caption(f"Tomorrow day-type: **{dt['top']}** ({max(dt['probs'].values())*100:.0f}%)")
+            d4c.caption(f"Day-type: **{dt['top']}** ({max(dt['probs'].values())*100:.0f}%)")
     else:
-        f2.metric("Daily High — predicted", "—"); f3.metric("Daily Low — predicted", "—")
+        d4c.metric("GLDM daily High (pred)", "—"); d5c.metric("GLDM daily Low (pred)", "—")
 
     # ── trend-signature alert (the BTC-style card block) ──
-    st.markdown("### 🔔 Trend-Signature Alert")
+    st.markdown("### 🔔 Trend-Signature Alert  ·  _signals derived from the GLDM daily H/L model_")
     render_gldm_signatures(sigs)
 
-    # ── strategy + current positions ──
-    st.markdown(f"### 🎯 Strategy — {gc.STRATEGY_NAME}  (GDX & UGL)")
-    st.markdown(
-        f"**Signal from gold, executed in the leveraged/high-beta names** "
-        f"(GLDM 1× is not traded). **Entry:** U1 bullish divergence (> +{gc.U1_ERRHI_MIN:.2f}%) "
-        f"inside the Pure-Regime gate — Bull Regime *or* washed-out Clean Breakout *or* "
-        f"V-reversal. **Exit:** D2 (< {gc.D2_ERRHI_MAX:+.2f}%) / D3 exhaustion, or a fixed "
-        f"**−{gc.FIXED_STOP*100:.0f}%** stop. Out-of-sample 2021→now this beats buy & hold on "
-        f"**both return and drawdown**: GDX **+270%** (MDD −16% vs −47%, Sharpe 1.40), "
-        f"UGL **+207%** (MDD −18% vs −49%, Sharpe 1.29).")
+    # ── strategy description card + live conditions checklist + positions ──
+    st.markdown(f"### 🎯 Strategy — {gc.STRATEGY_NAME}")
+    render_strategy_card()
+    st.markdown("#### Strategy conditions (live)")
+    render_conditions_box(sigs)
+    st.markdown("#### Current positions")
     p1, p2 = st.columns(2)
     end = None if is_live else as_of_date
     position_panel("GDX", p1, end=end)
