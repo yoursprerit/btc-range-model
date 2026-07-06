@@ -1,0 +1,25 @@
+{
+  "ticker": "VEGN",
+  "oos_start": "2022-01-01",
+  "oos_end": "2026-07-06",
+  "strategy": "Large-Cap Trend-Regime",
+  "mode": "ma",
+  "assets": {
+    "VEGN": {
+      "strategy": {
+        "total_ret": 0.819431273306459,
+        "cagr": 0.14212909860063383,
+        "mdd": -0.1512237584030669,
+        "sharpe": 1.0019813147594712
+      },
+      "buy_hold": {
+        "total_ret": 0.8144958148783856,
+        "cagr": 0.14144046198588578,
+        "mdd": -0.32846930441850897,
+        "sharpe": 0.7326098357190033
+      },
+      "n_trades": 10,
+      "win_rate": 40.0
+    }
+  }
+}

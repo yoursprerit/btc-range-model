@@ -1,0 +1,1298 @@
+"""Generic multi-ticker Streamlit app (SOXX / VEGN / GRID / XLE / REMX).
+
+A single, config-driven port of ``app/gldm_hourly_app.py`` — it reproduces the
+Gold app's exact layout, styling and colour coding for whichever ticker the
+sidebar radio selects, reading everything asset-specific from
+``ticker_config.TickerConfig``.  The BTC and GLDM apps are never imported here;
+the root router (``streamlit_app.py``) dispatches to this module for the five
+new apps and keeps the two originals byte-for-byte unchanged.
+
+Two strategy engines are supported and chosen per ticker in the config:
+  * "ma"          long-above-N-day-SMA trend filter (SOXX / VEGN / GRID)
+  * "divergence"  the Gold/BTC U1·D2·D3 Pure-Regime system (XLE / REMX)
+
+Tabs mirror Gold: 🔴 Live · 🕒 Historical replay · 📊 per-asset Backtesting ·
+🧠 Explain.
+"""
+import sys
+import importlib
+import warnings
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+
+_APP_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _APP_DIR.parent
+sys.path.insert(0, str(_APP_DIR))
+sys.path.insert(0, str(_REPO_ROOT))
+
+try:
+    import sklearn._loss._loss as _sk_loss_ext
+    if "_loss" not in sys.modules:
+        sys.modules["_loss"] = _sk_loss_ext
+except Exception:
+    pass
+
+import numpy as np
+import pandas as pd
+import joblib
+import streamlit as st
+import plotly.graph_objects as go
+
+import ticker_core
+import backtest_ticker
+import ticker_config
+# Self-heal a stale module cache on long-lived Streamlit servers (same guard as
+# the Gold app): reload from disk if an expected new symbol is missing.
+if not hasattr(ticker_core, "compute_trend_signatures"):
+    ticker_core = importlib.reload(ticker_core)
+if not hasattr(backtest_ticker, "run_strategy"):
+    backtest_ticker = importlib.reload(backtest_ticker)
+tc = ticker_core
+bt = backtest_ticker
+
+_ALL_APPS = ["BTC", "GLDM"] + ticker_config.APP_KEYS
+_APP_LABELS = {"BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)"}
+for _k, _c in ticker_config.CONFIGS.items():
+    _APP_LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
+
+# ── which ticker is active? (set by the router via session state) ─────────
+_active = st.session_state.get("gldm_active_app", "SOXX")
+if _active not in ticker_config.CONFIGS:
+    _active = ticker_config.APP_KEYS[0]
+cfg = ticker_config.get_config(_active)
+
+st.set_page_config(page_title=f"{cfg.key} Forecaster", page_icon=cfg.emoji,
+                   layout="wide", initial_sidebar_state="expanded")
+
+# ── theme shorthands ──────────────────────────────────────────────────────
+ACC = cfg.accent; ACCD = cfg.accent_dark; ACCBG = cfg.accent_bg; ACCBG2 = cfg.accent_bg2
+IS_DIV = cfg.strategy_mode == "divergence"
+SIGNAL_LINE = "#475569"     # secondary signal-price line (distinct from any accent)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Sidebar — unified application selector (all seven apps) + controls
+# ════════════════════════════════════════════════════════════════════════
+if "gldm_active_app" not in st.session_state:
+    st.session_state["gldm_active_app"] = cfg.key
+with st.sidebar:
+    st.radio("**Application**", options=_ALL_APPS,
+             format_func=lambda x: _APP_LABELS.get(x, x), key="gldm_active_app")
+    st.markdown("---")
+    st.markdown("**Auto-refresh:** live data cached ~5 min.")
+    if st.button("Refresh now", use_container_width=True):
+        st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
+    st.caption(f"_{cfg.key} & macro pulled from Yahoo. Equity trades US market "
+               "hours; intraday bars update through the session._")
+
+st.title(f"{cfg.emoji} {cfg.key} — {cfg.name}")
+st.caption(cfg.blurb + f"  Models: ridge on log-returns (hourly close), ridge "
+           "H/L bands & close cones, logistic day-type — driven by the asset's "
+           f"macro factors. The **{cfg.strategy_name}** strategy is tuned to beat "
+           "buy-&-hold on risk while keeping drawdowns shallow.")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Loaders (per-ticker cache keys so the five apps never collide)
+# ════════════════════════════════════════════════════════════════════════
+@st.cache_resource(show_spinner=False)
+def load_model(path_str: str):
+    p = Path(path_str)
+    if not p.exists():
+        return None
+    try:
+        return joblib.load(p)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner="Fetching daily data…")
+def get_daily(key: str):
+    c = ticker_config.get_config(key)
+    d = tc.fetch_daily(c)
+    paths = tc.cache_paths(c)
+    if d is None or d.empty:
+        if paths["daily"].exists():
+            d = pd.read_csv(paths["daily"], index_col=0, parse_dates=True)
+    return d
+
+
+@st.cache_data(ttl=300, show_spinner="Fetching hourly data…")
+def get_hourly(key: str):
+    c = ticker_config.get_config(key)
+    h = tc.fetch_hourly(c)
+    paths = tc.cache_paths(c)
+    if h is None or h.empty:
+        if paths["hourly"].exists():
+            h = pd.read_csv(paths["hourly"], index_col=0, parse_dates=True)
+    return h
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_predictions(key: str, _daily_key: str):
+    c = ticker_config.get_config(key)
+    daily = get_daily(key)
+    preds = bt.build_predictions(c, daily)
+    sig = bt.precompute_signals(c, preds)
+    return preds, sig
+
+
+def _fresh(art):
+    if not art:
+        return "_missing_"
+    meta = art.get("calibration_meta", {})
+    end = meta.get("train_end") or art.get("train_end")
+    return end.split()[0] if isinstance(end, str) else "_unknown_"
+
+
+_MP = tc.model_paths(cfg)
+M_HOURLY = load_model(str(_MP["hourly"]))
+M_HL = load_model(str(_MP["daily_hl"]))
+M_7D = load_model(str(_MP["cone_7d"]))
+M_14D = load_model(str(_MP["cone_14d"]))
+M_DT = load_model(str(_MP["day_type"]))
+
+daily = get_daily(cfg.key)
+if daily is None or daily.empty:
+    st.error(f"Could not fetch {cfg.key} data from Yahoo. Click **Refresh now** to retry.")
+    st.stop()
+_daily_key = f"{daily.index.max()}::{len(daily)}"
+preds, sig = get_predictions(cfg.key, _daily_key)
+completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
+
+TRADED = cfg.traded_assets                      # [(label, col), ...]
+PRIMARY_LABEL = TRADED[0][0]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Inference helpers
+# ════════════════════════════════════════════════════════════════════════
+def predict_next_hour(hourly):
+    if M_HOURLY is None or hourly is None or hourly.empty:
+        return None
+    feat = tc.build_hourly_features(cfg, hourly)
+    cols = M_HOURLY["feat_cols"]
+    x = feat[cols].ffill().iloc[[-1]]
+    if x.isna().any(axis=None):
+        return None
+    r = float(M_HOURLY["model"].predict(x)[0])
+    last_close = float(hourly["px_close"].iloc[-1])
+    sigma = float(M_HOURLY["sigma"])
+    return dict(last_close=last_close, pred_close=last_close * np.exp(r),
+                lo=last_close * np.exp(r - 1.96 * sigma),
+                hi=last_close * np.exp(r + 1.96 * sigma),
+                ret=r, sigma=sigma, ts=hourly.index[-1])
+
+
+def predict_next_daily_hl(daily_df):
+    if M_HL is None:
+        return None
+    feat = tc.build_daily_features(cfg, daily_df)
+    cols = M_HL["feat_cols"]
+    x = feat[cols].ffill().iloc[[-1]]
+    if x.isna().any(axis=None):
+        return None
+    last_close = float(daily_df["px_close"].iloc[-1])
+    bh = M_HL.get("bias_high", 0.0); bl = M_HL.get("bias_low", 0.0)
+    ph = last_close * (1 + float(M_HL["model_high"].predict(x)[0])) + bh * last_close
+    pl = last_close * (1 + float(M_HL["model_low"].predict(x)[0])) + bl * last_close
+    return dict(last_close=last_close, pred_high=ph, pred_low=pl,
+                band_hi=M_HL["sigma_high"] * last_close,
+                band_lo=M_HL["sigma_low"] * last_close)
+
+
+def predict_cone(art, daily_df):
+    if art is None:
+        return None
+    feat = tc.build_daily_features(cfg, daily_df)
+    cols = art["feat_cols"]
+    x = feat[cols].ffill().iloc[[-1]]
+    if x.isna().any(axis=None):
+        return None
+    last_close = float(daily_df["px_close"].iloc[-1])
+    central_r = float(art["model"].predict(x)[0]); q = art["quantiles"]
+    return dict(last_close=last_close, horizon=art["horizon"],
+                central=last_close * np.exp(central_r),
+                p5=last_close * np.exp(central_r + q[5]),
+                p25=last_close * np.exp(central_r + q[25]),
+                p75=last_close * np.exp(central_r + q[75]),
+                p95=last_close * np.exp(central_r + q[95]))
+
+
+def predict_day_type(daily_df):
+    if M_DT is None:
+        return None
+    feat = tc.build_daily_features(cfg, daily_df)
+    cols = M_DT["feat_cols"]
+    x = feat[cols].ffill().iloc[[-1]]
+    if x.isna().any(axis=None):
+        return None
+    proba = M_DT["model"].predict_proba(x)[0]
+    classes = M_DT["model"].classes_; label_map = M_DT["classes"]
+    pm = {label_map[int(c)]: float(p) for c, p in zip(classes, proba)}
+    return dict(probs=pm, top=max(pm, key=pm.get))
+
+
+def signatures_asof(target_date):
+    sub = completed_all[completed_all["target_date"] <= pd.Timestamp(target_date)].tail(45)
+    return tc.compute_trend_signatures(cfg, sub)
+
+
+def ma_state(d_df):
+    """Strategy-MA state on the primary close (for the 'ma' mode UI)."""
+    c = d_df["px_close"].to_numpy(float)
+    w = cfg.ma_window
+    ma = float(np.mean(c[-w:])) if len(c) >= 1 else np.nan
+    ma_prev = float(np.mean(c[-(w + 5):-5])) if len(c) >= w + 5 else ma
+    close = float(c[-1])
+    return dict(ma=ma, close=close, above=close > ma, slope_pos=ma > ma_prev, window=w)
+
+
+def strategy_position(col, end=None):
+    if col not in preds:
+        return None
+    r = bt.run_strategy(cfg, preds, sig, col, end=end)
+    r["metrics"] = bt._metrics(r["strat"], r["dates"])
+    r["bh_metrics"] = bt._metrics(r["bh"], r["dates"])
+    return r
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Trend-signature alert renderer (identical card layout to Gold)
+# ════════════════════════════════════════════════════════════════════════
+def _sig_card(title, icon, color, triggered, rows, interpretation):
+    border = color if triggered else "#cbd5e1"
+    bg = ("#f0fdf4" if (triggered and color == "#16a34a")
+          else "#fff7ed" if triggered else "#f8fafc")
+    status = "● ACTIVE" if triggered else "○ CLEAR"
+    badge = (f"<span style='background:{color};color:white;border-radius:12px;"
+             f"padding:2px 10px;font-size:11px;font-weight:700;margin-left:8px;'>{status}</span>")
+    rows_html = ""
+    for label, val, thr, fired in rows:
+        vcol = color if fired else "#64748b"
+        bd = (f"<span style='color:{color};font-weight:700;margin-left:auto;'>✓ TRIGGERED</span>"
+              if fired else "<span style='color:#94a3b8;margin-left:auto;'>○</span>")
+        rows_html += (
+            "<div style='display:flex;align-items:center;gap:8px;padding:4px 0;"
+            "border-bottom:1px solid #e2e8f0;'>"
+            f"<span style='font-size:12px;color:#64748b;width:150px;flex-shrink:0;'>{label}</span>"
+            f"<span style='font-weight:700;color:{vcol};font-size:13px;min-width:74px;'>{val}</span>"
+            f"<span style='font-size:11px;color:#94a3b8;'>need: {thr}</span>{bd}</div>")
+    tcol = color if triggered else "#475569"
+    return (
+        f"<div style='background:{bg};border:2px solid {border};border-radius:10px;"
+        f"padding:14px;height:100%;box-sizing:border-box;'>"
+        f"<div style='font-size:14px;font-weight:700;color:{tcol};margin-bottom:8px;'>"
+        f"{icon} {title}{badge}</div>"
+        f"<div style='margin-bottom:8px;'>{rows_html}</div>"
+        f"<div style='font-size:11.5px;color:#1e293b;background:rgba(0,0,0,0.04);"
+        f"border-radius:6px;padding:7px 9px;line-height:1.45;'>"
+        f"<b>📊 What it means:</b> {interpretation}</div></div>")
+
+
+def net_signal_div(sigs):
+    """Resolve raw signatures → ONE state (divergence mode). Exit overrides entry."""
+    if not sigs:
+        return dict(state="NEUTRAL", label="NO DATA", ico="⬜",
+                    bg="#f8fafc", brd="#94a3b8", reason="insufficient completed bars")
+    d1, d2, d3 = sigs["d1_triggered"], sigs["d2_triggered"], sigs["d3_triggered"]
+    u1, entry = sigs["u1_triggered"], sigs["entry_triggered"]
+    if d2 or d3:
+        parts = [p for p, f in [("D3 exhaustion", d3), ("D2 momentum fade", d2)] if f]
+        note = " — entry is blocked while an exit is active" if entry else ""
+        return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
+                    bg="#fef2f2", brd="#dc2626",
+                    reason="Exit signal: " + " + ".join(parts) + note)
+    if entry:
+        gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
+                                ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
+                                ("⚡ V-reversal", sigs.get("v_recent_gate"))] if f]
+        return dict(state="ENTRY", label="ENTRY / GO LONG", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason="U1 confirmed inside the Pure-Regime gate: " + " + ".join(gates))
+    if u1:
+        return dict(state="WATCH_UP", label="U1 WATCH — GATE NOT MET", ico="🟡",
+                    bg="#fefce8", brd="#ca8a04",
+                    reason="Bullish pressure, but no Bull-Regime / Clean-Breakout / V-reversal yet")
+    if d1:
+        return dict(state="WATCH_DN", label="DOWNTREND WATCH (D1)", ico="🟠",
+                    bg="#fff7ed", brd="#f59e0b",
+                    reason="Low-break pressure building — no exit trigger yet")
+    return dict(state="NEUTRAL", label="NO ACTION SIGNAL", ico="⬜",
+                bg="#f8fafc", brd="#94a3b8",
+                reason="Flat — awaiting a Pure-Regime entry")
+
+
+def net_signal_ma(mst):
+    """One resolved state for the MA-trend-filter mode."""
+    if not mst:
+        return dict(state="NEUTRAL", label="NO DATA", ico="⬜",
+                    bg="#f8fafc", brd="#94a3b8", reason="insufficient bars")
+    if mst["above"]:
+        return dict(state="ENTRY", label="LONG — IN TREND", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason=f"Close ${mst['close']:,.2f} is above the {mst['window']}-day SMA "
+                           f"${mst['ma']:,.2f} — hold the long.")
+    return dict(state="EXIT", label="FLAT — BELOW TREND", ico="🔴",
+                bg="#fef2f2", brd="#dc2626",
+                reason=f"Close ${mst['close']:,.2f} is below the {mst['window']}-day SMA "
+                       f"${mst['ma']:,.2f} — stand aside in cash.")
+
+
+def render_strategy_card():
+    exec_line = (" · ".join(f"<b>{lbl}</b>" for lbl, _ in TRADED))
+    if IS_DIV:
+        st.markdown(f"""
+<div style='background:{ACCBG}; border:2px solid {ACC}; border-radius:12px;
+     padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
+  <div style='font-size:15px; font-weight:800; color:{ACCD}; margin-bottom:12px; letter-spacing:0.3px;'>
+    {cfg.emoji} {cfg.strategy_name} &nbsp;—&nbsp;
+    <span style='color:{ACC};'>{cfg.key} signal · {exec_line} execution</span>
+  </div>
+  <div style='background:{ACCBG2}; border-radius:8px; padding:10px 14px; margin-bottom:12px;
+       font-size:12.5px; color:{ACCD}; font-weight:600;'>
+    🔁 <b>Core idea:</b> the divergence signatures (U1 / D2 / D3 / V-reversal) read
+    <b>{cfg.key}'s</b> predicted-vs-actual daily highs/lows as the signal engine, and the
+    strategy holds long only while momentum is confirmed inside a trend regime — sitting
+    out the deep drawdowns that wreck buy-&-hold on this asset.
+  </div>
+  <div style='background:{ACCBG2}; border:1px solid {ACC}; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:{ACCD};'>
+    🎯 <b>Pure-Regime entry:</b> a U1 bullish-divergence trigger must be confirmed by
+    <b>one</b> of three non-overlapping trend paths — a bull regime (above a rising
+    20-day MA), a washed-out clean breakout from below the MA, or a fresh V-reversal.
+  </div>
+  <div style='display:flex; gap:14px; flex-wrap:wrap;'>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long {exec_line}</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① <b>U1 active</b> — err_hi 3d-avg &gt; +{cfg.u1_errhi_min:.2f}% &amp;&amp; ≥2 high-breaks<br>
+        ② <b>one gate</b>: 🐂 Bull Regime · 🧹 Clean Breakout · ⚡ V-reversal
+      </div>
+    </div>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash (overrides entry)</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① <b>D2 fade</b> — err_hi 3d-avg &lt; {cfg.d2_errhi_max:+.2f}%<br>
+        ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
+        ③ <b>fixed stop</b> — −{cfg.fixed_stop*100:.0f}% from entry
+      </div>
+    </div>
+  </div>
+  <div style='margin-top:12px; font-size:11.5px; color:{ACCD};'>📈 {cfg.results_note}</div>
+</div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+<div style='background:{ACCBG}; border:2px solid {ACC}; border-radius:12px;
+     padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
+  <div style='font-size:15px; font-weight:800; color:{ACCD}; margin-bottom:12px; letter-spacing:0.3px;'>
+    {cfg.emoji} {cfg.strategy_name} &nbsp;—&nbsp;
+    <span style='color:{ACC};'>long-above-the-{cfg.ma_window}-day-SMA trend filter</span>
+  </div>
+  <div style='background:{ACCBG2}; border-radius:8px; padding:10px 14px; margin-bottom:12px;
+       font-size:12.5px; color:{ACCD}; font-weight:600;'>
+    🔁 <b>Core idea:</b> {cfg.key} trends in long cycles with vicious drawdowns. A simple,
+    robust filter — <b>hold {PRIMARY_LABEL} only while its close is above the
+    {cfg.ma_window}-day simple moving average</b> — captures the up-cycles and moves to
+    cash for the down-cycles, beating buy-&-hold on risk (and often on return).
+  </div>
+  <div style='display:flex; gap:14px; flex-wrap:wrap;'>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① close crosses <b>above</b> the {cfg.ma_window}-day SMA (decided at the close)<br>
+        ② enter on the next bar
+      </div>
+    </div>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① close crosses <b>below</b> the {cfg.ma_window}-day SMA, or<br>
+        ② <b>fixed stop</b> — −{cfg.fixed_stop*100:.0f}% from entry
+      </div>
+    </div>
+  </div>
+  <div style='margin-top:12px; font-size:11.5px; color:{ACCD};'>📈 {cfg.results_note}</div>
+</div>""", unsafe_allow_html=True)
+
+
+def render_conditions_box(sigs, mst):
+    if IS_DIV:
+        ns = net_signal_div(sigs)
+        if not sigs:
+            st.info("Strategy conditions unavailable — need ≥ 3 completed bars.")
+            return
+
+        def row(active, name, detail):
+            ico = "✅" if active else "○"
+            col = "#15803d" if active else "#94a3b8"; weight = "700" if active else "500"
+            return (f"<tr><td style='padding:3px 8px 3px 0;font-size:14px;'>{ico}</td>"
+                    f"<td style='padding:3px 10px 3px 0;font-weight:{weight};color:{col};"
+                    f"white-space:nowrap;'>{name}</td>"
+                    f"<td style='padding:3px 0;font-size:11.5px;color:#475569;'>{detail}</td></tr>")
+
+        gate_bull = bool(sigs.get("bull_regime"))
+        gate_clean = bool(sigs["clean_10d"] and not sigs["above_ma20"])
+        gate_v = bool(sigs.get("v_recent_gate"))
+        gate_any = gate_bull or gate_clean or gate_v
+        entry_ready = sigs["u1_triggered"] and gate_any and not (sigs["d2_triggered"] or sigs["d3_triggered"])
+        entry_html = "<table style='border-collapse:collapse;'>" + \
+            row(sigs["u1_triggered"], "U1 trigger",
+                f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (need &gt; +{cfg.u1_errhi_min:.2f}%) "
+                f"&amp; high-breaks = {sigs['hi_breaks_3d']}/3 (need ≥2)") + \
+            row(gate_any, "Trend gate (any one)",
+                f"{'🐂 Bull ' if gate_bull else ''}{'🧹 Clean ' if gate_clean else ''}"
+                f"{'⚡ V-rev' if gate_v else ''}".strip() or "none active") + \
+            "<tr><td></td><td colspan='2' style='padding-left:22px;font-size:11px;color:#64748b;'>" + \
+            f"{'✓' if gate_bull else '○'} Bull Regime &nbsp; {'✓' if gate_clean else '○'} Clean Breakout &nbsp; " + \
+            f"{'✓' if gate_v else '○'} V-reversal</td></tr></table>"
+        exit_html = "<table style='border-collapse:collapse;'>" + \
+            row(sigs["d2_triggered"], "D2 momentum fade",
+                f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (exit &lt; {cfg.d2_errhi_max:+.2f}%)") + \
+            row(sigs["d3_triggered"], "D3 exhaustion",
+                f"consec high-breaks = {sigs['consec_hi']} then a low-break") + \
+            row(False, f"Fixed stop −{cfg.fixed_stop*100:.0f}%",
+                "position-level — checked per open trade") + "</table>"
+        st.markdown(f"""
+<div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
+  <div style='flex:1; min-width:280px; background:#f0fdf4; border:1.5px solid #86efac;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#15803d; margin-bottom:6px;'>
+      📥 ENTRY conditions {'— ✅ ALL MET' if entry_ready else '— not met'}</div>
+    {entry_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Entry fires when
+      <b>U1 AND one gate</b> are true and no exit is active.</div>
+  </div>
+  <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#b91c1c; margin-bottom:6px;'>
+      📤 EXIT conditions {'— 🔴 ACTIVE' if (sigs['d2_triggered'] or sigs['d3_triggered']) else '— clear'}</div>
+    {exit_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Any one exit (or the stop)
+      closes the position and <b>overrides</b> a simultaneous entry.</div>
+  </div>
+</div>
+<div style='background:{ns['bg']}; border:2px solid {ns['brd']}; border-radius:10px;
+     padding:10px 16px; margin:4px 0;'>
+  <b style='font-size:15px;'>{ns['ico']} NET DECISION: {ns['label']}</b>
+  <span style='color:#475569; font-size:12.5px; margin-left:8px;'>{ns['reason']}</span>
+</div>""", unsafe_allow_html=True)
+    else:
+        ns = net_signal_ma(mst)
+        if not mst:
+            st.info("Strategy conditions unavailable.")
+            return
+        above = mst["above"]; slope = mst["slope_pos"]
+        def rowm(active, name, detail):
+            ico = "✅" if active else "○"
+            col = "#15803d" if active else "#94a3b8"; weight = "700" if active else "500"
+            return (f"<tr><td style='padding:3px 8px 3px 0;font-size:14px;'>{ico}</td>"
+                    f"<td style='padding:3px 10px 3px 0;font-weight:{weight};color:{col};"
+                    f"white-space:nowrap;'>{name}</td>"
+                    f"<td style='padding:3px 0;font-size:11.5px;color:#475569;'>{detail}</td></tr>")
+        entry_html = "<table style='border-collapse:collapse;'>" + \
+            rowm(above, f"Close &gt; {mst['window']}-day SMA",
+                 f"close ${mst['close']:,.2f} vs SMA ${mst['ma']:,.2f} "
+                 f"({(mst['close']/mst['ma']-1)*100:+.2f}%)") + \
+            rowm(slope, "SMA rising", "trend slope confirms the regime") + "</table>"
+        exit_html = "<table style='border-collapse:collapse;'>" + \
+            rowm(not above, f"Close &lt; {mst['window']}-day SMA", "→ move to cash") + \
+            rowm(False, f"Fixed stop −{cfg.fixed_stop*100:.0f}%",
+                 "position-level — checked per open trade") + "</table>"
+        st.markdown(f"""
+<div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
+  <div style='flex:1; min-width:280px; background:#f0fdf4; border:1.5px solid #86efac;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#15803d; margin-bottom:6px;'>
+      📥 LONG conditions {'— ✅ IN TREND' if above else '— not met'}</div>
+    {entry_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Hold long while the close
+      stays above the {mst['window']}-day SMA.</div>
+  </div>
+  <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#b91c1c; margin-bottom:6px;'>
+      📤 CASH conditions {'— 🔴 ACTIVE' if not above else '— clear'}</div>
+    {exit_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>A close below the SMA (or the
+      stop) moves the position to cash.</div>
+  </div>
+</div>
+<div style='background:{ns['bg']}; border:2px solid {ns['brd']}; border-radius:10px;
+     padding:10px 16px; margin:4px 0;'>
+  <b style='font-size:15px;'>{ns['ico']} NET DECISION: {ns['label']}</b>
+  <span style='color:#475569; font-size:12.5px; margin-left:8px;'>{ns['reason']}</span>
+</div>""", unsafe_allow_html=True)
+
+
+def render_signatures(sigs):
+    if not sigs:
+        st.info("Not enough completed bars for trend signatures yet (need ≥ 3).")
+        return
+    ns = net_signal_div(sigs)
+    as_of = pd.Timestamp(sigs["as_of_date"]).strftime("%Y-%m-%d")
+    st.markdown(
+        f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
+        border-radius:10px;padding:12px 16px;margin:8px 0;">
+        <span style="background:{ns['brd']};color:white;font-weight:700;font-size:14px;
+        padding:5px 14px;border-radius:20px;">{ns['ico']} {ns['label']}</span>
+        <span style="color:#334155;font-size:13px;margin-left:10px;">
+        <b>{sigs['dn_count']}/3</b> DN · <b>{sigs['up_count']}/1</b> UP ·
+        raw flags: U1={'✓' if sigs['u1_triggered'] else '✗'}
+        D2={'✓' if sigs['d2_triggered'] else '✗'} D3={'✓' if sigs['d3_triggered'] else '✗'}
+        · bull_regime={'✓' if sigs.get('bull_regime') else '✗'}
+        · as-of <b>{as_of}</b> · <b>{sigs['n_bars']}</b> bars</span></div>""",
+        unsafe_allow_html=True)
+    r1c1, r1c2 = st.columns(2)
+    r2c1, r2c2 = st.columns(2)
+    r1c1.markdown(_sig_card(
+        "U1 — Bullish pressure", "📈", "#16a34a", sigs["u1_triggered"],
+        [("err_hi 3d-avg", f"{sigs['err_hi_ma3']:+.3f}%", f"> +{cfg.u1_errhi_min:.2f}%",
+          sigs['err_hi_ma3'] > cfg.u1_errhi_min),
+         ("high-breaks (3d)", f"{sigs['hi_breaks_3d']}/3", "≥ 2", sigs['hi_breaks_3d'] >= 2)],
+        f"{cfg.key}'s actual highs keep beating the model's predicted highs → upside "
+        "momentum. This is the entry trigger (needs a trend gate too)."),
+        unsafe_allow_html=True)
+    r1c2.markdown(_sig_card(
+        "D2 — Momentum fading", "📉", "#dc2626", sigs["d2_triggered"],
+        [("err_hi 3d-avg", f"{sigs['err_hi_ma3']:+.3f}%", f"< {cfg.d2_errhi_max:+.2f}%",
+          sigs['err_hi_ma3'] < cfg.d2_errhi_max)],
+        "Predicted highs are no longer being beaten — upside momentum is collapsing. "
+        "Primary exit signal."), unsafe_allow_html=True)
+    r2c1.markdown(_sig_card(
+        "D1 — Downtrend pressure", "📉", "#dc2626", sigs["d1_triggered"],
+        [("err_lo 3d-avg", f"{sigs['err_lo_ma3']:+.3f}%", f"> +{cfg.d1_errlo_min:.2f}%",
+          sigs['err_lo_ma3'] > cfg.d1_errlo_min),
+         ("low-breaks (3d)", f"{sigs['lo_breaks_3d']}/3", "≥ 2", sigs['lo_breaks_3d'] >= 2)],
+        f"{cfg.key}'s actual lows keep undershooting the predicted floor → the trend is "
+        "deteriorating."), unsafe_allow_html=True)
+    r2c2.markdown(_sig_card(
+        "D3 — Exhaustion canary", "📉", "#dc2626", sigs["d3_triggered"],
+        [("consec high-breaks", f"{sigs['consec_hi']}", "≥ 3 then a low-break",
+          sigs['consec_hi'] >= 3),
+         ("low-break today", "yes" if sigs['detail_rows'] and sigs['detail_rows'][-1]['lo_break'] else "no",
+          "required", bool(sigs['exhaustion_active']))],
+        "A first downside break after a run of upside breaks — classic blow-off / "
+        "exhaustion reversal. Exit signal (fires even in a bull regime)."),
+        unsafe_allow_html=True)
+    if sigs.get("v_reversal_likely"):
+        st.markdown("⚡ **V-reversal likely** — capitulation low undershoot detected "
+                    "(a fresh V-reversal within 3 bars satisfies the entry trend gate).")
+    if sigs["detail_rows"]:
+        with st.expander("📋 Last 5 bars — signal detail", expanded=False):
+            st.caption(
+                f"Each row is a **completed** {cfg.key} daily bar (actual H/L known); signals use "
+                "these bars only. err_hi (bar) = (actual_high − pred_high)/close × 100 "
+                "(regime-centered; + = bullish pressure). err_hi 3d-avg = rolling 3-bar mean. "
+                "Break = actual H > pred_H (Hi) or actual L < pred_L (Lo).")
+            disp = []
+            for r in sigs["detail_rows"]:
+                disp.append({
+                    "Date": pd.Timestamp(r["date"]).strftime("%Y-%m-%d"),
+                    "Close": f"${r['close']:,.2f}",
+                    "Pred H": f"${r['pred_hi']:,.2f}", "Actual H": f"${r['actual_hi']:,.2f}",
+                    "err_hi (bar)": f"{r['err_hi_pct']:+.3f}%", "err_hi 3d-avg": f"{r['err_hi_ma3']:+.3f}%",
+                    "Hi Brk": "✓" if r["hi_break"] else "–",
+                    "Pred L": f"${r['pred_lo']:,.2f}", "Actual L": f"${r['actual_lo']:,.2f}",
+                    "err_lo (bar)": f"{r['err_lo_pct']:+.3f}%", "err_lo 3d-avg": f"{r['err_lo_ma3']:+.3f}%",
+                    "Lo Brk": "✓" if r["lo_break"] else "–",
+                })
+            st.dataframe(pd.DataFrame(disp[::-1]), hide_index=True, use_container_width=True)
+
+
+def position_panel(label, col, col_container, end=None):
+    r = strategy_position(col, end=end)
+    if r is None:
+        col_container.info(f"{label}: price series unavailable.")
+        return
+    if end is None:
+        px = float(preds[col].iloc[-1]); as_of = pd.Timestamp(preds["target_date"].iloc[-1])
+    else:
+        sub = preds[preds["target_date"] <= pd.Timestamp(end)]
+        px = float(sub[col].iloc[-1]); as_of = pd.Timestamp(end)
+
+    def _tbl(rows):
+        body = "".join(
+            f"<tr><td style='color:#64748b;padding:1px 8px 1px 0;white-space:nowrap'>{k}</td>"
+            f"<td style='font-weight:600'>{v}</td></tr>" for k, v in rows)
+        return f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>{body}</table>"
+
+    trig = "U1 + Pure-Regime gate" if IS_DIV else f"Close &gt; {cfg.ma_window}-day SMA"
+    if r["in_pos_now"] and r["entry_px"]:
+        e_px = r["entry_px"]; e_date = pd.Timestamp(r["entry_date"])
+        upnl = (px / e_px - 1) * 100; col_pnl = "#16a34a" if upnl >= 0 else "#dc2626"
+        stop_px = e_px * (1 - cfg.fixed_stop); days = (as_of - e_date).days
+        html = (
+            f"<div style='background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
+            f"<div style='font-size:13px;font-weight:700;color:#15803d;margin-bottom:6px;'>"
+            f"📍 {label} — LONG</div>"
+            + _tbl([("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
+                    ("Trigger", trig), ("Live price", f"${px:,.2f}"),
+                    ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>"),
+                    ("Stop (−%.0f%%)" % (cfg.fixed_stop * 100), f"${stop_px:,.2f}"),
+                    ("Days held", f"{days}d")]) + "</div>")
+        col_container.markdown(html, unsafe_allow_html=True)
+        return
+    tl = r.get("trade_log") or []
+    if tl:
+        lt = tl[-1]; ret = lt["ret"] * 100; profit = ret > 0
+        bg = "#f0fdf4" if profit else "#fef2f2"; brd = "#16a34a" if profit else "#dc2626"
+        hdr = "#15803d" if profit else "#991b1b"; pcol = "#16a34a" if profit else "#dc2626"
+        badge = "✅ CLOSED — PROFIT" if profit else "🔴 CLOSED — LOSS"
+        e_date = pd.Timestamp(lt["entry_date"]); x_date = pd.Timestamp(lt["exit_date"])
+        html = (
+            f"<div style='background:{bg};border:2.5px solid {brd};border-radius:10px;padding:12px 14px;'>"
+            f"<div style='font-size:12px;font-weight:700;color:{hdr};margin-bottom:6px;'>"
+            f"{badge} — {label}</div>"
+            f"<div style='background:#fff7ed;border:1.5px solid #ea580c;border-radius:6px;"
+            f"padding:4px 9px;margin-bottom:7px;font-size:12px;font-weight:700;color:#9a3412;'>"
+            f"📤 Exit: {lt['reason']}</div>"
+            + _tbl([("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${lt['entry_px']:,.2f}"),
+                    ("Exit", f"{x_date.strftime('%b %d, %Y')} @ ${lt['exit_px']:,.2f}"),
+                    ("Trade P&amp;L", f"<b style='color:{pcol}'>{ret:+.2f}%</b>"),
+                    ("Days held", f"{(x_date - e_date).days}d"),
+                    ("Now", f"⚪ FLAT · ${px:,.2f}, awaiting next entry")]) + "</div>")
+        col_container.markdown(html, unsafe_allow_html=True)
+    else:
+        col_container.markdown(
+            f"<div style='background:#f8fafc;border:2px solid #94a3b8;border-radius:10px;"
+            f"padding:12px 14px;font-size:13px;'><b>⚪ {label} — FLAT</b><br>"
+            f"<span style='color:#475569'>last close ${px:,.2f} · no trades yet, awaiting entry</span></div>",
+            unsafe_allow_html=True)
+
+
+# Shared plotly layout defaults (match the Gold/BTC look).
+_PLOT_BG = dict(plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff", hovermode="x unified")
+_GRID = dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False)
+_HL_BAND_PCT = cfg.hl_band_pct
+
+
+def _hl_forecast_fig(d_df, n_bars=8):
+    sub = preds[preds["target_date"] <= d_df.index[-1]].tail(n_bars).copy()
+    if sub.empty:
+        return None
+    hl = predict_next_daily_hl(d_df)
+    if hl:
+        nx = d_df.index[-1] + pd.tseries.offsets.BDay(1)
+        sub = pd.concat([sub, pd.DataFrame([{
+            "target_date": nx, "pred_high": hl["pred_high"], "pred_low": hl["pred_low"],
+            "actual_high": np.nan, "actual_low": np.nan}])], ignore_index=True)
+    x = pd.to_datetime(sub["target_date"])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_high"] * (1 + _HL_BAND_PCT),
+                             line=dict(color="rgba(34,139,34,0)"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_high"] * (1 - _HL_BAND_PCT), fill="tonexty",
+                             fillcolor="rgba(34,139,34,0.13)", line=dict(color="rgba(34,139,34,0)"),
+                             name=f"HIGH ±{_HL_BAND_PCT*100:.1f}% band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_low"] * (1 + _HL_BAND_PCT),
+                             line=dict(color="rgba(220,20,60,0)"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_low"] * (1 - _HL_BAND_PCT), fill="tonexty",
+                             fillcolor="rgba(220,20,60,0.13)", line=dict(color="rgba(220,20,60,0)"),
+                             name=f"LOW ±{_HL_BAND_PCT*100:.1f}% band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_high"], mode="lines+markers",
+                             line=dict(color="green", width=2.2, dash="dot"),
+                             marker=dict(size=8), name="Predicted HIGH"))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_low"], mode="lines+markers",
+                             line=dict(color="red", width=2.2, dash="dot"),
+                             marker=dict(size=8), name="Predicted LOW"))
+    have = sub["actual_high"].notna()
+    if have.any():
+        fig.add_trace(go.Scatter(x=x[have], y=sub.loc[have, "actual_high"], mode="markers",
+                                 marker=dict(symbol="x-thin", size=12, line=dict(width=3, color="darkgreen")),
+                                 name="Actual HIGH"))
+        fig.add_trace(go.Scatter(x=x[have], y=sub.loc[have, "actual_low"], mode="markers",
+                                 marker=dict(symbol="x-thin", size=12, line=dict(width=3, color="darkred")),
+                                 name="Actual LOW"))
+    if hl:
+        fig.add_trace(go.Scatter(x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]],
+                                 mode="markers", marker=dict(symbol="diamond", size=12, color=ACC),
+                                 name="Next-bar forecast"))
+    fig.update_layout(height=340, margin=dict(l=0, r=10, t=44, b=0),
+                      title=dict(text="📈 Daily H/L — predictions vs actuals (last bars + next forecast)",
+                                 font=dict(size=13), x=0, xanchor="left"),
+                      yaxis_title="Price ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                      xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
+    return fig
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def rolling_cone_series(key, as_of_iso, horizon, lookback):
+    art = M_7D if horizon == 7 else M_14D
+    if art is None:
+        return pd.DataFrame()
+    d_df = daily[daily.index <= pd.Timestamp(as_of_iso)]
+    close = d_df["px_close"]
+    feat = tc.build_daily_features(cfg, d_df)[art["feat_cols"]].ffill()
+    n = len(close); q = art["quantiles"]
+    start = max(0, n - lookback - horizon)
+    Xa = feat.iloc[start:]
+    Xa = Xa[~Xa.isna().any(axis=1)]
+    if Xa.empty:
+        return pd.DataFrame()
+    cr = art["model"].predict(Xa)
+    rows = []
+    for adate, c in zip(Xa.index, cr):
+        pos = close.index.get_loc(adate)
+        ac = float(close.iloc[pos]); tpos = pos + horizon
+        pred = ac * np.exp(c); lo = ac * np.exp(c + q[5]); hi = ac * np.exp(c + q[95])
+        if tpos < n:
+            tdate = close.index[tpos]; realized = float(close.iloc[tpos]); future = False
+        else:
+            tdate = close.index[-1] + pd.tseries.offsets.BDay(tpos - (n - 1)); realized = None; future = True
+        rows.append(dict(target_date=tdate, pred=pred, lo=lo, hi=hi, realized=realized, future=future))
+    return pd.DataFrame(rows)
+
+
+def _cone_forecast_fig(as_of_iso, horizon, lookback, title, band_rgba, line_col):
+    df = rolling_cone_series(cfg.key, as_of_iso, horizon, lookback)
+    if df.empty:
+        return None
+    df["target_date"] = pd.to_datetime(df["target_date"]); x = df["target_date"]
+    band_pct = (df["hi"] / df["pred"] - 1).mean() * 100
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=df["hi"], line=dict(color="rgba(0,0,0,0)"),
+                             hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=df["lo"], fill="tonexty", fillcolor=band_rgba,
+                             line=dict(color="rgba(0,0,0,0)"),
+                             name=f"±{band_pct:.1f}% (P5–P95) band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=df["pred"], mode="lines",
+                             line=dict(color=line_col, width=1.8, dash="dot"),
+                             name=f"{horizon}d prediction"))
+    res = df[df["realized"].notna()]
+    if not res.empty:
+        within = (res["realized"] >= res["lo"]) & (res["realized"] <= res["hi"])
+        fig.add_trace(go.Scatter(x=res["target_date"], y=res["realized"], mode="lines",
+                                 line=dict(color="#1f2937", width=2.2), name="Realized close"))
+        if within.any():
+            fig.add_trace(go.Scatter(x=res.loc[within, "target_date"], y=res.loc[within, "realized"],
+                                     mode="markers", marker=dict(symbol="circle", size=6, color="#16a34a",
+                                     line=dict(color="white", width=1)), name="✅ within band"))
+        if (~within).any():
+            fig.add_trace(go.Scatter(x=res.loc[~within, "target_date"], y=res.loc[~within, "realized"],
+                                     mode="markers", marker=dict(symbol="x", size=8, color="#dc2626",
+                                     line=dict(color="#dc2626", width=2)), name="❌ outside band"))
+    fut = df[df["future"]]
+    if not fut.empty:
+        fig.add_trace(go.Scatter(x=fut["target_date"], y=fut["pred"], mode="lines+markers",
+                                 line=dict(color=line_col, width=2.4),
+                                 marker=dict(symbol="diamond", size=8, color=line_col,
+                                             line=dict(color="white", width=1)),
+                                 name=f"+{horizon}d forecast"))
+    within_pct = (((res["realized"] >= res["lo"]) & (res["realized"] <= res["hi"])).mean() * 100
+                  if not res.empty else np.nan)
+    subtitle = f"  ·  {within_pct:.0f}% of realized closes within band" if not np.isnan(within_pct) else ""
+    fig.update_layout(height=320, margin=dict(l=0, r=10, t=44, b=0),
+                      title=dict(text=title + subtitle, font=dict(size=13), x=0, xanchor="left"),
+                      yaxis_title="Close ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                      xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
+    return fig
+
+
+_HR_LOOKBACK_HOURS = 23
+
+
+def _hourly_forecast_fig(as_of_date, is_live, hl=None):
+    hourly = get_hourly(cfg.key)
+    if hourly is None or hourly.empty or M_HOURLY is None:
+        return None
+    if not is_live and as_of_date is not None:
+        cutoff = pd.Timestamp(as_of_date) + pd.Timedelta(hours=23, minutes=59)
+        hourly = hourly[hourly.index <= cutoff]
+    if len(hourly) < 30:
+        return None
+    close = hourly["px_close"]
+    feat = tc.build_hourly_features(cfg, hourly)
+    cols = M_HOURLY["feat_cols"]; X = feat[cols]
+    valid = X.index[~X.isna().any(axis=1)]
+    if len(valid) < 5:
+        return None
+    anchor = valid[-1]
+    look = valid[valid >= anchor - pd.Timedelta(hours=_HR_LOOKBACK_HOURS)]
+    if len(look) < 3:
+        look = valid[-8:]
+    sigma = float(M_HOURLY["sigma"]); yhat = M_HOURLY["model"].predict(X.loc[look])
+    tgt_ts, pred_c, act_c, mcol = [], [], [], []
+    for k in range(len(look) - 1):
+        b = look[k]; nb = look[k + 1]
+        c0 = float(close.loc[b]); pc = c0 * np.exp(yhat[k]); ac = float(close.loc[nb])
+        tgt_ts.append(nb); pred_c.append(pc); act_c.append(ac)
+        correct = np.sign(yhat[k]) == np.sign(np.log(ac / c0))
+        mcol.append("seagreen" if correct else "indianred")
+    tgt_ts = pd.DatetimeIndex(tgt_ts)
+    last_ts = look[-1]; last_close = float(close.loc[last_ts])
+    if len(valid) >= 3:
+        step = pd.Series(valid[-6:]).diff().median()
+        step = step if pd.notna(step) else pd.Timedelta(hours=1)
+    else:
+        step = pd.Timedelta(hours=1)
+    next_ts = last_ts + step
+    fc = last_close * np.exp(yhat[-1]); fc_ret = float(yhat[-1])
+    fc_hi = last_close * np.exp(yhat[-1] + 1.96 * sigma); fc_lo = last_close * np.exp(yhat[-1] - 1.96 * sigma)
+
+    def _ct(ts):
+        idx = pd.DatetimeIndex(pd.to_datetime(np.atleast_1d(ts)))
+        return idx.tz_localize("UTC").tz_convert("America/Chicago").tz_localize(None)
+    tgt_ct = _ct(tgt_ts); act_win = close.loc[look]; act_ct = _ct(act_win.index)
+    last_ct = _ct(last_ts)[0]; next_ct = _ct(next_ts)[0]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=tgt_ct, y=np.array(pred_c) * np.exp(1.96 * sigma),
+                             line=dict(color="rgba(65,105,225,0)"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=tgt_ct, y=np.array(pred_c) * np.exp(-1.96 * sigma), fill="tonexty",
+                             fillcolor="rgba(65,105,225,0.18)", line=dict(color="rgba(65,105,225,0)"),
+                             name=f"Pred ±{1.96*sigma*100:.2f}% (95% CI) band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=act_ct, y=act_win.values, mode="lines",
+                             line=dict(color="black", width=2), name="Actual close (hourly)",
+                             hovertemplate="%{x|%d-%b %H:%M} CT<br>$%{y:,.2f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=tgt_ct, y=pred_c, mode="lines+markers",
+                             line=dict(color="#7c3aed", width=2),
+                             marker=dict(color=mcol, size=8, symbol="circle", line=dict(width=1, color="white")),
+                             name="● Past hourly predictions (green = correct dir.)",
+                             hovertemplate="Past pred for %{x|%d-%b %H:%M} CT<br>$%{y:,.2f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=tgt_ct, y=act_c, mode="lines+markers",
+                             line=dict(color="#0d9488", width=2),
+                             marker=dict(color=mcol, size=10, symbol="diamond", line=dict(color="white", width=1.5)),
+                             name="◆ Hourly realized close",
+                             hovertemplate="Realized %{x|%d-%b %H:%M} CT<br>$%{y:,.2f}<extra></extra>"))
+    fig.add_vrect(x0=last_ct, x1=next_ct, fillcolor="khaki", opacity=0.30, line_width=0, layer="below")
+    fig.add_trace(go.Scatter(x=[last_ct, next_ct], y=[last_close, fc], mode="lines",
+                             line=dict(color="darkorange", width=2), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=[next_ct], y=[fc], mode="markers",
+                             marker=dict(symbol="star", size=16, color="darkorange", line=dict(width=1, color="white")),
+                             error_y=dict(type="data", array=[fc_hi - fc], arrayminus=[fc - fc_lo],
+                                          color="darkorange", thickness=1.5, width=6),
+                             name="⭐ Next-hour forecast",
+                             hovertemplate=(f"Forecast {next_ct:%d-%b %H:%M} CT<br>"
+                                            f"$%{{y:,.2f}} ({fc_ret*100:+.2f}%)<br>"
+                                            f"95% CI ${fc_lo:,.2f} – ${fc_hi:,.2f}<extra></extra>")))
+    fig.add_vline(x=last_ct, line=dict(color="crimson", width=1.5, dash="dash"))
+    if hl:
+        fig.add_hline(y=hl["pred_high"], line=dict(color="green", width=2.5, dash="dot"),
+                      annotation_text=f"Daily Pred HIGH ${hl['pred_high']:,.2f}",
+                      annotation_position="top right", annotation_font=dict(color="green", size=12),
+                      annotation_bgcolor="rgba(255,255,255,0.92)", annotation_bordercolor="green",
+                      annotation_borderwidth=1)
+        fig.add_hline(y=hl["pred_low"], line=dict(color="red", width=2.5, dash="dot"),
+                      annotation_text=f"Daily Pred LOW ${hl['pred_low']:,.2f}",
+                      annotation_position="bottom right", annotation_font=dict(color="red", size=12),
+                      annotation_bgcolor="rgba(255,255,255,0.92)", annotation_bordercolor="red",
+                      annotation_borderwidth=1)
+        mid = (hl["pred_high"] + hl["pred_low"]) / 2
+        hi_dn = max(hl["pred_high"] - hl["band_hi"], mid); lo_up = min(hl["pred_low"] + hl["band_lo"], mid)
+        if hl["pred_high"] + hl["band_hi"] > hi_dn:
+            fig.add_hrect(y0=hi_dn, y1=hl["pred_high"] + hl["band_hi"],
+                          fillcolor="rgba(0,170,0,0.12)", line_width=0, layer="below")
+        if lo_up > hl["pred_low"] - hl["band_lo"]:
+            fig.add_hrect(y0=hl["pred_low"] - hl["band_lo"], y1=lo_up,
+                          fillcolor="rgba(220,30,30,0.12)", line_width=0, layer="below")
+    title = (f"🕐 {cfg.key} — rolling next-hour close forecast (last 23 hours)"
+             if is_live else f"🕐 {cfg.key} hourly forecast as of {pd.Timestamp(as_of_date).date()}")
+    fig.update_layout(template="plotly_white", height=420,
+                      title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
+                      yaxis_title=f"{cfg.key} / USD", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
+                      margin=dict(l=0, r=10, t=46, b=0),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                      xaxis=dict(title="Time (US Central)", tickformat="%d-%b %H:%M", **_GRID),
+                      yaxis=_GRID, **_PLOT_BG)
+    return fig
+
+
+def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None):
+    st.markdown(f"### 🔮 Model forecast charts ({cfg.key})")
+    hl = predict_next_daily_hl(d_df)
+    fhr = _hourly_forecast_fig(as_of_date, is_live, hl=hl)
+    if fhr:
+        st.plotly_chart(fhr, use_container_width=True, key=f"{key_prefix}_hr")
+    else:
+        st.caption("_Hourly forecast unavailable for this date (hourly history is limited)._")
+    fhl = _hl_forecast_fig(d_df)
+    if fhl:
+        st.plotly_chart(fhl, use_container_width=True, key=f"{key_prefix}_hl")
+    as_of_iso = str(d_df.index[-1])
+    f7 = _cone_forecast_fig(as_of_iso, 7, 90, "📅 7-day close-price cone", "rgba(147,197,253,0.28)", "#2563eb")
+    f14 = _cone_forecast_fig(as_of_iso, 14, 120, "📆 14-day close-price cone", "rgba(196,181,253,0.30)", "#7c3aed")
+    if f7:
+        st.plotly_chart(f7, use_container_width=True, key=f"{key_prefix}_c7")
+    if f14:
+        st.plotly_chart(f14, use_container_width=True, key=f"{key_prefix}_c14")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Backtesting dashboard
+# ════════════════════════════════════════════════════════════════════════
+def _equity_fig(r, label, col, title):
+    INIT = 100_000.0
+    dts = pd.to_datetime(r["dates"]); nav = r["strat"] * INIT; bh = r["bh"] * INIT
+    date_to_nav = dict(zip([pd.Timestamp(d) for d in r["dates"]], nav))
+    fig = go.Figure()
+    reg = pd.Series(sig["bull_regime"], index=pd.to_datetime(preds["target_date"]))
+    reg = reg.reindex(dts).ffill().fillna(False).values.astype(bool)
+    if len(reg):
+        changes = np.where(np.diff(reg.astype(int)) != 0)[0] + 1
+        starts = np.concatenate([[0], changes]); ends = np.concatenate([changes, [len(reg)]])
+        bull_leg = bear_leg = False
+        for s_i, e_i in zip(starts, ends):
+            is_bull = bool(reg[s_i])
+            show = (is_bull and not bull_leg) or (not is_bull and not bear_leg)
+            fig.add_vrect(x0=dts[s_i], x1=dts[min(e_i, len(dts) - 1)],
+                          fillcolor="rgba(34,197,94,0.10)" if is_bull else "rgba(239,68,68,0.07)",
+                          line_width=0, name=f"🐂 Bull Regime ({cfg.key})" if is_bull else f"🐻 Bear/Neutral ({cfg.key})",
+                          showlegend=show)
+            bull_leg = bull_leg or is_bull; bear_leg = bear_leg or (not is_bull)
+    fig.add_trace(go.Scatter(x=dts, y=bh, name=f"Buy & Hold {label}",
+                             line=dict(color="#94a3b8", width=1.5, dash="dot"),
+                             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>"))
+    fig.add_trace(go.Scatter(x=dts, y=nav, name=f"{cfg.strategy_name} ({label})",
+                             line=dict(color=ACC, width=2.5),
+                             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Strategy</extra>"))
+    gseries = preds.set_index(pd.to_datetime(preds["target_date"]))["px_close"].reindex(dts)
+    fig.add_trace(go.Scatter(x=dts, y=gseries.values, name=f"{cfg.key} price (signal)",
+                             line=dict(color=SIGNAL_LINE, width=1.2), yaxis="y2", opacity=0.7,
+                             hovertemplate="%{x|%b %d, %Y}: $%{y:,.2f}<extra>" + cfg.key + "</extra>"))
+    fig.add_hline(y=INIT, line_dash="dash", line_color="#64748b", line_width=1, opacity=0.4,
+                  annotation_text="  $100k start", annotation_position="bottom right")
+    for t in r["trade_log"]:
+        ed = pd.Timestamp(t["entry_date"]); xd = pd.Timestamp(t["exit_date"])
+        win_col = "#16a34a" if t["ret"] > 0 else "#dc2626"
+        if ed in date_to_nav:
+            fig.add_trace(go.Scatter(x=[ed], y=[date_to_nav[ed]], mode="markers", showlegend=False,
+                                     marker=dict(symbol="triangle-up", size=12, color="#16a34a",
+                                                 line=dict(width=1.5, color="white")),
+                                     hovertemplate=f"<b>BUY {label}</b> {ed:%b %d} @ ${t['entry_px']:,.2f}<extra></extra>"))
+        if xd in date_to_nav:
+            fig.add_trace(go.Scatter(x=[xd], y=[date_to_nav[xd]], mode="markers", showlegend=False,
+                                     marker=dict(symbol="triangle-down", size=12, color=win_col,
+                                                 line=dict(width=1.5, color="white")),
+                                     hovertemplate=(f"<b>SELL {label}</b> {xd:%b %d} @ ${t['exit_px']:,.2f} "
+                                                    f"({t['ret']*100:+.1f}%) — {t['reason']}<extra></extra>")))
+    if r.get("in_pos_now") and r.get("entry_date") is not None:
+        ed = pd.Timestamp(r["entry_date"])
+        if ed in date_to_nav:
+            fig.add_trace(go.Scatter(x=[ed], y=[date_to_nav[ed]], mode="markers", name="Open entry",
+                                     marker=dict(symbol="triangle-up", size=14, color="#f59e0b",
+                                                 line=dict(width=1.5, color="white"))))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
+        height=380, margin=dict(l=0, r=70, t=54, b=0),
+        yaxis_title="Portfolio value ($)", yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+        xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID,
+        yaxis2=dict(title=f"{cfg.key} ($)", overlaying="y", side="right", showgrid=False,
+                    zeroline=False, anchor="x", tickprefix="$", tickformat=",.2f", color=SIGNAL_LINE),
+        **_PLOT_BG)
+    return fig
+
+
+def _trade_log_table(r, label, col):
+    INIT = 100_000.0; rows = []; nav = INIT
+    for i, t in enumerate(r["trade_log"], 1):
+        nav *= (1 + t["ret"])
+        result = "🛑 SL EXIT" if "stop" in t["reason"] else ("✓ WIN" if t["ret"] > 0 else "✗ LOSS")
+        rows.append({
+            "#": i, "Entry": pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
+            f"Buy {label} @": f"${t['entry_px']:,.2f}",
+            "Exit": pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
+            f"Sell {label} @": f"${t['exit_px']:,.2f}",
+            "P&L": f"{t['ret']*100:+.1f}%", "Result": result,
+            "Days": (pd.Timestamp(t["exit_date"]) - pd.Timestamp(t["entry_date"])).days,
+            "Exit signal": t["reason"], "NAV After": f"${nav:,.0f}"})
+    if r.get("in_pos_now") and r.get("entry_px"):
+        last_px = float(preds[col].iloc[-1]) if col in preds else None
+        unr = (last_px / r["entry_px"] - 1) * 100 if last_px else 0.0
+        rows.append({
+            "#": len(r["trade_log"]) + 1, "Entry": pd.Timestamp(r["entry_date"]).strftime("%b %d, %Y"),
+            f"Buy {label} @": f"${r['entry_px']:,.2f}", "Exit": "⏳ OPEN", f"Sell {label} @": "—",
+            "P&L": f"{unr:+.1f}% (unrlzd)", "Result": "🟡 OPEN",
+            "Days": (pd.Timestamp(preds['target_date'].iloc[-1]) - pd.Timestamp(r["entry_date"])).days,
+            "Exit signal": "—", "NAV After": "—"})
+    if not rows:
+        st.info("No trades in this period — strategy was in cash throughout.")
+        return
+    st.dataframe(pd.DataFrame(rows[::-1]), use_container_width=True, hide_index=True, height=300)
+    tr = r["trades"]
+    if len(tr):
+        wins = tr[tr > 0]
+        st.caption(f"💡 {len(tr)} trades · win rate {(tr>0).mean()*100:.0f}% · "
+                   f"avg win {wins.mean()*100 if len(wins) else 0:.2f}% · "
+                   f"avg loss {tr[tr<=0].mean()*100 if (tr<=0).any() else 0:.2f}% · "
+                   f"best {tr.max()*100:+.1f}% · worst {tr.min()*100:+.1f}%. "
+                   "P&L at execution prices; costs/slippage not modelled.")
+
+
+def _metrics_table_html(label, col):
+    def cell(txt, good=None, bold=False):
+        color = "#16a34a" if good is True else "#dc2626" if good is False else "#334155"
+        w = "700" if (bold or good is not None) else "500"
+        return f"<td style='padding:6px 10px;text-align:center;color:{color};font-weight:{w};'>{txt}</td>"
+    metric_rows = [("Total Return", "ret"), ("CAGR", "cagr"), ("Max Drawdown", "mdd"),
+                   ("Sharpe", "sharpe"), ("Win Rate", "wr"), ("Trades", "n")]
+    per = []
+    for lbl, s, e in cfg.periods:
+        r = bt.run_strategy(cfg, preds, sig, col, oos_start=s, end=e)
+        sm = bt._metrics(r["strat"], r["dates"]); bm = bt._metrics(r["bh"], r["dates"])
+        wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
+        per.append((lbl, sm, bm, wr, len(r["trades"])))
+    hdr = f"<tr style='background:{ACCD};color:white;'><th style='padding:9px 10px;text-align:left;'>Metric</th>"
+    for lbl, *_ in per:
+        bg = "#14532d" if "OOS" in lbl or "recent" in lbl else ACCD
+        hdr += (f"<th colspan='2' style='padding:9px 8px;text-align:center;background:{bg};"
+                f"border-left:3px solid #fff;'>{lbl}</th>")
+    hdr += "</tr>"
+    subr = f"<tr style='background:{ACC};color:white;font-size:11px;'><th></th>"
+    for lbl, *_ in per:
+        bg = "#166534" if "OOS" in lbl or "recent" in lbl else ACC
+        subr += (f"<th style='padding:4px 8px;background:{bg};border-left:3px solid #fff;'>Strategy</th>"
+                 f"<th style='padding:4px 8px;background:{bg};'>Buy&amp;Hold</th>")
+    subr += "</tr>"
+    body = ""
+    for ri, (lbl_m, key) in enumerate(metric_rows):
+        bg = ACCBG if ri % 2 == 0 else "#ffffff"
+        body += f"<tr style='background:{bg};'><td style='padding:6px 10px;font-weight:600;color:#334155;'>{lbl_m}</td>"
+        for lbl, sm, bm, wr, ntr in per:
+            if key == "ret":
+                sv, bv = sm["total_ret"] * 100, bm["total_ret"] * 100
+                body += cell(f"{sv:+.1f}%", sv > bv) + cell(f"{bv:+.1f}%")
+            elif key == "cagr":
+                sv, bv = sm["cagr"] * 100, bm["cagr"] * 100
+                body += cell(f"{sv:+.1f}%", sv > bv) + cell(f"{bv:+.1f}%")
+            elif key == "mdd":
+                sv, bv = sm["mdd"] * 100, bm["mdd"] * 100
+                body += cell(f"{sv:.1f}%", sv > bv) + cell(f"{bv:.1f}%")
+            elif key == "sharpe":
+                sv, bv = sm["sharpe"], bm["sharpe"]
+                body += cell(f"{sv:.2f}", sv > bv) + cell(f"{bv:.2f}")
+            elif key == "wr":
+                body += cell(f"{wr:.0f}%") + cell("—")
+            else:
+                body += cell(f"{ntr}") + cell("—")
+        body += "</tr>"
+    return (f"<div style='overflow-x:auto;margin:8px 0;'>"
+            f"<table style='width:100%;border-collapse:collapse;font-size:13px;"
+            f"border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'>"
+            f"<thead>{hdr}{subr}</thead><tbody>{body}</tbody></table></div>"
+            f"<p style='font-size:11px;color:#64748b;margin:2px 0 10px;'>"
+            f"🟢 green = Strategy beats Buy&amp;Hold on that metric · 🔴 red = worse · "
+            f"Max Drawdown closer to 0 is better. All windows are out-of-sample.</p>")
+
+
+def render_backtest_dashboard(label, col):
+    st.markdown(f"## 📊 {label} — {cfg.key} Signal-Driven Backtesting")
+    render_strategy_card()
+    st.caption(f"All trades are out-of-sample: the {cfg.key} daily H/L signal model is fit once "
+               f"on the pre-{cfg.oos_start[:4]} window and predicts every later bar, so all periods "
+               "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
+    st.markdown(_metrics_table_html(label, col), unsafe_allow_html=True)
+    period_tabs = st.tabs([lbl for lbl, _, _ in cfg.periods])
+    for (lbl, s, e), tb in zip(cfg.periods, period_tabs):
+        with tb:
+            r = bt.run_strategy(cfg, preds, sig, col, oos_start=s, end=e)
+            if len(r["strat"]) < 2:
+                st.info("Not enough bars in this window.")
+                continue
+            sm = bt._metrics(r["strat"], r["dates"]); bm = bt._metrics(r["bh"], r["dates"])
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Strategy return", f"{sm['total_ret']*100:+.1f}%", f"CAGR {sm['cagr']*100:+.1f}%")
+            k2.metric("Buy & Hold", f"{bm['total_ret']*100:+.1f}%", f"CAGR {bm['cagr']*100:+.1f}%")
+            k3.metric("Max drawdown", f"{sm['mdd']*100:.1f}%", f"vs B&H {bm['mdd']*100:.1f}%",
+                      delta_color="inverse")
+            k4.metric("Sharpe", f"{sm['sharpe']:.2f}", f"vs B&H {bm['sharpe']:.2f}")
+            st.plotly_chart(_equity_fig(r, label, col, f"{cfg.strategy_name} ({label}) vs Buy & Hold — {lbl}"),
+                            use_container_width=True, key=f"{label}_{s}_{e}_eq")
+            dts = pd.to_datetime(r["dates"]); figd = go.Figure()
+            figd.add_trace(go.Scatter(x=dts, y=bt.drawdown_series(r["strat"]) * 100,
+                                      name="Strategy DD", fill="tozeroy", line=dict(color=ACC)))
+            figd.add_trace(go.Scatter(x=dts, y=bt.drawdown_series(r["bh"]) * 100,
+                                      name="Buy & Hold DD", line=dict(color="#94a3b8", dash="dot")))
+            figd.update_layout(height=190, margin=dict(l=0, r=70, t=6, b=0),
+                               yaxis_title="Drawdown %", yaxis_ticksuffix="%",
+                               legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                               xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID, **_PLOT_BG)
+            st.plotly_chart(figd, use_container_width=True, key=f"{label}_{s}_{e}_dd")
+            st.markdown("#### 📋 Trade log")
+            _trade_log_table(r, label, col)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tabs
+# ════════════════════════════════════════════════════════════════════════
+_bt_tab_labels = [f"📊 {lbl} Backtesting" for lbl, _ in TRADED]
+_tabs = st.tabs(["🔴 Live (rolling now+1h)", "🕒 Historical replay", *_bt_tab_labels, "🧠 Explain"])
+tab_live, tab_hist = _tabs[0], _tabs[1]
+tab_bt = _tabs[2:2 + len(TRADED)]
+tab_explain = _tabs[-1]
+
+
+def render_live_dashboard(as_of_date=None, is_live=True):
+    if is_live:
+        d_df = daily
+        hourly = get_hourly(cfg.key)
+        ph = predict_next_hour(hourly)
+    else:
+        d_df = daily[daily.index <= pd.Timestamp(as_of_date)]
+        ph = None
+    hl = predict_next_daily_hl(d_df)
+    dt = predict_day_type(d_df)
+    sent = tc.macro_sentiment(cfg, d_df).dropna()
+    sent_now = float(sent.iloc[-1]) if len(sent) else np.nan
+    sigs = signatures_asof(d_df.index[-1] if not is_live else completed_all["target_date"].iloc[-1])
+    mst = ma_state(d_df)
+
+    last_px = float(d_df["px_close"].iloc[-1]); prev_px = float(d_df["px_close"].iloc[-2])
+
+    def _px_chg(col):
+        if col not in d_df or d_df[col].dropna().shape[0] < 2:
+            return None, None
+        s = d_df[col].dropna()
+        return float(s.iloc[-1]), (float(s.iloc[-1]) / float(s.iloc[-2]) - 1) * 100
+
+    # ── Row 1: primary + siblings + sentiment + regime ──
+    cols = st.columns(5)
+    cols[0].metric(f"{cfg.key} close", f"${last_px:,.2f}", f"{(last_px/prev_px-1)*100:+.2f}% d/d")
+    ci = 1
+    for lbl, col in TRADED:
+        if col == "px_close":
+            continue
+        spx, schg = _px_chg(col)
+        cols[ci].metric(f"{lbl} (traded)", f"${spx:,.2f}" if spx else "—",
+                        f"{schg:+.2f}% d/d" if schg is not None else None)
+        ci += 1
+    if ci < 3:
+        _ma = mst["ma"]
+        cols[ci].metric(f"{cfg.key} {cfg.ma_window}-day SMA", f"${_ma:,.2f}",
+                        f"${last_px-_ma:+,.2f} vs close",
+                        delta_color="normal" if last_px >= _ma else "inverse")
+        ci += 1
+    if not np.isnan(sent_now):
+        mood = "Bullish" if sent_now >= 60 else "Bearish" if sent_now <= 40 else "Neutral"
+        cols[ci].metric(cfg.sentiment_label, f"{sent_now:.0f}/100", mood); ci += 1
+    if ci <= 4:
+        _bull = sigs.get("bull_regime") if sigs else None
+        cols[4].metric("Market regime", ("🐂 BULL" if _bull else "🐻 BEAR/NEUTRAL") if _bull is not None else "—",
+                       delta=("↑MA20 & rising" if _bull else "below MA20 or flat") if _bull is not None else None,
+                       delta_color="normal" if _bull else "inverse")
+
+    # ── Row 2: next-hour forecast + CI + MA + predicted daily H/L ──
+    d1c, d2c, d3c, d4c, d5c = st.columns(5)
+    if ph:
+        d1c.metric(f"{cfg.key} next-hour (pred)", f"${ph['pred_close']:,.2f}", f"{ph['ret']*100:+.2f}%")
+        d2c.metric("95% CI band", f"${ph['lo']:,.2f}–${ph['hi']:,.2f}", f"±{1.96*ph['sigma']*100:.2f}%")
+    else:
+        d1c.metric(f"{cfg.key} next-hour (pred)", "— (replay)"); d2c.metric("95% CI band", "—")
+    _ma20 = sigs.get("ma20_value") if sigs else None
+    d3c.metric(f"{cfg.key} 20-day MA", f"${_ma20:,.2f}" if _ma20 else "—",
+               (f"${last_px-_ma20:+,.2f} vs close" if _ma20 else None),
+               delta_color="normal" if (_ma20 and last_px >= _ma20) else "inverse")
+    if hl:
+        d4c.metric(f"{cfg.key} daily High (pred)", f"${hl['pred_high']:,.2f}",
+                   f"{(hl['pred_high']/hl['last_close']-1)*100:+.2f}% vs close")
+        d5c.metric(f"{cfg.key} daily Low (pred)", f"${hl['pred_low']:,.2f}",
+                   f"{(hl['pred_low']/hl['last_close']-1)*100:+.2f}% vs close")
+        if dt:
+            d4c.caption(f"Day-type: **{dt['top']}** ({max(dt['probs'].values())*100:.0f}%)")
+    else:
+        d4c.metric(f"{cfg.key} daily High (pred)", "—"); d5c.metric(f"{cfg.key} daily Low (pred)", "—")
+
+    st.markdown(f"### 🔔 Trend-Signature Alert  ·  _signals derived from the {cfg.key} daily H/L model_")
+    render_signatures(sigs)
+
+    st.markdown(f"### 🎯 Strategy — {cfg.strategy_name}")
+    render_strategy_card()
+    st.markdown("#### Strategy conditions (live)")
+    render_conditions_box(sigs, mst)
+    st.markdown("#### Current positions")
+    pcols = st.columns(max(2, len(TRADED)))
+    end = None if is_live else as_of_date
+    for (lbl, col), pc in zip(TRADED, pcols):
+        position_panel(lbl, col, pc, end=end)
+
+    st.markdown("---")
+    render_prediction_plots(d_df, key_prefix=("live" if is_live else "hist"),
+                            is_live=is_live, as_of_date=as_of_date)
+
+
+with tab_live:
+    render_live_dashboard(is_live=True)
+
+
+with tab_hist:
+    st.markdown(f"### 🕒 Historical replay — {' & '.join(l for l, _ in TRADED)}")
+    st.caption("Replay the trend-signals, forecasts and positions exactly as they stood "
+               "at the close of any past trading day.")
+    dates_avail = pd.to_datetime(completed_all["target_date"])
+    dates_avail = dates_avail[dates_avail >= pd.Timestamp(cfg.oos_start)]
+    if len(dates_avail) == 0:
+        st.info("No out-of-sample bars available yet.")
+    else:
+        min_d, max_d = dates_avail.min().date(), dates_avail.max().date()
+        skey = f"{cfg.key}_hist_date"
+        if skey not in st.session_state:
+            st.session_state[skey] = max_d
+        cprev, cpick, cnext = st.columns([1, 3, 1])
+        with cprev:
+            if st.button("◀ prev day", use_container_width=True, key=f"{cfg.key}_prev"):
+                prior = dates_avail[dates_avail < pd.Timestamp(st.session_state[skey])]
+                if len(prior):
+                    st.session_state[skey] = prior.max().date()
+        with cnext:
+            if st.button("next day ▶", use_container_width=True, key=f"{cfg.key}_next"):
+                later = dates_avail[dates_avail > pd.Timestamp(st.session_state[skey])]
+                if len(later):
+                    st.session_state[skey] = later.min().date()
+        with cpick:
+            st.date_input("Replay date", min_value=min_d, max_value=max_d, key=skey)
+        picked = pd.Timestamp(st.session_state[skey])
+        avail_le = dates_avail[dates_avail <= picked]
+        if len(avail_le) == 0:
+            st.warning("No completed bar on or before that date.")
+        else:
+            snapped = avail_le.max()
+            if snapped.date() != picked.date():
+                st.caption(f"⚠️ Snapped to last completed bar: **{snapped.date()}**")
+            render_live_dashboard(as_of_date=snapped, is_live=False)
+
+
+for (lbl, col), tb in zip(TRADED, tab_bt):
+    with tb:
+        render_backtest_dashboard(lbl, col)
+
+
+with tab_explain:
+    st.subheader(f"How the {cfg.key} app works")
+    drivers = ", ".join(cfg.macro_syms.keys())
+    st.markdown(f"""
+**Asset.** {cfg.key} = {cfg.name}. {cfg.blurb}
+
+**Asset-specific features** (replacing BTC's crypto inputs): the macro drivers
+`{drivers}` plus a purpose-built **{cfg.sentiment_label} 0–100** composite (each
+driver signed so *up = bullish for {cfg.key}*, then rank-scaled like a Fear & Greed
+index), on top of the usual technical toolkit (returns, vol, ATR, RSI, MACD,
+Bollinger width, distance from moving averages / extremes) and seasonality.
+
+**Five models** (`src/tickers/train_ticker.py {cfg.key}`): hourly next-close
+(ridge + 95% CI), daily High/Low (calibrated ridge bands), 7-day & 14-day close
+cones, and a 3-class day-type classifier.
+
+**Strategy — {cfg.strategy_name}.** {'The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%) / D3 exhaustion or a fixed −' + f'{cfg.fixed_stop*100:.0f}' + '% stop.' if IS_DIV else 'A long-above-the-' + f'{cfg.ma_window}' + '-day-SMA trend filter: hold ' + PRIMARY_LABEL + ' only while the ' + cfg.key + ' close is above its ' + f'{cfg.ma_window}' + '-day simple moving average, otherwise move to cash (with a −' + f'{cfg.fixed_stop*100:.0f}' + '% fixed stop).'} The strategy and its thresholds were chosen by a frontier sweep (`backtest_ticker.py {cfg.key} --sweep`) to maximise return subject to a drawdown no worse than buy-&-hold across every backtest period.
+
+{cfg.results_note}
+
+**Honest framing.** Intraday direction is ~coin-flip (like BTC and gold); the
+hourly model's value is a tight, well-calibrated CI, not a directional bet. The
+edge is in the trend regime and risk control — quantified in the Backtesting tabs.
+""")
+    if cfg.eval_note:
+        st.markdown("#### 🛢️ XLE vs OIH — which signal drives OIH?")
+        st.markdown(cfg.eval_note)
+    st.markdown(f"#### Model freshness (`train_end`) — {cfg.key}")
+    for label, art in (("hourly close", M_HOURLY), ("daily H/L", M_HL),
+                       ("7-day cone", M_7D), ("14-day cone", M_14D),
+                       ("3-class day type", M_DT)):
+        st.caption(f"&bull; {label}: `{_fresh(art)}`", unsafe_allow_html=True)
+    st.caption(f"Retrain with `python src/tickers/train_ticker.py {cfg.key}`, then Refresh now.")
