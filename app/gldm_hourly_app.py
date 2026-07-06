@@ -48,8 +48,23 @@ import joblib
 import streamlit as st
 import plotly.graph_objects as go
 
-import gldm_core as gc
-import backtest_gldm as btg
+import importlib
+import gldm_core
+import backtest_gldm
+
+# Streamlit re-executes the main script from disk on every run, but `import`
+# returns whatever is cached in sys.modules — so after a code update that adds
+# new symbols, a long-lived server process (e.g. Streamlit Cloud that didn't
+# fully restart) can hand back a STALE gldm_core / backtest_gldm and raise
+# AttributeError (e.g. missing STRATEGY_NAME).  Self-heal by reloading from disk
+# whenever an expected new symbol is absent.  Reload gldm_core first so
+# backtest_gldm's `import gldm_core as gc` binds to the refreshed module.
+if not hasattr(gldm_core, "STRATEGY_NAME"):
+    gldm_core = importlib.reload(gldm_core)
+if not hasattr(backtest_gldm, "drawdown_series"):
+    backtest_gldm = importlib.reload(backtest_gldm)
+gc = gldm_core
+btg = backtest_gldm
 
 st.set_page_config(page_title="GLDM Gold Forecaster", page_icon="🥇",
                    layout="wide", initial_sidebar_state="expanded")
