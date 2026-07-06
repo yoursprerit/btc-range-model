@@ -326,20 +326,49 @@ def net_signal_div(sigs):
                 reason="Flat — awaiting a Pure-Regime entry")
 
 
-def net_signal_ma(mst):
-    """One resolved state for the MA-trend-filter mode."""
+def net_signal_ma(mst, pos=None):
+    """One resolved state for the MA-trend-filter mode.
+
+    Reconciles the *instantaneous* MA read (today's close vs the SMA) with the
+    strategy's *actual* executed position, so the NET DECISION can never silently
+    contradict the position card.  The filter decides at each close and acts on
+    the NEXT bar (no look-ahead), so a one-bar whipsaw — prior close dips below
+    the SMA (→ exit today) while today's close pops back above it — is surfaced
+    explicitly instead of showing a bare 'LONG' that disagrees with a just-closed
+    position.
+    """
     if not mst:
         return dict(state="NEUTRAL", label="NO DATA", ico="⬜",
                     bg="#f8fafc", brd="#94a3b8", reason="insufficient bars")
-    if mst["above"]:
-        return dict(state="ENTRY", label="LONG — IN TREND", ico="🟢",
+    above = mst["above"]; c = mst["close"]; ma = mst["ma"]; w = mst["window"]
+    in_pos = bool(pos and pos.get("in_pos_now"))
+    just_exit = None
+    if pos and not in_pos and pos.get("trade_log"):
+        lt = pos["trade_log"][-1]
+        exit_d = pd.Timestamp(lt["exit_date"])
+        last_bar = pd.Timestamp(preds["target_date"].iloc[-1])
+        if exit_d >= last_bar - pd.Timedelta(days=6):     # exited on/near the latest bar
+            just_exit = lt
+
+    if in_pos:
+        return dict(state="ENTRY", label="LONG — HOLDING", ico="🟢",
                     bg="#f0fdf4", brd="#16a34a",
-                    reason=f"Close ${mst['close']:,.2f} is above the {mst['window']}-day SMA "
-                           f"${mst['ma']:,.2f} — hold the long.")
+                    reason=f"Strategy is long; close ${c:,.2f} is above the {w}-day SMA "
+                           f"${ma:,.2f} — hold.")
+    if above:
+        # Flat but price is back above the SMA → the filter re-enters next bar.
+        base = (f"Strategy is FLAT. Today's close ${c:,.2f} is back above the {w}-day SMA "
+                f"${ma:,.2f}, so the trend filter will RE-ENTER (go long) on the next bar.")
+        if just_exit:
+            base += (f" It exited on {pd.Timestamp(just_exit['exit_date']).strftime('%b %d')} "
+                     f"({just_exit['reason']}) because the *prior* close had slipped below the "
+                     f"SMA — a one-bar whipsaw; the close has since recovered.")
+        return dict(state="WATCH_UP", label="FLAT — RE-ENTRY PENDING NEXT BAR", ico="🟡",
+                    bg="#fefce8", brd="#ca8a04", reason=base)
     return dict(state="EXIT", label="FLAT — BELOW TREND", ico="🔴",
                 bg="#fef2f2", brd="#dc2626",
-                reason=f"Close ${mst['close']:,.2f} is below the {mst['window']}-day SMA "
-                       f"${mst['ma']:,.2f} — stand aside in cash.")
+                reason=f"Strategy is FLAT; close ${c:,.2f} is below the {w}-day SMA "
+                       f"${ma:,.2f} — stand aside in cash.")
 
 
 def render_strategy_card():
@@ -424,7 +453,7 @@ def render_strategy_card():
 </div>""", unsafe_allow_html=True)
 
 
-def render_conditions_box(sigs, mst):
+def render_conditions_box(sigs, mst, pos=None):
     if IS_DIV:
         ns = net_signal_div(sigs)
         if not sigs:
@@ -491,11 +520,13 @@ def render_conditions_box(sigs, mst):
   <span style='color:#475569; font-size:12.5px; margin-left:8px;'>{ns['reason']}</span>
 </div>""", unsafe_allow_html=True)
     else:
-        ns = net_signal_ma(mst)
+        ns = net_signal_ma(mst, pos)
         if not mst:
             st.info("Strategy conditions unavailable.")
             return
         above = mst["above"]; slope = mst["slope_pos"]
+        strat_state = ("🟢 LONG (holding)" if (pos and pos.get("in_pos_now"))
+                       else "⚪ FLAT (in cash)")
         def rowm(active, name, detail):
             ico = "✅" if active else "○"
             col = "#15803d" if active else "#94a3b8"; weight = "700" if active else "500"
@@ -520,7 +551,11 @@ def render_conditions_box(sigs, mst):
       📥 LONG conditions {'— ✅ IN TREND' if above else '— not met'}</div>
     {entry_html}
     <div style='font-size:11px;color:#64748b;margin-top:6px;'>Hold long while the close
-      stays above the {mst['window']}-day SMA.</div>
+      stays above the {mst['window']}-day SMA. <b>Decisions are made at the daily
+      close and executed on the next bar</b> (no look-ahead), so the actual
+      position can lag this instantaneous read by one bar — e.g. a one-day dip
+      below the SMA exits even if price has since recovered.<br>
+      Current strategy position: <b>{strat_state}</b>.</div>
   </div>
   <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
        border-radius:10px; padding:10px 14px;'>
@@ -1207,16 +1242,26 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         d4c.metric(f"{cfg.key} daily High (pred)", "—"); d5c.metric(f"{cfg.key} daily Low (pred)", "—")
 
-    st.markdown(f"### 🔔 Trend-Signature Alert  ·  _signals derived from the {cfg.key} daily H/L model_")
+    end = None if is_live else as_of_date
+    primary_pos = strategy_position(TRADED[0][1], end=end)
+
+    if IS_DIV:
+        st.markdown(f"### 🔔 Trend-Signature Alert  ·  _signals derived from the {cfg.key} daily H/L model_")
+    else:
+        st.markdown("### 🔔 Trend-Signature Alert  ·  _market context only — does **not** drive this app's strategy_")
+        st.info(f"ℹ️ **{cfg.key}'s strategy is the {cfg.ma_window}-day moving-average trend filter** "
+                "(the 🎯 panel just below). This U1 / D2 / D3 divergence read is shown only for "
+                "market context and parity with the Gold/BTC apps — it does **not** open or close "
+                f"{cfg.key} positions, so a 'U1 Watch' here is expected even while the trend filter "
+                "is long. Use the **🎯 Strategy conditions** panel for the live signal.")
     render_signatures(sigs)
 
     st.markdown(f"### 🎯 Strategy — {cfg.strategy_name}")
     render_strategy_card()
     st.markdown("#### Strategy conditions (live)")
-    render_conditions_box(sigs, mst)
+    render_conditions_box(sigs, mst, pos=primary_pos)
     st.markdown("#### Current positions")
     pcols = st.columns(max(2, len(TRADED)))
-    end = None if is_live else as_of_date
     for (lbl, col), pc in zip(TRADED, pcols):
         position_panel(lbl, col, pc, end=end)
 
