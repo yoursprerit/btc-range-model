@@ -755,9 +755,64 @@ def _cone_forecast_fig(as_of_iso, horizon, lookback, title, band_rgba, line_col)
     return fig
 
 
-def render_prediction_plots(d_df, key_prefix):
-    """Daily H/L + 7-day cone + 14-day cone forecast charts (Live & Replay)."""
+def _hourly_forecast_fig(as_of_date, is_live, lookback=48):
+    """Rolling next-hour GLDM close forecast — last N hourly closes (black),
+    the model's forecast point (★) and a 95% CI band fanning out to the next
+    hour, with a 'now' marker.  Same intent/style as the BTC hourly chart."""
+    hourly = get_hourly()
+    if hourly is None or hourly.empty or M_HOURLY is None:
+        return None
+    if not is_live and as_of_date is not None:
+        cutoff = pd.Timestamp(as_of_date) + pd.Timedelta(hours=23, minutes=59)
+        hourly = hourly[hourly.index <= cutoff]
+        if len(hourly) < 30:
+            return None
+    ph = predict_next_hour(hourly)
+    if ph is None:
+        return None
+    recent = hourly["gldm_close"].tail(lookback)
+    last_ts = recent.index[-1]; next_ts = last_ts + pd.Timedelta(hours=1)
+    last_close = float(recent.iloc[-1])
+    fig = go.Figure()
+    # 95% CI band fanning from the last actual close out to the next-hour bounds
+    fig.add_trace(go.Scatter(x=[last_ts, next_ts], y=[last_close, ph["hi"]],
+                             line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=[last_ts, next_ts], y=[last_close, ph["lo"]], fill="tonexty",
+                             fillcolor="rgba(65,105,225,0.18)", line=dict(width=0),
+                             name=f"95% CI ±{1.96*ph['sigma']*100:.2f}%", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=recent.index, y=recent.values, mode="lines",
+                             line=dict(color="black", width=2), name="Actual close (hourly)",
+                             hovertemplate="%{x|%b %d %H:%M} UTC<br>$%{y:,.2f}<extra></extra>"))
+    # dashed connector from last actual to the forecast point
+    fig.add_trace(go.Scatter(x=[last_ts, next_ts], y=[last_close, ph["pred_close"]],
+                             mode="lines", line=dict(color="#b8860b", width=1.5, dash="dot"),
+                             showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=[next_ts], y=[ph["pred_close"]], mode="markers",
+                             marker=dict(symbol="star", size=16, color="#b8860b",
+                                         line=dict(width=1, color="white")),
+                             name="Next-hour forecast ⭐",
+                             hovertemplate=(f"Forecast {next_ts:%b %d %H:%M} UTC<br>"
+                                            f"$%{{y:,.2f}} ({ph['ret']*100:+.2f}%)<extra></extra>")))
+    fig.add_vline(x=last_ts, line=dict(color="crimson", width=1.5, dash="dash"))
+    title = ("🕐 GLDM — rolling next-hour close forecast"
+             if is_live else f"🕐 GLDM hourly forecast as of {pd.Timestamp(as_of_date).date()}")
+    fig.update_layout(template="plotly_white", height=340,
+                      title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
+                      yaxis_title="GLDM / USD", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
+                      margin=dict(l=0, r=10, t=44, b=0),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                      xaxis=dict(title="Time (UTC)", **_GRID), yaxis=_GRID, **_PLOT_BG)
+    return fig
+
+
+def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None):
+    """Hourly + Daily H/L + 7-day + 14-day forecast charts (Live & Replay)."""
     st.markdown("### 🔮 Model forecast charts (GLDM)")
+    fhr = _hourly_forecast_fig(as_of_date, is_live)
+    if fhr:
+        st.plotly_chart(fhr, use_container_width=True, key=f"{key_prefix}_hr")
+    else:
+        st.caption("_Hourly forecast unavailable for this date (hourly history starts ~Aug 2023)._")
     fhl = _hl_forecast_fig(d_df)
     if fhl:
         st.plotly_chart(fhl, use_container_width=True, key=f"{key_prefix}_hl")
@@ -1112,9 +1167,10 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     position_panel("GDX", p1, end=end)
     position_panel("UGL", p2, end=end)
 
-    # ── model forecast charts (Daily H/L + 7d & 14d close cones) ──
+    # ── model forecast charts (hourly + Daily H/L + 7d & 14d close cones) ──
     st.markdown("---")
-    render_prediction_plots(d_df, key_prefix=("live" if is_live else "hist"))
+    render_prediction_plots(d_df, key_prefix=("live" if is_live else "hist"),
+                            is_live=is_live, as_of_date=as_of_date)
 
 
 with tab_live:

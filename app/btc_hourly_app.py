@@ -4200,12 +4200,13 @@ def run_mstr_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # SATA variant decode — "bull_regime_sata" reuses the identical Confirmed
-    # Uptrend (bull_regime) entry signals; the ONLY difference is that idle cash
-    # between positions is parked in SATA preferred (see backtest loop below).
-    # Signal generation is therefore completely unchanged from "bull_regime".
-    sata_cash = (entry_gate == "bull_regime_sata")
-    _sig_gate = "bull_regime" if sata_cash else entry_gate
+    # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
+    # signals of its base gate; the ONLY difference is that idle cash between
+    # positions is parked in SATA preferred (see backtest loop below). Signal
+    # generation is therefore completely unchanged from the base gate.
+    # "pure_regime_sata" → base gate "pure_regime" (the current SATA variant).
+    sata_cash = entry_gate.endswith("_sata")
+    _sig_gate = entry_gate[:-len("_sata")] if sata_cash else entry_gate
 
     # Entry gate selection
     if _sig_gate == "above_ma30":
@@ -4522,12 +4523,13 @@ def run_btc_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # SATA variant decode — "bull_regime_sata" reuses the identical Confirmed
-    # Uptrend (bull_regime) entry signals; the ONLY difference is that idle cash
-    # between positions is parked in SATA preferred (see backtest loop below).
-    # Signal generation is therefore completely unchanged from "bull_regime".
-    sata_cash = (entry_gate == "bull_regime_sata")
-    _sig_gate = "bull_regime" if sata_cash else entry_gate
+    # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
+    # signals of its base gate; the ONLY difference is that idle cash between
+    # positions is parked in SATA preferred (see backtest loop below). Signal
+    # generation is therefore completely unchanged from the base gate.
+    # "pure_regime_sata" → base gate "pure_regime" (the current SATA variant).
+    sata_cash = entry_gate.endswith("_sata")
+    _sig_gate = entry_gate[:-len("_sata")] if sata_cash else entry_gate
 
     # Entry gate selection
     if _sig_gate == "above_ma30":
@@ -4839,12 +4841,13 @@ def run_mstu_backtest(end_date_iso: str,
     for i in range(N):
         v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
 
-    # SATA variant decode — "bull_regime_sata" reuses the identical Confirmed
-    # Uptrend (bull_regime) entry signals; the ONLY difference is that idle cash
-    # between positions is parked in SATA preferred (see backtest loop below).
-    # Signal generation is therefore completely unchanged from "bull_regime".
-    sata_cash = (entry_gate == "bull_regime_sata")
-    _sig_gate = "bull_regime" if sata_cash else entry_gate
+    # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
+    # signals of its base gate; the ONLY difference is that idle cash between
+    # positions is parked in SATA preferred (see backtest loop below). Signal
+    # generation is therefore completely unchanged from the base gate.
+    # "pure_regime_sata" → base gate "pure_regime" (the current SATA variant).
+    sata_cash = entry_gate.endswith("_sata")
+    _sig_gate = entry_gate[:-len("_sata")] if sata_cash else entry_gate
 
     # Entry gate selection
     if _sig_gate == "above_ma30":
@@ -15859,23 +15862,23 @@ with tab_btc:
     st.caption(f"📦 Price dataset {_ds_ver_btc} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     _btc_variant = st.radio(
         "Entry gate variant",
-        options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
+        options=["pure_regime", "bull_regime", "pure_regime_sata", "above_ma30"],
         index=0,   # ⭐ BTC default = Pure Regime (2026-07c gate / 07d threshold)
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ STRATEGY"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
-            "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
-            if x == "bull_regime_sata" else
+            "🪙 Pure Regime + SATA Daily Dividend (idle cash)"
+            if x == "pure_regime_sata" else
             "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="btc_variant_radio",
     )
-    if _btc_variant == "bull_regime_sata":
+    if _btc_variant == "pure_regime_sata":
         st.caption(
-            "🪙 **SATA idle-cash variant** — *identical* Confirmed Uptrend (Bull Regime XOR) "
+            "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
             "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
@@ -15923,23 +15926,23 @@ with tab_mstr:
     st.caption(f"📦 Price dataset {_ds_ver_mstr} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     _mstr_variant = st.radio(
         "Entry gate variant",
-        options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
+        options=["pure_regime", "bull_regime", "pure_regime_sata", "above_ma30"],
         index=0,   # ⭐ MSTR default = Pure Regime (re-tuned 2026-07; matches B&H in bull)
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ MSTR STRATEGY"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
-            "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
-            if x == "bull_regime_sata" else
+            "🪙 Pure Regime + SATA Daily Dividend (idle cash)"
+            if x == "pure_regime_sata" else
             "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="mstr_variant_radio",
     )
-    if _mstr_variant == "bull_regime_sata":
+    if _mstr_variant == "pure_regime_sata":
         st.caption(
-            "🪙 **SATA idle-cash variant** — *identical* Confirmed Uptrend (Bull Regime XOR) "
+            "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
             "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
@@ -15988,23 +15991,23 @@ with tab_mstu:
     st.caption(f"📦 Price dataset {_ds_ver_mstu} · pulled via `scripts/pull_backtest_data.py` · OLS β≈1.96 · all QC checks passed")
     _mstu_variant = st.radio(
         "Entry gate variant",
-        options=["pure_regime", "bull_regime", "bull_regime_sata", "above_ma30"],
+        options=["pure_regime", "bull_regime", "pure_regime_sata", "above_ma30"],
         index=0,   # ⭐ MSTU default = Pure Regime (2026-07d: Full +504%, U1>+1.3%, stop −3%)
         format_func=lambda x: (
             "🎯 Pure Regime — Bull Regime or Clean Breakout  ⭐ MSTU STRATEGY"
             if x == "pure_regime" else
             "🔒 Confirmed Uptrend — Bull Regime (XOR)"
             if x == "bull_regime" else
-            "🪙 Confirmed Uptrend + SATA Daily Dividend (idle cash)"
-            if x == "bull_regime_sata" else
+            "🪙 Pure Regime + SATA Daily Dividend (idle cash)"
+            if x == "pure_regime_sata" else
             "📊 Standard — Above MA30"
         ),
         horizontal=True,
         key="mstu_variant_radio",
     )
-    if _mstu_variant == "bull_regime_sata":
+    if _mstu_variant == "pure_regime_sata":
         st.caption(
-            "🪙 **SATA idle-cash variant** — *identical* Confirmed Uptrend (Bull Regime XOR) "
+            "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
             "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
