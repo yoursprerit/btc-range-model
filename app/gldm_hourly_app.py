@@ -813,43 +813,52 @@ def _hourly_forecast_fig(as_of_date, is_live):
     fc_hi = last_close * np.exp(yhat[-1] + 1.96 * sigma)
     fc_lo = last_close * np.exp(yhat[-1] - 1.96 * sigma)
 
+    # ── convert every x-value to US Central Time (DST-aware) for display ──
+    # Data timestamps are tz-naive UTC; localize → convert → drop tz. Same as BTC.
+    def _ct(ts):
+        idx = pd.DatetimeIndex(pd.to_datetime(np.atleast_1d(ts)))
+        return idx.tz_localize("UTC").tz_convert("America/Chicago").tz_localize(None)
+    tgt_ct = _ct(tgt_ts)
+    act_win = close.loc[look]
+    act_ct = _ct(act_win.index)
+    last_ct = _ct(last_ts)[0]; next_ct = _ct(next_ts)[0]
+
     fig = go.Figure()
     # ±95% CI band around the past predictions (blue tint) — matches BTC band
-    fig.add_trace(go.Scatter(x=tgt_ts, y=np.array(pred_c) * np.exp(1.96 * sigma),
+    fig.add_trace(go.Scatter(x=tgt_ct, y=np.array(pred_c) * np.exp(1.96 * sigma),
                              line=dict(color="rgba(65,105,225,0)"), hoverinfo="skip", showlegend=False))
-    fig.add_trace(go.Scatter(x=tgt_ts, y=np.array(pred_c) * np.exp(-1.96 * sigma), fill="tonexty",
+    fig.add_trace(go.Scatter(x=tgt_ct, y=np.array(pred_c) * np.exp(-1.96 * sigma), fill="tonexty",
                              fillcolor="rgba(65,105,225,0.18)", line=dict(color="rgba(65,105,225,0)"),
                              name=f"Pred ±{1.96*sigma*100:.2f}% (95% CI) band", hoverinfo="skip"))
     # Actual close line (last 23h of bars) — black
-    act_win = close.loc[look]
-    fig.add_trace(go.Scatter(x=act_win.index, y=act_win.values, mode="lines",
+    fig.add_trace(go.Scatter(x=act_ct, y=act_win.values, mode="lines",
                              line=dict(color="black", width=2), name="Actual close (hourly)",
-                             hovertemplate="%{x|%d-%b %H:%M} UTC<br>$%{y:,.2f}<extra></extra>"))
+                             hovertemplate="%{x|%d-%b %H:%M} CT<br>$%{y:,.2f}<extra></extra>"))
     # Past predictions — purple line, ● markers colored by direction correctness
-    fig.add_trace(go.Scatter(x=tgt_ts, y=pred_c, mode="lines+markers",
+    fig.add_trace(go.Scatter(x=tgt_ct, y=pred_c, mode="lines+markers",
                              line=dict(color="#7c3aed", width=2),
                              marker=dict(color=mcol, size=8, symbol="circle", line=dict(width=1, color="white")),
                              name="● Past hourly predictions (green = correct dir.)",
-                             hovertemplate="Past pred for %{x|%d-%b %H:%M} UTC<br>$%{y:,.2f}<extra></extra>"))
+                             hovertemplate="Past pred for %{x|%d-%b %H:%M} CT<br>$%{y:,.2f}<extra></extra>"))
     # Realized closes — teal line, ◆ markers colored by direction correctness
-    fig.add_trace(go.Scatter(x=tgt_ts, y=act_c, mode="lines+markers",
+    fig.add_trace(go.Scatter(x=tgt_ct, y=act_c, mode="lines+markers",
                              line=dict(color="#0d9488", width=2),
                              marker=dict(color=mcol, size=10, symbol="diamond", line=dict(color="white", width=1.5)),
                              name="◆ Hourly realized close",
-                             hovertemplate="Realized %{x|%d-%b %H:%M} UTC<br>$%{y:,.2f}<extra></extra>"))
+                             hovertemplate="Realized %{x|%d-%b %H:%M} CT<br>$%{y:,.2f}<extra></extra>"))
     # Forecast zone (khaki) + darkorange connector + ⭐ star with 95% CI error bars
-    fig.add_vrect(x0=last_ts, x1=next_ts, fillcolor="khaki", opacity=0.30, line_width=0, layer="below")
-    fig.add_trace(go.Scatter(x=[last_ts, next_ts], y=[last_close, fc], mode="lines",
+    fig.add_vrect(x0=last_ct, x1=next_ct, fillcolor="khaki", opacity=0.30, line_width=0, layer="below")
+    fig.add_trace(go.Scatter(x=[last_ct, next_ct], y=[last_close, fc], mode="lines",
                              line=dict(color="darkorange", width=2), showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=[next_ts], y=[fc], mode="markers",
+    fig.add_trace(go.Scatter(x=[next_ct], y=[fc], mode="markers",
                              marker=dict(symbol="star", size=16, color="darkorange", line=dict(width=1, color="white")),
                              error_y=dict(type="data", array=[fc_hi - fc], arrayminus=[fc - fc_lo],
                                           color="darkorange", thickness=1.5, width=6),
                              name="⭐ Next-hour forecast",
-                             hovertemplate=(f"Forecast {next_ts:%d-%b %H:%M} UTC<br>"
+                             hovertemplate=(f"Forecast {next_ct:%d-%b %H:%M} CT<br>"
                                             f"$%{{y:,.2f}} ({fc_ret*100:+.2f}%)<br>"
                                             f"95% CI ${fc_lo:,.2f} – ${fc_hi:,.2f}<extra></extra>")))
-    fig.add_vline(x=last_ts, line=dict(color="crimson", width=1.5, dash="dash"))
+    fig.add_vline(x=last_ct, line=dict(color="crimson", width=1.5, dash="dash"))
     title = ("🕐 GLDM — rolling next-hour close forecast (last 23 hours)"
              if is_live else f"🕐 GLDM hourly forecast as of {pd.Timestamp(as_of_date).date()}")
     fig.update_layout(template="plotly_white", height=420,
@@ -857,7 +866,7 @@ def _hourly_forecast_fig(as_of_date, is_live):
                       yaxis_title="GLDM / USD", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
                       margin=dict(l=0, r=10, t=46, b=0),
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                      xaxis=dict(title="Time (UTC)", tickformat="%d-%b %H:%M", **_GRID),
+                      xaxis=dict(title="Time (US Central)", tickformat="%d-%b %H:%M", **_GRID),
                       yaxis=_GRID, **_PLOT_BG)
     return fig
 
