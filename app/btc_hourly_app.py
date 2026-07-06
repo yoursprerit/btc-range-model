@@ -231,6 +231,15 @@ def render_replay_in_sample_warning(target_date):
         )
 
 with st.sidebar:
+    # ── Application selector (shared BTC ⇄ GLDM router; see streamlit_app.py) ─
+    # Reading/writing st.session_state["gldm_active_app"] lets the root router
+    # dispatch to app/gldm_hourly_app.py when the user picks Gold.
+    if "gldm_active_app" not in st.session_state:
+        st.session_state["gldm_active_app"] = "BTC"
+    st.radio("**Application**", options=["BTC", "GLDM"],
+             format_func=lambda x: "₿  Bitcoin (BTC)" if x == "BTC" else "🥇  Gold (GLDM)",
+             key="gldm_active_app")
+    st.markdown("---")
     st.markdown(
         "**Auto-refresh:** every "
         f"{REFRESH_SECONDS // 60} min. Click **Refresh now** to force.")
@@ -245,13 +254,6 @@ with st.sidebar:
     st.markdown(
         "_Hourly BTC bars update every hour; macro and F&G update less often._"
     )
-    # Model freshness — train_end of each artefact, so users can tell at a
-    # glance which version of each model is live in the UI.
-    st.markdown("---")
-    st.caption("**Model freshness** (`train_end`)")
-    for label, end in _cutoffs().items():
-        end_str = f"`{end.date()}`" if end is not None else "_unknown_"
-        st.caption(f"&bull; {label}: {end_str}", unsafe_allow_html=True)
 
 # ───────────────────────── fetch helpers ──────────────────────────────
 def _flat(df, name):

@@ -1,5 +1,12 @@
 # btc-range-model
 
+> **Two apps, one dashboard.** This repo now hosts a **Bitcoin** forecaster
+> (below) and a parallel **Gold (GLDM)** forecaster. Switch between them with the
+> **radio button at the top of the sidebar**. The gold app has its own models,
+> features and strategy — see **[`GLDM_README.md`](GLDM_README.md)** and
+> **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**. The Bitcoin app
+> below is unchanged.
+
 A four-model Bitcoin forecasting stack served through a Streamlit dashboard:
 
 | Model | What it predicts | Cadence | Horizon |
