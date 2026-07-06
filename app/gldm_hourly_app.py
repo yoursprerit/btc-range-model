@@ -609,77 +609,165 @@ def position_panel(asset, col_container, end=None):
             unsafe_allow_html=True)
 
 
-def _hl_forecast_fig(d_df, hist_bars=45):
-    """Candlestick of recent GLDM bars + next-day predicted High/Low band."""
+# Shared plotly layout defaults so every chart matches the BTC app's look.
+_PLOT_BG = dict(plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff", hovermode="x unified")
+_GRID = dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False)
+_HL_BAND_PCT = 0.006   # ±0.6% uncertainty tint (gold's daily range is ~⅓ of BTC's)
+
+
+def _hl_forecast_fig(d_df, n_bars=8):
+    """Daily H/L predictions-vs-actuals over the last N completed bars + the next
+    forecast — same layout/colors as the BTC Live-tab H/L chart (green predicted
+    HIGH line + tint, red predicted LOW line + tint, ✕ actual markers)."""
+    sub = preds[preds["target_date"] <= d_df.index[-1]].tail(n_bars).copy()
+    if sub.empty:
+        return None
     hl = predict_next_daily_hl(d_df)
-    recent = d_df.tail(hist_bars)
-    fig = go.Figure(go.Candlestick(
-        x=recent.index, open=recent["gldm_open"], high=recent["gldm_high"],
-        low=recent["gldm_low"], close=recent["gldm_close"], name="GLDM",
-        increasing_line_color="#16a34a", decreasing_line_color="#dc2626"))
     if hl:
-        nx = recent.index[-1] + pd.tseries.offsets.BDay(1)
-        fig.add_hline(y=hl["pred_high"], line=dict(color="#c0392b", dash="dot"),
-                      annotation_text=f"pred High ${hl['pred_high']:,.2f}",
-                      annotation_position="top left")
-        fig.add_hline(y=hl["pred_low"], line=dict(color="#2563eb", dash="dot"),
-                      annotation_text=f"pred Low ${hl['pred_low']:,.2f}",
-                      annotation_position="bottom left")
-        fig.add_trace(go.Scatter(
-            x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]], mode="markers+lines",
-            marker=dict(size=9, color="#b8860b", symbol="diamond"),
-            line=dict(color="#b8860b", width=3), name="next-day band"))
-    fig.update_layout(height=340, margin=dict(l=0, r=0, t=28, b=0),
-                      title="Daily High / Low forecast (next bar)",
-                      xaxis_rangeslider_visible=False, showlegend=False)
+        nx = d_df.index[-1] + pd.tseries.offsets.BDay(1)
+        sub = pd.concat([sub, pd.DataFrame([{
+            "target_date": nx, "pred_high": hl["pred_high"], "pred_low": hl["pred_low"],
+            "actual_high": np.nan, "actual_low": np.nan}])], ignore_index=True)
+    x = pd.to_datetime(sub["target_date"])
+    fig = go.Figure()
+    # HIGH ±band (green tint)
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_high"] * (1 + _HL_BAND_PCT),
+                             line=dict(color="rgba(34,139,34,0)"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_high"] * (1 - _HL_BAND_PCT), fill="tonexty",
+                             fillcolor="rgba(34,139,34,0.13)", line=dict(color="rgba(34,139,34,0)"),
+                             name=f"HIGH ±{_HL_BAND_PCT*100:.1f}% band", hoverinfo="skip"))
+    # LOW ±band (red tint)
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_low"] * (1 + _HL_BAND_PCT),
+                             line=dict(color="rgba(220,20,60,0)"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_low"] * (1 - _HL_BAND_PCT), fill="tonexty",
+                             fillcolor="rgba(220,20,60,0.13)", line=dict(color="rgba(220,20,60,0)"),
+                             name=f"LOW ±{_HL_BAND_PCT*100:.1f}% band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_high"], mode="lines+markers",
+                             line=dict(color="green", width=2.2, dash="dot"),
+                             marker=dict(size=8), name="Predicted HIGH"))
+    fig.add_trace(go.Scatter(x=x, y=sub["pred_low"], mode="lines+markers",
+                             line=dict(color="red", width=2.2, dash="dot"),
+                             marker=dict(size=8), name="Predicted LOW"))
+    have = sub["actual_high"].notna()
+    if have.any():
+        fig.add_trace(go.Scatter(x=x[have], y=sub.loc[have, "actual_high"], mode="markers",
+                                 marker=dict(symbol="x-thin", size=12, line=dict(width=3, color="darkgreen")),
+                                 name="Actual HIGH"))
+        fig.add_trace(go.Scatter(x=x[have], y=sub.loc[have, "actual_low"], mode="markers",
+                                 marker=dict(symbol="x-thin", size=12, line=dict(width=3, color="darkred")),
+                                 name="Actual LOW"))
+    if hl:  # highlight the forward forecast point
+        fig.add_trace(go.Scatter(x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]],
+                                 mode="markers", marker=dict(symbol="diamond", size=12, color="#b8860b"),
+                                 name="Next-bar forecast"))
+    fig.update_layout(height=340, margin=dict(l=0, r=10, t=44, b=0),
+                      title=dict(text="📈 Daily H/L — predictions vs actuals (last bars + next forecast)",
+                                 font=dict(size=13), x=0, xanchor="left"),
+                      yaxis_title="Price ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                      xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
     return fig
 
 
-def _cone_forecast_fig(art, d_df, hist_bars, title):
-    """Recent closes + forward close cone (central path + P5–P95 / P25–P75 fills)."""
-    cone = predict_cone(art, d_df)
-    if not cone:
-        return None
-    hist = d_df["gldm_close"].tail(hist_bars)
-    horizon = cone["horizon"]
-    future = pd.date_range(hist.index[-1], periods=horizon + 1, freq="B")[1:]
-    xall = [hist.index[-1]] + list(future)
-    y0 = cone["last_close"]
+@st.cache_data(ttl=600, show_spinner=False)
+def rolling_cone_series(as_of_iso, horizon, lookback):
+    """Rolling H-day close prediction vs realized, for the cone charts.
 
-    def path(key):
-        return [y0] + list(np.linspace(y0, cone[key], horizon + 1)[1:])
+    For each recent anchor bar (up to ``as_of_iso`` — so Historical Replay never
+    leaks future data): predict the close ``horizon`` trading days out (central +
+    P5/P95 band), map it to the target date, and attach the realized close if that
+    date has already occurred. Mirrors the BTC rolling-cone chart.
+    """
+    art = M_7D if horizon == 7 else M_14D
+    if art is None:
+        return pd.DataFrame()
+    d_df = daily[daily.index <= pd.Timestamp(as_of_iso)]
+    close = d_df["gldm_close"]
+    feat = gc.build_daily_features(d_df)[art["feat_cols"]].ffill()
+    n = len(close); q = art["quantiles"]
+    start = max(0, n - lookback - horizon)
+    Xa = feat.iloc[start:]
+    Xa = Xa[~Xa.isna().any(axis=1)]
+    if Xa.empty:
+        return pd.DataFrame()
+    cr = art["model"].predict(Xa)
+    rows = []
+    for adate, c in zip(Xa.index, cr):
+        pos = close.index.get_loc(adate)
+        ac = float(close.iloc[pos]); tpos = pos + horizon
+        pred = ac * np.exp(c)
+        lo = ac * np.exp(c + q[5]); hi = ac * np.exp(c + q[95])
+        if tpos < n:
+            tdate = close.index[tpos]; realized = float(close.iloc[tpos]); future = False
+        else:
+            tdate = close.index[-1] + pd.tseries.offsets.BDay(tpos - (n - 1)); realized = None; future = True
+        rows.append(dict(target_date=tdate, pred=pred, lo=lo, hi=hi,
+                         realized=realized, future=future))
+    return pd.DataFrame(rows)
+
+
+def _cone_forecast_fig(as_of_iso, horizon, lookback, title, band_rgba, line_col):
+    """Rolling H-day cone chart — realized close line, prediction band, and the
+    forward forecast segment — styled like the BTC 7d/14d cone charts."""
+    df = rolling_cone_series(as_of_iso, horizon, lookback)
+    if df.empty:
+        return None
+    df["target_date"] = pd.to_datetime(df["target_date"])
+    x = df["target_date"]
+    band_pct = (df["hi"] / df["pred"] - 1).mean() * 100
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hist.index, y=hist.values, name="GLDM",
-                             line=dict(color="#b8860b", width=2)))
-    fig.add_trace(go.Scatter(x=xall, y=path("p95"), line=dict(width=0),
-                             showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=xall, y=path("p5"), fill="tonexty",
-                             fillcolor="rgba(184,134,11,0.12)", line=dict(width=0),
-                             name="P5–P95"))
-    fig.add_trace(go.Scatter(x=xall, y=path("p75"), line=dict(width=0),
-                             showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=xall, y=path("p25"), fill="tonexty",
-                             fillcolor="rgba(184,134,11,0.28)", line=dict(width=0),
-                             name="P25–P75"))
-    fig.add_trace(go.Scatter(x=xall, y=path("central"), name="central path",
-                             line=dict(color="#c0392b", width=2, dash="dash")))
-    fig.update_layout(height=300, margin=dict(l=0, r=0, t=28, b=0), title=title,
-                      legend=dict(orientation="h", y=-0.15))
+    fig.add_trace(go.Scatter(x=x, y=df["hi"], line=dict(color="rgba(0,0,0,0)"),
+                             hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=x, y=df["lo"], fill="tonexty", fillcolor=band_rgba,
+                             line=dict(color="rgba(0,0,0,0)"),
+                             name=f"±{band_pct:.1f}% (P5–P95) band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=df["pred"], mode="lines",
+                             line=dict(color=line_col, width=1.8, dash="dot"),
+                             name=f"{horizon}d prediction"))
+    res = df[df["realized"].notna()]
+    if not res.empty:
+        within = (res["realized"] >= res["lo"]) & (res["realized"] <= res["hi"])
+        fig.add_trace(go.Scatter(x=res["target_date"], y=res["realized"], mode="lines",
+                                 line=dict(color="#1f2937", width=2.2), name="Realized close"))
+        if within.any():
+            fig.add_trace(go.Scatter(x=res.loc[within, "target_date"], y=res.loc[within, "realized"],
+                                     mode="markers", marker=dict(symbol="circle", size=6, color="#16a34a",
+                                     line=dict(color="white", width=1)), name="✅ within band"))
+        if (~within).any():
+            fig.add_trace(go.Scatter(x=res.loc[~within, "target_date"], y=res.loc[~within, "realized"],
+                                     mode="markers", marker=dict(symbol="x", size=8, color="#dc2626",
+                                     line=dict(color="#dc2626", width=2)), name="❌ outside band"))
+    fut = df[df["future"]]
+    if not fut.empty:
+        fig.add_trace(go.Scatter(x=fut["target_date"], y=fut["pred"], mode="lines+markers",
+                                 line=dict(color=line_col, width=2.4),
+                                 marker=dict(symbol="diamond", size=8, color=line_col,
+                                             line=dict(color="white", width=1)),
+                                 name=f"+{horizon}d forecast"))
+    within_pct = (((res["realized"] >= res["lo"]) & (res["realized"] <= res["hi"])).mean() * 100
+                  if not res.empty else np.nan)
+    subtitle = f"  ·  {within_pct:.0f}% of realized closes within band" if not np.isnan(within_pct) else ""
+    fig.update_layout(height=320, margin=dict(l=0, r=10, t=44, b=0),
+                      title=dict(text=title + subtitle, font=dict(size=13), x=0, xanchor="left"),
+                      yaxis_title="Close ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                      xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
     return fig
 
 
 def render_prediction_plots(d_df, key_prefix):
     """Daily H/L + 7-day cone + 14-day cone forecast charts (Live & Replay)."""
     st.markdown("### 🔮 Model forecast charts (GLDM)")
-    st.plotly_chart(_hl_forecast_fig(d_df), use_container_width=True,
-                    key=f"{key_prefix}_hl")
-    cc7, cc14 = st.columns(2)
-    f7 = _cone_forecast_fig(M_7D, d_df, 60, "7-day close cone")
-    f14 = _cone_forecast_fig(M_14D, d_df, 90, "14-day close cone")
+    fhl = _hl_forecast_fig(d_df)
+    if fhl:
+        st.plotly_chart(fhl, use_container_width=True, key=f"{key_prefix}_hl")
+    as_of_iso = str(d_df.index[-1])
+    f7 = _cone_forecast_fig(as_of_iso, 7, 90, "📅 7-day close-price cone", "rgba(147,197,253,0.28)", "#2563eb")
+    f14 = _cone_forecast_fig(as_of_iso, 14, 120, "📆 14-day close-price cone", "rgba(196,181,253,0.30)", "#7c3aed")
     if f7:
-        cc7.plotly_chart(f7, use_container_width=True, key=f"{key_prefix}_c7")
+        st.plotly_chart(f7, use_container_width=True, key=f"{key_prefix}_c7")
     if f14:
-        cc14.plotly_chart(f14, use_container_width=True, key=f"{key_prefix}_c14")
+        st.plotly_chart(f14, use_container_width=True, key=f"{key_prefix}_c14")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -699,63 +787,192 @@ _PERIODS = [
 def _equity_fig(r, asset, title):
     """Strategy-vs-B&H equity curve with entry (▲) and exit (▼ win/loss) markers,
     plus a marker for a still-open position — same idea as the BTC/MSTR plot."""
+    INIT = 100_000.0
     dts = pd.to_datetime(r["dates"])
-    date_to_eq = dict(zip([pd.Timestamp(d) for d in r["dates"]], r["strat"]))
+    nav = r["strat"] * INIT; bh = r["bh"] * INIT
+    date_to_nav = dict(zip([pd.Timestamp(d) for d in r["dates"]], nav))
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=dts, y=r["strat"], name=f"Strategy ({asset})",
-                             line=dict(color="#b8860b", width=2)))
-    fig.add_trace(go.Scatter(x=dts, y=r["bh"], name=f"Buy & Hold ({asset})",
-                             line=dict(color="#9ca3af", dash="dash")))
-    ent_x, ent_y, xw_x, xw_y, xl_x, xl_y = [], [], [], [], [], []
+
+    # ── regime shading (gold bull vs bear/neutral) — like the BTC chart ──
+    reg = pd.Series(sig["bull_regime"], index=pd.to_datetime(preds["target_date"]))
+    reg = reg.reindex(dts).ffill().fillna(False).values.astype(bool)
+    if len(reg):
+        changes = np.where(np.diff(reg.astype(int)) != 0)[0] + 1
+        starts = np.concatenate([[0], changes]); ends = np.concatenate([changes, [len(reg)]])
+        bull_leg = bear_leg = False
+        for s_i, e_i in zip(starts, ends):
+            is_bull = bool(reg[s_i])
+            show = (is_bull and not bull_leg) or (not is_bull and not bear_leg)
+            fig.add_vrect(x0=dts[s_i], x1=dts[min(e_i, len(dts) - 1)],
+                          fillcolor="rgba(34,197,94,0.10)" if is_bull else "rgba(239,68,68,0.07)",
+                          line_width=0, name="🐂 Bull Regime (GLDM)" if is_bull else "🐻 Bear/Neutral (GLDM)",
+                          showlegend=show)
+            bull_leg = bull_leg or is_bull; bear_leg = bear_leg or (not is_bull)
+
+    fig.add_trace(go.Scatter(x=dts, y=bh, name=f"Buy & Hold {asset}",
+                             line=dict(color="#94a3b8", width=1.5, dash="dot"),
+                             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold</extra>"))
+    fig.add_trace(go.Scatter(x=dts, y=nav, name=f"{gc.STRATEGY_NAME} ({asset})",
+                             line=dict(color="#b8860b", width=2.5),
+                             hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Strategy</extra>"))
+    # GLDM signal-source price on a secondary axis (like BTC price on the MSTR chart)
+    gseries = preds.set_index(pd.to_datetime(preds["target_date"]))["gldm_close"].reindex(dts)
+    fig.add_trace(go.Scatter(x=dts, y=gseries.values, name="GLDM price (signal)",
+                             line=dict(color="#2563eb", width=1.2), yaxis="y2", opacity=0.7,
+                             hovertemplate="%{x|%b %d, %Y}: $%{y:,.2f}<extra>GLDM</extra>"))
+    fig.add_hline(y=INIT, line_dash="dash", line_color="#64748b", line_width=1, opacity=0.4,
+                  annotation_text="  $100k start", annotation_position="bottom right")
+
+    # entry / exit markers (▲ green entry · ▼ green|red exit)
     for t in r["trade_log"]:
         ed = pd.Timestamp(t["entry_date"]); xd = pd.Timestamp(t["exit_date"])
-        if ed in date_to_eq:
-            ent_x.append(ed); ent_y.append(date_to_eq[ed])
-        if xd in date_to_eq:
-            (xw_x if t["ret"] > 0 else xl_x).append(xd)
-            (xw_y if t["ret"] > 0 else xl_y).append(date_to_eq[xd])
-    if ent_x:
-        fig.add_trace(go.Scatter(x=ent_x, y=ent_y, mode="markers", name="Entry",
-                                 marker=dict(symbol="triangle-up", size=11, color="#16a34a",
-                                             line=dict(width=1, color="#065f46"))))
-    if xw_x:
-        fig.add_trace(go.Scatter(x=xw_x, y=xw_y, mode="markers", name="Exit (win)",
-                                 marker=dict(symbol="triangle-down", size=11, color="#16a34a",
-                                             line=dict(width=1, color="#065f46"))))
-    if xl_x:
-        fig.add_trace(go.Scatter(x=xl_x, y=xl_y, mode="markers", name="Exit (loss)",
-                                 marker=dict(symbol="triangle-down", size=11, color="#dc2626",
-                                             line=dict(width=1, color="#7f1d1d"))))
+        win_col = "#16a34a" if t["ret"] > 0 else "#dc2626"
+        if ed in date_to_nav:
+            fig.add_trace(go.Scatter(x=[ed], y=[date_to_nav[ed]], mode="markers", showlegend=False,
+                                     marker=dict(symbol="triangle-up", size=12, color="#16a34a",
+                                                 line=dict(width=1.5, color="white")),
+                                     hovertemplate=f"<b>BUY {asset}</b> {ed:%b %d} @ ${t['entry_px']:,.2f}<extra></extra>"))
+        if xd in date_to_nav:
+            fig.add_trace(go.Scatter(x=[xd], y=[date_to_nav[xd]], mode="markers", showlegend=False,
+                                     marker=dict(symbol="triangle-down", size=12, color=win_col,
+                                                 line=dict(width=1.5, color="white")),
+                                     hovertemplate=(f"<b>SELL {asset}</b> {xd:%b %d} @ ${t['exit_px']:,.2f} "
+                                                    f"({t['ret']*100:+.1f}%) — {t['reason']}<extra></extra>")))
     if r.get("in_pos_now") and r.get("entry_date") is not None:
         ed = pd.Timestamp(r["entry_date"])
-        if ed in date_to_eq:
-            fig.add_trace(go.Scatter(x=[ed], y=[date_to_eq[ed]], mode="markers",
-                                     name="Open entry",
-                                     marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
-                                                 line=dict(width=1.5, color="#b45309"))))
-    fig.update_layout(height=360, margin=dict(l=0, r=0, t=30, b=0), title=title,
-                      yaxis_title="Growth of $1", legend=dict(orientation="h", y=-0.14))
+        if ed in date_to_nav:
+            fig.add_trace(go.Scatter(x=[ed], y=[date_to_nav[ed]], mode="markers", name="Open entry",
+                                     marker=dict(symbol="triangle-up", size=14, color="#f59e0b",
+                                                 line=dict(width=1.5, color="white"))))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13), x=0, xanchor="left"),
+        height=380, margin=dict(l=0, r=70, t=54, b=0),
+        yaxis_title="Portfolio value ($)", yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+        xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID,
+        yaxis2=dict(title="GLDM ($)", overlaying="y", side="right", showgrid=False,
+                    zeroline=False, anchor="x", tickprefix="$", tickformat=",.2f", color="#2563eb"),
+        **_PLOT_BG)
     return fig
 
 
-def _trade_log_table(r):
-    tl = pd.DataFrame(r["trade_log"])
-    if tl.empty:
-        st.caption("No completed trades in this window.")
+def _trade_log_table(r, asset):
+    """BTC-style trade log: #, entry/exit dates & prices, P&L, emoji Result,
+    days, exit signal, and running NAV After (start $100k)."""
+    INIT = 100_000.0
+    rows = []
+    nav = INIT
+    for i, t in enumerate(r["trade_log"], 1):
+        nav *= (1 + t["ret"])
+        if "stop" in t["reason"]:
+            result = "🛑 SL EXIT"
+        elif t["ret"] > 0:
+            result = "✓ WIN"
+        else:
+            result = "✗ LOSS"
+        rows.append({
+            "#": i,
+            "Entry": pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
+            f"Buy {asset} @": f"${t['entry_px']:,.2f}",
+            "Exit": pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
+            f"Sell {asset} @": f"${t['exit_px']:,.2f}",
+            "P&L": f"{t['ret']*100:+.1f}%",
+            "Result": result,
+            "Days": (pd.Timestamp(t["exit_date"]) - pd.Timestamp(t["entry_date"])).days,
+            "Exit signal": t["reason"],
+            "NAV After": f"${nav:,.0f}",
+        })
+    if r.get("in_pos_now") and r.get("entry_px"):
+        last_px = float(preds[f"{asset.lower()}_close"].iloc[-1]) if f"{asset.lower()}_close" in preds else None
+        unr = (last_px / r["entry_px"] - 1) * 100 if last_px else 0.0
+        rows.append({
+            "#": len(r["trade_log"]) + 1,
+            "Entry": pd.Timestamp(r["entry_date"]).strftime("%b %d, %Y"),
+            f"Buy {asset} @": f"${r['entry_px']:,.2f}",
+            "Exit": "⏳ OPEN", f"Sell {asset} @": "—",
+            "P&L": f"{unr:+.1f}% (unrlzd)", "Result": "🟡 OPEN",
+            "Days": (pd.Timestamp(preds['target_date'].iloc[-1]) - pd.Timestamp(r["entry_date"])).days,
+            "Exit signal": "—", "NAV After": "—",
+        })
+    if not rows:
+        st.info("No trades in this period — strategy was in cash throughout.")
         return
-    tl["entry_date"] = pd.to_datetime(tl["entry_date"]).dt.date
-    tl["exit_date"] = pd.to_datetime(tl["exit_date"]).dt.date
-    tl["ret"] = (tl["ret"] * 100).round(2)
-    tl["entry_px"] = tl["entry_px"].round(2); tl["exit_px"] = tl["exit_px"].round(2)
-    tl = tl.rename(columns={"entry_date": "Entry", "exit_date": "Exit",
-                            "entry_px": "Entry $", "exit_px": "Exit $",
-                            "ret": "Return %", "reason": "Exit reason"})
-    st.dataframe(tl[::-1], use_container_width=True, hide_index=True, height=280)
-    wins = tl[tl["Return %"] > 0]["Return %"]; losses = tl[tl["Return %"] <= 0]["Return %"]
-    st.caption(f"{len(tl)} trades · win rate {len(wins)/len(tl)*100:.0f}% · "
-               f"avg win {wins.mean() if len(wins) else 0:.2f}% · "
-               f"avg loss {losses.mean() if len(losses) else 0:.2f}% · "
-               f"best {tl['Return %'].max():.1f}% · worst {tl['Return %'].min():.1f}%")
+    st.dataframe(pd.DataFrame(rows[::-1]), use_container_width=True, hide_index=True, height=300)
+    tr = r["trades"]
+    if len(tr):
+        wins = tr[tr > 0]
+        st.caption(f"💡 {len(tr)} trades · win rate {(tr>0).mean()*100:.0f}% · "
+                   f"avg win {wins.mean()*100 if len(wins) else 0:.2f}% · "
+                   f"avg loss {tr[tr<=0].mean()*100 if (tr<=0).any() else 0:.2f}% · "
+                   f"best {tr.max()*100:+.1f}% · worst {tr.min()*100:+.1f}%. "
+                   "P&L at execution prices; entry/exit from the GLDM signal.")
+
+
+def _metrics_table_html(asset):
+    """BTC-style colored metrics table: periods × (Strategy / Buy&Hold), with the
+    Strategy cell green when it beats B&H on that metric, red when worse."""
+    col = f"{asset.lower()}_close"
+
+    def cell(txt, good=None, bold=False):
+        color = "#16a34a" if good is True else "#dc2626" if good is False else "#334155"
+        w = "700" if (bold or good is not None) else "500"
+        return f"<td style='padding:6px 10px;text-align:center;color:{color};font-weight:{w};'>{txt}</td>"
+
+    metric_rows = [("Total Return", "ret", True), ("CAGR", "cagr", True),
+                   ("Max Drawdown", "mdd", True), ("Sharpe", "sharpe", True),
+                   ("Win Rate", "wr", None), ("Trades", "n", None)]
+    per = []
+    for lbl, s, e in _PERIODS:
+        r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
+                         gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
+        sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
+        wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
+        per.append((lbl, sm, bm, wr, len(r["trades"])))
+
+    # header
+    hdr = "<tr style='background:#7a5901;color:white;'><th style='padding:9px 10px;text-align:left;'>Metric</th>"
+    for i, (lbl, *_ ) in enumerate(per):
+        bg = "#14532d" if "OOS" in lbl else "#7a5901"
+        hdr += (f"<th colspan='2' style='padding:9px 8px;text-align:center;background:{bg};"
+                f"border-left:3px solid #fff;'>{lbl}</th>")
+    hdr += "</tr>"
+    sub = "<tr style='background:#a67c00;color:white;font-size:11px;'><th></th>"
+    for lbl, *_ in per:
+        bg = "#166534" if "OOS" in lbl else "#a67c00"
+        sub += (f"<th style='padding:4px 8px;background:{bg};border-left:3px solid #fff;'>Strategy</th>"
+                f"<th style='padding:4px 8px;background:{bg};'>Buy&amp;Hold</th>")
+    sub += "</tr>"
+
+    body = ""
+    for ri, (lbl_m, key, higher_better) in enumerate(metric_rows):
+        bg = "#fffaf0" if ri % 2 == 0 else "#ffffff"
+        body += f"<tr style='background:{bg};'><td style='padding:6px 10px;font-weight:600;color:#334155;'>{lbl_m}</td>"
+        for lbl, sm, bm, wr, ntr in per:
+            if key == "ret":
+                sv, bv = sm["total_ret"] * 100, bm["total_ret"] * 100
+                good = sv > bv; body += cell(f"{sv:+.1f}%", good) + cell(f"{bv:+.1f}%")
+            elif key == "cagr":
+                sv, bv = sm["cagr"] * 100, bm["cagr"] * 100
+                good = sv > bv; body += cell(f"{sv:+.1f}%", good) + cell(f"{bv:+.1f}%")
+            elif key == "mdd":
+                sv, bv = sm["mdd"] * 100, bm["mdd"] * 100
+                good = sv > bv; body += cell(f"{sv:.1f}%", good) + cell(f"{bv:.1f}%")
+            elif key == "sharpe":
+                sv, bv = sm["sharpe"], bm["sharpe"]
+                good = sv > bv; body += cell(f"{sv:.2f}", good) + cell(f"{bv:.2f}")
+            elif key == "wr":
+                body += cell(f"{wr:.0f}%") + cell("—")
+            else:
+                body += cell(f"{ntr}") + cell("—")
+        body += "</tr>"
+
+    return (f"<div style='overflow-x:auto;margin:8px 0;'>"
+            f"<table style='width:100%;border-collapse:collapse;font-size:13px;"
+            f"border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'>"
+            f"<thead>{hdr}{sub}</thead><tbody>{body}</tbody></table></div>"
+            f"<p style='font-size:11px;color:#64748b;margin:2px 0 10px;'>"
+            f"🟢 green = Strategy beats Buy&amp;Hold on that metric · 🔴 red = worse · "
+            f"Max Drawdown closer to 0 is better. All windows are out-of-sample.</p>")
 
 
 def render_backtest_dashboard(asset):
@@ -765,26 +982,12 @@ def render_backtest_dashboard(asset):
     render_strategy_card()
     st.caption("All trades are out-of-sample: the GLDM daily H/L signal model is fit once "
                "on the pre-2021 window and predicts every later bar, so all four periods "
-               "below are genuinely blind. Costs/slippage not modelled.")
+               "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
 
-    # ── summary KPI table across all four periods ──
-    rows = []
-    for lbl, s, e in _PERIODS:
-        r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
-                         gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
-        sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
-        wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
-        rows.append({"Period": lbl,
-                     "Strategy": f"{sm['total_ret']*100:+.1f}%",
-                     "Buy & Hold": f"{bm['total_ret']*100:+.1f}%",
-                     "Strat MDD": f"{sm['mdd']*100:.1f}%",
-                     "B&H MDD": f"{bm['mdd']*100:.1f}%",
-                     "Strat Sharpe": f"{sm['sharpe']:.2f}",
-                     "B&H Sharpe": f"{bm['sharpe']:.2f}",
-                     "Trades": len(r["trades"]), "Win%": f"{wr:.0f}%"})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    # ── colored period × Strategy/B&H metrics table (BTC-style) ──
+    st.markdown(_metrics_table_html(asset), unsafe_allow_html=True)
 
-    # ── one tab per period (mirrors the BTC/MSTR period tabs) ──
+    # ── one chart+log tab per period (mirrors the BTC/MSTR period tabs) ──
     period_tabs = st.tabs([lbl for lbl, _, _ in _PERIODS])
     for (lbl, s, e), tb in zip(_PERIODS, period_tabs):
         with tb:
@@ -801,28 +1004,29 @@ def render_backtest_dashboard(asset):
                       delta_color="inverse")
             k4.metric("Sharpe", f"{sm['sharpe']:.2f}", f"vs B&H {bm['sharpe']:.2f}")
 
-            st.plotly_chart(_equity_fig(r, asset, f"{asset} strategy vs Buy & Hold — {lbl}"),
+            st.plotly_chart(_equity_fig(r, asset, f"{gc.STRATEGY_NAME} ({asset}) vs Buy & Hold — {lbl}"),
                             use_container_width=True, key=f"{asset}_{s}_{e}_eq")
             dts = pd.to_datetime(r["dates"])
             figd = go.Figure()
             figd.add_trace(go.Scatter(x=dts, y=btg.drawdown_series(r["strat"]) * 100,
                                       name="Strategy DD", fill="tozeroy", line=dict(color="#b8860b")))
             figd.add_trace(go.Scatter(x=dts, y=btg.drawdown_series(r["bh"]) * 100,
-                                      name="Buy & Hold DD", line=dict(color="#bbb", dash="dash")))
-            figd.update_layout(height=190, margin=dict(l=0, r=0, t=6, b=0),
-                               yaxis_title="Drawdown %", legend=dict(orientation="h", y=-0.2))
+                                      name="Buy & Hold DD", line=dict(color="#94a3b8", dash="dot")))
+            figd.update_layout(height=190, margin=dict(l=0, r=70, t=6, b=0),
+                               yaxis_title="Drawdown %", yaxis_ticksuffix="%",
+                               legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                               xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID, **_PLOT_BG)
             st.plotly_chart(figd, use_container_width=True, key=f"{asset}_{s}_{e}_dd")
-            st.markdown("#### Trade log")
-            _trade_log_table(r)
+            st.markdown("#### 📋 Trade log")
+            _trade_log_table(r, asset)
 
 
 # ════════════════════════════════════════════════════════════════════════
 # Tabs
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_gdx, tab_ugl, tab_cones, tab_explain = st.tabs(
+tab_live, tab_hist, tab_gdx, tab_ugl, tab_explain = st.tabs(
     ["🔴 Live (rolling now+1h)", "🕒 Historical replay",
-     "📊 GDX Backtesting", "📈 UGL Backtesting",
-     "🗓️ H/L & Cones", "🧠 Explain"])
+     "📊 GDX Backtesting", "📈 UGL Backtesting", "🧠 Explain"])
 
 
 # ═════════════════════════════ LIVE ══════════════════════════════════════
@@ -962,48 +1166,6 @@ with tab_gdx:
     render_backtest_dashboard("GDX")
 with tab_ugl:
     render_backtest_dashboard("UGL")
-
-
-# ═════════════════════════════ CONES ═════════════════════════════════════
-with tab_cones:
-    st.subheader("Daily High / Low band")
-    hl = predict_next_daily_hl(daily)
-    if hl and M_HL:
-        m = M_HL["metrics_test"]
-        st.caption(f"Out-of-sample: MAPE_high {m['mae_hi_pct']:.3f}%, "
-                   f"MAPE_low {m['mae_lo_pct']:.3f}%, ±1σ band coverage {m['band_cov_pct']:.0f}%.")
-    c7, c14 = st.columns(2)
-    for col, art, label in ((c7, M_7D, "7-day"), (c14, M_14D, "14-day")):
-        with col:
-            st.subheader(f"{label} close cone")
-            cone = predict_cone(art, daily)
-            if cone:
-                hist = daily["gldm_close"].tail(90)
-                future = pd.date_range(hist.index[-1], periods=cone["horizon"] + 1, freq="B")[1:]
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=hist.index, y=hist.values, name="GLDM",
-                                         line=dict(color="#b8860b")))
-                y0 = cone["last_close"]
-                for key, clr, nm in (("p95", "rgba(192,57,43,0.25)", "P95"),
-                                     ("p75", "rgba(192,57,43,0.15)", "P75"),
-                                     ("central", "#c0392b", "central"),
-                                     ("p25", "rgba(39,174,96,0.15)", "P25"),
-                                     ("p5", "rgba(39,174,96,0.25)", "P5")):
-                    yv = np.linspace(y0, cone[key], len(future) + 1)[1:]
-                    fig.add_trace(go.Scatter(x=future, y=yv, name=nm,
-                                             line=dict(color=clr,
-                                                       dash="dot" if nm != "central" else "solid")))
-                fig.update_layout(height=320, margin=dict(l=0, r=0, t=6, b=0),
-                                  showlegend=True, legend=dict(orientation="h"))
-                st.plotly_chart(fig, use_container_width=True)
-                st.markdown(f"**Central:** ${cone['central']:,.2f} "
-                            f"({(cone['central']/cone['last_close']-1)*100:+.1f}%)  |  "
-                            f"**P5–P95:** ${cone['p5']:,.2f} – ${cone['p95']:,.2f}")
-                if art:
-                    st.caption(f"OOS R²={art['metrics_test']['R2']:+.3f}, "
-                               f"5–95 band coverage {art['metrics_test']['band_cov_pct']:.0f}%.")
-            else:
-                st.info(f"{label} cone unavailable.")
 
 
 # ═════════════════════════════ EXPLAIN ═══════════════════════════════════
