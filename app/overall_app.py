@@ -48,7 +48,24 @@ import plotly.graph_objects as go
 
 import overall_core as ov
 import ticker_config
-if not hasattr(ov, "run_universe"):
+import inspect as _inspect
+
+
+def _stale_core(mod) -> bool:
+    """True if the imported overall_core is an old hot-reloaded copy that lacks a
+    current capability. Streamlit reruns THIS entry script but reuses
+    already-imported dependency modules, so after an overall_core update the app
+    can otherwise call new code against a stale module (e.g. optimize_weights
+    without the `fundamental` overlay arg) and crash until a full restart."""
+    if not hasattr(mod, "run_universe") or not hasattr(mod, "optimize_weights"):
+        return True
+    try:
+        return "fundamental" not in _inspect.signature(mod.optimize_weights).parameters
+    except (ValueError, TypeError):
+        return False
+
+
+if _stale_core(ov):
     ov = importlib.reload(ov)
 
 try:                                  # optional live auto-refresh (graceful if absent)
