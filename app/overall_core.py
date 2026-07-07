@@ -208,6 +208,29 @@ CAP_BY_KIND = {"core": 0.30, "beta": 0.18, "lev": 0.10}
 CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 
 
+# ── fundamental forward-view overlay (mid-2026 sector outlook) ─────────────
+# A per-instrument conviction multiplier (>1 overweight · <1 underweight) that
+# tilts each profile's historically-optimal blend toward the strongest secular
+# growth themes, then re-water-fills to the same caps.  It is applied on top of
+# the quant optimum (see ``optimize_weights(fundamental=True)``) so the strategy,
+# allocation and back-test reflect the forward view, not just past risk/return.
+FUNDAMENTAL_VIEW = {
+    "SOXX": 1.40, "ARTY": 1.40,                 # AI / semiconductor supercycle
+    "BTC": 1.40, "MSTR": 1.40, "MSTU": 1.40,    # crypto institutional era
+    "GLDM": 1.30, "GDX": 1.40, "UGL": 1.40,     # structural gold bull
+    "GRID": 1.40,                                # electrification / grid capex
+    "WGMI": 1.30,                                # miners' AI/HPC pivot
+    "REMX": 1.10,                                # rare-earth supply squeeze
+    "XLE": 1.00,                                 # energy — gas ok, oil soft
+    "VEGN": 0.60, "OIH": 0.50, "PBW": 0.40,      # no catalyst / policy headwinds
+}
+FUNDAMENTAL_VIEW_NOTE = (
+    "Mid-2026 sector outlook: overweight AI/semis (SOXX, ARTY), the crypto "
+    "institutional era (BTC/MSTR/MSTU, WGMI), the structural gold bull "
+    "(GLDM/GDX/UGL) and electrification (GRID); underweight clean energy (PBW), "
+    "oil services (OIH) and plain ESG beta (VEGN).")
+
+
 # ── risk profiles — how hard to lean on the high-beta / leveraged proxies ──
 # Beta/leveraged sleeves carry huge returns but poor stand-alone Sharpe (deep
 # drawdowns), so loading them boosts raw return at the cost of risk-adjusted
@@ -571,7 +594,7 @@ def curve_metrics(equity: pd.Series) -> dict:
 def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
                      n_samples: int = 20000, seed: int = 7, mdd_floor: float = -0.35,
                      pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
-                     objective: str = "balanced") -> dict:
+                     objective: str = "balanced", fundamental: bool = True) -> dict:
     """Search long-only weights (sum=1, per-instrument ≤ its cap).  Objective:
     ``"balanced"`` — highest return among near-max-Sharpe blends (holds Sharpe
     high); ``"max_return"`` — highest return within the ``mdd_floor`` budget
@@ -617,9 +640,25 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
 
     def _pack(w):
         return {c: float(x) for c, x in zip(cols, np.asarray(w, float))}
+
+    base_optimal = dict(weights=_pack(w_opt), **m_opt)
+    optimal = base_optimal
+    if fundamental and FUNDAMENTAL_VIEW:
+        # tilt the quant-optimal blend by forward conviction, re-water-fill to caps
+        caps_d = {c: (caps or CAP_BY_KEY).get(c, 0.30) for c in cols}
+        raw = {c: base_optimal["weights"][c] * FUNDAMENTAL_VIEW.get(c, 1.0) for c in cols}
+        for c in cols:                       # let a high-conviction name enter even if ignored
+            mult = FUNDAMENTAL_VIEW.get(c, 1.0)
+            if mult > 1.2:
+                raw[c] = max(raw[c], 0.02 * mult)
+        w_t = _waterfill({c: v for c, v in raw.items() if v > 0}, caps_d)
+        wv = np.array([w_t.get(c, 0.0) for c in cols])
+        optimal = dict(weights=w_t, **_cm(wv))
     return dict(
         cols=cols,
-        optimal=dict(weights=_pack(w_opt), **m_opt),
+        optimal=optimal,
+        optimal_pretilt=base_optimal,
+        fundamental=bool(fundamental and FUNDAMENTAL_VIEW),
         equal=dict(weights=_pack(ew_c), **_cm(ew_c)),
         risk_parity=dict(weights=_pack(rp), **_cm(rp)),
     )

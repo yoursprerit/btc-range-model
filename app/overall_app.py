@@ -90,6 +90,7 @@ if st.session_state.get("gldm_active_app") not in _ALL_APPS:
     st.session_state["gldm_active_app"] = "OVERALL"
 if st.session_state.get("overall_risk_profile") not in ov.RISK_PROFILES:
     st.session_state["overall_risk_profile"] = ov.DEFAULT_PROFILE
+st.session_state.setdefault("overall_use_fundamental", True)
 with st.sidebar:
     st.radio("**Application**", options=_ALL_APPS,
              format_func=lambda x: _APP_LABELS.get(x, x), key="gldm_active_app")
@@ -158,9 +159,10 @@ def get_entry_closes(positions: tuple):
 
 
 @st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
-def get_all_profiles(bucket: str):
+def get_all_profiles(bucket: str, fundamental: bool = True):
     """Compute the full portfolio for EVERY risk profile once, so switching
-    profiles (and rendering the comparison table) is instant — no recompute."""
+    profiles (and rendering the comparison table) is instant — no recompute.
+    ``fundamental`` applies the mid-2026 sector forward-view overlay."""
     results = get_results(bucket)
     if not results:
         return None
@@ -174,7 +176,8 @@ def get_all_profiles(bucket: str):
     for name, prof in ov.RISK_PROFILES.items():
         caps = ov.caps_for(name)
         opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
-                                  mdd_floor=prof["mdd_floor"], objective=prof["objective"])
+                                  mdd_floor=prof["mdd_floor"], objective=prof["objective"],
+                                  fundamental=fundamental)
         w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
         per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS, pos=pos, sata_daily=sata)
         curves = {"Optimal blend": ov._equity(ov._combine(rets, w_opt, pos, sata)),
@@ -184,8 +187,8 @@ def get_all_profiles(bucket: str):
     return dict(results=results, rets=rets, bm=bm, profiles=profiles)
 
 
-def get_portfolio(bucket: str, profile: str):
-    allp = get_all_profiles(bucket)
+def get_portfolio(bucket: str, profile: str, fundamental: bool = True):
+    allp = get_all_profiles(bucket, fundamental)
     if not allp:
         return None
     p = allp["profiles"][profile]
@@ -193,9 +196,9 @@ def get_portfolio(bucket: str, profile: str):
                 profile=profile, **p)
 
 
-def get_profile_comparison(bucket: str):
+def get_profile_comparison(bucket: str, fundamental: bool = True):
     """Headline metrics for every risk profile (reads the shared computation)."""
-    allp = get_all_profiles(bucket)
+    allp = get_all_profiles(bucket, fundamental)
     if not allp:
         return []
     rows = []
@@ -216,8 +219,9 @@ st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instrume
            "single question: **where should capital go today?**")
 
 _profile = st.session_state["overall_risk_profile"]
+_use_fund = st.session_state["overall_use_fundamental"]
 try:
-    _PF = get_portfolio(_bucket(), _profile)
+    _PF = get_portfolio(_bucket(), _profile, _use_fund)
 except Exception as exc:                       # never blank the sidebar/selector
     st.error(f"Live data fetch hit an error: {exc}. Press **Refresh now** in a moment.")
     st.stop()
@@ -320,7 +324,7 @@ with tab_live:
                 unsafe_allow_html=True)
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
-    pcomp = {r["name"]: r for r in get_profile_comparison(_bucket())}
+    pcomp = {r["name"]: r for r in get_profile_comparison(_bucket(), _use_fund)}
     rp = st.columns([1.15, 2])
     with rp[0]:
         st.radio("⚙️ **Risk profile**", list(ov.RISK_PROFILES.keys()),
@@ -346,6 +350,14 @@ with tab_live:
         st.markdown(
             "<div style='display:flex;gap:8px;align-items:stretch'>" + "".join(cells) + "</div>",
             unsafe_allow_html=True)
+    st.checkbox("🔭 **Apply fundamental view** (mid-2026 sector outlook)",
+                key="overall_use_fundamental",
+                help=ov.FUNDAMENTAL_VIEW_NOTE + " Tilts each profile's optimal blend "
+                     "toward the strongest secular-growth sleeves (re-capped), then "
+                     "re-runs the allocation and back-test. Uncheck for the pure "
+                     "historical quant optimum.")
+    if _use_fund:
+        st.caption(f"🔭 **Fundamental overlay ON** — {ov.FUNDAMENTAL_VIEW_NOTE}")
         st.caption("Switching reruns today's targets and the back-test on the "
                    "chosen profile. β / 2× exposure rises Balanced → Aggressive: "
                    "more return, deeper drawdowns, lower Sharpe.")
@@ -695,12 +707,20 @@ with tab_bt:
                "that **maximises return while keeping the drawdown shallow** "
                "(highest raw return among near-max-Sharpe blends). Out-of-sample "
                "from 2021; $100k start.")
+    if opt.get("fundamental") and "optimal_pretilt" in opt:
+        _pt = opt["optimal_pretilt"]
+        st.info(f"🔭 **Fundamental overlay applied** — these figures tilt the quant "
+                f"optimum toward the mid-2026 sector view (toggle on the Live tab). "
+                f"This profile: **{o['total_ret']*100:,.0f}%** return / "
+                f"Sharpe **{o['sharpe']:.2f}** *with* the overlay vs "
+                f"**{_pt['total_ret']*100:,.0f}%** / **{_pt['sharpe']:.2f}** without. "
+                f"{ov.FUNDAMENTAL_VIEW_NOTE}")
 
     # ── risk-profile trade-off: leaning on β / 2× proxies ───────────────
     st.markdown(f"**Risk profile: `{_profile}`** — "
                 f"{ov.RISK_PROFILES[_profile]['blurb']} "
                 f"_(change it in the sidebar.)_")
-    comp = get_profile_comparison(_bucket())
+    comp = get_profile_comparison(_bucket(), _use_fund)
     if comp:
         ch = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
               "<th style='padding:6px 10px'>Profile</th>"
