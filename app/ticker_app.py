@@ -991,7 +991,10 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
                                             f"$%{{y:,.2f}} ({fc_ret*100:+.2f}%)<br>"
                                             f"95% CI ${fc_lo:,.2f} – ${fc_hi:,.2f}<extra></extra>")))
     fig.add_vline(x=last_ct, line=dict(color="crimson", width=1.5, dash="dash"))
-    if hl:
+    # Daily predicted HIGH/LOW bands belong to the divergence (H/L prediction)
+    # strategy; MA-filter apps trade on the SMA (overlaid below) instead, so the
+    # H/L lines are omitted there to keep their hourly plot uncluttered.
+    if hl and cfg.strategy_mode != "ma":
         fig.add_hline(y=hl["pred_high"], line=dict(color="green", width=2.5, dash="dot"),
                       annotation_text=f"Daily Pred HIGH ${hl['pred_high']:,.2f}",
                       annotation_position="top right", annotation_font=dict(color="green", size=12),
