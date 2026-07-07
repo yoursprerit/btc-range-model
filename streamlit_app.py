@@ -30,6 +30,7 @@ import runpy
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 import sys
 _APP_DIR = Path(__file__).resolve().parent / "app"
@@ -42,41 +43,35 @@ _LABELS = {"OVERALL": "🧭  Overall Trading",
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
-# Resolve the active app from the selector's widget key, falling back to a plain
-# (non-widget) shadow key.  The blank tear-down rerun below renders no widgets,
-# and Streamlit PURGES widget-keyed session state whenever its widget isn't
-# rendered — which would wipe ``gldm_active_app`` and snap the selector back to
-# OVERALL.  The shadow key survives that purge, so we restore the widget key from
-# it every run and the selection sticks.
-_choice = (st.session_state.get("gldm_active_app")
-           or st.session_state.get("_active_app", "OVERALL"))
+# ── routing ────────────────────────────────────────────────────────────────
+# Every app is one script run of this router that runpy-executes the selected
+# sub-app.  Switching apps left the previous (often heavy) app's elements
+# ghosting through as faded "stale" text on the new page: across the runpy swap
+# Streamlit reconciles by position and does not reliably tear the old tree down,
+# and a tear-down st.rerun() aborts before the end-of-run prune commits — so the
+# ghost survived.  The one bulletproof fix is to reload the browser on a switch
+# so the new app always renders on a pristine DOM.  The route is persisted in the
+# URL (?app=...) so the reload lands on the right app; the heavy compute stays
+# warm in st.cache_data across the reload, so it's cheap.
+_qp_app = st.query_params.get("app")
+_widget_app = st.session_state.get("gldm_active_app")
+_choice = _widget_app or _qp_app or "OVERALL"
 if _choice not in _ALL_APPS:
     _choice = "OVERALL"
-st.session_state["_active_app"] = _choice            # shadow — survives the blank rerun
-st.session_state["gldm_active_app"] = _choice        # restore widget state for the render run
 
-# Switching apps used to leave the previous app's elements ghosting through as
-# faded ("stale") text on the new page — worst when switching to a heavy, slow
-# app (e.g. Bitcoin) whose long render keeps the old, faded tree on screen and
-# whose element tree Streamlit reconciles by position rather than tearing down.
-#
-# Two-layer fix:
-#   1) On an actual app switch, do ONE blank rerun first (render nothing, then
-#      st.rerun()).  That run produces no elements, so Streamlit prunes the
-#      entire previous app's tree — the page goes cleanly blank — and only the
-#      NEXT run renders the new app, into an empty slate. This is what actually
-#      kills the ghost for slow apps.
-#   2) Render each app inside a route-keyed container so it also has a distinct
-#      element identity (belt-and-suspenders).
-if st.session_state.get("_route_prev") not in (None, _choice):
-    st.session_state["_route_prev"] = _choice
-    st.rerun()                                       # blank run → old tree torn down
-st.session_state["_route_prev"] = _choice
+# A real switch = the user picked an app (widget) different from what the URL has
+# currently loaded.  Point the URL at the new app and hard-reload onto a clean DOM.
+if _qp_app is not None and _widget_app is not None and _widget_app != _qp_app:
+    st.query_params["app"] = _widget_app
+    components.html("<script>window.parent.location.reload();</script>", height=0)
+    st.stop()
 
-# A keyed container is a Streamlit command, so it must come *after*
-# ``set_page_config``; we therefore set the page config once here (per-app title
-# / icon derived from the label) and no-op the sub-apps' own calls — the same
-# transparent-patch approach already used for the app selector below.
+st.query_params["app"] = _choice                     # keep the URL in sync
+st.session_state["gldm_active_app"] = _choice        # seed the selector widget
+
+# Per-app page title / icon (derived from the label); no-op the sub-apps' own
+# set_page_config so it doesn't error or override — the same transparent-patch
+# approach already used for the app selector below.
 _lbl = _LABELS.get(_choice, _choice).strip()
 _icon = _lbl.split()[0] if _lbl.split() else "🧭"
 _title = _lbl[len(_icon):].strip() or str(_choice)
@@ -118,7 +113,6 @@ def _run_choice():
 
 
 try:
-    with st.container(key=f"route_{_choice}"):
-        _run_choice()
+    _run_choice()
 finally:
     st.set_page_config = _orig_spc                    # restore for the next run
