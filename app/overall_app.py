@@ -136,6 +136,12 @@ def get_spot(minute_bucket: str):
     return ov.fetch_spot()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_sata_spot(minute_bucket: str):
+    """Live SATA quote (price, day-change, P&L vs $100 par), refreshed ~1/min."""
+    return ov.fetch_sata()
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def get_entry_closes(positions: tuple):
     """Real official close on each open position's entry date — the cost basis.
@@ -254,6 +260,7 @@ if _missing:
 # current spot, so fetch each instrument's live quote and overlay it.
 _spot_ts = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M")
 _spot = {}
+_sata = {}
 try:
     # cost basis = the real official close on each open position's entry bar
     _pos_key = tuple(sorted(
@@ -264,6 +271,7 @@ try:
         and r["key"] in ov.SPOT_SYMBOLS))
     ov.apply_entry_basis(results, get_entry_closes(_pos_key))
     _spot = get_spot(_spot_ts)
+    _sata = get_sata_spot(_spot_ts)
     ov.apply_spot(results, _spot)
     for _a in gate["actions"]:            # keep the action table price/P&L in sync
         _r = by_key.get(_a["key"])
@@ -444,17 +452,29 @@ with tab_live:
     sbar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
             f"margin-top:3px'><div style='height:7px;width:{min(sata_pct*100,100):.0f}%;"
             f"background:#334155'></div></div>" if sata_pct > 0.0005 else "")
+    # live SATA quote — price, day-change, and P&L vs the $100 par cost basis
+    _sa_px = _sata.get("price"); _sa_dc = _sata.get("dchg"); _sa_pnl = _sata.get("upnl")
+    sa_px_s = f"${_sa_px:,.2f}" if _sa_px else f"${si['par']:,.0f}"
+    if _sa_dc is None:
+        sa_dc_s, sa_dc_col = "—", "#94a3b8"
+    else:
+        sa_dc_s, sa_dc_col = f"{_sa_dc:+.2f}%", (C_BUY if _sa_dc >= 0 else C_EXIT)
+    if _sa_pnl is None:
+        sa_pnl_s, sa_pnl_col = "—", "#94a3b8"
+    else:
+        sa_pnl_s, sa_pnl_col = f"{_sa_pnl:+.2f}%", (C_BUY if _sa_pnl >= 0 else C_EXIT)
+    sa_pnl_sub = "<div style='font-size:10px;color:#94a3b8'>@ $100.00 par</div>"
     rows.append(
         f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
         f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
         f"<td style='font-weight:700'>💵 SATA"
         f"<div style='font-size:11px;color:#64748b;font-weight:400'>{si['name']}</div></td>"
         f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
-        f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par</div></td>"
+        f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par · +{si['annual_rate']*100:.0f}%/yr coupon</div></td>"
         f"<td style='text-align:center;color:#cbd5e1'>—</td>"
-        f"<td style='text-align:right'>${si['par']:,.0f}</td>"
-        f"<td style='text-align:right;color:#94a3b8'>—</td>"
-        f"<td style='text-align:right;color:{C_BUY}'>+{si['annual_rate']*100:.0f}%/yr</td>"
+        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{sa_px_s}</td>"
+        f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{sa_dc_col}'>{sa_dc_s}</td>"
+        f"<td style='text-align:right;font-weight:600;color:{sa_pnl_col}'>{sa_pnl_s}{sa_pnl_sub}</td>"
         f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
         f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
         f"${sata_pct*portfolio_value:,.0f}</td></tr>")

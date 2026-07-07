@@ -850,6 +850,15 @@ def fetch_spot(symbols: dict | None = None) -> dict:
         return {k: v for k, v in ex.map(_one, items)}
 
 
+def fetch_sata() -> dict:
+    """Live SATA quote: current price, day-change %, and unrealised P&L measured
+    against its $100 par cost basis (the price idle cash is parked at)."""
+    px, prev = _quote(SATA["ticker"])
+    dchg = ((px / prev - 1) * 100) if (px and prev) else None
+    upnl = ((px / SATA["par"] - 1) * 100) if px else None
+    return dict(price=px, dchg=dchg, upnl=upnl)
+
+
 def apply_spot(results: list[dict], spot: dict) -> None:
     """Overlay live spot prices onto result dicts in place — updates the
     displayed last price, day-change and any open-position unrealised P&L /
