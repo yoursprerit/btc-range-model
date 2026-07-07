@@ -141,16 +141,6 @@ def run_gldm() -> list[dict]:
                        days=int((as_of - e_dt).days),
                        dist_stop=(last_px / (e_px * (1 - stop)) - 1) * 100)
         last_trade = r["trade_log"][-1] if r.get("trade_log") else None
-        # intraday-signal context (GLDM MA20 regime, shared by GLDM/GDX/UGL); the
-        # entry gate can flip with the live price, model triggers are as-of close.
-        _s = sigs or {}
-        ictx = dict(
-            mode="div",
-            trend_ma=(float(_s["ma20_value"]) if _s.get("ma20_value") is not None else None),
-            slope_pos=bool(_s.get("ma20_slope_pos", True)), exit_rule="d2d3",
-            div=dict(d1=bool(_s.get("d1_triggered")), d2=bool(_s.get("d2_triggered")),
-                     d3=bool(_s.get("d3_triggered")), u1=bool(_s.get("u1_triggered")),
-                     entry=bool(_s.get("entry_triggered"))))
         out.append(dict(
             key=key, parent="GLDM", name=meta["name"], kind=meta["kind"],
             emoji=EMOJI, kemoji=KIND_EMOJI[meta["kind"]], accent=ACCENT,
@@ -163,6 +153,6 @@ def run_gldm() -> list[dict]:
             r=dict(bh=np.asarray(r["bh"], float), dates=list(dates), trades=r["trades"],
                    in_pos_now=bool(r.get("in_pos_now"))),
             as_of=as_of, mode="divergence", ma_window=gc.MA_WINDOW_BY_ASSET.get(key, 50),
-            stop=stop, engine="gldm", intraday_ctx=ictx,
+            stop=stop, engine="gldm",
         ))
     return out

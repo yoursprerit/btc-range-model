@@ -264,15 +264,6 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
     ref = bc[max(0, len(bc) - 50):].mean()
     mom = (bc[-1] / ref - 1) if ref else 0.0
     as_of = pd.Timestamp(dates[last])
-    # intraday-signal context (BTC MA30 regime, shared by BTC/MSTR/MSTU); the
-    # regime-adaptive D2 exit and the entry gate can move with the live price.
-    ma30_arr = np.array([bc[max(0, i - 29):i + 1].mean() for i in range(len(bc))])
-    _ictx = dict(mode="div", trend_ma=float(ma30_arr[-1]),
-                 slope_pos=(bool(ma30_arr[-1] > ma30_arr[-6]) if len(ma30_arr) > 6 else True),
-                 exit_rule="regime_adaptive",
-                 div=dict(d1=bool(sigs["d1"][last]), d2=bool(sigs["d2"][last]),
-                          d3=bool(sigs["d3"][last]), u1=bool(sigs["u1"][last]),
-                          entry=bool(sigs["tf2_entry"][last])))
 
     out = []
     for key in ("BTC", "MSTR", "MSTU"):
@@ -317,7 +308,7 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
             ret=ret, pos_series=pos_series, strat=nav.to_numpy(float),
             dates=pd.Series(nav.index), r=r, as_of=as_of,
             mode="ct-divergence", ma_window=30,
-            stop=meta["stop"], engine="ct", intraday_ctx=_ictx,
+            stop=meta["stop"], engine="ct",
         ))
     return out
 

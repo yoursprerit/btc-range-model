@@ -264,7 +264,6 @@ try:
     ov.apply_entry_basis(results, get_entry_closes(_pos_key))
     _spot = get_spot(_spot_ts)
     ov.apply_spot(results, _spot)
-    ov.apply_intraday(results, _spot)     # live intraday re-read of each signal
     for _a in gate["actions"]:            # keep the action table price/P&L in sync
         _r = by_key.get(_a["key"])
         if _r:
@@ -272,7 +271,6 @@ try:
     _n_spot = sum(1 for v in _spot.values() if v.get("price"))
 except Exception:
     _n_spot = 0
-    ov.apply_intraday(results, {})        # populate committed fallback if no spot
 
 
 # ── small HTML helpers ─────────────────────────────────────────────────────
@@ -364,14 +362,11 @@ with tab_live:
                "score (0–1) blends live momentum, macro sentiment, the strategy's "
                "back-tested win-rate and its risk-adjusted edge — it decides which "
                "signals get funded and how much. Held/opened risk assets total "
-               "100%; any capped-out remainder is parked in **SATA**. "
-               "**Signal (last close)** is the committed decision the allocation "
-               "acts on (evaluated on completed bars); **Live signal (intraday)** "
-               "re-reads that decision against the *current* spot — the trend/regime "
-               "gate and any stop breach update live, while model-based divergence "
-               "triggers stay fixed until the bar closes (⚡ = the live read differs). "
-               "**Unreal. P&L** is measured against each position's real cost basis — "
-               "the official close on its entry bar.")
+               "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
+               "**red** ⚠️ are long positions whose trend has broken — they still "
+               "hold today but **exit on the next bar**. **Unreal. P&L** is measured "
+               "against each position's real cost basis — the official close on its "
+               "entry bar.")
     _pv_cols = st.columns([1, 2])
     with _pv_cols[0]:
         portfolio_value = st.number_input(
@@ -380,9 +375,7 @@ with tab_live:
             help="Target $ per instrument = target % × this value.")
     hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
            "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
-           "<th>Signal (last close)</th>"
-           "<th>Live signal (intraday) ⚡</th>"
-           "<th style='text-align:center'>Priority</th>"
+           "<th>Live signal</th><th style='text-align:center'>Priority</th>"
            "<th style='text-align:right'>Price</th>"
            "<th style='text-align:right'>Unreal. P&amp;L</th>"
            "<th style='text-align:right'>Target %</th>"
@@ -412,27 +405,25 @@ with tab_live:
                f"margin-top:3px'><div style='height:7px;width:{min(tgt*100,100):.0f}%;"
                f"background:{_r['accent']}'></div></div>" if tgt > 0.0005 else "")
         amt_s = f"${tgt * portfolio_value:,.0f}" if tgt > 0.0005 else "—"
-        # live intraday signal (recomputed from the current spot price)
-        _iv = _r.get("intraday") or {}
-        iv_col = _TONE_COL.get(_iv.get("tone"), C_FLAT)
-        iv_mark = ("<span title='differs from the last-close signal'> ⚡</span>"
-                   if _iv.get("changed") else "")
-        iv_note = "live vs last close" if _iv.get("live") else "as of close (no live px)"
-        iv_cell = (f"<td style='font-size:12px;color:{iv_col}'>"
-                   f"{_iv.get('ico','')} {_iv.get('label','—')}{iv_mark}"
-                   f"<div style='font-size:10px;color:#94a3b8'>{iv_note}</div></td>")
         # cost basis = the real close on the entry bar
         _cb = _r["pos"].get("entry_px")
         cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
                   if a["in_pos"] and _cb else "")
+        # a long/entering position whose trend has broken exits on the NEXT bar —
+        # flag the whole row red so it's clear the hold is about to be closed out.
+        exit_next = a.get("exits_next_bar")
+        row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
+                     "box-shadow:inset 3px 0 0 #dc2626" if exit_next
+                     else "border-bottom:1px solid #eef2f7")
+        warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
+                "⚠️ exits next bar</div>" if exit_next else "")
         rows.append(
-            f"<tr style='border-bottom:1px solid #eef2f7'>"
-            f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}</td>"
+            f"<tr style='{row_style}'>"
+            f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}{warn}</td>"
             f"<td style='font-weight:700'>{a['emoji']} {a['key']}{_kind_badge(a['kind'])}"
             f"<div style='font-size:11px;color:#64748b;font-weight:400'>{a['name']}</div></td>"
             f"<td style='font-size:12px;color:{_TONE_COL.get(a['tone'], C_FLAT)}'>{a['decision']}"
             f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
-            f"{iv_cell}"
             f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"
@@ -450,7 +441,6 @@ with tab_live:
         f"<div style='font-size:11px;color:#64748b;font-weight:400'>{si['name']}</div></td>"
         f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
         f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par</div></td>"
-        f"<td style='font-size:12px;color:#94a3b8'>—</td>"
         f"<td style='text-align:center;color:#cbd5e1'>—</td>"
         f"<td style='text-align:right'>${si['par']:,.0f}</td>"
         f"<td style='text-align:right;color:{C_BUY}'>+{si['annual_rate']*100:.0f}%/yr</td>"
