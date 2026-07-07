@@ -376,7 +376,8 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
     return dict(state="FLAT", label="FLAT — NO SIGNAL", ico="⬜", tone="flat")
 
 
-def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dchg, mom):
+def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dchg, mom,
+                  sigs=None):
     """Assemble one traded-instrument result dict from a run_strategy output."""
     dates = pd.to_datetime(pd.Series(r["dates"]))
     strat = np.asarray(r["strat"], float)
@@ -399,6 +400,21 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     meta = ASSET_META.get(label, dict(name=label, kind="core"))
     m = bt._metrics(strat, r["dates"]); bh = bt._metrics(r["bh"], r["dates"])
     wr = float((r["trades"] > 0).mean() * 100) if len(r["trades"]) else 0.0
+    # intraday-signal context: the regime/stop-sensitive inputs that a live price
+    # can move (the model-based divergence triggers are fixed as-of last close).
+    if cfg.strategy_mode == "ma":
+        ictx = dict(mode="ma", trend_ma=ma_val, slope_pos=True,
+                    exit_rule="ma", div=None)
+    else:
+        s = sigs or {}
+        ictx = dict(
+            mode="div",
+            trend_ma=(float(s["ma20_value"]) if s.get("ma20_value") is not None else None),
+            slope_pos=bool(s.get("ma20_slope_pos", True)),
+            exit_rule=("d2d3_d1" if cfg.use_d1_exit else "d2d3"),
+            div=dict(d1=bool(s.get("d1_triggered")), d2=bool(s.get("d2_triggered")),
+                     d3=bool(s.get("d3_triggered")), u1=bool(s.get("u1_triggered")),
+                     entry=bool(s.get("entry_triggered"))))
     return dict(
         key=label, parent=cfg.key, name=meta["name"], kind=meta["kind"],
         emoji=cfg.emoji, kemoji=KIND_EMOJI[meta["kind"]], accent=cfg.accent,
@@ -409,6 +425,7 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         metrics=m, bh_metrics=bh, win_rate=wr, n_trades=int(len(r["trades"])),
         ret=ret, pos_series=pos_series, strat=strat, dates=dates, r=r, as_of=as_of,
         mode=cfg.strategy_mode, ma_window=cfg.ma_window, stop=cfg.fixed_stop,
+        intraday_ctx=ictx,
     )
 
 
@@ -456,7 +473,7 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
         # each traded instrument shares the parent decision but has its own pos
         dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val)
         out.append(_asset_result(cfg, label, col, r, daily, dec, alert, bull,
-                                 sent, ma_val, dchg, mom))
+                                 sent, ma_val, dchg, mom, sigs=sigs))
     return out
 
 
@@ -861,3 +878,147 @@ def apply_spot(results: list[dict], spot: dict) -> None:
             p["upnl"] = (s["price"] / e - 1) * 100
             if p.get("stop_px"):
                 p["dist_stop"] = (s["price"] / p["stop_px"] - 1) * 100
+
+
+# ── real cost basis: the official close on the entry bar ─────────────────────
+def _bar_close(symbol: str, date) -> float | None:
+    """Official daily close of ``symbol`` on ``date`` (or the last trading day
+    at/before it), from the live chart feed — used as the real cost basis so
+    unrealised P&L is measured against a genuine market close on the entry bar,
+    not the strategy's (possibly synthetic/cached) fill price."""
+    d = pd.Timestamp(date).normalize()
+    params = {"interval": "1d",
+              "period1": int((d - pd.Timedelta(days=8)).timestamp()),
+              "period2": int((d + pd.Timedelta(days=3)).timestamp())}
+    for host in tc._YH_HOSTS:
+        try:
+            r = requests.get(f"{host}/v8/finance/chart/{symbol}",
+                             params=params, headers=tc._UA, timeout=15)
+            if r.status_code != 200:
+                continue
+            res = r.json()["chart"]["result"][0]
+            ts = res.get("timestamp") or []
+            closes = (res.get("indicators", {}).get("quote", [{}])[0] or {}).get("close") or []
+            s = pd.Series(closes, index=pd.to_datetime(ts, unit="s").normalize()).dropna()
+            s = s[s.index <= d]
+            if len(s):
+                return float(s.iloc[-1])
+        except Exception:
+            continue
+    return None
+
+
+def fetch_entry_closes(results: list[dict], symbols: dict | None = None) -> dict:
+    """Real official close on each OPEN position's entry date, fetched
+    concurrently. Returns {key: close_float} (only successful lookups)."""
+    from concurrent.futures import ThreadPoolExecutor
+    symbols = symbols or SPOT_SYMBOLS
+    need = []
+    for r in results:
+        p = r.get("pos") or {}
+        sym = symbols.get(r["key"])
+        if p.get("in_pos") and p.get("entry_date") and sym:
+            need.append((r["key"], sym, p["entry_date"]))
+    if not need:
+        return {}
+
+    def _one(item):
+        k, sym, dt = item
+        return k, _bar_close(sym, dt)
+
+    with ThreadPoolExecutor(max_workers=min(13, len(need))) as ex:
+        return {k: v for k, v in ex.map(_one, need) if v}
+
+
+def apply_entry_basis(results: list[dict], entry_closes: dict) -> None:
+    """Overlay the real entry-date close as the displayed cost basis, recomputing
+    the stop level, unrealised P&L and distance-to-stop against the current price.
+    Keeps the strategy's own fill under ``pos['entry_px_model']``. Idempotent —
+    safe to call on cached result dicts across reruns."""
+    for r in results:
+        c = entry_closes.get(r["key"])
+        p = r.get("pos") or {}
+        if not c or not p.get("in_pos"):
+            continue
+        p.setdefault("entry_px_model", p.get("entry_px"))   # preserve strategy fill
+        p["entry_px"] = float(c)
+        stop_frac = r.get("stop") or 0.0
+        last = r.get("last_close")
+        if stop_frac:
+            p["stop_px"] = float(c) * (1 - stop_frac)
+        if last:
+            p["upnl"] = (last / float(c) - 1) * 100
+            if p.get("stop_px"):
+                p["dist_stop"] = (last / p["stop_px"] - 1) * 100
+
+
+# ── intraday (live-price) signal ─────────────────────────────────────────────
+def _intraday_from_ctx(ctx: dict | None, pos: dict, inst_live, parent_live) -> dict | None:
+    """Recompute the actionable signal from the current intraday (live) price.
+    Only the regime- and stop-sensitive parts move intraday; the model-based
+    divergence triggers are fixed as-of the last completed close. Returns a
+    ``dict(label, tone, ico)`` or ``None`` when no live read is possible."""
+    in_pos = bool(pos.get("in_pos"))
+    stop_px = pos.get("stop_px")
+    # 1) intraday stop breach — on the instrument's OWN live price
+    if in_pos and stop_px and inst_live is not None and inst_live <= stop_px:
+        return dict(label="STOP HIT — EXIT NOW", tone="exit", ico="🔴")
+    if not ctx or ctx.get("trend_ma") is None or parent_live is None:
+        return None
+    above = parent_live > ctx["trend_ma"]        # live regime read (parent price)
+    slope = bool(ctx.get("slope_pos", True))
+    if ctx["mode"] == "ma":
+        if in_pos:
+            if above:
+                return dict(label="LONG — HOLDING", tone="hold", ico="🟢")
+            return dict(label="HOLDING — below trend (exits next bar)",
+                        tone="hold", ico="🟡")
+        if above:
+            return dict(label="ENTER — ABOVE TREND", tone="buy", ico="🟢")
+        return dict(label="FLAT — BELOW TREND", tone="flat", ico="⬜")
+    # divergence — recompute the regime-sensitive exit/entry, keep model triggers
+    d = ctx.get("div") or {}
+    d1, d2, d3, u1 = d.get("d1"), d.get("d2"), d.get("d3"), d.get("u1")
+    rule = ctx.get("exit_rule", "d2d3")
+    if rule == "regime_adaptive":                # BTC CT: D2 exit only in a bear regime
+        exit_sig = d3 or (d2 and not above)
+    elif rule == "d2d3_d1":
+        exit_sig = d2 or d3 or d1
+    else:
+        exit_sig = d2 or d3
+    why = "D3 exhaustion" if d3 else "D2 momentum fade" if d2 else "D1 downtrend"
+    if in_pos:
+        if exit_sig:
+            return dict(label=f"EXIT — {why}", tone="exit", ico="🔴")
+        return dict(label="LONG — HOLDING", tone="hold", ico="🟢")
+    if exit_sig:
+        return dict(label=f"STAND ASIDE — EXIT ACTIVE ({why})", tone="watch", ico="🟠")
+    # a flat instrument can turn into a live buy when the regime gate flips up
+    if d.get("entry") or (u1 and above and slope):
+        return dict(label="ENTER — PURE-REGIME BUY", tone="buy", ico="🟢")
+    if u1:
+        return dict(label="WATCH — UPTREND (GATE PENDING)", tone="watch", ico="🟡")
+    if d1:
+        return dict(label="STAND ASIDE — DOWNTREND (D1)", tone="watch", ico="🟠")
+    return dict(label="FLAT — NO SIGNAL", tone="flat", ico="⬜")
+
+
+def apply_intraday(results: list[dict], spot: dict) -> None:
+    """Attach a live intraday signal to each result under ``r['intraday']``.
+    Falls back to the committed (last-close) decision when no live price is
+    available, and flags whether the live read differs from it (``changed``)."""
+    for r in results:
+        inst = (spot.get(r["key"]) or {}).get("price")
+        parent = (spot.get(r.get("parent")) or {}).get("price")
+        sig = _intraday_from_ctx(r.get("intraday_ctx"), r.get("pos") or {},
+                                 inst, parent)
+        committed = r.get("decision") or {}
+        if sig is None:
+            r["intraday"] = dict(label=committed.get("label", "—"),
+                                 tone=committed.get("tone", "flat"),
+                                 ico=committed.get("ico", ""),
+                                 changed=False, live=False)
+        else:
+            r["intraday"] = dict(live=True,
+                                 changed=(sig["tone"] != committed.get("tone")),
+                                 **sig)
