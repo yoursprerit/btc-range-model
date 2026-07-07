@@ -205,7 +205,7 @@ RISK_PROFILES = {
         blurb="Maximum return inside a −38% budget — heavy β / 2× exposure; "
               "highest return, deepest drawdowns, lower Sharpe."),
 }
-DEFAULT_PROFILE = "Balanced"
+DEFAULT_PROFILE = "Aggressive"
 
 
 def caps_for(profile: str) -> dict:
