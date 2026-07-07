@@ -42,6 +42,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
 
 warnings.filterwarnings("ignore")
 
@@ -739,3 +740,87 @@ COMBINED_PERIODS = [
     ("🐂 Bull (2023 → now)", "2023-01-01", None),
     ("🔬 Recent (2025 → now)", "2025-01-01", None),
 ]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# LIVE SPOT PRICES — the traded-instrument last price, for the action plan.
+# The strategy/signals run on completed daily bars (some from cached CSVs, so
+# their last close can be days stale — notably BTC/MSTR/MSTU); the *displayed*
+# price must be the current spot, so we pull each instrument's live quote
+# separately from the Yahoo chart meta (regularMarketPrice + previous close).
+# ════════════════════════════════════════════════════════════════════════
+SPOT_SYMBOLS = {
+    "BTC": "BTC-USD", "MSTR": "MSTR", "MSTU": "MSTU",
+    "GLDM": "GLDM", "GDX": "GDX", "UGL": "UGL",
+    "SOXX": "SOXX", "VEGN": "VEGN", "GRID": "GRID",
+    "XLE": "XLE", "OIH": "OIH", "REMX": "REMX", "WGMI": "WGMI",
+}
+
+
+def _quote(symbol: str) -> tuple:
+    """(spot price, previous-session close) for a symbol.
+
+    Spot = the chart meta's ``regularMarketPrice`` (true live quote); the
+    previous close is the last *completed* daily bar strictly before today
+    (Yahoo's ``previousClose`` is often null and ``chartPreviousClose`` is the
+    close before the whole range, so neither gives a correct 1-day change)."""
+    params = {"interval": "1d", "range": "7d"}
+    for host in tc._YH_HOSTS:
+        try:
+            r = requests.get(f"{host}/v8/finance/chart/{symbol}",
+                             params=params, headers=tc._UA, timeout=15)
+            if r.status_code != 200:
+                continue
+            res = r.json()["chart"]["result"][0]
+            meta = res.get("meta", {})
+            px = meta.get("regularMarketPrice")
+            ts = res.get("timestamp") or []
+            closes = (res.get("indicators", {}).get("quote", [{}])[0] or {}).get("close") or []
+            s = pd.Series(closes, index=pd.to_datetime(ts, unit="s").normalize()).dropna()
+            if px is None and len(s):
+                px = float(s.iloc[-1])
+            # prev = the session-before-last close, so day-change compares the
+            # live/most-recent session against the one before it (works during
+            # market hours, after hours, and on weekends alike).
+            prev = float(s.iloc[-2]) if len(s) >= 2 else None
+            if px:
+                return float(px), prev
+        except Exception:
+            continue
+    return None, None
+
+
+def fetch_spot(symbols: dict | None = None) -> dict:
+    """Live spot price + day-change % for each instrument, fetched concurrently.
+    Returns {key: {"price": float|None, "dchg": float|None}}."""
+    from concurrent.futures import ThreadPoolExecutor
+    symbols = symbols or SPOT_SYMBOLS
+
+    def _one(item):
+        k, sym = item
+        px, prev = _quote(sym)
+        dchg = ((px / prev - 1) * 100) if (px and prev) else None
+        return k, dict(price=px, dchg=dchg)
+
+    items = list(symbols.items())
+    with ThreadPoolExecutor(max_workers=min(13, len(items))) as ex:
+        return {k: v for k, v in ex.map(_one, items)}
+
+
+def apply_spot(results: list[dict], spot: dict) -> None:
+    """Overlay live spot prices onto result dicts in place — updates the
+    displayed last price, day-change and any open-position unrealised P&L /
+    distance-to-stop, without touching the strategy signals or back-test."""
+    for r in results:
+        s = spot.get(r["key"])
+        if not s or not s.get("price"):
+            continue
+        r["last_close"] = s["price"]
+        if s.get("dchg") is not None:
+            r["dchg"] = s["dchg"]
+        p = r.get("pos") or {}
+        if p.get("in_pos") and p.get("entry_px"):
+            e = float(p["entry_px"])
+            p["upnl"] = (s["price"] / e - 1) * 100
+            if p.get("stop_px"):
+                p["dist_stop"] = (s["price"] / p["stop_px"] - 1) * 100

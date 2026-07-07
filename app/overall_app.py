@@ -110,6 +110,13 @@ def get_results(bucket: str):
     return ov.run_universe()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_spot(minute_bucket: str):
+    """Live spot prices, refreshed ~every minute (separate from the 15-min
+    strategy cache) so the action plan shows current prices, not stale bars."""
+    return ov.fetch_spot()
+
+
 @st.cache_data(ttl=900, show_spinner="Optimising the combined allocation…")
 def get_all_profiles(bucket: str):
     """Compute the full portfolio for EVERY risk profile once, so switching
@@ -207,6 +214,22 @@ if _missing:
         f"figures: {_lines}. Press **Refresh now**; if it persists, the app's "
         f"data/model files may be unavailable in this environment.")
 
+# ── live spot prices — overlay onto the display (not the signals/back-test) ──
+# Signals run on completed daily bars (some cached, so a few days stale for
+# BTC/MSTR/MSTU); the action-plan price and open-position P&L must show the
+# current spot, so fetch each instrument's live quote and overlay it.
+_spot_ts = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M")
+try:
+    _spot = get_spot(_spot_ts)
+    ov.apply_spot(results, _spot)
+    for _a in gate["actions"]:            # keep the action table price/P&L in sync
+        _r = by_key.get(_a["key"])
+        if _r:
+            _a["last_close"] = _r["last_close"]; _a["upnl"] = _r["pos"]["upnl"]
+    _n_spot = sum(1 for v in _spot.values() if v.get("price"))
+except Exception:
+    _n_spot = 0
+
 
 # ── small HTML helpers ─────────────────────────────────────────────────────
 def _pill(text, color, bg=None):
@@ -237,8 +260,11 @@ tab_live, tab_bt, tab_explain = st.tabs(
 # TAB 1 — LIVE DECISION COCKPIT
 # ══════════════════════════════════════════════════════════════════════════
 with tab_live:
-    st.markdown(f"#### As of **{as_of.strftime('%b %d, %Y')}** · "
-                f"{len(results)} instruments across {len(parents)} signals")
+    _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/13)</span>"
+                if _n_spot else " · <span style='color:#dc2626'>spot quote unavailable — showing last bar</span>")
+    st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** · "
+                f"{len(results)} instruments across {len(parents)} signals{_px_note}",
+                unsafe_allow_html=True)
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
     pcomp = {r["name"]: r for r in get_profile_comparison(_bucket())}
