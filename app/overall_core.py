@@ -433,28 +433,37 @@ def run_universe() -> list[dict]:
     with its own tuned config, which is the exact engine those apps use.
     """
     from concurrent.futures import ThreadPoolExecutor
+    import traceback
 
     def _one(cfg):
         try:
             if cfg.key == "BTC":
                 import btc_ct_engine
-                return btc_ct_engine.run_btc_ct()
+                return cfg.key, btc_ct_engine.run_btc_ct(), None
             if cfg.key == "GLDM":
                 import gldm_engine
-                return gldm_engine.run_gldm()
-            return run_asset(cfg)
+                return cfg.key, gldm_engine.run_gldm(), None
+            return cfg.key, run_asset(cfg), None
         except Exception:
-            return []
+            return cfg.key, [], traceback.format_exc().strip().splitlines()[-1]
 
     cfgs = all_configs()
     # Each app is network-bound (independent Yahoo fetches) — run them
     # concurrently.  ex.map preserves order, so the universe stays in app order.
     with ThreadPoolExecutor(max_workers=len(cfgs)) as ex:
-        groups = list(ex.map(_one, cfgs))
+        rows = list(ex.map(_one, cfgs))
+    _LAST_ERRORS.clear()
     out = []
-    for g in groups:
+    for key, g, err in rows:           # aggregate in the main thread (no races)
+        if err or not g:
+            _LAST_ERRORS[key] = err or "no instruments returned"
         out.extend(g or [])
     return out
+
+
+# per-app load errors from the most recent run_universe() (best-effort; the app
+# surfaces these so a silently-dropped sleeve is visible, not hidden).
+_LAST_ERRORS: dict[str, str] = {}
 
 
 # ════════════════════════════════════════════════════════════════════════

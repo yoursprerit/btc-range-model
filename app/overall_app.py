@@ -190,6 +190,23 @@ for pk in ov.PARENT_KEYS:
     if grp:
         parents.append((pk, grp))
 
+# ── diagnostic: make a silently-dropped app VISIBLE ─────────────────────────
+# All 8 apps (13 instruments) should load. If one fails in a given environment
+# (e.g. a data/model file missing or a library-version mismatch), its sleeve is
+# dropped and every combined number changes — so surface it loudly instead of
+# showing a quietly-reduced universe.
+_present = {r["parent"] for r in results}
+_missing = [k for k in ov.PARENT_KEYS if k not in _present]
+if _missing:
+    _errs = getattr(ov, "_LAST_ERRORS", {})
+    _lines = "; ".join(f"**{k}** ({_errs.get(k, 'not loaded')})" for k in _missing)
+    st.warning(
+        f"⚠️ Only **{len(results)}/13** instruments loaded — the following "
+        f"app(s) failed to load, so the combined strategy & back-test below are "
+        f"computed on a **reduced universe** and won't match the full-universe "
+        f"figures: {_lines}. Press **Refresh now**; if it persists, the app's "
+        f"data/model files may be unavailable in this environment.")
+
 
 # ── small HTML helpers ─────────────────────────────────────────────────────
 def _pill(text, color, bg=None):
