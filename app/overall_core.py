@@ -132,32 +132,19 @@ GLDM_CFG = TickerConfig(
                   "GDX +156% / −19% / 1.12, UGL +184% / −20% / 1.28."),
 )
 
-# REMX — override to the DIVERGENCE Pure-Regime system for the combined book
-# (a U1×D2×stop×D1-exit sweep showed it is REMX's better risk-adjusted choice
-# OOS: +109% / −18% MDD / Sharpe 0.93 vs the MA150 filter's +73% / −56% / 0.48).
-# The standalone REMX app keeps its MA150 config (which wins the full 2016+
-# cycle on raw return); this override is scoped to the combined-strategy mandate.
-REMX_CFG = replace(
-    get_config("REMX"),
-    strategy_mode="divergence",
-    strategy_name="Metals Divergence Pure-Regime",
-    u1_errhi_min=0.16, d2_errhi_max=-0.18, d1_errlo_min=0.10, v_errlo_min=0.50,
-    use_d1_exit=False, fixed_stop=0.08,
-    results_note=("Divergence Pure-Regime (chosen for the combined book): OOS "
-                  "2021→now +109% at −18% max drawdown, Sharpe 0.93 — vs the "
-                  "MA150 filter's +73% / −56% / 0.48 and buy-&-hold +24% / "
-                  "−74% / 0.30."),
-)
-
-
 def overall_config(key: str) -> TickerConfig:
-    """Return the unified parent config for one signal app."""
+    """Return the unified parent config for one signal app.
+
+    Every app is aligned to the strategy its own app trades: BTC via the CT
+    engine (see run_universe), GLDM via its Divergence Pure-Regime config, and
+    the six ETF apps via their exact ``ticker_config`` entries — including
+    **REMX on its MA150 trend filter** (its app's strategy; an earlier
+    divergence override was reverted so the Overall app matches each source app).
+    """
     if key == "BTC":
         return BTC_CFG
     if key == "GLDM":
         return GLDM_CFG
-    if key == "REMX":
-        return REMX_CFG
     return get_config(key)
 
 
@@ -439,9 +426,28 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
 
 
 def run_universe() -> list[dict]:
-    """Run every instrument across all apps; skip any that fail to fetch."""
+    """Run every instrument across all apps; skip any that fail.
+
+    BTC/MSTR/MSTU are run through the BTC app's ACTUAL CT-model engine
+    (``btc_ct_engine``); every other app is run through the shared daily engine
+    with its own tuned config, which is the exact engine those apps use.
+    """
     out = []
     for cfg in all_configs():
+        if cfg.key == "BTC":
+            try:
+                import btc_ct_engine
+                out.extend(btc_ct_engine.run_btc_ct())
+            except Exception:
+                pass
+            continue
+        if cfg.key == "GLDM":
+            try:
+                import gldm_engine
+                out.extend(gldm_engine.run_gldm())
+            except Exception:
+                pass
+            continue
         try:
             out.extend(run_asset(cfg))
         except Exception:

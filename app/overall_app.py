@@ -425,7 +425,8 @@ with tab_live:
         dec = head["decision"]; col = _TONE_COL.get(dec["tone"], C_FLAT)
         sent = head["sentiment"]
         sent_s = f"{sent:.0f}/100" if sent == sent else "—"
-        eng = (f"MA{head['ma_window']}" if head["mode"] == "ma" else "Divergence")
+        eng = ("CT-Divergence" if head["mode"] == "ct-divergence"
+               else f"MA{head['ma_window']}" if head["mode"] == "ma" else "Divergence")
         st.markdown(
             f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 4px 0'>"
             f"<span style='font-size:16px;font-weight:800'>{head['emoji']} {pk}</span>"
@@ -608,11 +609,12 @@ with tab_bt:
                "parent's signal**, not their own: MSTR/MSTU enter and exit on "
                "BTC's divergence signal, GDX/UGL on gold's, OIH on XLE's — the "
                "higher-beta name executes on its own price but is steered by the "
-               "cleaner parent read. **BTC/MSTR/MSTU show weak daily numbers** "
-               "because BTC uses the BTC app's hourly-calibrated divergence "
-               "thresholds, which don't rebuild well daily — they're aligned for "
-               "live-signal consistency, not daily performance, and earn ~0 "
-               "weight in the blend.")
+               "cleaner parent read. Every asset here runs its **own app's actual "
+               "engine** — BTC/MSTR/MSTU via the BTC app's trained CT model, "
+               "GLDM/GDX/UGL via the Gold app's Divergence Pure-Regime, the ETFs "
+               "via their tuned configs — so these numbers match each source app. "
+               "(BTC's CT features begin ~2024, so its sleeve covers a shorter "
+               "window than the 2021-start ETFs.)")
     ah = ("<tr style='background:#f1f5f9'><th style='text-align:left;padding:6px 10px'>Instrument</th>"
           "<th>Signal / engine</th><th style='text-align:right'>Strat</th>"
           "<th style='text-align:right'>Buy&amp;Hold</th><th style='text-align:right'>Max DD</th>"
@@ -623,7 +625,8 @@ with tab_bt:
         for res in grp:
             mm = res["metrics"]; bb = res["bh_metrics"]
             beat = mm["total_ret"] >= bb["total_ret"]
-            base_eng = f"MA{res['ma_window']}" if res["mode"] == "ma" else "Divergence"
+            base_eng = ("CT-Divergence" if res["mode"] == "ct-divergence"
+                        else f"MA{res['ma_window']}" if res["mode"] == "ma" else "Divergence")
             if res["key"] == res["parent"]:          # this app's own signal instrument
                 eng = f"{base_eng} signal"
             else:                                     # sibling traded off the parent signal
@@ -678,8 +681,8 @@ signal (never its own), exactly as the dedicated apps do:
 
 | App / signal | Traded instruments | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | Divergence Pure-Regime, −3% (app-aligned)† |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) | Divergence Pure-Regime, −3% |
+| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | BTC app's CT-model Divergence Pure-Regime |
+| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) | Gold app's Divergence Pure-Regime, −3% |
 | 🛢️ **XLE** | XLE · OIH (β) | Divergence Pure-Regime, −8% |
 | 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
 | 🖥️ **SOXX** | SOXX | MA40, −5% |
@@ -687,20 +690,22 @@ signal (never its own), exactly as the dedicated apps do:
 | ⚡ **GRID** | GRID | MA150, −5% |
 | ⛏️ **WGMI** | WGMI (β) | MA30, −10% |
 
-β = higher-beta sibling · 2× = leveraged. The six ETF apps reuse their **exact**
-`ticker_config` entries. **Gold reuses the Gold app's actual Divergence
-Pure-Regime strategy** (U1 entry inside a 50-day regime gate, D2/D3 exits, −3%
-stop) — it rebuilds well daily because gold trends smoothly. **BTC now uses the
-same Divergence Pure-Regime logic and thresholds as the BTC app** (U1 err_hi
->+1.3% + ≥2 high-breaks, D2 exit <−1.3%, MA30 regime gate, −3% stop), so its live
-entry/exit signal tracks the BTC app. REMX is switched to divergence for the
-combined book — a sweep showed it is REMX's better risk-adjusted choice OOS.
+Every asset runs the **exact engine its own app trades**, so the Overall app's
+signals, positions and back-tests match each source app:
 
-**† BTC caveat.** Those ±1.3% thresholds are calibrated for the BTC app's *hourly*
-CT-model. Rebuilt on a daily RidgeCV H/L model the predictions are noisier, so
-BTC/MSTR/MSTU's **daily back-test is weak and they earn ~0 weight in the blend** —
-the alignment buys live-signal consistency with the BTC app, not daily
-performance. The only faithful BTC back-test is the dedicated BTC app itself.
+- **BTC / MSTR / MSTU** run the **BTC app's own trained CT model**
+  (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
+  premium) with the app's live Pure-Regime gate (U1>+1.3% + ≥2 high-breaks,
+  regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL re-entry). This
+  reproduces the BTC app's headline **BTC +102% / MSTR +213% / MSTU +504%**. The
+  CT feature data begins ~2023-11, so the BTC sleeve covers ~2024→now (the
+  combined engine handles the staggered start).
+- **GLDM / GDX / UGL** run the **Gold app's `backtest_gldm`** Divergence
+  Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
+  −3% stops — reproducing the Gold app's **GDX +272% / UGL +211%**.
+- **SOXX / VEGN / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
+  entries through the same `backtest_ticker` engine their apps use (REMX on its
+  MA150 trend filter). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert
