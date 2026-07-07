@@ -323,12 +323,19 @@ with tab_live:
                "back-tested win-rate and its risk-adjusted edge — it decides which "
                "signals get funded and how much. Held/opened risk assets total "
                "100%; any capped-out remainder is parked in **SATA**.")
+    _pv_cols = st.columns([1, 2])
+    with _pv_cols[0]:
+        portfolio_value = st.number_input(
+            "💼 Portfolio value ($)", min_value=0.0, value=100000.0, step=1000.0,
+            format="%.0f", key="overall_portfolio_value",
+            help="Target $ per instrument = target % × this value.")
     hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
            "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
            "<th>Live signal</th><th style='text-align:center'>Priority</th>"
            "<th style='text-align:right'>Price</th>"
            "<th style='text-align:right'>Unreal. P&amp;L</th>"
-           "<th style='text-align:right'>Target %</th></tr>")
+           "<th style='text-align:right'>Target %</th>"
+           "<th style='text-align:right'>Target $</th></tr>")
     rows = []
     for a in gate["actions"]:
         ac = _ACTION_COL[a["action"]]
@@ -353,6 +360,7 @@ with tab_live:
         bar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
                f"margin-top:3px'><div style='height:7px;width:{min(tgt*100,100):.0f}%;"
                f"background:{_r['accent']}'></div></div>" if tgt > 0.0005 else "")
+        amt_s = f"${tgt * portfolio_value:,.0f}" if tgt > 0.0005 else "—"
         rows.append(
             f"<tr style='border-bottom:1px solid #eef2f7'>"
             f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}</td>"
@@ -363,7 +371,8 @@ with tab_live:
             f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}</td>"
-            f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td></tr>")
+            f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td>"
+            f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td></tr>")
     # SATA row — the idle-cash park absorbing whatever risk assets can't hold
     si = gate["sata_info"]; sata_pct = gate["sata"]
     sbar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
@@ -379,7 +388,9 @@ with tab_live:
         f"<td style='text-align:center;color:#cbd5e1'>—</td>"
         f"<td style='text-align:right'>${si['par']:,.0f}</td>"
         f"<td style='text-align:right;color:{C_BUY}'>+{si['annual_rate']*100:.0f}%/yr</td>"
-        f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td></tr>")
+        f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
+        f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
+        f"${sata_pct*portfolio_value:,.0f}</td></tr>")
     st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
                 unsafe_allow_html=True)
     if gate["n_active"] == 0:
