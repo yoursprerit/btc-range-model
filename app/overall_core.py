@@ -322,17 +322,30 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
         if (not in_pos) and above:
             return dict(state="ENTRY", label="ENTER — ABOVE TREND", ico="🟢", tone="buy")
         return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
-    alert = (sigs or {}).get("alert_level", "NEUTRAL")
+    # Divergence — replicate the backtest's exit-overrides-entry precedence
+    # (backtest_ticker.simulate: exit on d2/d3/d1-exit; enter only when the gate
+    # fires AND no exit is active) so the displayed decision can never say "buy"
+    # while an exit signal is live — matching each app's net_signal.
+    d1 = bool((sigs or {}).get("d1_triggered"))
+    d2 = bool((sigs or {}).get("d2_triggered"))
+    d3 = bool((sigs or {}).get("d3_triggered"))
+    exit_sig = d2 or d3 or (d1 and cfg.use_d1_exit)
+    entry_gate = bool((sigs or {}).get("entry_triggered"))
+    why = ("D3 exhaustion" if d3 else "D2 momentum fade" if d2 else "D1 downtrend")
     if in_pos:
-        if alert in ("HIGH_DN", "ELEVATED_DN"):
-            return dict(state="EXIT", label="EXIT — DOWNTREND PRESSURE", ico="🔴", tone="exit")
+        if exit_sig:
+            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit")
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
-    if alert == "STRATEGY_BUY":
+    # flat — an active exit signal blocks entry (net-exit), even if U1 is firing
+    if exit_sig:
+        return dict(state="AVOID", label=f"STAND ASIDE — EXIT ACTIVE ({why})",
+                    ico="🟠", tone="watch")
+    if entry_gate:
         return dict(state="ENTRY", label="ENTER — PURE-REGIME BUY", ico="🟢", tone="buy")
-    if alert == "WATCH_UP":
+    if bool((sigs or {}).get("u1_triggered")):
         return dict(state="WATCH", label="WATCH — UPTREND (GATE PENDING)", ico="🟡", tone="watch")
-    if alert in ("HIGH_DN", "ELEVATED_DN", "WATCH_DN"):
-        return dict(state="AVOID", label="STAND ASIDE — DOWNTREND", ico="🟠", tone="watch")
+    if d1:
+        return dict(state="AVOID", label="STAND ASIDE — DOWNTREND (D1)", ico="🟠", tone="watch")
     return dict(state="FLAT", label="FLAT — NO SIGNAL", ico="⬜", tone="flat")
 
 
@@ -624,16 +637,16 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
 
     actions = []
     for res in results:
-        k = res["key"]; dec = res["decision"]
-        if res["pos"]["in_pos"] and dec["tone"] == "exit":
+        k = res["key"]; dec = res["decision"]; stt = dec["state"]
+        if res["pos"]["in_pos"] and stt == "EXIT":
             act = "CLOSE"
         elif res["pos"]["in_pos"]:
             act = "HOLD"
-        elif dec["tone"] == "buy":
+        elif stt == "ENTRY":
             act = "OPEN"
-        elif dec["tone"] == "watch":
+        elif stt == "WATCH":            # U1 pressure, gate not yet met
             act = "WATCH"
-        else:
+        else:                            # AVOID (exit active / downtrend) or FLAT
             act = "STAND ASIDE"
         p = prio.get(k)
         actions.append(dict(key=k, name=res["name"], emoji=res["emoji"],
