@@ -14,6 +14,9 @@ requests>=2.31
 # Web app
 streamlit>=1.30
 plotly>=5.18
+# Live auto-refresh of the Overall Trading price column (optional — the app
+# degrades gracefully to click/reload refresh if this is unavailable).
+streamlit-autorefresh>=1.0.1
 
 # Notebook generation
 nbformat>=5.9

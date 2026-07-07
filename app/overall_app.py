@@ -51,7 +51,13 @@ import ticker_config
 if not hasattr(ov, "run_universe"):
     ov = importlib.reload(ov)
 
+try:                                  # optional live auto-refresh (graceful if absent)
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
+
 N_ALL = len(ov.SPOT_SYMBOLS)          # total instruments the universe spans
+_AUTOREFRESH_SECS = 45                # re-run cadence so the live price column ticks
 
 
 # ── app registry (shared with the router / other apps) ────────────────────
@@ -97,6 +103,13 @@ with st.sidebar:
     st.caption("_Overall Trading fuses all the asset apps into one portfolio. "
                "Each app's signal trades its 1× primary plus higher-beta / "
                "leveraged siblings, all re-run through one unified daily engine._")
+
+# Auto-rerun the page every ~45s so the live spot-price column ticks without a
+# click.  It only re-fetches quotes when the 60-second spot cache expires, and
+# the heavy strategy/optimise stays on its 30-min cache — so each tick is cheap.
+# Session state (risk profile, portfolio value) is preserved across the rerun.
+if st_autorefresh is not None:
+    st_autorefresh(interval=_AUTOREFRESH_SECS * 1000, key="overall_spot_tick")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -266,7 +279,9 @@ tab_live, tab_bt, tab_explain = st.tabs(
 # TAB 1 — LIVE DECISION COCKPIT
 # ══════════════════════════════════════════════════════════════════════════
 with tab_live:
-    _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>"
+    _auto = (f" · auto-refreshing every {_AUTOREFRESH_SECS}s"
+             if (st_autorefresh is not None and _n_spot) else "")
+    _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>{_auto}"
                 if _n_spot else " · <span style='color:#dc2626'>spot quote unavailable — showing last bar</span>")
     st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** · "
                 f"{len(results)} instruments across {len(parents)} signals{_px_note}",
