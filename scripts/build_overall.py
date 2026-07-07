@@ -25,8 +25,8 @@ import overall_core as oc   # noqa: E402
 def main():
     print("Running universe (live fetch, ~30-90s)…", flush=True)
     results = oc.run_universe()
-    print(f"  ran {len(results)}/{len(oc.UNIVERSE_KEYS)} assets: "
-          f"{[r['key'] for r in results]}", flush=True)
+    print(f"  ran {len(results)} instruments across {len(oc.PARENT_KEYS)} apps: "
+          f"{[(r['key'], r['parent']) for r in results]}", flush=True)
 
     rets = oc.returns_matrix(results)
     print("Return matrix:", rets.shape, rets.index[0].date(), "->", rets.index[-1].date())
