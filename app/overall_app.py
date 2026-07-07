@@ -363,6 +363,17 @@ with tab_live:
                 help=f"{gate['sata_info']['name']} — idle cash parked at "
                      f"~{gate['sata_info']['annual_rate']*100:.0f}% yield.")
 
+    # live-adjusted allocation (drops MA positions whose live price is below the
+    # trend filter → they exit next bar) — used by the action table's Live target
+    # columns and by the "Recommended now" pie below.
+    _live_exits = ov.live_exit_keys(results, _spot)
+    try:
+        gate_live = ov.signal_gated_allocation(
+            results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
+            force_exit=_live_exits)
+    except Exception:
+        gate_live = gate
+
     # ── 1. TODAY'S ACTION PLAN ──────────────────────────────────────────
     st.markdown("### 🎯 Today's action plan")
     st.caption("What to do now, ranked: **close** exits first, then **open** / "
@@ -375,7 +386,11 @@ with tab_live:
                "**red** ⚠️ are long positions whose trend has broken — they still "
                "hold today but **exit on the next bar**. **Unreal. P&L** is measured "
                "against each position's real cost basis — the official close on its "
-               "entry bar.")
+               "entry bar. **Target % / $ (Last bar)** is the committed allocation "
+               "from the last-close signals; **Target % / $ (Live)** re-runs it "
+               "against the current live price, dropping any position exiting next "
+               "bar and reallocating to the survivors and SATA (differences are "
+               "coloured green/red).")
     _pv_cols = st.columns([1, 2])
     with _pv_cols[0]:
         portfolio_value = st.number_input(
@@ -388,12 +403,15 @@ with tab_live:
            "<th style='text-align:right'>Price</th>"
            "<th style='text-align:right'>Chg %</th>"
            "<th style='text-align:right'>Unreal. P&amp;L</th>"
-           "<th style='text-align:right'>Target %</th>"
-           "<th style='text-align:right'>Target $</th></tr>")
+           "<th style='text-align:right'>Target % (Last bar)</th>"
+           "<th style='text-align:right'>Target $ (Last bar)</th>"
+           "<th style='text-align:right'>Target % (Live)</th>"
+           "<th style='text-align:right'>Target $ (Live)</th></tr>")
     rows = []
     for a in gate["actions"]:
         ac = _ACTION_COL[a["action"]]
-        tgt = a["target"]
+        tgt = a["target"]                                    # last-bar (committed)
+        tgt_live = gate_live["target"].get(a["key"], 0.0)    # live-adjusted
         tgt_s = f"{tgt*100:.1f}%" if tgt > 0.0005 else "—"
         pnl = _pct(a["upnl"]) if a["in_pos"] else "—"
         pnl_col = (C_BUY if (a["upnl"] or 0) >= 0 else C_EXIT) if a["in_pos"] else "#94a3b8"
@@ -411,10 +429,19 @@ with tab_live:
                          f"<div style='height:5px;width:{p*100:.0f}%;background:{pcolor};border-radius:3px'></div></div>")
         else:
             prio_cell = "<span style='color:#cbd5e1'>—</span>"
-        bar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
-               f"margin-top:3px'><div style='height:7px;width:{min(tgt*100,100):.0f}%;"
-               f"background:{_r['accent']}'></div></div>" if tgt > 0.0005 else "")
+        def _tgt_bar(t):
+            return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
+                    f"margin-top:3px'><div style='height:7px;width:{min(t*100,100):.0f}%;"
+                    f"background:{_r['accent']}'></div></div>" if t > 0.0005 else "")
+        bar = _tgt_bar(tgt)
         amt_s = f"${tgt * portfolio_value:,.0f}" if tgt > 0.0005 else "—"
+        # live-adjusted target (accounts for positions exiting next bar on live px)
+        tgt_live_s = f"{tgt_live*100:.1f}%" if tgt_live > 0.0005 else "—"
+        bar_live = _tgt_bar(tgt_live)
+        amt_live_s = f"${tgt_live * portfolio_value:,.0f}" if tgt_live > 0.0005 else "—"
+        # highlight a live target that has diverged from the last-bar target
+        _live_moved = abs(tgt_live - tgt) > 0.005
+        _live_col = (C_EXIT if tgt_live < tgt else C_BUY) if _live_moved else "inherit"
         # today's price change (%) — live day-change from the spot overlay
         _dchg = _r.get("dchg")
         if _dchg is None or (isinstance(_dchg, float) and np.isnan(_dchg)):
@@ -446,12 +473,18 @@ with tab_live:
             f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{chg_col}'>{chg_s}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"
             f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td>"
-            f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td></tr>")
+            f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td>"
+            f"<td style='text-align:right;font-weight:700;color:{_live_col}'>{tgt_live_s}{bar_live}</td>"
+            f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:{_live_col}'>{amt_live_s}</td></tr>")
     # SATA row — the idle-cash park absorbing whatever risk assets can't hold
-    si = gate["sata_info"]; sata_pct = gate["sata"]
-    sbar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
-            f"margin-top:3px'><div style='height:7px;width:{min(sata_pct*100,100):.0f}%;"
-            f"background:#334155'></div></div>" if sata_pct > 0.0005 else "")
+    si = gate["sata_info"]; sata_pct = gate["sata"]; sata_live = gate_live["sata"]
+
+    def _sata_bar(t):
+        return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
+                f"margin-top:3px'><div style='height:7px;width:{min(t*100,100):.0f}%;"
+                f"background:#334155'></div></div>" if t > 0.0005 else "")
+    sbar = _sata_bar(sata_pct); sbar_live = _sata_bar(sata_live)
+    _sata_col = (C_BUY if sata_live > sata_pct else C_EXIT) if abs(sata_live - sata_pct) > 0.005 else "inherit"
     # live SATA quote — price, day-change, and P&L vs the $100 par cost basis
     _sa_px = _sata.get("price"); _sa_dc = _sata.get("dchg"); _sa_pnl = _sata.get("upnl")
     sa_px_s = f"${_sa_px:,.2f}" if _sa_px else f"${si['par']:,.0f}"
@@ -477,7 +510,10 @@ with tab_live:
         f"<td style='text-align:right;font-weight:600;color:{sa_pnl_col}'>{sa_pnl_s}{sa_pnl_sub}</td>"
         f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
         f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
-        f"${sata_pct*portfolio_value:,.0f}</td></tr>")
+        f"${sata_pct*portfolio_value:,.0f}</td>"
+        f"<td style='text-align:right;font-weight:800;color:{_sata_col}'>{sata_live*100:.1f}%{sbar_live}</td>"
+        f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_sata_col}'>"
+        f"${sata_live*portfolio_value:,.0f}</td></tr>")
     st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
                 unsafe_allow_html=True)
     if gate["n_active"] == 0:
@@ -514,14 +550,7 @@ with tab_live:
                "price has fallen below its trend filter — it still holds today "
                "but exits on the next bar — and reallocates that capital to the "
                "survivors and SATA.")
-    # live-adjusted target: force out MA positions the live price says exit next bar
-    _live_exits = ov.live_exit_keys(results, _spot)
-    try:
-        gate_live = ov.signal_gated_allocation(
-            results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
-            force_exit=_live_exits)
-    except Exception:
-        gate_live = gate
+    # (_live_exits / gate_live computed above, before the action table)
     ac = st.columns([1, 1, 1])
 
     def _alloc_donut(alloc: dict, sata: float, title: str):
