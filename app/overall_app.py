@@ -374,7 +374,90 @@ with tab_live:
     except Exception:
         gate_live = gate
 
-    # ── 1. TODAY'S ACTION PLAN ──────────────────────────────────────────
+    # ── 1. OPTIMAL ALLOCATION TODAY vs CURRENT BOOK ─────────────────────
+    st.markdown("### 📐 Optimal allocation for today")
+    st.caption("**Current book** = what the strategy holds right now. "
+               "**Recommended today** = the book after today's *committed* "
+               "(last-close) signals — risk assets sized by the optimal weights "
+               "tilted by entry priority (caps: 30% core, 18% high-beta, 10% "
+               "leveraged); the remainder sits in **SATA**. **Recommended now "
+               "(live-adjusted)** additionally drops any position whose *live* "
+               "price has fallen below its trend filter — it still holds today "
+               "but exits on the next bar — and reallocates that capital to the "
+               "survivors and SATA.")
+    # (_live_exits / gate_live computed above, before the action table)
+    ac = st.columns([1, 1, 1])
+
+    def _alloc_donut(alloc: dict, sata: float, title: str):
+        labels, vals, colors = [], [], []
+        for kk, vv in sorted(alloc.items(), key=lambda x: -x[1]):
+            if vv <= 0.0005:
+                continue
+            tag = {"lev": " 2×", "beta": " β"}.get(by_key[kk]["kind"], "")
+            labels.append(f"{kk}{tag}"); vals.append(vv * 100)
+            colors.append(by_key[kk]["accent"])
+        if sata > 0.005:
+            labels.append("SATA"); vals.append(sata * 100); colors.append("#334155")
+        if not vals:
+            labels, vals, colors = ["SATA"], [100.0], ["#334155"]
+        fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.58,
+                               marker=dict(colors=colors,
+                                           line=dict(color="#fff", width=1)),
+                               sort=False, textinfo="label+percent", textfont_size=11,
+                               hovertemplate="%{label}: %{value:.1f}%<extra></extra>"))
+        fig.update_layout(title=dict(text=title, font_size=14), showlegend=False,
+                          height=320, margin=dict(t=40, b=10, l=10, r=10))
+        return fig
+
+    _live_title = ("Recommended now (live-adjusted)" if _live_exits
+                   else "Recommended now (live) — no pending exits")
+    ac[0].plotly_chart(_alloc_donut(gate["current"], gate["sata_now"],
+                                    "Current book"), use_container_width=True)
+    ac[1].plotly_chart(_alloc_donut(gate["target"], gate["sata"],
+                                    "Recommended today"), use_container_width=True)
+    ac[2].plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
+                                    _live_title), use_container_width=True)
+    if _live_exits:
+        st.warning("⚠️ **Live-adjusted:** " + ", ".join(sorted(_live_exits)) +
+                   " " + ("is" if len(_live_exits) == 1 else "are") +
+                   " long today but the **live price is below the trend filter**, "
+                   "so " + ("it" if len(_live_exits) == 1 else "they") +
+                   " will exit on the next bar. The **Recommended now** pie removes "
+                   + ("it" if len(_live_exits) == 1 else "them") +
+                   " and reallocates to the survivors and SATA.")
+    else:
+        st.caption("No held position's live price is below its trend filter — the "
+                   "live-adjusted book matches **Recommended today**.")
+
+    st.markdown("**Rebalancing moves** — current book → live-adjusted target")
+    moves = []
+    for kk in sorted(set(gate["current"]) | set(gate_live["target"]),
+                     key=lambda x: -(gate_live["target"].get(x, 0))):
+        cur = gate["current"].get(kk, 0.0); tg = gate_live["target"].get(kk, 0.0)
+        d = tg - cur
+        if abs(d) < 0.005:
+            continue
+        col = C_BUY if d > 0 else C_EXIT
+        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
+                     f"<b>{kk}</b>{_kind_badge(by_key[kk]['kind'])} "
+                     f"{cur*100:.0f}% → {tg*100:.0f}% "
+                     f"<span style='color:{col};font-weight:700'>"
+                     f"{'▲' if d>0 else '▼'}{abs(d)*100:.0f}pt</span></span>")
+    dsata = gate_live["sata"] - gate["sata_now"]
+    if abs(dsata) >= 0.005:
+        col = C_EXIT if dsata > 0 else C_BUY
+        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
+                     f"💵 <b>SATA</b> "
+                     f"{gate['sata_now']*100:.0f}% → {gate_live['sata']*100:.0f}% "
+                     f"<span style='color:{col};font-weight:700'>"
+                     f"{'▲' if dsata>0 else '▼'}{abs(dsata)*100:.0f}pt</span></span>")
+    st.markdown("".join(moves) if moves
+                else "_Book already at target — no rebalancing needed._",
+                unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
     st.markdown("### 🎯 Today's action plan")
     st.caption("What to do now, ranked: **close** exits first, then **open** / "
                "**hold**, ordered by entry priority. β = higher-beta sibling · "
@@ -536,89 +619,6 @@ with tab_live:
                 f"{a['key']} → {a['target']*100:.0f}%" for a in opens))
         else:
             st.info("**No fresh entries today** — no flat instrument is signalling a buy.")
-
-    st.markdown("---")
-
-    # ── 2. OPTIMAL ALLOCATION TODAY vs CURRENT BOOK ─────────────────────
-    st.markdown("### 📐 Optimal allocation for today")
-    st.caption("**Current book** = what the strategy holds right now. "
-               "**Recommended today** = the book after today's *committed* "
-               "(last-close) signals — risk assets sized by the optimal weights "
-               "tilted by entry priority (caps: 30% core, 18% high-beta, 10% "
-               "leveraged); the remainder sits in **SATA**. **Recommended now "
-               "(live-adjusted)** additionally drops any position whose *live* "
-               "price has fallen below its trend filter — it still holds today "
-               "but exits on the next bar — and reallocates that capital to the "
-               "survivors and SATA.")
-    # (_live_exits / gate_live computed above, before the action table)
-    ac = st.columns([1, 1, 1])
-
-    def _alloc_donut(alloc: dict, sata: float, title: str):
-        labels, vals, colors = [], [], []
-        for kk, vv in sorted(alloc.items(), key=lambda x: -x[1]):
-            if vv <= 0.0005:
-                continue
-            tag = {"lev": " 2×", "beta": " β"}.get(by_key[kk]["kind"], "")
-            labels.append(f"{kk}{tag}"); vals.append(vv * 100)
-            colors.append(by_key[kk]["accent"])
-        if sata > 0.005:
-            labels.append("SATA"); vals.append(sata * 100); colors.append("#334155")
-        if not vals:
-            labels, vals, colors = ["SATA"], [100.0], ["#334155"]
-        fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.58,
-                               marker=dict(colors=colors,
-                                           line=dict(color="#fff", width=1)),
-                               sort=False, textinfo="label+percent", textfont_size=11,
-                               hovertemplate="%{label}: %{value:.1f}%<extra></extra>"))
-        fig.update_layout(title=dict(text=title, font_size=14), showlegend=False,
-                          height=320, margin=dict(t=40, b=10, l=10, r=10))
-        return fig
-
-    _live_title = ("Recommended now (live-adjusted)" if _live_exits
-                   else "Recommended now (live) — no pending exits")
-    ac[0].plotly_chart(_alloc_donut(gate["current"], gate["sata_now"],
-                                    "Current book"), use_container_width=True)
-    ac[1].plotly_chart(_alloc_donut(gate["target"], gate["sata"],
-                                    "Recommended today"), use_container_width=True)
-    ac[2].plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
-                                    _live_title), use_container_width=True)
-    if _live_exits:
-        st.warning("⚠️ **Live-adjusted:** " + ", ".join(sorted(_live_exits)) +
-                   " " + ("is" if len(_live_exits) == 1 else "are") +
-                   " long today but the **live price is below the trend filter**, "
-                   "so " + ("it" if len(_live_exits) == 1 else "they") +
-                   " will exit on the next bar. The **Recommended now** pie removes "
-                   + ("it" if len(_live_exits) == 1 else "them") +
-                   " and reallocates to the survivors and SATA.")
-    else:
-        st.caption("No held position's live price is below its trend filter — the "
-                   "live-adjusted book matches **Recommended today**.")
-
-    st.markdown("**Rebalancing moves** — current book → live-adjusted target")
-    moves = []
-    for kk in sorted(set(gate["current"]) | set(gate_live["target"]),
-                     key=lambda x: -(gate_live["target"].get(x, 0))):
-        cur = gate["current"].get(kk, 0.0); tg = gate_live["target"].get(kk, 0.0)
-        d = tg - cur
-        if abs(d) < 0.005:
-            continue
-        col = C_BUY if d > 0 else C_EXIT
-        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-                     f"<b>{kk}</b>{_kind_badge(by_key[kk]['kind'])} "
-                     f"{cur*100:.0f}% → {tg*100:.0f}% "
-                     f"<span style='color:{col};font-weight:700'>"
-                     f"{'▲' if d>0 else '▼'}{abs(d)*100:.0f}pt</span></span>")
-    dsata = gate_live["sata"] - gate["sata_now"]
-    if abs(dsata) >= 0.005:
-        col = C_EXIT if dsata > 0 else C_BUY
-        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-                     f"💵 <b>SATA</b> "
-                     f"{gate['sata_now']*100:.0f}% → {gate_live['sata']*100:.0f}% "
-                     f"<span style='color:{col};font-weight:700'>"
-                     f"{'▲' if dsata>0 else '▼'}{abs(dsata)*100:.0f}pt</span></span>")
-    st.markdown("".join(moves) if moves
-                else "_Book already at target — no rebalancing needed._",
-                unsafe_allow_html=True)
 
     st.markdown("---")
 
