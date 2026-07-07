@@ -198,13 +198,19 @@ with tab_live:
                f"margin-top:3px'><div style='height:7px;width:{min(tgt*100,100):.0f}%;"
                f"background:{a['emoji'] and by_key[a['key']]['accent']}'></div></div>"
                if tgt > 0.0005 else "")
+        _r = by_key[a["key"]]
+        if _r["mode"] == "ma" and _r.get("ma_val"):
+            _dist = (_r["last_close"] / _r["ma_val"] - 1) * 100
+            sub = f"close {_dist:+.1f}% vs MA{_r['ma_window']}"
+        else:
+            sub = f"alert: {a['alert']}"
         rows.append(
             f"<tr style='border-bottom:1px solid #eef2f7'>"
             f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}</td>"
             f"<td style='font-weight:700'>{a['emoji']} {a['key']}"
             f"<div style='font-size:11px;color:#64748b;font-weight:400'>{a['name']}</div></td>"
             f"<td style='font-size:12px;color:{_TONE_COL.get(a['tone'], C_FLAT)}'>{a['decision']}"
-            f"<div style='font-size:10px;color:#94a3b8'>alert: {a['alert']}</div></td>"
+            f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}</td>"
             f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td></tr>")
@@ -502,7 +508,7 @@ single portfolio.
 | 🌱 VEGN | VEGN | MA200, −5% | Its tuned config |
 | ⚡ GRID | GRID | MA150, −5% | Its tuned config |
 | 🛢️ XLE | XLE | Divergence Pure-Regime, −8% | Its tuned config |
-| 🧲 REMX | REMX | MA150, −5% | Its tuned config |
+| 🧲 REMX | REMX | **Divergence Pure-Regime, −8%** | Divergence wins REMX's risk-adjusted OOS (+109%/−18%/0.93 vs MA's +73%/−56%/0.48) — see note below |
 | ⛏️ WGMI | WGMI | MA30, −10% | Its tuned config |
 
 The six ETF apps reuse their **exact** `ticker_config` entries, so their numbers

@@ -247,7 +247,8 @@ def ma_state(d_df):
     ma = float(np.mean(c[-w:])) if len(c) >= 1 else np.nan
     ma_prev = float(np.mean(c[-(w + 5):-5])) if len(c) >= w + 5 else ma
     close = float(c[-1])
-    return dict(ma=ma, close=close, above=close > ma, slope_pos=ma > ma_prev, window=w)
+    return dict(ma=ma, ma_prev=ma_prev, close=close, above=close > ma,
+                slope_pos=ma > ma_prev, window=w)
 
 
 def strategy_position(col, end=None):
@@ -647,6 +648,84 @@ def render_signatures(sigs):
                     "Lo Brk": "✓" if r["lo_break"] else "–",
                 })
             st.dataframe(pd.DataFrame(disp[::-1]), hide_index=True, use_container_width=True)
+
+
+def render_ma_signatures(mst, pos=None):
+    """Signal cards for the MA-trend-filter mode — the conditions the strategy
+    *actually* trades on (close vs SMA, SMA slope, the fixed stop, position
+    state), in place of the divergence U1/D2/D3 read this app does not use."""
+    if not mst:
+        st.info("Not enough bars for the trend-filter read yet.")
+        return
+    ns = net_signal_ma(mst, pos)
+    c = mst["close"]; ma = mst["ma"]; w = mst["window"]
+    ma_prev = mst.get("ma_prev", ma)
+    above = mst["above"]; slope_pos = mst["slope_pos"]
+    dist = (c / ma - 1) * 100 if ma else 0.0
+    slope_pct = (ma / ma_prev - 1) * 100 if ma_prev else 0.0
+    in_pos = bool(pos and pos.get("in_pos_now"))
+
+    st.markdown(
+        f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
+        border-radius:10px;padding:12px 16px;margin:8px 0;">
+        <span style="background:{ns['brd']};color:white;font-weight:700;font-size:14px;
+        padding:5px 14px;border-radius:20px;">{ns['ico']} {ns['label']}</span>
+        <span style="color:#334155;font-size:13px;margin-left:10px;">
+        close <b>${c:,.2f}</b> · {w}-day SMA <b>${ma:,.2f}</b> ·
+        distance <b>{dist:+.2f}%</b> · SMA {'▲ rising' if slope_pos else '▼ falling'}</span></div>""",
+        unsafe_allow_html=True)
+
+    r1c1, r1c2 = st.columns(2)
+    r2c1, r2c2 = st.columns(2)
+    r1c1.markdown(_sig_card(
+        f"Trend Filter — long above the {w}-day SMA", "📈", "#16a34a", above,
+        [("close vs SMA", f"${c:,.2f}", f"> ${ma:,.2f}", above),
+         ("distance", f"{dist:+.2f}%", "> 0%", dist > 0)],
+        f"The one condition this strategy trades on: hold {cfg.key} long while the "
+        f"close is above the {w}-day SMA, and exit to cash on the next bar once it "
+        "closes below."), unsafe_allow_html=True)
+    r1c2.markdown(_sig_card(
+        "Trend Slope — SMA direction", "📐", "#16a34a", slope_pos,
+        [("SMA vs 5 bars ago", f"{slope_pct:+.2f}%", "rising", slope_pos)],
+        "A rising average confirms the up-trend; the filter's cleanest longs sit "
+        "above a rising SMA, and a rolling-over SMA warns the regime is turning."),
+        unsafe_allow_html=True)
+
+    stop_lbl = "Stop-Loss Guard — −%.0f%% fixed stop" % (cfg.fixed_stop * 100)
+    if in_pos and pos.get("entry_px"):
+        e_px = float(pos["entry_px"]); stop_px = e_px * (1 - cfg.fixed_stop)
+        cushion = (c / stop_px - 1) * 100
+        r2c1.markdown(_sig_card(
+            stop_lbl, "🛑", "#dc2626", cushion < 3.0,
+            [("stop level", f"${stop_px:,.2f}", "hold above", c > stop_px),
+             ("cushion to stop", f"{cushion:+.2f}%", "> 0%", cushion > 0)],
+            "A hard stop from the entry caps the single-trade loss if price gaps "
+            "down faster than the SMA can trigger the exit."), unsafe_allow_html=True)
+    else:
+        r2c1.markdown(_sig_card(
+            stop_lbl, "🛑", "#94a3b8", False,
+            [("status", "inactive (flat)", "opens with a position", False)],
+            "Inactive while in cash. On entry a hard −%.0f%% stop from the fill "
+            "protects against a fast breakdown before the SMA can react."
+            % (cfg.fixed_stop * 100)), unsafe_allow_html=True)
+
+    if in_pos and pos.get("entry_px"):
+        e_dt = pd.Timestamp(pos["entry_date"]); e_px = float(pos["entry_px"])
+        days = (pd.Timestamp(preds["target_date"].iloc[-1]) - e_dt).days
+        upnl = (c / e_px - 1) * 100
+        r2c2.markdown(_sig_card(
+            "Position — currently LONG", "📍", "#16a34a", True,
+            [("entry", f"{e_dt.strftime('%b %d')} @ ${e_px:,.2f}", "—", True),
+             ("unrealised P&L", f"{upnl:+.2f}%", "≥ 0", upnl >= 0),
+             ("days held", f"{days}d", "—", True)],
+            f"The trend filter is long {cfg.key}; it stays long until a close below "
+            f"the {w}-day SMA or the fixed stop."), unsafe_allow_html=True)
+    else:
+        r2c2.markdown(_sig_card(
+            "Position — currently FLAT", "⚪", "#94a3b8", False,
+            [("state", "in cash", "—", False)],
+            f"No open position. The filter re-enters when {cfg.key} closes back "
+            f"above the {w}-day SMA."), unsafe_allow_html=True)
 
 
 def position_panel(label, col, col_container, end=None):
@@ -1248,14 +1327,15 @@ def render_live_dashboard(as_of_date=None, is_live=True):
 
     if IS_DIV:
         st.markdown(f"### 🔔 Trend-Signature Alert  ·  _signals derived from the {cfg.key} daily H/L model_")
+        render_signatures(sigs)
     else:
-        st.markdown("### 🔔 Trend-Signature Alert  ·  _market context only — does **not** drive this app's strategy_")
-        st.info(f"ℹ️ **{cfg.key}'s strategy is the {cfg.ma_window}-day moving-average trend filter** "
-                "(the 🎯 panel just below). This U1 / D2 / D3 divergence read is shown only for "
-                "market context and parity with the Gold/BTC apps — it does **not** open or close "
-                f"{cfg.key} positions, so a 'U1 Watch' here is expected even while the trend filter "
-                "is long. Use the **🎯 Strategy conditions** panel for the live signal.")
-    render_signatures(sigs)
+        st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {cfg.ma_window}-day moving-average conditions this app trades on_")
+        render_ma_signatures(mst, primary_pos)
+        with st.expander("🔬 Divergence read (U1 / D2 / D3) — context only, not traded", expanded=False):
+            st.caption(f"For parity with the Gold/BTC apps. {cfg.key} is traded by the "
+                       f"{cfg.ma_window}-day trend filter above, so these divergence "
+                       "signatures do **not** open or close positions here.")
+            render_signatures(sigs)
 
     st.markdown(f"### 🎯 Strategy — {cfg.strategy_name}")
     render_strategy_card()

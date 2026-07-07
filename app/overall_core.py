@@ -117,12 +117,37 @@ ASSET_NAME = {
 }
 
 
+# REMX — override to the DIVERGENCE Pure-Regime system for the combined
+# portfolio.  A U1×D2×stop×D1-exit sweep showed divergence is the better
+# *risk-adjusted* choice for REMX out-of-sample (2021→now: +109% at −18% max
+# drawdown / Sharpe 0.93, vs the MA150 filter's +73% / −56% / 0.48 and
+# buy-&-hold's +24% / −74% / 0.30) — it dodges the rare-earth crashes the slow
+# MA rides down.  A −8% stop is inert here (the D2/D3 exits always fire first),
+# so it only bounds a gap.  The standalone REMX app keeps its MA150 config,
+# which wins the full 2016+ cycle on raw return; this override is scoped to the
+# Overall app's explicit "most optimal combined strategy" mandate.
+REMX_CFG = replace(
+    get_config("REMX"),
+    strategy_mode="divergence",
+    strategy_name="Metals Divergence Pure-Regime",
+    u1_errhi_min=0.16, d2_errhi_max=-0.18, d1_errlo_min=0.10, v_errlo_min=0.50,
+    use_d1_exit=False, fixed_stop=0.08,
+    results_note=("Divergence Pure-Regime (chosen for the combined book): OOS "
+                  "2021→now +109% at −18% max drawdown, Sharpe 0.93 — vs the "
+                  "MA150 filter's +73% / −56% / 0.48 and buy-&-hold +24% / "
+                  "−74% / 0.30. Trades the crude-metals swings and stands aside "
+                  "through the deep rare-earth busts."),
+)
+
+
 def overall_config(key: str) -> TickerConfig:
     """Return the unified config for one universe key."""
     if key == "BTC":
         return BTC_CFG
     if key == "GLDM":
         return GLDM_CFG
+    if key == "REMX":
+        return REMX_CFG
     return get_config(key)
 
 
