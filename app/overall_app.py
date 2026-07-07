@@ -377,6 +377,7 @@ with tab_live:
            "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
            "<th>Live signal</th><th style='text-align:center'>Priority</th>"
            "<th style='text-align:right'>Price</th>"
+           "<th style='text-align:right'>Chg %</th>"
            "<th style='text-align:right'>Unreal. P&amp;L</th>"
            "<th style='text-align:right'>Target %</th>"
            "<th style='text-align:right'>Target $</th></tr>")
@@ -405,6 +406,13 @@ with tab_live:
                f"margin-top:3px'><div style='height:7px;width:{min(tgt*100,100):.0f}%;"
                f"background:{_r['accent']}'></div></div>" if tgt > 0.0005 else "")
         amt_s = f"${tgt * portfolio_value:,.0f}" if tgt > 0.0005 else "—"
+        # today's price change (%) — live day-change from the spot overlay
+        _dchg = _r.get("dchg")
+        if _dchg is None or (isinstance(_dchg, float) and np.isnan(_dchg)):
+            chg_s, chg_col = "—", "#94a3b8"
+        else:
+            chg_s = f"{_dchg:+.2f}%"
+            chg_col = C_BUY if _dchg >= 0 else C_EXIT
         # cost basis = the real close on the entry bar
         _cb = _r["pos"].get("entry_px")
         cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
@@ -426,6 +434,7 @@ with tab_live:
             f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
             f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
+            f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{chg_col}'>{chg_s}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"
             f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td>"
             f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td></tr>")
@@ -443,6 +452,7 @@ with tab_live:
         f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par</div></td>"
         f"<td style='text-align:center;color:#cbd5e1'>—</td>"
         f"<td style='text-align:right'>${si['par']:,.0f}</td>"
+        f"<td style='text-align:right;color:#94a3b8'>—</td>"
         f"<td style='text-align:right;color:{C_BUY}'>+{si['annual_rate']*100:.0f}%/yr</td>"
         f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
         f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"

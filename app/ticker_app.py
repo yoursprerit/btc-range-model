@@ -1010,6 +1010,25 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
         if lo_up > hl["pred_low"] - hl["band_lo"]:
             fig.add_hrect(y0=hl["pred_low"] - hl["band_lo"], y1=lo_up,
                           fillcolor="rgba(220,30,30,0.12)", line_width=0, layer="below")
+    # MA-mode apps: overlay the SMA the trend filter actually trades on, so the
+    # live hourly price can be read directly against its entry/exit threshold.
+    # (It's a *daily* N-day SMA, ~flat across this 23-hour window, so it's drawn
+    # as a horizontal reference line, coloured by whether price sits above it.)
+    if cfg.strategy_mode == "ma":
+        dd = daily if is_live else daily[daily.index <= pd.Timestamp(as_of_date)]
+        if dd is not None and len(dd) >= 1:
+            mst = ma_state(dd); ma_val = mst["ma"]; w = mst["window"]
+            if ma_val == ma_val:                      # not NaN
+                above = last_close > ma_val
+                ma_col = "#16a34a" if above else "#dc2626"
+                fig.add_hline(
+                    y=ma_val, line=dict(color=ma_col, width=2, dash="dash"),
+                    annotation_text=(f"{w}-day SMA ${ma_val:,.2f} — trend filter "
+                                     f"({'price above → long' if above else 'price below → cash'})"),
+                    annotation_position="bottom left",
+                    annotation_font=dict(color=ma_col, size=12),
+                    annotation_bgcolor="rgba(255,255,255,0.92)",
+                    annotation_bordercolor=ma_col, annotation_borderwidth=1)
     title = (f"🕐 {cfg.key} — rolling next-hour close forecast (last 23 hours)"
              if is_live else f"🕐 {cfg.key} hourly forecast as of {pd.Timestamp(as_of_date).date()}")
     fig.update_layout(template="plotly_white", height=420,
