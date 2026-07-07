@@ -80,9 +80,18 @@ _KIND_TAG = {"lev": ("2×", "#7c3aed"), "beta": ("β", "#0891b2"), "core": ("", 
 # ══════════════════════════════════════════════════════════════════════════
 if st.session_state.get("gldm_active_app") not in _ALL_APPS:
     st.session_state["gldm_active_app"] = "OVERALL"
+if st.session_state.get("overall_risk_profile") not in ov.RISK_PROFILES:
+    st.session_state["overall_risk_profile"] = ov.DEFAULT_PROFILE
 with st.sidebar:
     st.radio("**Application**", options=_ALL_APPS,
              format_func=lambda x: _APP_LABELS.get(x, x), key="gldm_active_app")
+    st.markdown("---")
+    st.radio("**Risk profile**", options=list(ov.RISK_PROFILES.keys()),
+             key="overall_risk_profile",
+             help="How hard to lean on the high-beta / leveraged proxies. "
+                  "Balanced holds Sharpe near its max; Growth and Aggressive "
+                  "trade Sharpe for higher return by loading β / 2× sleeves.")
+    st.caption(f"_{ov.RISK_PROFILES[st.session_state['overall_risk_profile']]['blurb']}_")
     st.markdown("---")
     st.markdown("**Auto-refresh:** live data cached ~15 min.")
     if st.button("Refresh now", use_container_width=True):
@@ -106,14 +115,17 @@ def get_results(bucket: str):
 
 
 @st.cache_data(ttl=900, show_spinner="Optimising the combined allocation…")
-def get_portfolio(bucket: str):
+def get_portfolio(bucket: str, profile: str):
     results = get_results(bucket)
     if not results:
         return None
+    prof = ov.RISK_PROFILES[profile]
+    caps = ov.caps_for(profile)
     rets = ov.returns_matrix(results)
     pos = ov.position_matrix(results, rets.index)
     sata = ov.SATA_DAILY
-    opt = ov.optimize_weights(rets, pos=pos, sata_daily=sata)
+    opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
+                              mdd_floor=prof["mdd_floor"], objective=prof["objective"])
     bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)
     w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
     per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS, pos=pos, sata_daily=sata)
@@ -122,9 +134,31 @@ def get_portfolio(bucket: str):
         "Equal-weight strategies": bm["strat_equal"]["equity"],
         "Equal-weight Buy & Hold": bm["bh_equal"]["equity"],
     }
-    gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"])
+    gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps)
     return dict(results=results, rets=rets, opt=opt, bm=bm, per=per,
-                curves=curves, gate=gate, w_opt=w_opt)
+                curves=curves, gate=gate, w_opt=w_opt, profile=profile)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_profile_comparison(bucket: str):
+    """Headline metrics for every risk profile, so the trade-off is visible."""
+    results = get_results(bucket)
+    if not results:
+        return []
+    rets = ov.returns_matrix(results)
+    pos = ov.position_matrix(results, rets.index)
+    sata = ov.SATA_DAILY
+    rows = []
+    for name, prof in ov.RISK_PROFILES.items():
+        opt = ov.optimize_weights(rets, caps=ov.caps_for(name), pos=pos,
+                                  sata_daily=sata, mdd_floor=prof["mdd_floor"],
+                                  objective=prof["objective"])
+        o = opt["optimal"]
+        bl = sum(v for k, v in o["weights"].items()
+                 if ov.ASSET_META.get(k, {}).get("kind") in ("beta", "lev"))
+        rows.append(dict(name=name, blurb=prof["blurb"], betalev=bl, **{
+            k: o[k] for k in ("total_ret", "cagr", "mdd", "sharpe")}))
+    return rows
 
 
 st.title("🧭 Overall Trading — Combined Decision Cockpit")
@@ -134,8 +168,9 @@ st.caption("Every asset app, fused into one portfolio spanning 13 instruments "
            "cross-asset allocation, and one combined back-test — built around a "
            "single question: **where should capital go today?**")
 
+_profile = st.session_state["overall_risk_profile"]
 try:
-    _PF = get_portfolio(_bucket())
+    _PF = get_portfolio(_bucket(), _profile)
 except Exception as exc:                       # never blank the sidebar/selector
     st.error(f"Live data fetch hit an error: {exc}. Press **Refresh now** in a moment.")
     st.stop()
@@ -424,6 +459,38 @@ with tab_bt:
                "that **maximises return while keeping the drawdown shallow** "
                "(highest raw return among near-max-Sharpe blends). Out-of-sample "
                "from 2021; $100k start.")
+
+    # ── risk-profile trade-off: leaning on β / 2× proxies ───────────────
+    st.markdown(f"**Risk profile: `{_profile}`** — "
+                f"{ov.RISK_PROFILES[_profile]['blurb']} "
+                f"_(change it in the sidebar.)_")
+    comp = get_profile_comparison(_bucket())
+    if comp:
+        ch = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+              "<th style='padding:6px 10px'>Profile</th>"
+              "<th style='text-align:right'>Return</th><th style='text-align:right'>CAGR</th>"
+              "<th style='text-align:right'>Max DD</th><th style='text-align:right'>Sharpe</th>"
+              "<th style='text-align:right'>β + 2× weight</th></tr>")
+        crows = []
+        for row in comp:
+            hi = "background:#eff6ff;" if row["name"] == _profile else ""
+            crows.append(
+                f"<tr style='border-bottom:1px solid #eef2f7;{hi}'>"
+                f"<td style='padding:6px 10px;font-weight:700'>{row['name']}"
+                f"{' ◄ active' if row['name']==_profile else ''}</td>"
+                f"<td style='text-align:right;font-weight:600'>{row['total_ret']*100:,.0f}%</td>"
+                f"<td style='text-align:right'>{row['cagr']*100:.0f}%</td>"
+                f"<td style='text-align:right;color:{C_EXIT}'>{row['mdd']*100:.0f}%</td>"
+                f"<td style='text-align:right;font-weight:600'>{row['sharpe']:.2f}</td>"
+                f"<td style='text-align:right'>{row['betalev']*100:.0f}%</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ch}{''.join(crows)}</table>",
+                    unsafe_allow_html=True)
+        st.caption("Loading the high-beta / leveraged proxies (β + 2× weight) "
+                   "**boosts return but lowers Sharpe** — the drawdown deepens "
+                   "faster than the return. Growth roughly doubles the return of "
+                   "Balanced for a still-respectable Sharpe; Aggressive pushes "
+                   "return highest at the deepest drawdown.")
+    st.markdown("")
 
     m = st.columns(4)
     m[0].metric("Optimal blend — total return", f"{o['total_ret']*100:,.0f}%",

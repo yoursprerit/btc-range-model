@@ -169,6 +169,38 @@ CAP_BY_KIND = {"core": 0.30, "beta": 0.18, "lev": 0.10}
 CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 
 
+# ── risk profiles — how hard to lean on the high-beta / leveraged proxies ──
+# Beta/leveraged sleeves carry huge returns but poor stand-alone Sharpe (deep
+# drawdowns), so loading them boosts raw return at the cost of risk-adjusted
+# return.  A profile bundles the per-kind caps, the optimiser objective and the
+# drawdown budget so the user can dial that trade-off:
+#   Balanced   — hold Sharpe near its max (default; ~unchanged behaviour)
+#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×)
+#   Aggressive — maximise return inside a −38% budget (heavy β / 2×)
+RISK_PROFILES = {
+    "Balanced": dict(
+        caps={"core": 0.30, "beta": 0.18, "lev": 0.10},
+        objective="balanced", mdd_floor=-0.35,
+        blurb="Holds Sharpe near its max — the historically best risk-adjusted blend."),
+    "Growth": dict(
+        caps={"core": 0.30, "beta": 0.25, "lev": 0.18},
+        objective="max_return", mdd_floor=-0.22,
+        blurb="Leans harder on the high-beta / leveraged proxies to maximise "
+              "return inside a −22% drawdown budget."),
+    "Aggressive": dict(
+        caps={"core": 0.35, "beta": 0.40, "lev": 0.35},
+        objective="max_return", mdd_floor=-0.38,
+        blurb="Maximum return inside a −38% budget — heavy β / 2× exposure; "
+              "highest return, deepest drawdowns, lower Sharpe."),
+}
+DEFAULT_PROFILE = "Balanced"
+
+
+def caps_for(profile: str) -> dict:
+    kc = RISK_PROFILES.get(profile, RISK_PROFILES[DEFAULT_PROFILE])["caps"]
+    return {k: kc[m["kind"]] for k, m in ASSET_META.items()}
+
+
 def _label(key: str) -> str:
     return ASSET_META.get(key, {}).get("name", key)
 
@@ -447,12 +479,14 @@ def curve_metrics(equity: pd.Series) -> dict:
 
 def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
                      n_samples: int = 60000, seed: int = 7, mdd_floor: float = -0.35,
-                     pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
-    """Search long-only weights (sum=1, per-instrument ≤ its cap) that maximise
-    combined Sharpe, preferring blends whose drawdown is no worse than
-    ``mdd_floor``.  Leveraged sleeves carry tighter caps, so the search only
-    leans on them when they earn their place.  Idle (out-of-market) capital earns
-    the SATA yield when ``pos``/``sata_daily`` are supplied.  Pure-numpy MC."""
+                     pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
+                     objective: str = "balanced") -> dict:
+    """Search long-only weights (sum=1, per-instrument ≤ its cap).  Objective:
+    ``"balanced"`` — highest return among near-max-Sharpe blends (holds Sharpe
+    high); ``"max_return"`` — highest return within the ``mdd_floor`` budget
+    (leans harder on the high-return β / 2× sleeves); ``"max_sharpe"`` — pure
+    Sharpe.  Idle (out-of-market) capital earns the SATA yield when
+    ``pos``/``sata_daily`` are supplied.  Pure-numpy MC."""
     cols = list(returns.columns)
     n = len(cols)
     cap_vec = np.array([(caps or CAP_BY_KEY).get(c, 0.30) for c in cols])
@@ -480,9 +514,15 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     evals = [(w, _cm(w)) for w in cand]
     feasible = [(w, mm) for w, mm in evals if mm["mdd"] >= mdd_floor]
     pool = feasible if feasible else evals
-    best_sharpe = max(mm["sharpe"] for _, mm in pool)
-    near = [(w, mm) for w, mm in pool if mm["sharpe"] >= 0.92 * best_sharpe]
-    w_opt, m_opt = max(near, key=lambda x: x[1]["total_ret"])
+    if objective == "max_return":
+        # highest raw return inside the drawdown budget — leans on β / 2×
+        w_opt, m_opt = max(pool, key=lambda x: x[1]["total_ret"])
+    elif objective == "max_sharpe":
+        w_opt, m_opt = max(pool, key=lambda x: x[1]["sharpe"])
+    else:  # "balanced" — highest return among near-max-Sharpe blends
+        best_sharpe = max(mm["sharpe"] for _, mm in pool)
+        near = [(w, mm) for w, mm in pool if mm["sharpe"] >= 0.92 * best_sharpe]
+        w_opt, m_opt = max(near, key=lambda x: x[1]["total_ret"])
 
     def _pack(w):
         return {c: float(x) for c, x in zip(cols, np.asarray(w, float))}
@@ -529,8 +569,8 @@ def _waterfill(raw: dict[str, float], caps: dict) -> dict[str, float]:
     return {k: float(v) for k, v in zip(keys, w)}
 
 
-def signal_gated_allocation(results: list[dict], base_weights: dict[str, float]
-                            ) -> dict:
+def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
+                            caps: dict | None = None) -> dict:
     """Today's actionable allocation.
 
     Capital is deployed only to instruments the strategy is long (or opening a
@@ -541,7 +581,7 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float]
     the caps allow; whatever cannot be deployed is parked in **SATA** (the idle
     -cash preferred, ~13% yield).  With no open positions the whole book is SATA.
     """
-    caps = CAP_BY_KEY
+    caps = caps or CAP_BY_KEY
 
     def _b(k):
         return max(base_weights.get(k, 0.0), 1e-6)
