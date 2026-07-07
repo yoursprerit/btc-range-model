@@ -42,9 +42,18 @@ _LABELS = {"OVERALL": "🧭  Overall Trading",
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
-_choice = st.session_state.get("gldm_active_app", "OVERALL")
+# Resolve the active app from the selector's widget key, falling back to a plain
+# (non-widget) shadow key.  The blank tear-down rerun below renders no widgets,
+# and Streamlit PURGES widget-keyed session state whenever its widget isn't
+# rendered — which would wipe ``gldm_active_app`` and snap the selector back to
+# OVERALL.  The shadow key survives that purge, so we restore the widget key from
+# it every run and the selection sticks.
+_choice = (st.session_state.get("gldm_active_app")
+           or st.session_state.get("_active_app", "OVERALL"))
 if _choice not in _ALL_APPS:
     _choice = "OVERALL"
+st.session_state["_active_app"] = _choice            # shadow — survives the blank rerun
+st.session_state["gldm_active_app"] = _choice        # restore widget state for the render run
 
 # Switching apps used to leave the previous app's elements ghosting through as
 # faded ("stale") text on the new page — worst when switching to a heavy, slow
