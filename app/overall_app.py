@@ -606,9 +606,13 @@ with tab_bt:
                "weight in the optimal blend. Grouped by signal — β = high-beta "
                "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
                "parent's signal**, not their own: MSTR/MSTU enter and exit on "
-               "BTC's MA30 signal, GDX/UGL on gold's, OIH on XLE's — the "
+               "BTC's divergence signal, GDX/UGL on gold's, OIH on XLE's — the "
                "higher-beta name executes on its own price but is steered by the "
-               "cleaner parent read.")
+               "cleaner parent read. **BTC/MSTR/MSTU show weak daily numbers** "
+               "because BTC uses the BTC app's hourly-calibrated divergence "
+               "thresholds, which don't rebuild well daily — they're aligned for "
+               "live-signal consistency, not daily performance, and earn ~0 "
+               "weight in the blend.")
     ah = ("<tr style='background:#f1f5f9'><th style='text-align:left;padding:6px 10px'>Instrument</th>"
           "<th>Signal / engine</th><th style='text-align:right'>Strat</th>"
           "<th style='text-align:right'>Buy&amp;Hold</th><th style='text-align:right'>Max DD</th>"
@@ -674,7 +678,7 @@ signal (never its own), exactly as the dedicated apps do:
 
 | App / signal | Traded instruments | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | MA30 trend filter, −3% |
+| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | Divergence Pure-Regime, −3% (app-aligned)† |
 | 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) | Divergence Pure-Regime, −3% |
 | 🛢️ **XLE** | XLE · OIH (β) | Divergence Pure-Regime, −8% |
 | 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
@@ -686,11 +690,17 @@ signal (never its own), exactly as the dedicated apps do:
 β = higher-beta sibling · 2× = leveraged. The six ETF apps reuse their **exact**
 `ticker_config` entries. **Gold reuses the Gold app's actual Divergence
 Pure-Regime strategy** (U1 entry inside a 50-day regime gate, D2/D3 exits, −3%
-stop) — it rebuilds well daily because gold trends smoothly. **BTC uses a 30-day
-trend filter** (the MA30 window its app references) because the BTC app's hourly
-divergence signal *doesn't* survive a daily rebuild. REMX is switched to
-divergence for the combined book — a sweep showed it is REMX's better
-risk-adjusted choice OOS.
+stop) — it rebuilds well daily because gold trends smoothly. **BTC now uses the
+same Divergence Pure-Regime logic and thresholds as the BTC app** (U1 err_hi
+>+1.3% + ≥2 high-breaks, D2 exit <−1.3%, MA30 regime gate, −3% stop), so its live
+entry/exit signal tracks the BTC app. REMX is switched to divergence for the
+combined book — a sweep showed it is REMX's better risk-adjusted choice OOS.
+
+**† BTC caveat.** Those ±1.3% thresholds are calibrated for the BTC app's *hourly*
+CT-model. Rebuilt on a daily RidgeCV H/L model the predictions are noisier, so
+BTC/MSTR/MSTU's **daily back-test is weak and they earn ~0 weight in the blend** —
+the alignment buys live-signal consistency with the BTC app, not daily
+performance. The only faithful BTC back-test is the dedicated BTC app itself.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert

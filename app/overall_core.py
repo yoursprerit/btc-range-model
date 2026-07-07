@@ -82,15 +82,20 @@ BTC_CFG = TickerConfig(
     traded_assets=[("BTC", "px_close"), ("MSTR", "mstr_close"), ("MSTU", "mstu_close")],
     asset_labels={"px_close": "BTC · Bitcoin", "mstr_close": "MSTR · MicroStrategy",
                   "mstu_close": "MSTU · 2× MSTR"},
-    strategy_mode="ma", strategy_name="BTC Trend-Regime",
-    ma_window=30, fixed_stop=0.03, hl_band_pct=0.02,
+    strategy_mode="divergence", strategy_name="BTC Divergence Pure-Regime",
+    ma_window=30, fixed_stop=0.03,
+    u1_errhi_min=0.013, d2_errhi_max=-0.013, d1_errlo_min=0.005, v_errlo_min=0.50,
+    use_d1_exit=False, hl_band_pct=0.02,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.02, day_down_thresh=-0.02,
-    results_note=("Daily 30-day trend filter on BTC (long above the 30-day SMA, "
-                  "−3% stop) — the same 30-bar window the BTC app uses as its "
-                  "regime gate; the same signal steers MSTR and the 2× MSTU. "
-                  "OOS 2021→now: +309% at −46% drawdown vs buy-&-hold +117% / "
-                  "−77%."),
+    results_note=("Divergence Pure-Regime — the SAME logic and thresholds as the "
+                  "BTC app (U1 err_hi>+1.3% + ≥2 high-breaks, D2 exit err_hi<−1.3%, "
+                  "MA30 regime gate, −3% stop), so the live entry/exit signal "
+                  "tracks the BTC app. NOTE: those thresholds are calibrated for "
+                  "the app's HOURLY CT-model; on a daily RidgeCV rebuild the H/L "
+                  "predictions are noisier, so the daily back-test is weak and "
+                  "BTC/MSTR/MSTU earn ~0 weight in the blend — the alignment is "
+                  "for signal consistency, not daily performance."),
 )
 
 # GLDM — Divergence Pure-Regime, the Gold app's ACTUAL strategy.
