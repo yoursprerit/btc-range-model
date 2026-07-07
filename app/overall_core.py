@@ -661,7 +661,8 @@ def _waterfill(raw: dict[str, float], caps: dict) -> dict[str, float]:
 
 
 def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
-                            caps: dict | None = None) -> dict:
+                            caps: dict | None = None,
+                            force_exit: set | None = None) -> dict:
     """Today's actionable allocation.
 
     Capital is deployed only to instruments the strategy is long (or opening a
@@ -673,12 +674,16 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     -cash preferred, ~13% yield).  With no open positions the whole book is SATA.
     """
     caps = caps or CAP_BY_KEY
+    force_exit = force_exit or set()
 
     def _b(k):
         return max(base_weights.get(k, 0.0), 1e-6)
 
     in_pos = [res for res in results if res["pos"]["in_pos"]]
-    closing = {res["key"] for res in in_pos if res["decision"]["tone"] == "exit"}
+    # closing = committed exits, plus any caller-forced exits (e.g. positions the
+    # live price says will drop out on the next bar).
+    closing = {res["key"] for res in in_pos
+               if res["decision"]["tone"] == "exit" or res["key"] in force_exit}
     keep = [res for res in in_pos if res["key"] not in closing]
     opens = [res for res in results
              if (not res["pos"]["in_pos"]) and res["decision"]["tone"] == "buy"]
@@ -934,3 +939,22 @@ def apply_entry_basis(results: list[dict], entry_closes: dict) -> None:
             p["upnl"] = (last / float(c) - 1) * 100
             if p.get("stop_px"):
                 p["dist_stop"] = (last / p["stop_px"] - 1) * 100
+
+
+def live_exit_keys(results: list[dict], spot: dict) -> set:
+    """Keys of MA-mode positions the *live* price says will exit on the next bar
+    — currently long, but the parent's live price has dropped below the trend
+    SMA (the MA filter decides at the close and acts on the next bar). Divergence
+    exits are model-triggered, not price-crossings, so they're not included."""
+    out = set()
+    for r in results:
+        p = r.get("pos") or {}
+        if not p.get("in_pos") or r.get("mode") != "ma":
+            continue
+        ma = r.get("ma_val")
+        plive = (spot.get(r.get("parent")) or {}).get("price")
+        if ma is None or plive is None:
+            continue
+        if plive < ma:
+            out.add(r["key"])
+    return out
