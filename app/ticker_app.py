@@ -293,6 +293,45 @@ def _sig_card(title, icon, color, triggered, rows, interpretation):
         f"<b>📊 What it means:</b> {interpretation}</div></div>")
 
 
+def _gate_card(title, icon, fired, rows, interpretation):
+    """Render an ENTRY-GATE condition card. Each row is
+    (label, current_value, criterion, met, kind) where kind ∈ {'threshold',
+    'context'} — a threshold row is a hard numeric comparison, a context row is a
+    regime/lookback state (no single cut-off)."""
+    color = "#4f46e5"                       # indigo — an enabling gate, not a directional signal
+    border = color if fired else "#cbd5e1"
+    bg = "#eef2ff" if fired else "#f8fafc"
+    status = "● SATISFIED" if fired else "○ NOT MET"
+    badge = (f"<span style='background:{color if fired else '#94a3b8'};color:white;"
+             f"border-radius:12px;padding:2px 10px;font-size:11px;font-weight:700;"
+             f"margin-left:8px;'>{status}</span>")
+    rows_html = ""
+    for label, val, crit, met, kind in rows:
+        vcol = color if met else "#64748b"
+        tag_col = "#0e7490" if kind == "threshold" else "#a16207"
+        tag = "THRESHOLD" if kind == "threshold" else "CONTEXT"
+        chk = (f"<span style='color:{color};font-weight:700;margin-left:auto;'>✓</span>"
+               if met else "<span style='color:#94a3b8;margin-left:auto;'>○</span>")
+        rows_html += (
+            "<div style='display:flex;align-items:center;gap:8px;padding:4px 0;"
+            "border-bottom:1px solid #e2e8f0;'>"
+            f"<span style='font-size:12px;color:#64748b;width:150px;flex-shrink:0;'>{label}</span>"
+            f"<span style='font-weight:700;color:{vcol};font-size:13px;min-width:70px;'>{val}</span>"
+            f"<span style='font-size:11px;color:#94a3b8;'>need: {crit}</span>"
+            f"<span style='font-size:9px;font-weight:800;color:{tag_col};background:{tag_col}1a;"
+            f"border-radius:5px;padding:1px 5px;margin-left:6px;'>{tag}</span>{chk}</div>")
+    tcol = color if fired else "#475569"
+    return (
+        f"<div style='background:{bg};border:2px solid {border};border-radius:10px;"
+        f"padding:14px;height:100%;box-sizing:border-box;'>"
+        f"<div style='font-size:14px;font-weight:700;color:{tcol};margin-bottom:8px;'>"
+        f"{icon} {title}{badge}</div>"
+        f"<div style='margin-bottom:8px;'>{rows_html}</div>"
+        f"<div style='font-size:11.5px;color:#1e293b;background:rgba(0,0,0,0.04);"
+        f"border-radius:6px;padding:7px 9px;line-height:1.45;'>"
+        f"<b>📊 What it means:</b> {interpretation}</div></div>")
+
+
 def net_signal_div(sigs):
     """Resolve raw signatures → ONE state (divergence mode). Exit overrides entry."""
     if not sigs:
@@ -650,6 +689,55 @@ def render_signatures(sigs):
                     "Lo Brk": "✓" if r["lo_break"] else "–",
                 })
             st.dataframe(pd.DataFrame(disp[::-1]), hide_index=True, use_container_width=True)
+
+
+def render_gate_signatures(sigs):
+    """Entry-gate condition cards (divergence mode). A U1 pressure signal only
+    opens a position when a trend gate also holds:
+    ``U1 AND (Bull Regime OR Clean Breakout OR V-Reversal)``. Each card shows the
+    criterion, where the live value stands, and whether it's a hard threshold or
+    a regime/context read."""
+    if not sigs:
+        return
+    close = sigs["detail_rows"][-1]["close"] if sigs.get("detail_rows") else None
+    ma20 = sigs.get("ma20_value")
+    above = bool(sigs.get("above_ma20")); slope = bool(sigs.get("ma20_slope_pos"))
+    bull = bool(sigs.get("bull_regime")); clean = bool(sigs.get("clean_10d"))
+    clean_gate = bool(clean and not above); vgate = bool(sigs.get("v_recent_gate"))
+    u1 = bool(sigs.get("u1_triggered")); entry = bool(sigs.get("entry_triggered"))
+    close_s = f"${close:,.2f}" if close is not None else "—"
+    ma_s = f"${ma20:,.2f}" if ma20 is not None else "—"
+    gate_ok = bull or clean_gate or vgate
+
+    st.markdown(
+        f"<div style='background:#eef2ff;border:2px solid #c7d2fe;border-radius:10px;"
+        f"padding:10px 14px;margin:8px 0;font-size:13px;color:#3730a3;'>"
+        f"<b>🚪 Entry gate</b> — U1 pressure only opens a position when a trend gate "
+        f"also holds: <b>U1 AND (Bull Regime OR Clean Breakout OR V-Reversal)</b>. "
+        f"Now: U1 <b>{'✓' if u1 else '✗'}</b> · gate <b>{'✓' if gate_ok else '✗'}</b> → "
+        f"entry <b>{'✅ ARMED' if entry else '⛔ not armed'}</b>. "
+        f"Exits (D2/D3{' /D1' if cfg.use_d1_exit else ''}) are ungated and override entry.</div>",
+        unsafe_allow_html=True)
+
+    g1, g2, g3 = st.columns(3)
+    g1.markdown(_gate_card(
+        "Bull Regime", "🐂", bull,
+        [("close vs 20-day SMA", close_s, f"> {ma_s}", above, "threshold"),
+         ("20-day SMA slope", "rising" if slope else "falling", "rising", slope, "context")],
+        "Price sits above a rising 20-day average — an established uptrend. Satisfies "
+        "the entry gate on its own."), unsafe_allow_html=True)
+    g2.markdown(_gate_card(
+        "Clean Breakout", "🧹", clean_gate,
+        [("no D1/D2 last ~8 bars", "clean" if clean else "recent damage", "clean", clean, "context"),
+         ("close vs 20-day SMA", close_s, f"< {ma_s}", (not above), "threshold")],
+        "A fresh breakout from <i>below</i> the average with no recent downside damage — "
+        "lets U1 fire early, before the regime formally turns bullish."),
+        unsafe_allow_html=True)
+    g3.markdown(_gate_card(
+        "V-Reversal", "⚡", vgate,
+        [("capitulation undershoot ≤3 bars", "yes" if vgate else "no", "required", vgate, "context")],
+        "A recent sharp washout / capitulation-low undershoot (V-shaped reversal setup) — "
+        "also satisfies the entry gate."), unsafe_allow_html=True)
 
 
 def render_ma_signatures(mst, pos=None):
@@ -1345,6 +1433,8 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     if IS_DIV:
         st.markdown(f"### 🔔 Trend-Signature Alert  ·  _signals derived from the {cfg.key} daily H/L model_")
         render_signatures(sigs)
+        st.markdown("#### 🚪 Entry-gate conditions  ·  _what turns a U1 pressure signal into an actual entry_")
+        render_gate_signatures(sigs)
     else:
         st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {cfg.ma_window}-day moving-average conditions this app trades on_")
         render_ma_signatures(mst, primary_pos)
