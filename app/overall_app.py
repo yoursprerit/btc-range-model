@@ -602,9 +602,13 @@ with tab_bt:
                 unsafe_allow_html=True)
 
     st.markdown("#### Per-instrument strategy (standalone, out-of-sample)")
-    st.caption("Each instrument's own signal-driven strategy vs buy-&-hold, and "
-               "its weight in the optimal blend. Grouped by signal; β = high-beta "
-               "sibling, 2× = leveraged.")
+    st.caption("Each instrument's signal-driven strategy vs buy-&-hold, and its "
+               "weight in the optimal blend. Grouped by signal — β = high-beta "
+               "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
+               "parent's signal**, not their own: MSTR/MSTU enter and exit on "
+               "BTC's MA50 signal, GDX/UGL on gold's, OIH on XLE's — the "
+               "higher-beta name executes on its own price but is steered by the "
+               "cleaner parent read.")
     ah = ("<tr style='background:#f1f5f9'><th style='text-align:left;padding:6px 10px'>Instrument</th>"
           "<th>Signal / engine</th><th style='text-align:right'>Strat</th>"
           "<th style='text-align:right'>Buy&amp;Hold</th><th style='text-align:right'>Max DD</th>"
@@ -615,8 +619,11 @@ with tab_bt:
         for res in grp:
             mm = res["metrics"]; bb = res["bh_metrics"]
             beat = mm["total_ret"] >= bb["total_ret"]
-            eng = (f"{res['parent']} · MA{res['ma_window']}" if res["mode"] == "ma"
-                   else f"{res['parent']} · Divergence")
+            base_eng = f"MA{res['ma_window']}" if res["mode"] == "ma" else "Divergence"
+            if res["key"] == res["parent"]:          # this app's own signal instrument
+                eng = f"{base_eng} signal"
+            else:                                     # sibling traded off the parent signal
+                eng = f"↳ off {res['parent']} {base_eng}"
             ar.append(f"<tr style='border-bottom:1px solid #eef2f7'>"
                       f"<td style='padding:6px 10px;font-weight:700'>{res['key']}"
                       f"{_kind_badge(res['kind'])}"
