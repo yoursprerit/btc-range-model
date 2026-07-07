@@ -335,11 +335,18 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
     tone ∈ {buy, hold, exit, watch, flat}."""
     if cfg.strategy_mode == "ma":
         above = (ma_val is not None) and (last_close > ma_val)
-        if in_pos and above:
-            return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
-        if in_pos and not above:
-            return dict(state="EXIT", label="EXIT — TREND BROKEN", ico="🔴", tone="exit")
-        if (not in_pos) and above:
+        if in_pos:
+            # The MA filter decides at the close and acts on the NEXT bar, so a
+            # position is still open the day its close first drops below the SMA
+            # (it exits next bar). Mirror the source app's net_signal_ma: while
+            # in position the state is always HOLD — flag the pending exit rather
+            # than closing a bar early, so the Overall app agrees with the app.
+            if above:
+                return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
+            return dict(state="HOLD",
+                        label="LONG — HOLDING (below trend → exits next bar)",
+                        ico="🟡", tone="hold")
+        if above:
             return dict(state="ENTRY", label="ENTER — ABOVE TREND", ico="🟢", tone="buy")
         return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
     # Divergence — replicate the backtest's exit-overrides-entry precedence
