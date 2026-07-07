@@ -111,45 +111,49 @@ def get_results(bucket: str):
 
 
 @st.cache_data(ttl=900, show_spinner="Optimising the combined allocation…")
-def get_portfolio(bucket: str, profile: str):
+def get_all_profiles(bucket: str):
+    """Compute the full portfolio for EVERY risk profile once, so switching
+    profiles (and rendering the comparison table) is instant — no recompute."""
     results = get_results(bucket)
     if not results:
         return None
-    prof = ov.RISK_PROFILES[profile]
-    caps = ov.caps_for(profile)
     rets = ov.returns_matrix(results)
     pos = ov.position_matrix(results, rets.index)
     sata = ov.SATA_DAILY
-    opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
-                              mdd_floor=prof["mdd_floor"], objective=prof["objective"])
-    bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)
-    w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
-    per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS, pos=pos, sata_daily=sata)
-    curves = {
-        "Optimal blend": ov._equity(ov._combine(rets, w_opt, pos, sata)),
-        "Equal-weight strategies": bm["strat_equal"]["equity"],
-        "Equal-weight Buy & Hold": bm["bh_equal"]["equity"],
-    }
-    gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps)
-    return dict(results=results, rets=rets, opt=opt, bm=bm, per=per,
-                curves=curves, gate=gate, w_opt=w_opt, profile=profile)
+    bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)      # profile-independent
+    base_curves = {"Equal-weight strategies": bm["strat_equal"]["equity"],
+                   "Equal-weight Buy & Hold": bm["bh_equal"]["equity"]}
+    profiles = {}
+    for name, prof in ov.RISK_PROFILES.items():
+        caps = ov.caps_for(name)
+        opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
+                                  mdd_floor=prof["mdd_floor"], objective=prof["objective"])
+        w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
+        per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS, pos=pos, sata_daily=sata)
+        curves = {"Optimal blend": ov._equity(ov._combine(rets, w_opt, pos, sata)),
+                  **base_curves}
+        gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps)
+        profiles[name] = dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt)
+    return dict(results=results, rets=rets, bm=bm, profiles=profiles)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+def get_portfolio(bucket: str, profile: str):
+    allp = get_all_profiles(bucket)
+    if not allp:
+        return None
+    p = allp["profiles"][profile]
+    return dict(results=allp["results"], rets=allp["rets"], bm=allp["bm"],
+                profile=profile, **p)
+
+
 def get_profile_comparison(bucket: str):
-    """Headline metrics for every risk profile, so the trade-off is visible."""
-    results = get_results(bucket)
-    if not results:
+    """Headline metrics for every risk profile (reads the shared computation)."""
+    allp = get_all_profiles(bucket)
+    if not allp:
         return []
-    rets = ov.returns_matrix(results)
-    pos = ov.position_matrix(results, rets.index)
-    sata = ov.SATA_DAILY
     rows = []
     for name, prof in ov.RISK_PROFILES.items():
-        opt = ov.optimize_weights(rets, caps=ov.caps_for(name), pos=pos,
-                                  sata_daily=sata, mdd_floor=prof["mdd_floor"],
-                                  objective=prof["objective"])
-        o = opt["optimal"]
+        o = allp["profiles"][name]["opt"]["optimal"]
         bl = sum(v for k, v in o["weights"].items()
                  if ov.ASSET_META.get(k, {}).get("kind") in ("beta", "lev"))
         rows.append(dict(name=name, blurb=prof["blurb"], betalev=bl, **{

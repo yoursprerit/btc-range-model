@@ -432,26 +432,28 @@ def run_universe() -> list[dict]:
     (``btc_ct_engine``); every other app is run through the shared daily engine
     with its own tuned config, which is the exact engine those apps use.
     """
-    out = []
-    for cfg in all_configs():
-        if cfg.key == "BTC":
-            try:
-                import btc_ct_engine
-                out.extend(btc_ct_engine.run_btc_ct())
-            except Exception:
-                pass
-            continue
-        if cfg.key == "GLDM":
-            try:
-                import gldm_engine
-                out.extend(gldm_engine.run_gldm())
-            except Exception:
-                pass
-            continue
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(cfg):
         try:
-            out.extend(run_asset(cfg))
+            if cfg.key == "BTC":
+                import btc_ct_engine
+                return btc_ct_engine.run_btc_ct()
+            if cfg.key == "GLDM":
+                import gldm_engine
+                return gldm_engine.run_gldm()
+            return run_asset(cfg)
         except Exception:
-            continue
+            return []
+
+    cfgs = all_configs()
+    # Each app is network-bound (independent Yahoo fetches) — run them
+    # concurrently.  ex.map preserves order, so the universe stays in app order.
+    with ThreadPoolExecutor(max_workers=len(cfgs)) as ex:
+        groups = list(ex.map(_one, cfgs))
+    out = []
+    for g in groups:
+        out.extend(g or [])
     return out
 
 
@@ -521,7 +523,7 @@ def curve_metrics(equity: pd.Series) -> dict:
 
 
 def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
-                     n_samples: int = 60000, seed: int = 7, mdd_floor: float = -0.35,
+                     n_samples: int = 20000, seed: int = 7, mdd_floor: float = -0.35,
                      pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
                      objective: str = "balanced") -> dict:
     """Search long-only weights (sum=1, per-instrument ≤ its cap).  Objective:

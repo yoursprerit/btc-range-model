@@ -106,17 +106,29 @@ def _chart(symbol: str, interval: str, start: str | None = None,
 
 def _merge(symbol_map: dict, interval: str, start: str | None = None,
            range_: str | None = None) -> pd.DataFrame:
-    frames = []
-    for name, sym in symbol_map.items():
+    """Fetch every symbol concurrently (network-bound) and column-merge them.
+
+    Yahoo chart requests are independent, so a small thread pool cuts a
+    multi-symbol fetch from sum-of-latencies to ~one round-trip.  Insertion
+    order is preserved so the merged columns are deterministic.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(item):
+        name, sym = item
         d = _chart(sym, interval, start=start, range_=range_)
         if d.empty:
-            continue
+            return None
         if interval == "1d":
             d.index = pd.to_datetime(d.index).normalize()
             d = d[~d.index.duplicated(keep="last")]
-        d = d.add_prefix(f"{name}_")
-        frames.append(d)
-        time.sleep(0.15)
+        return d.add_prefix(f"{name}_")
+
+    items = list(symbol_map.items())
+    if not items:
+        return pd.DataFrame()
+    with ThreadPoolExecutor(max_workers=min(8, len(items))) as ex:
+        frames = [f for f in ex.map(_one, items) if f is not None]
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1).sort_index()
