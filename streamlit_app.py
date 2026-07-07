@@ -46,13 +46,24 @@ _choice = st.session_state.get("gldm_active_app", "OVERALL")
 if _choice not in _ALL_APPS:
     _choice = "OVERALL"
 
-# Switching apps used to leave the previous (often longer) app's trailing
-# elements ghosting through as faded text at the bottom of the new page: because
-# every app is one script run of THIS router, Streamlit reconciles elements by
-# position and a shorter new app doesn't overwrite the old tail.  Fix: render
-# each app inside a *route-keyed* container so every app has a distinct element
-# identity — on switch, the previous route's subtree is dropped wholesale.
+# Switching apps used to leave the previous app's elements ghosting through as
+# faded ("stale") text on the new page — worst when switching to a heavy, slow
+# app (e.g. Bitcoin) whose long render keeps the old, faded tree on screen and
+# whose element tree Streamlit reconciles by position rather than tearing down.
 #
+# Two-layer fix:
+#   1) On an actual app switch, do ONE blank rerun first (render nothing, then
+#      st.rerun()).  That run produces no elements, so Streamlit prunes the
+#      entire previous app's tree — the page goes cleanly blank — and only the
+#      NEXT run renders the new app, into an empty slate. This is what actually
+#      kills the ghost for slow apps.
+#   2) Render each app inside a route-keyed container so it also has a distinct
+#      element identity (belt-and-suspenders).
+if st.session_state.get("_route_prev") not in (None, _choice):
+    st.session_state["_route_prev"] = _choice
+    st.rerun()                                       # blank run → old tree torn down
+st.session_state["_route_prev"] = _choice
+
 # A keyed container is a Streamlit command, so it must come *after*
 # ``set_page_config``; we therefore set the page config once here (per-app title
 # / icon derived from the label) and no-op the sub-apps' own calls — the same
