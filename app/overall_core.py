@@ -58,8 +58,13 @@ from ticker_config import TickerConfig, get_config, _STD_PERIODS   # noqa: E402
 # ════════════════════════════════════════════════════════════════════════
 # CONFIGS — one per signal app; each may trade its 1× primary + siblings.
 # ════════════════════════════════════════════════════════════════════════
-# BTC — daily MA50 trend filter (model-free, robust regime), −3% stop.
-# Trades BTC (1×) plus MSTR (BTC-proxy equity) and MSTU (2× MSTR) off the signal.
+# BTC — daily MA30 trend filter (model-free, robust regime), −3% stop.
+# The dedicated BTC app runs an *hourly* divergence Pure-Regime system that uses
+# a 30-day moving average (``above_ma30``) as its trend-regime gate; that hourly
+# CT-anchored signal can't be reproduced in this daily engine, so BTC is traded
+# on a daily 30-day trend filter — the SAME 30-bar window the BTC app references,
+# so the number is consistent with what that app shows.  Trades BTC (1×) plus
+# MSTR (BTC-proxy equity) and MSTU (2× MSTR) off the signal.
 BTC_CFG = TickerConfig(
     key="BTC", name="Bitcoin", emoji="₿",
     blurb=("Spot Bitcoin drives the signal; the strategy trades BTC and its "
@@ -76,11 +81,14 @@ BTC_CFG = TickerConfig(
     asset_labels={"px_close": "BTC · Bitcoin", "mstr_close": "MSTR · MicroStrategy",
                   "mstu_close": "MSTU · 2× MSTR"},
     strategy_mode="ma", strategy_name="BTC Trend-Regime",
-    ma_window=50, fixed_stop=0.03, hl_band_pct=0.02,
+    ma_window=30, fixed_stop=0.03, hl_band_pct=0.02,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.02, day_down_thresh=-0.02,
-    results_note=("Daily MA50 trend filter on BTC (long above the 50-day SMA, "
-                  "−3% stop); the same signal steers MSTR and the 2× MSTU."),
+    results_note=("Daily 30-day trend filter on BTC (long above the 30-day SMA, "
+                  "−3% stop) — the same 30-bar window the BTC app uses as its "
+                  "regime gate; the same signal steers MSTR and the 2× MSTU. "
+                  "OOS 2021→now: +309% at −46% drawdown vs buy-&-hold +117% / "
+                  "−77%."),
 )
 
 # GLDM — MA50 trend filter (the Gold app's documented primary).
