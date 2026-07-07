@@ -58,6 +58,30 @@ import ticker_config                         # noqa: E402
 from ticker_config import TickerConfig, get_config, _STD_PERIODS   # noqa: E402
 
 
+def _warmup_imports() -> None:
+    """Force every heavy, lazily-imported module into ``sys.modules`` on a
+    SINGLE thread, so the concurrent per-app thread pool in ``run_universe`` can
+    never trigger a first-time import from two threads at once — which Python's
+    import lock turns into a deadlock (observed on ``sklearn.linear_model._huber``
+    and the CT-model engine).  Idempotent and best-effort."""
+    try:
+        from sklearn.linear_model import (RidgeCV, HuberRegressor,   # noqa: F401
+                                          QuantileRegressor)
+        from sklearn.ensemble import GradientBoostingRegressor       # noqa: F401
+        from sklearn.preprocessing import StandardScaler             # noqa: F401
+        from sklearn.pipeline import Pipeline                        # noqa: F401
+    except Exception:
+        pass
+    for _eng in ("btc_ct_engine", "gldm_engine"):                    # load CT/gold engines + models
+        try:
+            __import__(_eng)
+        except Exception:
+            pass
+
+
+_warmup_imports()   # run at import time (single-threaded), before any thread pool
+
+
 # ════════════════════════════════════════════════════════════════════════
 # CONFIGS — one per signal app; each may trade its 1× primary + siblings.
 # ════════════════════════════════════════════════════════════════════════
@@ -438,6 +462,8 @@ def run_universe() -> list[dict]:
     """
     from concurrent.futures import ThreadPoolExecutor
     import traceback
+
+    _warmup_imports()   # ensure heavy imports are cached before threading
 
     def _one(cfg):
         try:
