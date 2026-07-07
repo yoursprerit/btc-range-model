@@ -29,9 +29,10 @@ def main():
           f"{[(r['key'], r['parent']) for r in results]}", flush=True)
 
     rets = oc.returns_matrix(results)
+    pos = oc.position_matrix(results, rets.index)
     print("Return matrix:", rets.shape, rets.index[0].date(), "->", rets.index[-1].date())
 
-    opt = oc.optimize_weights(rets)
+    opt = oc.optimize_weights(rets, pos=pos, sata_daily=oc.SATA_DAILY)
     w = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
     print("\nOptimal weights:")
     for c in opt["cols"]:
@@ -46,7 +47,7 @@ def main():
           f"CAGR {opt['risk_parity']['cagr']*100:5.1f}%  MDD {opt['risk_parity']['mdd']*100:6.1f}%  "
           f"Sharpe {opt['risk_parity']['sharpe']:.2f}")
 
-    bm = oc.benchmarks(rets, results)
+    bm = oc.benchmarks(rets, results, pos=pos, sata_daily=oc.SATA_DAILY)
     print("\nBenchmarks:")
     print(f"  8× Buy&Hold (EW)   ret {bm['bh_equal']['total_ret']*100:7.1f}%  "
           f"MDD {bm['bh_equal']['mdd']*100:6.1f}%  Sharpe {bm['bh_equal']['sharpe']:.2f}")
@@ -55,7 +56,7 @@ def main():
     print(f"  Best single ({bm['best_single']['key']}) ret {bm['best_single']['total_ret']*100:7.1f}%  "
           f"MDD {bm['best_single']['mdd']*100:6.1f}%  Sharpe {bm['best_single']['sharpe']:.2f}")
 
-    per = oc.period_breakdown(rets, w, oc.COMBINED_PERIODS)
+    per = oc.period_breakdown(rets, w, oc.COMBINED_PERIODS, pos=pos, sata_daily=oc.SATA_DAILY)
     print("\nOptimal combined by period:")
     for row in per:
         print(f"  {row['label']:28s} ret {row['total_ret']*100:8.1f}%  "
@@ -63,10 +64,12 @@ def main():
 
     gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"])
     print(f"\nToday: {gate['n_active']} positions open, {gate['n_open']} new entries, "
-          f"cash {gate['cash']*100:.0f}%")
+          f"SATA {gate['sata']*100:.0f}%")
+    print(f"  Priority rank: {gate['priority_rank']}")
     for a in gate["actions"]:
+        pr = f"prio {a['priority']:.2f}" if a["priority"] is not None else ""
         print(f"  {a['action']:11s} {a['key']:5s} target {a['target']*100:5.1f}%  "
-              f"[{a['decision']}]")
+              f"{pr:9s} [{a['decision']}]")
 
     # persist compact JSON -------------------------------------------------
     outdir = _REPO / "data" / "overall"

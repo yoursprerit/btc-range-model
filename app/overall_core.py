@@ -173,6 +173,59 @@ def _label(key: str) -> str:
     return ASSET_META.get(key, {}).get("name", key)
 
 
+# ── SATA — the idle-cash park (Strive Variable Rate Series A Perpetual Pfd) ──
+# The same instrument the BTC app parks idle capital in: a US-listed preferred
+# paying a ~13% annual coupon as a daily dividend on $100 par (≈13.88% effective
+# when reinvested).  Any capital not deployed to a live position sits in SATA and
+# earns this daily yield, rather than dead cash.
+SATA = dict(ticker="SATA", name="Strive Variable-Rate Preferred (idle cash)",
+            annual_rate=0.13, biz_days=250, par=100.0)
+SATA_DAILY = SATA["annual_rate"] / SATA["biz_days"]     # ≈0.00052 / business day
+
+
+# ── entry-priority weighting ──────────────────────────────────────────────
+# When several instruments signal entry at once (or one fires while others are
+# already held), rank them by their ability to maximise return in the CURRENT
+# tape and size the book toward the winners.  A blend of live momentum, macro
+# sentiment, the strategy's back-tested win-rate and its risk-adjusted edge.
+PRIORITY_WEIGHTS = dict(momentum=0.28, sentiment=0.24, win_rate=0.20,
+                        sharpe=0.18, regime=0.10)
+
+
+def _minmax(vals: dict) -> dict:
+    xs = [v for v in vals.values() if v == v]          # drop NaN
+    if not xs:
+        return {k: 0.5 for k in vals}
+    lo, hi = min(xs), max(xs)
+    if hi - lo < 1e-12:
+        return {k: 0.5 for k in vals}
+    return {k: (0.5 if v != v else (v - lo) / (hi - lo)) for k, v in vals.items()}
+
+
+def compute_priorities(results: list[dict], keys: list[str]) -> dict:
+    """Priority score in [0,1] for each candidate key, plus its components.
+    Normalised across the competing candidate set so the ranking is relative to
+    what is actually on the table today."""
+    by = {r["key"]: r for r in results}
+    keys = [k for k in keys if k in by]
+    if not keys:
+        return {}
+    mom = _minmax({k: by[k].get("mom", np.nan) for k in keys})
+    shp = _minmax({k: by[k]["metrics"].get("sharpe", np.nan) for k in keys})
+    out = {}
+    for k in keys:
+        r = by[k]
+        sent = r.get("sentiment", np.nan)
+        sent01 = 0.5 if sent != sent else min(max(sent / 100.0, 0.0), 1.0)
+        wr01 = min(max(r.get("win_rate", 0.0) / 100.0, 0.0), 1.0)
+        reg = 1.0 if r.get("bull_regime") else 0.0
+        comp = dict(momentum=mom[k], sentiment=sent01, win_rate=wr01,
+                    sharpe=shp[k], regime=reg)
+        score = sum(PRIORITY_WEIGHTS[c] * comp[c] for c in PRIORITY_WEIGHTS)
+        out[k] = dict(score=float(score), **comp)
+    return out
+
+
 # ════════════════════════════════════════════════════════════════════════
 # PER-ASSET RUN — fetch → predict → simulate each traded instrument
 # ════════════════════════════════════════════════════════════════════════
@@ -232,11 +285,12 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
     return dict(state="FLAT", label="FLAT — NO SIGNAL", ico="⬜", tone="flat")
 
 
-def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dchg):
+def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dchg, mom):
     """Assemble one traded-instrument result dict from a run_strategy output."""
     dates = pd.to_datetime(pd.Series(r["dates"]))
     strat = np.asarray(r["strat"], float)
     ret = pd.Series(np.diff(strat) / strat[:-1], index=dates.iloc[1:]).rename(label)
+    pos_series = pd.Series(np.asarray(r["pos"], float), index=dates).rename(label)
     last_px = float(daily[col].dropna().iloc[-1]) if col in daily else np.nan
     as_of = pd.Timestamp(dates.iloc[-1])
 
@@ -260,9 +314,9 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         cap=CAP_BY_KEY.get(label, 0.30),
         last_close=last_px, dchg=dchg, ma_val=ma_val,
         sentiment=sent, decision=dec, alert=alert, bull_regime=bull,
-        pos=pos, last_trade=last_trade,
+        pos=pos, last_trade=last_trade, mom=mom,
         metrics=m, bh_metrics=bh, win_rate=wr, n_trades=int(len(r["trades"])),
-        ret=ret, strat=strat, dates=dates, r=r, as_of=as_of,
+        ret=ret, pos_series=pos_series, strat=strat, dates=dates, r=r, as_of=as_of,
         mode=cfg.strategy_mode, ma_window=cfg.ma_window, stop=cfg.fixed_stop,
     )
 
@@ -281,6 +335,9 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
     prev_close = float(daily["px_close"].iloc[-2]) if len(daily) > 1 else last_close
     dchg = (last_close / prev_close - 1) * 100 if prev_close else 0.0
     ma_val = float(daily["px_close"].tail(cfg.ma_window).mean()) if cfg.strategy_mode == "ma" else None
+    # common momentum read (distance above a 50-day SMA) for cross-asset priority
+    ref_ma = float(daily["px_close"].tail(50).mean())
+    mom = (last_close / ref_ma - 1) if ref_ma else 0.0
     completed = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
     sigs = tc.compute_trend_signatures(cfg, completed.tail(45)) if len(completed) >= 3 else None
     alert = (sigs or {}).get("alert_level", "NEUTRAL")
@@ -308,7 +365,7 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
         # each traded instrument shares the parent decision but has its own pos
         dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val)
         out.append(_asset_result(cfg, label, col, r, daily, dec, alert, bull,
-                                 sent, ma_val, dchg))
+                                 sent, ma_val, dchg, mom))
     return out
 
 
@@ -335,18 +392,37 @@ def returns_matrix(results: list[dict]) -> pd.DataFrame:
     return pd.DataFrame({res["key"]: res["ret"] for res in results}).sort_index()
 
 
-def _combine(returns: pd.DataFrame, weights: np.ndarray) -> pd.Series:
+def position_matrix(results: list[dict], index: pd.Index) -> pd.DataFrame:
+    """0/1 in-market flag per instrument, aligned to ``index`` (0 where flat or
+    no data)."""
+    cols = {res["key"]: res["pos_series"] for res in results}
+    return pd.DataFrame(cols).reindex(index).fillna(0.0)
+
+
+def _combine(returns: pd.DataFrame, weights: np.ndarray,
+             pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> pd.Series:
     """Daily portfolio return for fixed target weights, renormalising over the
-    instruments that actually have data each day (handles staggered inception)."""
+    instruments that actually have data each day (handles staggered inception).
+
+    When a ``pos`` matrix and ``sata_daily`` are supplied, deployed weight that
+    is sitting *out of the market* (its sleeve flat) — and any fully-cash day —
+    earns the SATA idle-cash yield instead of nothing."""
     w = np.asarray(weights, float)
-    mask = returns.notna().to_numpy()
-    wt = mask * w
+    avail = returns.notna().to_numpy()
+    wt = avail * w
     denom = wt.sum(axis=1, keepdims=True)
+    zero = denom[:, 0] == 0
     denom[denom == 0] = np.nan
-    wt = wt / denom
+    ew = wt / denom                              # deployed weights, sum→1 among available
     filled = np.nan_to_num(returns.to_numpy())
-    port = np.nansum(wt * filled, axis=1)
-    port[np.isnan(denom[:, 0])] = 0.0
+    port = np.nansum(np.nan_to_num(ew) * filled, axis=1)
+    if pos is not None and sata_daily:
+        P = np.nan_to_num(pos.reindex(returns.index).to_numpy())
+        idle = np.nansum(np.nan_to_num(ew) * (1.0 - P) * avail, axis=1)
+        port = port + sata_daily * idle
+        port[zero] = sata_daily                  # fully-cash day → all in SATA
+    else:
+        port[zero] = 0.0
     return pd.Series(port, index=returns.index)
 
 
@@ -370,16 +446,20 @@ def curve_metrics(equity: pd.Series) -> dict:
 
 
 def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
-                     n_samples: int = 60000, seed: int = 7,
-                     mdd_floor: float = -0.35) -> dict:
+                     n_samples: int = 60000, seed: int = 7, mdd_floor: float = -0.35,
+                     pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
     """Search long-only weights (sum=1, per-instrument ≤ its cap) that maximise
     combined Sharpe, preferring blends whose drawdown is no worse than
     ``mdd_floor``.  Leveraged sleeves carry tighter caps, so the search only
-    leans on them when they earn their place.  Pure-numpy Monte-Carlo."""
+    leans on them when they earn their place.  Idle (out-of-market) capital earns
+    the SATA yield when ``pos``/``sata_daily`` are supplied.  Pure-numpy MC."""
     cols = list(returns.columns)
     n = len(cols)
     cap_vec = np.array([(caps or CAP_BY_KEY).get(c, 0.30) for c in cols])
     rng = np.random.default_rng(seed)
+
+    def _cm(w):
+        return curve_metrics(_equity(_combine(returns, w, pos, sata_daily)))
 
     samples = rng.dirichlet(np.ones(n), size=n_samples)
     keep = (samples <= cap_vec + 1e-9).all(axis=1)
@@ -397,14 +477,10 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     # both maximises risk-adjusted return AND grabs the most raw return among
     # near-optimal blends — matching the "maximise returns, minimise losses"
     # mandate rather than a purely defensive max-Sharpe point.
-    evals = []
-    for w in cand:
-        mm = curve_metrics(_equity(_combine(returns, w)))
-        evals.append((w, mm))
+    evals = [(w, _cm(w)) for w in cand]
     feasible = [(w, mm) for w, mm in evals if mm["mdd"] >= mdd_floor]
     pool = feasible if feasible else evals
     best_sharpe = max(mm["sharpe"] for _, mm in pool)
-    # among blends within 92% of the best Sharpe, take the highest total return
     near = [(w, mm) for w, mm in pool if mm["sharpe"] >= 0.92 * best_sharpe]
     w_opt, m_opt = max(near, key=lambda x: x[1]["total_ret"])
 
@@ -413,8 +489,8 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     return dict(
         cols=cols,
         optimal=dict(weights=_pack(w_opt), **m_opt),
-        equal=dict(weights=_pack(ew_c), **curve_metrics(_equity(_combine(returns, ew_c)))),
-        risk_parity=dict(weights=_pack(rp), **curve_metrics(_equity(_combine(returns, rp)))),
+        equal=dict(weights=_pack(ew_c), **_cm(ew_c)),
+        risk_parity=dict(weights=_pack(rp), **_cm(rp)),
     )
 
 
@@ -455,10 +531,16 @@ def _waterfill(raw: dict[str, float], caps: dict) -> dict[str, float]:
 
 def signal_gated_allocation(results: list[dict], base_weights: dict[str, float]
                             ) -> dict:
-    """Today's actionable allocation: deploy capital only to instruments whose
-    strategy is currently long (or firing a fresh entry), split by the optimal
-    base weights renormalised over the active set and capped per instrument;
-    any un-deployable remainder sits in cash.  Also reports the current book."""
+    """Today's actionable allocation.
+
+    Capital is deployed only to instruments the strategy is long (or opening a
+    fresh entry).  Among those, the size of each slice is the historically
+    optimal weight **tilted by a live entry-priority score** (momentum,
+    sentiment, back-tested win-rate, risk-adjusted edge, regime), then
+    water-filled to the per-instrument caps.  The deployed book sums to 100% when
+    the caps allow; whatever cannot be deployed is parked in **SATA** (the idle
+    -cash preferred, ~13% yield).  With no open positions the whole book is SATA.
+    """
     caps = CAP_BY_KEY
 
     def _b(k):
@@ -470,11 +552,16 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float]
     opens = [res for res in results
              if (not res["pos"]["in_pos"]) and res["decision"]["tone"] == "buy"]
 
+    target_keys = [res["key"] for res in keep] + [res["key"] for res in opens]
+    prio = compute_priorities(results, target_keys)
+    # priority-tilted raw weights: optimal anchor × (0.5 + priority) ∈ [0.5,1.5]×
+    raw = {k: _b(k) * (0.5 + prio.get(k, {}).get("score", 0.5)) for k in target_keys}
+    target = _waterfill(raw, caps)
+    sata = max(1.0 - sum(target.values()), 0.0)
+
+    # current book (what we hold now) — optimal weights, no forward tilt
     current = _waterfill({res["key"]: _b(res["key"]) for res in in_pos}, caps)
-    target_set = {res["key"] for res in keep} | {res["key"] for res in opens}
-    target = _waterfill({k: _b(k) for k in target_set}, caps)
-    cash = max(1.0 - sum(target.values()), 0.0)
-    cash_now = max(1.0 - sum(current.values()), 0.0)
+    sata_now = max(1.0 - sum(current.values()), 0.0)
 
     actions = []
     for res in results:
@@ -489,22 +576,32 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float]
             act = "WATCH"
         else:
             act = "STAND ASIDE"
+        p = prio.get(k)
         actions.append(dict(key=k, name=res["name"], emoji=res["emoji"],
                             kemoji=res["kemoji"], kind=res["kind"], parent=res["parent"],
                             action=act, tone=dec["tone"], decision=dec["label"],
                             target=target.get(k, 0.0), in_pos=res["pos"]["in_pos"],
                             upnl=res["pos"]["upnl"], alert=res["alert"],
-                            last_close=res["last_close"]))
+                            last_close=res["last_close"],
+                            priority=(p["score"] if p else None),
+                            prio_comp=(p if p else None)))
     order = {"CLOSE": 0, "OPEN": 1, "HOLD": 2, "WATCH": 3, "STAND ASIDE": 4}
-    actions.sort(key=lambda a: (order[a["action"]], -a["target"]))
-    return dict(target=target, cash=max(cash, 0.0), current=current,
-                cash_now=max(cash_now, 0.0), actions=actions,
-                n_active=len(in_pos), n_open=len(opens), n_close=len(closing))
+    # within an action group, rank by priority (entries) then target size
+    actions.sort(key=lambda a: (order[a["action"]],
+                                -(a["priority"] if a["priority"] is not None else -1),
+                                -a["target"]))
+    ranked = sorted(prio.items(), key=lambda kv: -kv[1]["score"])
+    return dict(target=target, sata=sata, current=current, sata_now=sata_now,
+                actions=actions, priorities=prio, priority_rank=[k for k, _ in ranked],
+                n_active=len(in_pos), n_open=len(opens), n_close=len(closing),
+                sata_info=SATA)
 
 
-def benchmarks(returns: pd.DataFrame, results: list[dict]) -> dict:
-    """Reference curves: equal-weight buy&hold of the underlyings, equal-weight
-    of the strategies, and the best single strategy by Sharpe."""
+def benchmarks(returns: pd.DataFrame, results: list[dict],
+               pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
+    """Reference curves: equal-weight buy&hold of the underlyings (always
+    invested, no SATA), equal-weight of the strategies (idle→SATA), and the best
+    single strategy by Sharpe."""
     out = {}
     bh_cols = {}
     for res in results:
@@ -514,7 +611,8 @@ def benchmarks(returns: pd.DataFrame, results: list[dict]) -> dict:
     n = bh_df.shape[1]
     eqbh = _equity(_combine(bh_df, np.full(n, 1.0 / n)))
     out["bh_equal"] = curve_metrics(eqbh); out["bh_equal"]["equity"] = eqbh
-    eqw = _equity(_combine(returns, np.full(returns.shape[1], 1.0 / returns.shape[1])))
+    eqw = _equity(_combine(returns, np.full(returns.shape[1], 1.0 / returns.shape[1]),
+                           pos, sata_daily))
     out["strat_equal"] = curve_metrics(eqw); out["strat_equal"]["equity"] = eqw
     best_key = best_m = best_eq = None
     for res in results:
@@ -526,14 +624,16 @@ def benchmarks(returns: pd.DataFrame, results: list[dict]) -> dict:
 
 
 def period_breakdown(returns: pd.DataFrame, weights: np.ndarray,
-                     periods: list[tuple]) -> list[dict]:
+                     periods: list[tuple], pos: pd.DataFrame | None = None,
+                     sata_daily: float = 0.0) -> list[dict]:
     rows = []
     for lbl, s, e in periods:
         sub = returns.loc[pd.Timestamp(s):(pd.Timestamp(e) if e else None)]
         if len(sub) < 5:
             continue
+        subpos = pos.loc[sub.index] if pos is not None else None
         rows.append(dict(label=lbl, start=s, end=e,
-                         **curve_metrics(_equity(_combine(sub, weights)))))
+                         **curve_metrics(_equity(_combine(sub, weights, subpos, sata_daily)))))
     return rows
 
 

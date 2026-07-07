@@ -111,12 +111,14 @@ def get_portfolio(bucket: str):
     if not results:
         return None
     rets = ov.returns_matrix(results)
-    opt = ov.optimize_weights(rets)
-    bm = ov.benchmarks(rets, results)
+    pos = ov.position_matrix(results, rets.index)
+    sata = ov.SATA_DAILY
+    opt = ov.optimize_weights(rets, pos=pos, sata_daily=sata)
+    bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)
     w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
-    per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS)
+    per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS, pos=pos, sata_daily=sata)
     curves = {
-        "Optimal blend": ov._equity(ov._combine(rets, w_opt)),
+        "Optimal blend": ov._equity(ov._combine(rets, w_opt, pos, sata)),
         "Equal-weight strategies": bm["strat_equal"]["equity"],
         "Equal-weight Buy & Hold": bm["bh_equal"]["equity"],
     }
@@ -186,25 +188,31 @@ with tab_live:
     st.markdown(f"#### As of **{as_of.strftime('%b %d, %Y')}** · "
                 f"{len(results)} instruments across {len(parents)} signals")
 
-    invested = 1.0 - gate["cash"]
+    invested = 1.0 - gate["sata"]
     k = st.columns(5)
     k[0].metric("Positions open", f"{gate['n_active']}")
     k[1].metric("Open today", f"{gate['n_open']}",
                 delta="new entries" if gate["n_open"] else None)
     k[2].metric("Close today", f"{gate['n_close']}",
                 delta="exit signal" if gate["n_close"] else None, delta_color="inverse")
-    k[3].metric("Target invested", f"{invested*100:.0f}%")
-    k[4].metric("Target cash", f"{gate['cash']*100:.0f}%")
+    k[3].metric("Target in risk assets", f"{invested*100:.0f}%")
+    k[4].metric("Target in SATA", f"{gate['sata']*100:.0f}%",
+                help=f"{gate['sata_info']['name']} — idle cash parked at "
+                     f"~{gate['sata_info']['annual_rate']*100:.0f}% yield.")
 
     # ── 1. TODAY'S ACTION PLAN ──────────────────────────────────────────
     st.markdown("### 🎯 Today's action plan")
-    st.caption("What to do now, ranked: **close** exits first, then **open** new "
-               "positions, then holds. β = higher-beta sibling · 2× = leveraged; "
-               "both are traded off their parent's signal. Target % is the "
-               "recommended book after today's moves.")
+    st.caption("What to do now, ranked: **close** exits first, then **open** / "
+               "**hold**, ordered by entry priority. β = higher-beta sibling · "
+               "2× = leveraged (traded off the parent signal). The **priority** "
+               "score (0–1) blends live momentum, macro sentiment, the strategy's "
+               "back-tested win-rate and its risk-adjusted edge — it decides which "
+               "signals get funded and how much. Held/opened risk assets total "
+               "100%; any capped-out remainder is parked in **SATA**.")
     hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
            "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
-           "<th>Live signal</th><th style='text-align:right'>Price</th>"
+           "<th>Live signal</th><th style='text-align:center'>Priority</th>"
+           "<th style='text-align:right'>Price</th>"
            "<th style='text-align:right'>Unreal. P&amp;L</th>"
            "<th style='text-align:right'>Target %</th></tr>")
     rows = []
@@ -221,6 +229,13 @@ with tab_live:
             sub = f"{a['parent']} close {dist:+.1f}% vs MA{_r['ma_window']}{off}"
         else:
             sub = f"{a['parent']} alert: {a['alert']}{off}"
+        if a["priority"] is not None:
+            p = a["priority"]; pcolor = C_BUY if p >= 0.6 else C_WATCH if p >= 0.4 else C_FLAT
+            prio_cell = (f"<span style='font-weight:700;color:{pcolor}'>{p:.2f}</span>"
+                         f"<div style='height:5px;background:#e2e8f0;border-radius:3px;margin-top:2px'>"
+                         f"<div style='height:5px;width:{p*100:.0f}%;background:{pcolor};border-radius:3px'></div></div>")
+        else:
+            prio_cell = "<span style='color:#cbd5e1'>—</span>"
         bar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
                f"margin-top:3px'><div style='height:7px;width:{min(tgt*100,100):.0f}%;"
                f"background:{_r['accent']}'></div></div>" if tgt > 0.0005 else "")
@@ -231,11 +246,32 @@ with tab_live:
             f"<div style='font-size:11px;color:#64748b;font-weight:400'>{a['name']}</div></td>"
             f"<td style='font-size:12px;color:{_TONE_COL.get(a['tone'], C_FLAT)}'>{a['decision']}"
             f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
+            f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}</td>"
             f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td></tr>")
+    # SATA row — the idle-cash park absorbing whatever risk assets can't hold
+    si = gate["sata_info"]; sata_pct = gate["sata"]
+    sbar = (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
+            f"margin-top:3px'><div style='height:7px;width:{min(sata_pct*100,100):.0f}%;"
+            f"background:#334155'></div></div>" if sata_pct > 0.0005 else "")
+    rows.append(
+        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+        f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
+        f"<td style='font-weight:700'>💵 SATA"
+        f"<div style='font-size:11px;color:#64748b;font-weight:400'>{si['name']}</div></td>"
+        f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
+        f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par</div></td>"
+        f"<td style='text-align:center;color:#cbd5e1'>—</td>"
+        f"<td style='text-align:right'>${si['par']:,.0f}</td>"
+        f"<td style='text-align:right;color:{C_BUY}'>+{si['annual_rate']*100:.0f}%/yr</td>"
+        f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td></tr>")
     st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
                 unsafe_allow_html=True)
+    if gate["n_active"] == 0:
+        st.warning("**No open positions today** — no instrument is signalling long, "
+                   "so the entire book is parked in **SATA** earning its idle-cash "
+                   "yield until a signal fires.")
 
     closes = [a for a in gate["actions"] if a["action"] == "CLOSE"]
     opens = [a for a in gate["actions"] if a["action"] == "OPEN"]
@@ -258,12 +294,12 @@ with tab_live:
     # ── 2. OPTIMAL ALLOCATION TODAY vs CURRENT BOOK ─────────────────────
     st.markdown("### 📐 Optimal allocation for today")
     st.caption("Left: what the strategy holds **right now**. Right: the "
-               "**recommended** book after today's signals, sized by the "
-               "historically-optimal weights (per-instrument caps: 30% core, "
-               "18% high-beta, 10% leveraged; water-filled).")
+               "**recommended** book after today's signals — risk assets sized "
+               "by the optimal weights tilted by entry priority (caps: 30% core, "
+               "18% high-beta, 10% leveraged); the remainder sits in **SATA**.")
     ac = st.columns([1, 1, 1])
 
-    def _alloc_donut(alloc: dict, cash: float, title: str):
+    def _alloc_donut(alloc: dict, sata: float, title: str):
         labels, vals, colors = [], [], []
         for kk, vv in sorted(alloc.items(), key=lambda x: -x[1]):
             if vv <= 0.0005:
@@ -271,8 +307,10 @@ with tab_live:
             tag = {"lev": " 2×", "beta": " β"}.get(by_key[kk]["kind"], "")
             labels.append(f"{kk}{tag}"); vals.append(vv * 100)
             colors.append(by_key[kk]["accent"])
-        if cash > 0.005:
-            labels.append("Cash"); vals.append(cash * 100); colors.append(C_CASH)
+        if sata > 0.005:
+            labels.append("SATA"); vals.append(sata * 100); colors.append("#334155")
+        if not vals:
+            labels, vals, colors = ["SATA"], [100.0], ["#334155"]
         fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.58,
                                marker=dict(colors=colors,
                                            line=dict(color="#fff", width=1)),
@@ -282,9 +320,9 @@ with tab_live:
                           height=320, margin=dict(t=40, b=10, l=10, r=10))
         return fig
 
-    ac[0].plotly_chart(_alloc_donut(gate["current"], gate["cash_now"],
+    ac[0].plotly_chart(_alloc_donut(gate["current"], gate["sata_now"],
                                     "Current book"), use_container_width=True)
-    ac[1].plotly_chart(_alloc_donut(gate["target"], gate["cash"],
+    ac[1].plotly_chart(_alloc_donut(gate["target"], gate["sata"],
                                     "Recommended today"), use_container_width=True)
     with ac[2]:
         st.markdown("**Rebalancing moves**")
@@ -301,13 +339,13 @@ with tab_live:
                          f"{cur*100:.0f}% → {tg*100:.0f}% "
                          f"<span style='color:{col};font-weight:700'>"
                          f"{'▲' if d>0 else '▼'}{abs(d)*100:.0f}pt</span></div>")
-        dcash = gate["cash"] - gate["cash_now"]
-        if abs(dcash) >= 0.005:
-            col = C_EXIT if dcash > 0 else C_BUY
-            moves.append(f"<div style='font-size:13px;margin:3px 0'>💵 <b>Cash</b> "
-                         f"{gate['cash_now']*100:.0f}% → {gate['cash']*100:.0f}% "
+        dsata = gate["sata"] - gate["sata_now"]
+        if abs(dsata) >= 0.005:
+            col = C_EXIT if dsata > 0 else C_BUY
+            moves.append(f"<div style='font-size:13px;margin:3px 0'>💵 <b>SATA</b> "
+                         f"{gate['sata_now']*100:.0f}% → {gate['sata']*100:.0f}% "
                          f"<span style='color:{col};font-weight:700'>"
-                         f"{'▲' if dcash>0 else '▼'}{abs(dcash)*100:.0f}pt</span></div>")
+                         f"{'▲' if dsata>0 else '▼'}{abs(dsata)*100:.0f}pt</span></div>")
         st.markdown("".join(moves) if moves
                     else "_Book already at target — no rebalancing needed._",
                     unsafe_allow_html=True)
@@ -380,11 +418,12 @@ with tab_bt:
     o = opt["optimal"]
     st.markdown("## 📊 The optimal combined strategy")
     st.caption("Each instrument's signal-driven strategy produces a daily return "
-               "stream (long when its parent signal is on, cash otherwise). We "
-               "search long-only blends of all 13 — leveraged sleeves capped "
-               "tighter — for the mix that **maximises return while keeping the "
-               "drawdown shallow** (highest raw return among near-max-Sharpe "
-               "blends). Out-of-sample from 2021; $100k start.")
+               "stream (long when its parent signal is on, otherwise **idle "
+               "capital earns the SATA yield ~13%/yr**). We search long-only "
+               "blends of all 13 — leveraged sleeves capped tighter — for the mix "
+               "that **maximises return while keeping the drawdown shallow** "
+               "(highest raw return among near-max-Sharpe blends). Out-of-sample "
+               "from 2021; $100k start.")
 
     m = st.columns(4)
     m[0].metric("Optimal blend — total return", f"{o['total_ret']*100:,.0f}%",
@@ -509,9 +548,11 @@ with tab_bt:
         f"but a punishing **{bm['bh_equal']['mdd']*100:.0f}%** drawdown "
         f"(Sharpe **{bm['bh_equal']['sharpe']:.2f}**).")
     st.caption("⚠️ Optimal weights are fit on this same history (in-sample) — the "
-               "best *historical* blend, not a guarantee. Equal-weight and "
-               "risk-parity need no fitting and are shown for comparison. Not "
-               "investment advice.")
+               "best *historical* blend, not a guarantee. Strategy curves park "
+               "idle capital in SATA (~13%/yr, an assumed-constant series); the "
+               "buy-&-hold benchmark is always fully invested with no SATA. "
+               "Equal-weight and risk-parity need no fitting and are shown for "
+               "comparison. Not investment advice.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -552,20 +593,38 @@ for the primary **and** each sibling (which shares the parent's entry/exit timin
 but has its own fill price and P&L). That drives the **action plan** and the
 **allocation donuts**.
 
-**The optimal allocation.** Each strategy is long when its signal is on and in
-cash otherwise, producing a daily return stream. We Monte-Carlo long-only blends
-(sum = 100%) with **per-instrument caps** — 30% core, 18% high-beta, 10%
-leveraged — and pick the **highest-return blend among the near-max-Sharpe set**,
-so returns are maximised while drawdown stays shallow. The tight caps mean the 2×
-/ β sleeves only get weight when they genuinely improve the risk-adjusted result.
+**The optimal allocation.** Each strategy is long when its signal is on and
+otherwise parks idle capital in **SATA** (see below), producing a daily return
+stream. We Monte-Carlo long-only blends (sum = 100%) with **per-instrument caps**
+— 30% core, 18% high-beta, 10% leveraged — and pick the **highest-return blend
+among the near-max-Sharpe set**, so returns are maximised while drawdown stays
+shallow. The tight caps mean the 2× / β sleeves only get weight when they
+genuinely improve the risk-adjusted result.
 
-**Today's book.** Capital is deployed only to instruments currently signalling
-long (or firing a fresh entry), split by the optimal weights, water-filled to
-each cap; whatever can't be deployed sits in cash. That's the *Recommended today*
-donut and the rebalancing moves.
+**Entry priority.** When several instruments signal entry at once — or one fires
+while others are already held — a **priority score (0–1)** decides which get
+funded and how much. It blends four current-conditions reads, each normalised
+across the competing candidates: **momentum** (0.28, distance above the 50-day
+SMA), **macro sentiment** (0.24, the app's 0–100 gauge), the strategy's
+**back-tested win-rate** (0.20), its **risk-adjusted edge** (0.18, OOS Sharpe)
+and **regime** (0.10, bull vs bear). Each instrument's target = its optimal
+weight × (0.5 + priority), water-filled to the caps — so the highest-priority
+signals in today's tape get the largest slices.
+
+**Today's book & SATA.** Capital is deployed only to instruments currently
+signalling long (or firing a fresh entry); the held/opened **risk assets total
+100%** when the caps allow, and **whatever can't be deployed is parked in SATA**
+— *Strive's Variable-Rate Series A Perpetual Preferred*, a US-listed security
+paying a ~13% annual coupon as a daily dividend on $100 par (≈13.88% effective
+reinvested). With **no open positions the entire book sits in SATA**, earning
+that yield until a signal fires. Idle capital earns SATA in the back-test too, so
+the combined curve reflects cash working rather than sitting dead.
 
 **Honest caveats.**
 - Optimal weights are in-sample — the best *historical* blend, not a promise.
+- SATA is modelled (per the BTC app's framing) as always having existed, flat at
+  $100 par, paying its ~13% daily dividend across every period — an assumption,
+  not a market-tested series.
 - Leveraged 2× sleeves (MSTU, UGL) and high-beta names compound decay and gap
   risk; the caps bound but don't remove that.
 - This is a **daily** engine. The BTC and Gold apps' canonical **hourly**
