@@ -86,12 +86,8 @@ with st.sidebar:
     st.radio("**Application**", options=_ALL_APPS,
              format_func=lambda x: _APP_LABELS.get(x, x), key="gldm_active_app")
     st.markdown("---")
-    st.radio("**Risk profile**", options=list(ov.RISK_PROFILES.keys()),
-             key="overall_risk_profile",
-             help="How hard to lean on the high-beta / leveraged proxies. "
-                  "Balanced holds Sharpe near its max; Growth and Aggressive "
-                  "trade Sharpe for higher return by loading β / 2× sleeves.")
-    st.caption(f"_{ov.RISK_PROFILES[st.session_state['overall_risk_profile']]['blurb']}_")
+    st.markdown(f"**Risk profile:** `{st.session_state['overall_risk_profile']}` "
+                "— switch it on the 🔴 **Live** tab.")
     st.markdown("---")
     st.markdown("**Auto-refresh:** live data cached ~15 min.")
     if st.button("Refresh now", use_container_width=True):
@@ -222,6 +218,38 @@ tab_live, tab_bt, tab_explain = st.tabs(
 with tab_live:
     st.markdown(f"#### As of **{as_of.strftime('%b %d, %Y')}** · "
                 f"{len(results)} instruments across {len(parents)} signals")
+
+    # ── risk-profile switch — decide and trade accordingly ──────────────
+    pcomp = {r["name"]: r for r in get_profile_comparison(_bucket())}
+    rp = st.columns([1.15, 2])
+    with rp[0]:
+        st.radio("⚙️ **Risk profile**", list(ov.RISK_PROFILES.keys()),
+                 key="overall_risk_profile", horizontal=True)
+        st.caption(ov.RISK_PROFILES[_profile]["blurb"])
+    with rp[1]:
+        cells = []
+        for name in ov.RISK_PROFILES:
+            r = pcomp.get(name)
+            if not r:
+                continue
+            on = name == _profile
+            cells.append(
+                f"<div style='flex:1;border:2px solid {'#2563eb' if on else '#e2e8f0'};"
+                f"background:{'#eff6ff' if on else '#fff'};border-radius:9px;"
+                f"padding:7px 10px;min-width:120px'>"
+                f"<div style='font-size:12px;font-weight:800;color:#1e293b'>{name}"
+                f"{' ◄ active' if on else ''}</div>"
+                f"<div style='font-size:12px;margin-top:2px'>ret "
+                f"<b style='color:{C_BUY}'>{r['total_ret']*100:,.0f}%</b> · "
+                f"dd <b style='color:{C_EXIT}'>{r['mdd']*100:.0f}%</b> · "
+                f"Sharpe <b>{r['sharpe']:.2f}</b></div></div>")
+        st.markdown(
+            "<div style='display:flex;gap:8px;align-items:stretch'>" + "".join(cells) + "</div>",
+            unsafe_allow_html=True)
+        st.caption("Switching reruns today's targets and the back-test on the "
+                   "chosen profile. β / 2× exposure rises Balanced → Aggressive: "
+                   "more return, deeper drawdowns, lower Sharpe.")
+    st.markdown("")
 
     invested = 1.0 - gate["sata"]
     k = st.columns(5)
