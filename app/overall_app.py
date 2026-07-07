@@ -4,7 +4,7 @@ One screen that fuses the live signals, positions and back-tests of every other
 app into a single portfolio view built for one question: *where do I put money to
 work today?*  Each signal app trades its 1× primary plus higher-beta / leveraged
 siblings (BTC→MSTR/MSTU, Gold→GDX/UGL, XLE→OIH), all steered off the parent
-signal, so the combined book spans 13 instruments.
+signal, so the combined book spans every instrument across all apps.
 
   🔴 Live — Decision Cockpit   what to CLOSE / OPEN / HOLD today, the optimal %
                                 allocation, and the strategy's current book.
@@ -50,6 +50,8 @@ import overall_core as ov
 import ticker_config
 if not hasattr(ov, "run_universe"):
     ov = importlib.reload(ov)
+
+N_ALL = len(ov.SPOT_SYMBOLS)          # total instruments the universe spans
 
 
 # ── app registry (shared with the router / other apps) ────────────────────
@@ -173,7 +175,7 @@ def get_profile_comparison(bucket: str):
 
 
 st.title("🧭 Overall Trading — Combined Decision Cockpit")
-st.caption("Every asset app, fused into one portfolio spanning 13 instruments "
+st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instruments "
            "(each app's 1× primary plus its higher-beta / leveraged siblings). "
            "Live entry/exit signals, current positions, the historically-optimal "
            "cross-asset allocation, and one combined back-test — built around a "
@@ -202,7 +204,7 @@ for pk in ov.PARENT_KEYS:
         parents.append((pk, grp))
 
 # ── diagnostic: make a silently-dropped app VISIBLE ─────────────────────────
-# All 8 apps (13 instruments) should load. If one fails in a given environment
+# All apps' instruments should load. If one fails in a given environment
 # (e.g. a data/model file missing or a library-version mismatch), its sleeve is
 # dropped and every combined number changes — so surface it loudly instead of
 # showing a quietly-reduced universe.
@@ -212,7 +214,7 @@ if _missing:
     _errs = getattr(ov, "_LAST_ERRORS", {})
     _lines = "; ".join(f"**{k}** ({_errs.get(k, 'not loaded')})" for k in _missing)
     st.warning(
-        f"⚠️ Only **{len(results)}/13** instruments loaded — the following "
+        f"⚠️ Only **{len(results)}/{N_ALL}** instruments loaded — the following "
         f"app(s) failed to load, so the combined strategy & back-test below are "
         f"computed on a **reduced universe** and won't match the full-universe "
         f"figures: {_lines}. Press **Refresh now**; if it persists, the app's "
@@ -264,7 +266,7 @@ tab_live, tab_bt, tab_explain = st.tabs(
 # TAB 1 — LIVE DECISION COCKPIT
 # ══════════════════════════════════════════════════════════════════════════
 with tab_live:
-    _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/13)</span>"
+    _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>"
                 if _n_spot else " · <span style='color:#dc2626'>spot quote unavailable — showing last bar</span>")
     st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** · "
                 f"{len(results)} instruments across {len(parents)} signals{_px_note}",
@@ -546,7 +548,7 @@ with tab_bt:
     st.caption("Each instrument's signal-driven strategy produces a daily return "
                "stream (long when its parent signal is on, otherwise **idle "
                "capital earns the SATA yield ~13%/yr**). We search long-only "
-               "blends of all 13 — leveraged sleeves capped tighter — for the mix "
+               f"blends of all {N_ALL} — leveraged sleeves capped tighter — for the mix "
                "that **maximises return while keeping the drawdown shallow** "
                "(highest raw return among near-max-Sharpe blends). Out-of-sample "
                "from 2021; $100k start.")
@@ -711,7 +713,7 @@ with tab_bt:
 
     st.success(
         f"**Bottom line.** Blending signal-driven, cash-when-out strategies across "
-        f"13 instruments — including the higher-beta MSTR/MSTU, GDX/UGL and OIH "
+        f"{N_ALL} instruments — including the higher-beta MSTR/MSTU, GDX/UGL and OIH "
         f"sleeves, used only when they earn their capped slots — the optimal blend "
         f"returned **{o['total_ret']*100:,.0f}%** at just **{o['mdd']*100:.0f}%** "
         f"max drawdown (Sharpe **{o['sharpe']:.2f}**), versus an equal-weight "
@@ -738,7 +740,7 @@ them — each app's 1× primary **plus its higher-beta / leveraged siblings** �
 through **one unified daily engine**, so their signals, positions and back-tests
 sit side-by-side and blend into a single portfolio.
 
-**The 13-instrument universe.** Each sibling is traded off its **parent's**
+**The universe.** Each sibling is traded off its **parent's**
 signal (never its own), exactly as the dedicated apps do:
 
 | App / signal | Traded instruments | Engine |

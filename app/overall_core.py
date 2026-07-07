@@ -150,7 +150,8 @@ def overall_config(key: str) -> TickerConfig:
 
 
 # Parent (signal-app) display order.
-PARENT_KEYS = ["BTC", "GLDM", "SOXX", "VEGN", "GRID", "XLE", "REMX", "WGMI"]
+PARENT_KEYS = ["BTC", "GLDM", "SOXX", "VEGN", "GRID", "XLE", "REMX", "WGMI",
+               "PBW", "ARTY"]
 
 
 def all_configs() -> list[TickerConfig]:
@@ -175,6 +176,8 @@ ASSET_META = {
     "OIH":  dict(name="Oil Services",   kind="beta"),
     "REMX": dict(name="Rare-Earth Metals", kind="core"),
     "WGMI": dict(name="Bitcoin Miners", kind="beta"),
+    "PBW":  dict(name="Clean Energy",   kind="core"),
+    "ARTY": dict(name="AI & Tech",      kind="core"),
 }
 KIND_EMOJI = {"core": "", "beta": "⚡", "lev": "🔺"}
 CAP_BY_KIND = {"core": 0.30, "beta": 0.18, "lev": 0.10}
@@ -754,6 +757,7 @@ SPOT_SYMBOLS = {
     "GLDM": "GLDM", "GDX": "GDX", "UGL": "UGL",
     "SOXX": "SOXX", "VEGN": "VEGN", "GRID": "GRID",
     "XLE": "XLE", "OIH": "OIH", "REMX": "REMX", "WGMI": "WGMI",
+    "PBW": "PBW", "ARTY": "ARTY",
 }
 
 

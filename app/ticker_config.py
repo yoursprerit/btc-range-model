@@ -397,8 +397,105 @@ CONFIGS["WGMI"] = TickerConfig(
 )
 
 
+# ════════════════════════════════════════════════════════════════════════
+# PBW — Invesco WilderHill Clean Energy ETF
+# ════════════════════════════════════════════════════════════════════════
+CONFIGS["PBW"] = TickerConfig(
+    key="PBW",
+    name="Invesco WilderHill Clean Energy ETF",
+    blurb=("PBW holds a broad, equal-weighted basket of clean-energy names "
+           "(solar, wind, EVs, hydrogen, storage). It is one of the most "
+           "explosive boom-bust equity groups — a huge 2020–21 melt-up and a "
+           "brutal multi-year bust — where sidestepping the drawdown is the "
+           "whole game."),
+    emoji="☀️",
+    accent="#65a30d", accent_dark="#3f6212", accent_bg="#f7fee7", accent_bg2="#ecfccb",
+    primary_symbol="PBW",
+    macro_syms={
+        "icln": "ICLN",        # global clean energy — sister basket
+        "tan": "TAN",          # solar
+        "qcln": "QCLN",        # clean-edge green energy
+        "cper": "CPER",        # copper — electrification metal
+        "tnx": "^TNX",         # 10Y yield — long-duration growth, inverse
+        "spx": "^GSPC",        # equity risk backdrop
+        "vix": "^VIX",         # equity vol
+    },
+    extra_syms={},
+    sentiment=[("icln_close", "mom", +1.0), ("tnx_close", "chg", -1.0),
+               ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
+    sentiment_label="Clean-energy sentiment",
+    traded_assets=[("PBW", "px_close")],
+    asset_labels={"px_close": "PBW · Clean Energy"},
+    strategy_mode="divergence", strategy_name="Clean-Energy Divergence Pure-Regime",
+    ma_window=50, fixed_stop=0.10,
+    u1_errhi_min=0.12, d2_errhi_max=-0.08, d1_errlo_min=0.10, v_errlo_min=0.50,
+    use_d1_exit=False,
+    hl_band_pct=0.014,
+    fetch_start="2010-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
+    day_up_thresh=0.012, day_down_thresh=-0.012,
+    results_note=("OOS 2021→now: the U1/D2 divergence system returns +61% at a "
+                  "−39% max drawdown (Sharpe 0.54) while buy-&-hold is DOWN −64% "
+                  "at a −90% drawdown. On this boom-bust clean-energy basket a "
+                  "trend filter barely clears water (+10%); the divergence "
+                  "Pure-Regime — which stands aside through the multi-year bust "
+                  "and re-enters on confirmed momentum — is by far the better "
+                  "way to trade it, so it is the tuned strategy here."),
+)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ARTY — iShares Future AI & Tech ETF
+# ════════════════════════════════════════════════════════════════════════
+CONFIGS["ARTY"] = TickerConfig(
+    key="ARTY",
+    name="iShares Future AI & Tech ETF",
+    blurb=("ARTY holds the AI & exponential-technology supply chain (chips, "
+           "software, robotics, data names). It is a high-beta growth basket "
+           "that leads the Nasdaq both up and down and is highly rate- and "
+           "risk-sensitive."),
+    emoji="🤖",
+    accent="#4f46e5", accent_dark="#3730a3", accent_bg="#eef2ff", accent_bg2="#e0e7ff",
+    primary_symbol="ARTY",
+    macro_syms={
+        "qqq": "QQQ",          # Nasdaq-100 tech beta
+        "xlk": "XLK",          # technology sector
+        "smh": "SMH",          # semiconductors — AI compute
+        "nvda": "NVDA",        # AI bellwether
+        "tnx": "^TNX",         # 10Y yield — growth/duration, inverse
+        "spx": "^GSPC",        # equity risk backdrop
+        "vix": "^VIX",         # equity vol
+    },
+    extra_syms={},
+    sentiment=[("qqq_close", "mom", +1.0), ("smh_close", "mom", +1.0),
+               ("tnx_close", "chg", -1.0), ("px_close", "mom", +1.0)],
+    sentiment_label="AI/tech sentiment",
+    traded_assets=[("ARTY", "px_close")],
+    asset_labels={"px_close": "ARTY · AI & Tech"},
+    strategy_mode="divergence", strategy_name="AI/Tech Divergence Pure-Regime",
+    ma_window=50, fixed_stop=0.05,
+    u1_errhi_min=0.05, d2_errhi_max=-0.18, d1_errlo_min=0.10, v_errlo_min=0.50,
+    use_d1_exit=True,
+    hl_band_pct=0.012,
+    fetch_start="2018-06-28", oos_start="2021-01-01",
+    periods=[
+        ("🌍 Full history (Bull + Bear)", "2019-01-01", None),
+        ("🐻 Drawdown / Bear (2021–2022)", "2021-01-01", "2022-12-31"),
+        ("🐂 Recovery / Bull (2023 → now)", "2023-01-01", None),
+        ("🌐 Full Out-of-Sample (2021 → now)", "2021-01-01", None),
+        ("🔬 Most-recent OOS (2025 → now)", "2025-01-01", None),
+    ],
+    day_up_thresh=0.010, day_down_thresh=-0.010,
+    results_note=("OOS 2021→now: the U1/D2 divergence system (with a D1 "
+                  "downtrend exit and a −5% stop) returns +108% at just a −17% "
+                  "max drawdown (Sharpe 0.99) vs buy-&-hold +82% at −56% "
+                  "(Sharpe 0.52) — it beats the market on return AND roughly "
+                  "thirds the drawdown. A trend filter only manages +79% at "
+                  "−33%, so the divergence Pure-Regime is the tuned strategy."),
+)
+
+
 def get_config(key: str) -> TickerConfig:
     return CONFIGS[key]
 
 
-APP_KEYS = list(CONFIGS.keys())     # + WGMI
+APP_KEYS = list(CONFIGS.keys())     # + WGMI, PBW, ARTY
