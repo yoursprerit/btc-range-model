@@ -675,7 +675,7 @@ signal (never its own), exactly as the dedicated apps do:
 | App / signal | Traded instruments | Engine |
 |---|---|---|
 | ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | MA30 trend filter, −3% |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) | MA50 trend filter, −3% |
+| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) | Divergence Pure-Regime, −3% |
 | 🛢️ **XLE** | XLE · OIH (β) | Divergence Pure-Regime, −8% |
 | 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
 | 🖥️ **SOXX** | SOXX | MA40, −5% |
@@ -684,12 +684,13 @@ signal (never its own), exactly as the dedicated apps do:
 | ⛏️ **WGMI** | WGMI (β) | MA30, −10% |
 
 β = higher-beta sibling · 2× = leveraged. The six ETF apps reuse their **exact**
-`ticker_config` entries. BTC & Gold use daily trend-filter configs because their
-apps' canonical signals are *hourly* systems that can't be reproduced here:
-**BTC uses a 30-day trend filter — the same MA30 the BTC app uses as its
-regime gate** (its hourly divergence system doesn't survive a daily rebuild);
-Gold uses its documented MA50 primary. REMX is switched to divergence for the
-combined book — a sweep showed it is REMX's better risk-adjusted choice OOS.
+`ticker_config` entries. **Gold reuses the Gold app's actual Divergence
+Pure-Regime strategy** (U1 entry inside a 50-day regime gate, D2/D3 exits, −3%
+stop) — it rebuilds well daily because gold trends smoothly. **BTC uses a 30-day
+trend filter** (the MA30 window its app references) because the BTC app's hourly
+divergence signal *doesn't* survive a daily rebuild. REMX is switched to
+divergence for the combined book — a sweep showed it is REMX's better
+risk-adjusted choice OOS.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert

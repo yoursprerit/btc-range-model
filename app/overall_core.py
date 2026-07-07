@@ -27,9 +27,11 @@ included in the optimiser "as and when they make sense": each carries a tighter
 weight cap (see ``CAP_BY_KEY``) so the max-Sharpe search only leans on them when
 the extra beta actually improves risk-adjusted return.
 
-The six ETF apps reuse their exact ``ticker_config`` entries; BTC and Gold get
-faithful trend-filter configs here (Gold's is its documented MA50 primary).  None
-of the original app files are imported or modified.
+The six ETF apps reuse their exact ``ticker_config`` entries.  Gold reuses the
+Gold app's actual Divergence Pure-Regime strategy; BTC uses a 30-day trend
+filter (the MA30 window its app references) because the BTC app's hourly
+divergence signal cannot be reproduced daily.  None of the original app files are
+imported or modified.
 """
 from __future__ import annotations
 
@@ -91,8 +93,12 @@ BTC_CFG = TickerConfig(
                   "−77%."),
 )
 
-# GLDM — MA50 trend filter (the Gold app's documented primary).
-# Trades GLDM (1×) plus GDX (miners) and UGL (2× gold) off the signal.
+# GLDM — Divergence Pure-Regime, the Gold app's ACTUAL strategy.
+# gldm_core trades one strategy: a BTC-style U1/D2/D3 bullish-divergence system
+# (U1=0.08, D2=−0.10, D1=0.10, −3% stop) confirmed inside a 50-day trend-regime
+# gate.  It reproduces daily far better than it does for BTC (gold trends
+# smoothly), so we run the divergence system here — not the MA50 comparison
+# variant.  Trades GLDM (1×) plus GDX (miners) and UGL (2× gold) off the signal.
 GLDM_CFG = TickerConfig(
     key="GLDM", name="SPDR Gold MiniShares", emoji="🥇",
     blurb=("Spot gold via GLDM drives the signal; the strategy trades GLDM and "
@@ -108,12 +114,17 @@ GLDM_CFG = TickerConfig(
     traded_assets=[("GLDM", "px_close"), ("GDX", "gdx_close"), ("UGL", "ugl_close")],
     asset_labels={"px_close": "GLDM · Gold", "gdx_close": "GDX · Gold Miners",
                   "ugl_close": "UGL · 2× Gold"},
-    strategy_mode="ma", strategy_name="Gold Trend-Regime",
-    ma_window=50, fixed_stop=0.03, hl_band_pct=0.008,
+    strategy_mode="divergence", strategy_name="Gold Divergence Pure-Regime",
+    ma_window=50, fixed_stop=0.03,
+    u1_errhi_min=0.08, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
+    use_d1_exit=False, hl_band_pct=0.008,
     fetch_start="2018-06-26", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.006, day_down_thresh=-0.006,
-    results_note=("MA50 trend filter (the Gold app's documented primary); the "
-                  "same gold signal steers GDX and the 2× UGL."),
+    results_note=("Divergence Pure-Regime — the Gold app's actual strategy: a U1 "
+                  "bullish-divergence entry confirmed inside a 50-day regime "
+                  "gate, D2/D3 exits, −3% stop. The same gold signal steers GDX "
+                  "and the 2× UGL. OOS 2021→now: GLDM +73% / −11% / Sharpe 1.29, "
+                  "GDX +156% / −19% / 1.12, UGL +184% / −20% / 1.28."),
 )
 
 # REMX — override to the DIVERGENCE Pure-Regime system for the combined book
