@@ -170,12 +170,16 @@ def _chart(symbol: str, interval: str, start: str | None = None,
 
 def _merge(symbol_map: dict, interval: str, start: str | None = None,
            range_: str | None = None) -> pd.DataFrame:
-    """Fetch every symbol in ``symbol_map`` (name→ticker) and column-prefix."""
-    frames = []
-    for name, sym in symbol_map.items():
+    """Fetch every symbol in ``symbol_map`` (name→ticker) concurrently and
+    column-prefix.  The requests are independent, so a thread pool turns a
+    sum-of-latencies fetch into ~one round-trip (order preserved)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(item):
+        name, sym = item
         d = _chart(sym, interval, start=start, range_=range_)
         if d.empty:
-            continue
+            return None
         # Daily bars from different exchanges/indices carry different intraday
         # open timestamps (e.g. NYSE 13:30 UTC vs an index at 00:00), which
         # would misalign on a raw concat and produce mostly-NaN columns.
@@ -183,13 +187,16 @@ def _merge(symbol_map: dict, interval: str, start: str | None = None,
         if interval == "1d":
             d.index = pd.to_datetime(d.index).normalize()
             d = d[~d.index.duplicated(keep="last")]
-        d = d.add_prefix(f"{name}_")
-        frames.append(d)
-        time.sleep(0.15)
+        return d.add_prefix(f"{name}_")
+
+    items = list(symbol_map.items())
+    if not items:
+        return pd.DataFrame()
+    with ThreadPoolExecutor(max_workers=min(8, len(items))) as ex:
+        frames = [f for f in ex.map(_one, items) if f is not None]
     if not frames:
         return pd.DataFrame()
-    out = pd.concat(frames, axis=1).sort_index()
-    return out
+    return pd.concat(frames, axis=1).sort_index()
 
 
 def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:

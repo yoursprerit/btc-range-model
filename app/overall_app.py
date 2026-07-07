@@ -101,11 +101,15 @@ with st.sidebar:
 # Cached compute — run all instruments, then the portfolio maths
 # ══════════════════════════════════════════════════════════════════════════
 def _bucket() -> str:
+    # 30-minute granularity: the strategy runs on daily bars (positions/signals
+    # are daily-stable), and the *prices* are overlaid live from a separate
+    # 60-second spot cache — so the heavy compute needn't rerun more often, and
+    # switching away to another app and back stays a warm-cache (instant) hit.
     now = pd.Timestamp.utcnow()
-    return f"{now.date()}-{now.hour}-{now.minute // 15}"
+    return f"{now.date()}-{now.hour}-{now.minute // 30}"
 
 
-@st.cache_data(ttl=900, show_spinner="Running every strategy live (first load ~40–90s)…")
+@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…")
 def get_results(bucket: str):
     return ov.run_universe()
 
@@ -117,7 +121,7 @@ def get_spot(minute_bucket: str):
     return ov.fetch_spot()
 
 
-@st.cache_data(ttl=900, show_spinner="Optimising the combined allocation…")
+@st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
 def get_all_profiles(bucket: str):
     """Compute the full portfolio for EVERY risk profile once, so switching
     profiles (and rendering the comparison table) is instant — no recompute."""
