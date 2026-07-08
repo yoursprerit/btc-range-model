@@ -37,3 +37,6 @@ legacy/models/inference_assets_7d.joblib
 
 # Claude Code internal metadata
 .claude/
+
+# runtime marker for the CT feature auto-refresh (btc_ct_engine._ensure_fresh_features)
+data/backtest/.last_feature_pull

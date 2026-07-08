@@ -39,6 +39,54 @@ import pandas as pd
 
 import backtest_trailing_stop as T             # loads the CT model at import
 
+# ── self-heal the CT feature data so the BTC sleeve updates daily ────────────
+# BTC/MSTR/MSTU signals are built from a committed daily-features CSV
+# (data/backtest/raw_features_daily.csv).  In a long-running deployment nothing
+# refreshes it, so those three freeze at the CSV's last date while every other
+# instrument fetches live.  When the CSV falls behind the latest completed CT
+# bar we re-pull it (scripts/pull_backtest_data.py) — at most once every few
+# hours, and fully non-fatal: any failure just keeps the existing CSV.
+_PULL_SCRIPT = _REPO / "scripts" / "pull_backtest_data.py"
+_FEATURES_CSV = T.DATA / "raw_features_daily.csv"
+_PULL_GUARD = T.DATA / ".last_feature_pull"
+_PULL_MIN_GAP = pd.Timedelta(hours=3)          # don't re-attempt more often than this
+
+
+def _features_last_bar() -> "pd.Timestamp | None":
+    try:
+        idx = pd.read_csv(_FEATURES_CSV, index_col=0, parse_dates=True).index
+        return pd.Timestamp(idx[-1]).tz_localize(None).normalize()
+    except Exception:
+        return None
+
+
+def _ensure_fresh_features() -> None:
+    try:
+        if not _FEATURES_CSV.exists() or not _PULL_SCRIPT.exists():
+            return
+        now = pd.Timestamp.utcnow().tz_localize(None)
+        today = now.normalize()
+        # the CT "day" is anchored at 12:00 UTC; the prior day's bar is complete
+        # once we're past that anchor, so that's the freshest bar we can expect.
+        target = today if now.hour >= 12 else (today - pd.Timedelta(days=1))
+        last = _features_last_bar()
+        if last is not None and last >= target:
+            return                                 # already current — nothing to do
+        if _PULL_GUARD.exists():                    # rate-limit re-attempts
+            try:
+                if (now - pd.Timestamp(_PULL_GUARD.read_text().strip())) < _PULL_MIN_GAP:
+                    return
+            except Exception:
+                pass
+        _PULL_GUARD.write_text(now.isoformat())     # stamp before running
+        import subprocess
+        subprocess.run([sys.executable, str(_PULL_SCRIPT)], cwd=str(_REPO),
+                       timeout=360, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 # live Pure-Regime thresholds (btc_hourly_app.py:97-98) and per-asset stops
 U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
@@ -247,6 +295,7 @@ def _alert(sigs, i, in_pos):
 def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
     """Run BTC/MSTR/MSTU through the BTC app's CT engine and return standard
     Overall-app result dicts (one per instrument)."""
+    _ensure_fresh_features()          # refresh the feature CSV if it's behind
     rf = T.load_raw_features()
     preds = T.build_preds_offline(rf)
     end = str(rf.index[-1].date())

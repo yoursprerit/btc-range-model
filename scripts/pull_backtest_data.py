@@ -113,10 +113,63 @@ def _norm(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
     df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
+    df.index.name = "Date"          # so mstr_daily.csv etc. keep a 'Date' header
     return df
 
 
+_YH_HOSTS = ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com")
+_YH_UA = {"User-Agent": "Mozilla/5.0"}
+
+
+def _yf_requests(ticker: str, start: str) -> pd.DataFrame:
+    """Daily OHLCV from Yahoo's chart API via plain ``requests``, auto-adjusted
+    for splits/dividends (matching ``yfinance`` ``auto_adjust=True``).  The
+    yfinance client's own HTTP stack fails behind the agent proxy, whereas this
+    is the same request path the live app already uses successfully."""
+    p1 = int(pd.Timestamp(start).timestamp())
+    p2 = int(pd.Timestamp.now(tz="UTC").timestamp())
+    params = {"interval": "1d", "period1": p1, "period2": p2, "events": "div,splits"}
+    for host in _YH_HOSTS:
+        try:
+            r = requests.get(f"{host}/v8/finance/chart/{ticker}",
+                             params=params, headers=_YH_UA, timeout=30)
+            if r.status_code != 200:
+                continue
+            res = r.json()["chart"]["result"][0]
+            ts = res.get("timestamp")
+            if not ts:
+                continue
+            q = res["indicators"]["quote"][0]
+            close = np.array(q.get("close"), dtype=float)
+            df = pd.DataFrame({
+                "Open":  np.array(q.get("open"),   dtype=float),
+                "High":  np.array(q.get("high"),   dtype=float),
+                "Low":   np.array(q.get("low"),    dtype=float),
+                "Close": close,
+                "Volume": np.array(q.get("volume"), dtype=float),
+            }, index=pd.to_datetime(ts, unit="s"))
+            # auto-adjust OHLC by the adjusted-close ratio (splits + dividends),
+            # so e.g. MSTR's 2024 split matches the yfinance-built history.
+            adj = (res.get("indicators", {}).get("adjclose", [{}]) or [{}])[0].get("adjclose")
+            if adj is not None:
+                adjc = np.array(adj, dtype=float)
+                ratio = np.where(close > 0, adjc / close, 1.0)
+                for c in ("Open", "High", "Low", "Close"):
+                    df[c] = df[c].values * ratio
+            df = _norm(df)
+            df = df[~df.index.duplicated(keep="last")].sort_index().dropna(subset=["Close"])
+            if not df.empty:
+                return df
+        except Exception as exc:
+            print(f"  [yf-requests {ticker}] {exc}")
+    return pd.DataFrame()
+
+
 def _yf(ticker: str, start: str, retries: int = 3) -> pd.DataFrame:
+    # Prefer the proxy-friendly requests path; fall back to the yfinance client.
+    df = _yf_requests(ticker, start)
+    if not df.empty:
+        return df
     for attempt in range(1, retries + 1):
         try:
             df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
