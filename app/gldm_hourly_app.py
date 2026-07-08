@@ -346,6 +346,7 @@ def render_gldm_gate_signatures(sigs):
     bull = bool(sigs.get("bull_regime")); clean = bool(sigs.get("clean_10d"))
     clean_gate = bool(clean and not above); vgate = bool(sigs.get("v_recent_gate"))
     u1 = bool(sigs.get("u1_triggered")); entry = bool(sigs.get("entry_triggered"))
+    vdn = float(sigs.get("dn_score_raw") or 0.0)
     close_s = f"${close:,.2f}" if close is not None else "—"
     ma_s = f"${ma20:,.2f}" if ma20 is not None else "—"
     gate_ok = bull or clean_gate or vgate
@@ -376,9 +377,13 @@ def render_gldm_gate_signatures(sigs):
         unsafe_allow_html=True)
     g3.markdown(_gate_card(
         "V-Reversal", "⚡", vgate,
-        [("capitulation undershoot ≤3 bars", "yes" if vgate else "no", "required", vgate, "context")],
+        [("washout in last 3 bars", "yes — ≤3 bars ago" if vgate else "none",
+          "capitulation ≤3 bars ago", vgate, "context"),
+         ("capitulation score (today)", f"{vdn:.2f}", "> 0.80 + deep low", vgate, "context")],
         "A recent sharp washout / capitulation-low undershoot (V-shaped reversal setup) — "
-        "also satisfies the entry gate."), unsafe_allow_html=True)
+        "also satisfies the entry gate. The gate arms when the capitulation score clears "
+        "0.80 <i>and</i> the day's low deeply undershoots the model, within the last 3 bars."),
+        unsafe_allow_html=True)
 
 
 def net_signal(sigs):

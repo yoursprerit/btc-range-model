@@ -705,6 +705,7 @@ def render_gate_signatures(sigs):
     bull = bool(sigs.get("bull_regime")); clean = bool(sigs.get("clean_10d"))
     clean_gate = bool(clean and not above); vgate = bool(sigs.get("v_recent_gate"))
     u1 = bool(sigs.get("u1_triggered")); entry = bool(sigs.get("entry_triggered"))
+    vdn = float(sigs.get("dn_score_raw") or 0.0)
     close_s = f"${close:,.2f}" if close is not None else "—"
     ma_s = f"${ma20:,.2f}" if ma20 is not None else "—"
     gate_ok = bull or clean_gate or vgate
@@ -735,9 +736,13 @@ def render_gate_signatures(sigs):
         unsafe_allow_html=True)
     g3.markdown(_gate_card(
         "V-Reversal", "⚡", vgate,
-        [("capitulation undershoot ≤3 bars", "yes" if vgate else "no", "required", vgate, "context")],
+        [("washout in last 3 bars", "yes — ≤3 bars ago" if vgate else "none",
+          "capitulation ≤3 bars ago", vgate, "context"),
+         ("capitulation score (today)", f"{vdn:.2f}", "> 0.80 + deep low", vgate, "context")],
         "A recent sharp washout / capitulation-low undershoot (V-shaped reversal setup) — "
-        "also satisfies the entry gate."), unsafe_allow_html=True)
+        "also satisfies the entry gate. The gate arms when the capitulation score clears "
+        "0.80 <i>and</i> the day's low deeply undershoots the model, within the last 3 bars."),
+        unsafe_allow_html=True)
 
 
 def render_ma_signatures(mst, pos=None):
@@ -1120,6 +1125,26 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
                     annotation_font=dict(color=ma_col, size=12),
                     annotation_bgcolor="rgba(255,255,255,0.92)",
                     annotation_bordercolor=ma_col, annotation_borderwidth=1)
+    # Divergence apps (PBW / ARTY / …) trade on the U1/D2 divergence gate whose
+    # Bull-Regime leg is decided against the 20-day SMA.  Overlay that same
+    # 20-day SMA so the live hourly price can be read directly against the gate's
+    # trend threshold.  (It's a *daily* SMA, ~flat across this 23-hour window, so
+    # it's drawn as a horizontal reference line, coloured by price above/below.)
+    if IS_DIV:
+        dd = daily if is_live else daily[daily.index <= pd.Timestamp(as_of_date)]
+        if dd is not None and len(dd) >= 1:
+            ma20 = float(dd["px_close"].tail(20).mean())
+            if ma20 == ma20:                          # not NaN
+                above20 = last_close > ma20
+                ma20_col = "#16a34a" if above20 else "#dc2626"
+                fig.add_hline(
+                    y=ma20, line=dict(color=ma20_col, width=2, dash="dash"),
+                    annotation_text=(f"20-day SMA ${ma20:,.2f} — Bull-Regime gate "
+                                     f"({'price above' if above20 else 'price below'})"),
+                    annotation_position="bottom left",
+                    annotation_font=dict(color=ma20_col, size=12),
+                    annotation_bgcolor="rgba(255,255,255,0.92)",
+                    annotation_bordercolor=ma20_col, annotation_borderwidth=1)
     title = (f"🕐 {cfg.key} — rolling next-hour close forecast (last 23 hours)"
              if is_live else f"🕐 {cfg.key} hourly forecast as of {pd.Timestamp(as_of_date).date()}")
     fig.update_layout(template="plotly_white", height=420,
