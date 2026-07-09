@@ -60,8 +60,12 @@ def _stale_core(mod) -> bool:
     if not hasattr(mod, "run_universe") or not hasattr(mod, "optimize_weights"):
         return True
     try:
-        return "fundamental" not in _inspect.signature(mod.optimize_weights).parameters
-    except (ValueError, TypeError):
+        if "fundamental" not in _inspect.signature(mod.optimize_weights).parameters:
+            return True
+        if "include_entries" not in _inspect.signature(mod.live_exit_keys).parameters:
+            return True
+        return False
+    except (ValueError, TypeError, AttributeError):
         return False
 
 
