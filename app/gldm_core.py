@@ -65,9 +65,11 @@ HOURLY_CACHE_CSV  = GLDM_DATA_DIR / "gldm_macro_hourly.csv"
 #   GLDM → the core 1x gold position
 #   UGL  → ProShares Ultra Gold, 2x daily gold      (analog of MSTU / 2x BTC)
 #   GDX  → VanEck Gold Miners ETF, high-beta gold    (analog of MSTR)
+#   NUGT → Direxion Daily Gold Miners 2x, leveraged miners (2× the GDX beta)
 PRIMARY_SYMBOL = "GLDM"
 LEVERAGED_SYMBOLS = {"UGL": "ProShares Ultra Gold (2x)",
-                     "GDX": "VanEck Gold Miners ETF"}
+                     "GDX": "VanEck Gold Miners ETF",
+                     "NUGT": "Direxion Daily Gold Miners 2x"}
 
 # Macro drivers merged into the feature frame (name → Yahoo symbol).
 MACRO_SYMS = {
@@ -103,7 +105,7 @@ D2_ERRHI_MAX = -0.10   # D2 exit:   3d-avg centered err_hi < −0.10%
 D1_ERRLO_MIN =  0.10   # D1 exit:   3d-avg centered err_lo > +0.10%  (AND lo_breaks_3d ≥ 2)
 V_ERRLO_MIN  =  0.50   # V-reversal capitulation: single-bar low undershoot > 0.50%
 FIXED_STOP   =  0.03   # shared fixed stop (−3%) for both traded assets
-TRADEABLE_ASSETS = ["GDX", "UGL"]   # GLDM (1x) supplies the signal only
+TRADEABLE_ASSETS = ["GDX", "UGL", "NUGT"]   # GLDM (1x) supplies the signal only
 
 # ── PRIMARY GOLD STRATEGY — price-vs-MA trend filter ─────────────────────
 # The backtest (backtest_gldm.py, OOS 2021-2026) shows gold's persistent

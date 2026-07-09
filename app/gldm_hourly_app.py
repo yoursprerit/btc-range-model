@@ -69,7 +69,8 @@ btg = backtest_gldm
 st.set_page_config(page_title="GLDM Gold Forecaster", page_icon="🥇",
                    layout="wide", initial_sidebar_state="expanded")
 
-ASSET_LABELS = {"GDX": "GDX · Gold Miners", "UGL": "UGL · 2× Gold"}
+ASSET_LABELS = {"GDX": "GDX · Gold Miners", "UGL": "UGL · 2× Gold",
+                "NUGT": "NUGT · 2× Gold Miners"}
 
 # ════════════════════════════════════════════════════════════════════════
 # Sidebar — application selector (shared with the BTC app) + controls
@@ -433,7 +434,7 @@ def render_strategy_card():
   <div style='font-size:15px; font-weight:800; color:#7a5901; margin-bottom:12px;
        letter-spacing:0.3px;'>
     🥇 {gc.STRATEGY_NAME} &nbsp;—&nbsp;
-    <span style='color:#b8860b;'>GLDM signals · GDX &amp; UGL execution</span>
+    <span style='color:#b8860b;'>GLDM signals · GDX, UGL &amp; NUGT execution</span>
   </div>
   <div style='background:#fdf0d5; border-radius:8px; padding:10px 14px; margin-bottom:12px;
        font-size:12.5px; color:#5c4400; font-weight:600;'>
@@ -452,7 +453,7 @@ def render_strategy_card():
   <div style='display:flex; gap:14px; flex-wrap:wrap;'>
     <div style='flex:1; min-width:230px;'>
       <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long GDX &amp; UGL</div>
+           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long GDX, UGL &amp; NUGT</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① <b>U1 active</b> — err_hi 3d-avg &gt; +{gc.U1_ERRHI_MIN:.2f}% &amp;&amp; ≥2 high-breaks<br>
         ② <b>one gate</b>: 🐂 Bull Regime · 🧹 Clean Breakout · ⚡ V-reversal
@@ -1263,9 +1264,9 @@ def render_backtest_dashboard(asset):
 # ════════════════════════════════════════════════════════════════════════
 # Tabs
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_gdx, tab_ugl, tab_explain = st.tabs(
+tab_live, tab_hist, tab_gdx, tab_ugl, tab_nugt, tab_explain = st.tabs(
     ["🔴 Live (rolling now+1h)", "🕒 Historical replay",
-     "📊 GDX Backtesting", "📈 UGL Backtesting", "🧠 Explain"])
+     "📊 GDX Backtesting", "📈 UGL Backtesting", "⛏️ NUGT Backtesting", "🧠 Explain"])
 
 
 # ═════════════════════════════ LIVE ══════════════════════════════════════
@@ -1348,10 +1349,11 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     st.markdown("#### Strategy conditions (live)")
     render_conditions_box(sigs)
     st.markdown("#### Current positions")
-    p1, p2 = st.columns(2)
+    p1, p2, p3 = st.columns(3)
     end = None if is_live else as_of_date
     position_panel("GDX", p1, end=end)
     position_panel("UGL", p2, end=end)
+    position_panel("NUGT", p3, end=end)
 
     # ── model forecast charts (hourly + Daily H/L + 7d & 14d close cones) ──
     st.markdown("---")
@@ -1365,8 +1367,8 @@ with tab_live:
 
 # ═════════════════════════ HISTORICAL REPLAY ═════════════════════════════
 with tab_hist:
-    st.markdown("### 🕒 Historical replay — GDX & UGL")
-    st.caption("Replay the gold trend-signals, forecasts and both positions exactly as "
+    st.markdown("### 🕒 Historical replay — GDX, UGL & NUGT")
+    st.caption("Replay the gold trend-signals, forecasts and all three positions exactly as "
                "they stood at the close of any past trading day.")
     # Restrict replay to the out-of-sample window: the daily H/L model is fit on
     # the pre-2021 window, so signals/positions before 2021 would be in-sample.
@@ -1408,6 +1410,8 @@ with tab_gdx:
     render_backtest_dashboard("GDX")
 with tab_ugl:
     render_backtest_dashboard("UGL")
+with tab_nugt:
+    render_backtest_dashboard("NUGT")
 
 
 # ═════════════════════════════ EXPLAIN ═══════════════════════════════════
@@ -1435,16 +1439,18 @@ Clean Breakout below the MA *or* a recent V-reversal). Exit on D2
 (< {gc.D2_ERRHI_MAX:+.2f}%) / D3 exhaustion, or a fixed **−{gc.FIXED_STOP*100:.0f}%**
 stop. The divergence error is regime-centered (rolling median) so the signal
 self-calibrates to gold's low volatility. Signals come from **GLDM**; execution
-is in **GDX** (miners) and **UGL** (2× gold) — the 1× GLDM position is not traded,
-mirroring how the BTC app trades MSTR / MSTU rather than spot BTC.
+is in **GDX** (miners), **UGL** (2× gold) and **NUGT** (2× gold miners) — the 1×
+GLDM position is not traded, mirroring how the BTC app trades MSTR / MSTU rather
+than spot BTC.
 
 **Out-of-sample results (2021→now)** — beats buy & hold on **both** return and
-drawdown for both assets:
+drawdown for every sleeve:
 
 | Asset | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe |
 |---|---|---|---|---|---|
-| GDX | **+270%** | +104% | **−16%** | −47% | **1.40** |
-| UGL | **+207%** | +161% | **−18%** | −49% | **1.29** |
+| GDX | **+272%** | +97% | **−16%** | −47% | **1.41** |
+| UGL | **+211%** | +158% | **−18%** | −49% | **1.30** |
+| NUGT | **+634%** | +48% | **−28%** | −74% | **1.29** |
 
 **Honest framing.** Intraday gold direction is ~coin-flip (like BTC); the hourly
 model's value is a tight CI, not a directional bet. The edge is in the trend
