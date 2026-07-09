@@ -736,8 +736,11 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     closing = {res["key"] for res in in_pos
                if res["decision"]["tone"] == "exit" or res["key"] in force_exit}
     keep = [res for res in in_pos if res["key"] not in closing]
+    # a fresh entry whose live price has already broken the trend (in force_exit)
+    # would reverse straight back out next bar — don't fund it in the live book.
     opens = [res for res in results
-             if (not res["pos"]["in_pos"]) and res["decision"]["tone"] == "buy"]
+             if (not res["pos"]["in_pos"]) and res["decision"]["tone"] == "buy"
+             and res["key"] not in force_exit]
 
     target_keys = [res["key"] for res in keep] + [res["key"] for res in opens]
     prio = compute_priorities(results, target_keys)
@@ -1001,16 +1004,27 @@ def apply_entry_basis(results: list[dict], entry_closes: dict) -> None:
                 p["dist_stop"] = (last / p["stop_px"] - 1) * 100
 
 
-def live_exit_keys(results: list[dict], spot: dict) -> set:
-    """Keys of price-line trend positions the *live* price says will exit on the
-    next bar — currently long, but the parent's live price has dropped below the
-    trend line (these filters decide at the close and act on the next bar).
+def live_exit_keys(results: list[dict], spot: dict,
+                   include_entries: bool = False) -> set:
+    """Keys of price-line trend instruments the *live* price says will drop out on
+    the next bar — the parent's live price has fallen below the trend line (these
+    filters decide at the close and act on the next bar).  By default this covers
+    positions currently **held** (long today, but exit next bar).  With
+    ``include_entries=True`` it also covers fresh **entries** signalled off the
+    last close whose live price has since slipped below the trend — they'd open
+    into a broken trend and reverse right back out on the next bar.
     MACD (oscillator) and divergence exits are signal-triggered, not simple
     price-crossings, so they're not included."""
     out = set()
     for r in results:
+        if r.get("mode") not in ("ma", "dual_ma", "ma_vol"):
+            continue
         p = r.get("pos") or {}
-        if not p.get("in_pos") or r.get("mode") not in ("ma", "dual_ma", "ma_vol"):
+        in_pos = bool(p.get("in_pos"))
+        tone = (r.get("decision") or {}).get("tone")
+        is_hold = in_pos
+        is_entry = (not in_pos) and tone == "buy"
+        if not (is_hold or (include_entries and is_entry)):
             continue
         ma = r.get("ma_val")
         plive = (spot.get(r.get("parent")) or {}).get("price")

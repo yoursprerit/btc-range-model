@@ -392,10 +392,11 @@ with tab_live:
                 help=f"{gate['sata_info']['name']} — idle cash parked at "
                      f"~{gate['sata_info']['annual_rate']*100:.0f}% yield.")
 
-    # live-adjusted allocation (drops MA positions whose live price is below the
+    # live-adjusted allocation (drops MA instruments whose live price is below the
     # trend filter → they exit next bar) — used by the action table's Live target
-    # columns and by the "Recommended now" pie below.
-    _live_exits = ov.live_exit_keys(results, _spot)
+    # columns and by the "Recommended now" pie below. include_entries flags fresh
+    # buys that would open into an already-broken trend as well as current holds.
+    _live_exits = ov.live_exit_keys(results, _spot, include_entries=True)
     try:
         gate_live = ov.signal_gated_allocation(
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
@@ -449,9 +450,12 @@ with tab_live:
     if _live_exits:
         st.warning("⚠️ **Live-adjusted:** " + ", ".join(sorted(_live_exits)) +
                    " " + ("is" if len(_live_exits) == 1 else "are") +
-                   " long today but the **live price is below the trend filter**, "
-                   "so " + ("it" if len(_live_exits) == 1 else "they") +
-                   " will exit on the next bar. The **Recommended now** pie removes "
+                   " signalling long off the last close but the **live price is now "
+                   "below the trend filter**, so " +
+                   ("it" if len(_live_exits) == 1 else "they") +
+                   " won't hold — " + ("it exits" if len(_live_exits) == 1
+                                        else "they exit") +
+                   " on the next bar. The **Recommended now** pie removes "
                    + ("it" if len(_live_exits) == 1 else "them") +
                    " and reallocates to the survivors and SATA.")
     else:
@@ -495,8 +499,10 @@ with tab_live:
                "back-tested win-rate and its risk-adjusted edge — it decides which "
                "signals get funded and how much. Held/opened risk assets total "
                "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
-               "**red** ⚠️ are long positions whose trend has broken — they still "
-               "hold today but **exit on the next bar**. **Unreal. P&L** is measured "
+               "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
+               "the live price — they still **hold/open today** but **exit on the "
+               "next bar** (either the last close already crossed the trend, or the "
+               "live price has since slipped below it). **Unreal. P&L** is measured "
                "against each position's real cost basis — the official close on its "
                "entry bar. **Target % / $ (Last bar)** is the committed allocation "
                "from the last-close signals; **Target % / $ (Live)** re-runs it "
@@ -565,14 +571,25 @@ with tab_live:
         _cb = _r["pos"].get("entry_px")
         cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
                   if a["in_pos"] and _cb else "")
-        # a long/entering position whose trend has broken exits on the NEXT bar —
-        # flag the whole row red so it's clear the hold is about to be closed out.
-        exit_next = a.get("exits_next_bar")
+        # a hold/entry whose trend has broken drops out on the NEXT bar — flag the
+        # whole row red so it's clear the position is about to be closed out. This
+        # covers two cases: the committed last-close exit (exits_next_bar), and the
+        # live-price exit — a row that still holds/opens today but whose live price
+        # has fallen below the trend filter (in _live_exits, incl. fresh entries).
+        _committed_exit = bool(a.get("exits_next_bar"))
+        _live_exit = a["key"] in _live_exits
+        exit_next = _committed_exit or _live_exit
         row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
                      "box-shadow:inset 3px 0 0 #dc2626" if exit_next
                      else "border-bottom:1px solid #eef2f7")
-        warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
-                "⚠️ exits next bar</div>" if exit_next else "")
+        if not exit_next:
+            warn = ""
+        elif _committed_exit:                      # last close already below trend
+            warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
+                    "⚠️ exits next bar</div>")
+        else:                                      # live-driven (hold or fresh entry)
+            warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
+                    "⚠️ live px below trend — exits next bar</div>")
         rows.append(
             f"<tr style='{row_style}'>"
             f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}{warn}</td>"
