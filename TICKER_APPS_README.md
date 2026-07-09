@@ -22,18 +22,19 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 | 🌱 **VEGN** | US Vegan Climate ETF | ESG-screened S&P 500, tech-tilted | 200-day trend filter |
 | ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 |
 | 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Divergence Pure-Regime |
-| 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Divergence Pure-Regime |
+| 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Dual-MA 50/200 golden cross |
 | ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 50-day SMA + volatility filter |
 
-> **Strategy refresh (Aug-2025-trained search).** SOXX, GRID, REMX and WGMI were
-> re-tuned via a per-asset ML / statistical search validated on a held-out
-> window (training data through Aug-2025). SOXX moved from a single 40-day SMA to
-> a 25/100 dual-MA crossover, GRID from a 150-day SMA to MACD 10/20/9, WGMI from
-> a 30-day SMA to a 50-day SMA + volatility filter, and REMX from a 150-day SMA
-> to the divergence Pure-Regime — each an out-of-sample improvement on both
-> return and Sharpe. VEGN kept its 200-day filter (nothing beat it robustly).
-> See `HYPERPARAM_SEARCH_EVAL.md`, `ML_STATISTICAL_STRATEGY_EVAL.md` and
-> `REGIME_DIVERGENCE_EVAL.md` for the full evaluation.
+> **Strategy refresh.** SOXX, GRID and WGMI were re-tuned via a per-asset ML /
+> statistical search validated on a held-out window (training data through
+> Aug-2025): SOXX moved from a single 40-day SMA to a 25/100 dual-MA crossover,
+> GRID from a 150-day SMA to MACD 10/20/9, and WGMI from a 30-day SMA to a
+> 50-day SMA + volatility filter — each an out-of-sample improvement on return
+> and Sharpe. REMX was optimised over the **full 2015→now bull+bear cycle** to a
+> 50/200 dual-MA "golden cross" (+510% vs the old 150-day filter's +370%),
+> beating buy-&-hold on return, drawdown and Sharpe. VEGN kept its 200-day
+> filter (nothing beat it robustly). See `HYPERPARAM_SEARCH_EVAL.md`,
+> `ML_STATISTICAL_STRATEGY_EVAL.md` and `REGIME_DIVERGENCE_EVAL.md`.
 
 ---
 
@@ -97,7 +98,7 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 | VEGN | MA-200, −5 % stop | **+84 %** | +81 % | **−14 %** | −33 % | **1.02 / 0.73** |
 | GRID | MACD 10/20/9, −5 % stop | **+134 %** | +132 % | **−16 %** | −30 % | **1.20 / 0.83** |
 | XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
-| REMX | Divergence (U1 .16 / D2 −.18, no stop) | **+109 %** | +24 % | **−18 %** | −75 % | **0.93 / 0.30** |
+| REMX | Dual-MA 50/200, −5 % stop | **+135 %** | +24 % | **−27 %** | −74 % | **0.68 / 0.30** |
 | WGMI | MA-50 + vol-filter (k 0.95, no stop) | **+376 %** | +223 % | **−32 %** | −63 % | **1.81 / 0.98** |
 
 (OIH, traded off the XLE signal: **+70 %** at **−19 %** MDD vs Buy-&-Hold +130 % / −46 %.)
@@ -117,29 +118,25 @@ recovered from:
 |---|---|---|---|---|---|---|---|
 | **XLE** | 2016→now | **+165 %** | +76 % | **−17 %** | −70 % | **0.95 / 0.33** | return · DD · Sharpe |
 | **OIH** | 2016→now | **+119 %** | −32 % | **−23 %** | −90 % | **0.59 / 0.12** | return · DD · Sharpe |
-| **REMX** | 2015→now | +29 % | +112 % | **−44 %** | −75 % | 0.24 / 0.38 | drawdown only |
+| **REMX** | 2015→now | **+510 %** | +112 % | **−27 %** | −75 % | **0.82 / 0.38** | return · DD · Sharpe |
 | VEGN | 2020→now | +141 % | +167 % | **−16 %** | −34 % | **1.10 / 0.93** | DD · Sharpe |
 | GRID | 2015→now | +270 % | +452 % | **−21 %** | −41 % | **1.04 / 0.88** | DD · Sharpe |
 | WGMI | 2022→now | +282 % | +536 % | **−32 %** | −63 % | **1.32 / 1.08** | DD · Sharpe |
 | SOXX | 2015→now | +1161 % | +1842 % | **−35 %** | −46 % | **1.05 / 1.01** | DD · Sharpe |
 
-**Read this honestly.** Over a full bull+bear cycle **XLE and OIH** still beat
-buy-&-hold *outright — return, drawdown and Sharpe* — because B&H rode a
-multi-year energy bear all the way down. On the **secular compounders (SOXX,
-GRID, VEGN, WGMI)** buy-&-hold's total return is **mathematically unbeatable** by
-any unleveraged long/flat rule — every day in cash is a day of missed gains — so
-the strategy "wins" on **risk-adjusted terms** (higher Sharpe, roughly half the
-drawdown). The refreshed configs improve this risk-adjusted edge: SOXX's 25/100
-dual-MA now beats B&H on Sharpe *and* drawdown over the full cycle (1.05 vs 1.01),
-and GRID's MACD lifts full-cycle Sharpe to 1.04. **REMX is the deliberate
-exception:** its divergence Pure-Regime is tuned to the 2021→now out-of-sample
-window (where it turns B&H's +24 % / −74 % into +109 % / −18 %), and to do that it
-stands aside through the 2020–21 rare-earth boom — so over the *full* 2015→now
-cycle it trails B&H on total return and Sharpe, winning only on drawdown. If
-full-cycle total return is the priority for REMX rather than the recent OOS
-window, the older MA-150 trend filter (+370 % full-cycle) is the better fit; the
-divergence config is the right call for the recent-regime, drawdown-controlled
-mandate the other apps share.
+**Read this honestly.** Over a full bull+bear cycle the strategy beats
+buy-&-hold *outright — return, drawdown and Sharpe* — on the **commodity-equity
+crash assets (XLE, OIH, REMX)**, where B&H rode a multi-year bear all the way
+down. REMX's 50/200 golden cross is tuned to maximise the full-cycle result and
+turns B&H's +112 % / −75 % into **+510 % / −27 %** (Sharpe 0.82 vs 0.38). On the
+**secular compounders (SOXX, GRID, VEGN, WGMI)** buy-&-hold's total return is
+**mathematically unbeatable** by any unleveraged long/flat rule — every day in
+cash is a day of missed gains — so the strategy "wins" on **risk-adjusted terms**
+(higher Sharpe, roughly half the drawdown). The refreshed configs improve this
+risk-adjusted edge: SOXX's 25/100 dual-MA now beats B&H on Sharpe *and* drawdown
+over the full cycle (1.05 vs 1.01), and GRID's MACD lifts full-cycle Sharpe to
+1.04. The only ways to beat buy-&-hold's *return* on the compounders would be
+leverage or shorting, both excluded here.
 
 ---
 

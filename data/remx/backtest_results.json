@@ -2,15 +2,15 @@
   "ticker": "REMX",
   "oos_start": "2021-01-01",
   "oos_end": "2026-07-06",
-  "strategy": "Metals Divergence Pure-Regime",
-  "mode": "divergence",
+  "strategy": "Metals Dual-MA Trend",
+  "mode": "dual_ma",
   "assets": {
     "REMX": {
       "strategy": {
-        "total_ret": 1.0921859295892973,
-        "cagr": 0.14363472215051676,
-        "mdd": -0.17530654844091065,
-        "sharpe": 0.9280335215186167
+        "total_ret": 1.3488112517323878,
+        "cagr": 0.167945923990652,
+        "mdd": -0.2701167747763217,
+        "sharpe": 0.6754467188156943
       },
       "buy_hold": {
         "total_ret": 0.24329832600145251,
@@ -18,8 +18,8 @@
         "mdd": -0.7437406750849287,
         "sharpe": 0.3025369717649981
       },
-      "n_trades": 54,
-      "win_rate": 59.25925925925925
+      "n_trades": 3,
+      "win_rate": 33.33333333333333
     }
   }
 }

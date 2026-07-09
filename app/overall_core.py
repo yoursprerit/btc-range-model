@@ -164,8 +164,8 @@ def overall_config(key: str) -> TickerConfig:
     engine (see run_universe), GLDM via its Divergence Pure-Regime config, and
     the six ETF apps via their exact ``ticker_config`` entries — SOXX on its
     25/100 dual-MA crossover, GRID on its MACD 10/20/9 filter, WGMI on its
-    50-day SMA + volatility filter, REMX on its divergence Pure-Regime, XLE on
-    its energy divergence.  The Overall app therefore matches each source app
+    50-day SMA + volatility filter, REMX on its 50/200 dual-MA golden cross, XLE
+    on its energy divergence.  The Overall app therefore matches each source app
     bar-for-bar.
     """
     if key == "BTC":
