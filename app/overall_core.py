@@ -210,9 +210,11 @@ ASSET_META = {
     "GDX":  dict(name="Gold Miners",    kind="beta"),
     "UGL":  dict(name="2× Gold",        kind="lev"),
     "SOXX": dict(name="Semiconductors", kind="core"),
+    "SOXL": dict(name="3× Semiconductors", kind="lev"),
     "GRID": dict(name="Grid Infra",     kind="core"),
     "XLE":  dict(name="Energy",         kind="core"),
     "OIH":  dict(name="Oil Services",   kind="beta"),
+    "ERX":  dict(name="2× Energy",      kind="lev"),
     "REMX": dict(name="Rare-Earth Metals", kind="core"),
     "WGMI": dict(name="Bitcoin Miners", kind="beta"),
     "PBW":  dict(name="Clean Energy",   kind="core"),
@@ -230,13 +232,13 @@ CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 # the quant optimum (see ``optimize_weights(fundamental=True)``) so the strategy,
 # allocation and back-test reflect the forward view, not just past risk/return.
 FUNDAMENTAL_VIEW = {
-    "SOXX": 1.40, "ARTY": 1.40,                 # AI / semiconductor supercycle
+    "SOXX": 1.40, "SOXL": 1.40, "ARTY": 1.40,   # AI / semiconductor supercycle (SOXL = 3× semis)
     "BTC": 1.40, "MSTR": 1.40, "MSTU": 1.40,    # crypto institutional era
     "GLDM": 1.30, "GDX": 1.40, "UGL": 1.40,     # structural gold bull
     "GRID": 1.40,                                # electrification / grid capex
     "WGMI": 1.30,                                # miners' AI/HPC pivot
     "REMX": 1.10,                                # rare-earth supply squeeze
-    "XLE": 1.00,                                 # energy — gas ok, oil soft
+    "XLE": 1.00, "ERX": 1.00,                    # energy — gas ok, oil soft (ERX = 2× energy)
     "OIH": 0.50, "PBW": 0.40,                    # no catalyst / policy headwinds
 }
 FUNDAMENTAL_VIEW_NOTE = (

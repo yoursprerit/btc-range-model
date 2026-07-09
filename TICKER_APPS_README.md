@@ -155,6 +155,27 @@ gold signal. The XLE app therefore trades **both XLE and OIH off the XLE signal*
 
 ---
 
+## Leveraged siblings for total return — SOXL (3× semis) · ERX (2× energy)
+
+The two top-conviction signals (SOXX, XLE) now also drive a **leveraged sibling**,
+the same way BTC drives MSTU (2×) and gold drives UGL (2×):
+
+* **SOXL** (3× semis) trades off the **SOXX 25/100 dual-MA** — the SOXX app shows
+  it in its own Backtesting tab.
+* **ERX** (2× energy) trades off the **XLE energy-divergence** signal — alongside
+  XLE and OIH.
+
+The long/flat rule holds each leveraged ETF **only while its parent trends up** and
+stands aside in the drawdowns where daily-rebalance decay is worst — so the strat
+Sharpe far exceeds a buy-&-hold 3×. In the Overall blend they carry the tightest
+weight caps (`lev`: 0.10 Balanced → 0.35 Aggressive): **Balanced barely touches
+SOXL**, while the **Aggressive profile roughly doubles combined return** by loading
+it (OOS optimal ~+1034% → **+2161%**, drawdown −34%, inside the −38% budget). **ERX**
+is a rare win-win — it lifts return *and* Sharpe *and* trims drawdown, because it is
+uncorrelated to the tech-heavy book. Full analysis in `SOXL_ERX_ADDITION_EVAL.md`.
+
+---
+
 ## Reproduce
 
 ```bash
