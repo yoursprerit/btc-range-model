@@ -2,15 +2,15 @@
   "ticker": "WGMI",
   "oos_start": "2024-01-01",
   "oos_end": "2026-07-06",
-  "strategy": "Miner Trend-Regime",
-  "mode": "ma",
+  "strategy": "Miner MA + Vol-Filter Trend",
+  "mode": "ma_vol",
   "assets": {
     "WGMI": {
       "strategy": {
-        "total_ret": 1.9079237987315278,
-        "cagr": 0.5305629613122693,
-        "mdd": -0.4046056248271068,
-        "sharpe": 1.0159122696071967
+        "total_ret": 3.7641127521958433,
+        "cagr": 0.8635525087069831,
+        "mdd": -0.315453910962861,
+        "sharpe": 1.812084678768215
       },
       "buy_hold": {
         "total_ret": 2.2292738868701236,
@@ -18,8 +18,8 @@
         "mdd": -0.6286360836202833,
         "sharpe": 0.9840104570724469
       },
-      "n_trades": 23,
-      "win_rate": 39.130434782608695
+      "n_trades": 18,
+      "win_rate": 66.66666666666666
     }
   }
 }

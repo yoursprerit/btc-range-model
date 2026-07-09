@@ -143,21 +143,73 @@ def precompute_signals(cfg: TickerConfig, preds: pd.DataFrame):
                 d3=d3, v_recent=v_recent, lo_break=lo_break)
 
 
-# ── MA trend-filter strategy ──────────────────────────────────────────────
+# ── trend-family long/flat signal (ma · dual_ma · macd · ma_vol) ──────────
+def _rolling_mean(x, w):
+    return np.array([np.mean(x[max(0, i - (w - 1)):i + 1]) for i in range(len(x))])
+
+
+def trend_long_array(cfg, gcl):
+    """Boolean long-at-close signal for the config's trend mode, computed on the
+    PRIMARY close array ``gcl`` (decision at each close → executed next bar).
+
+      ma       long while close > N-day SMA
+      dual_ma  long while the fast SMA is above the slow SMA
+      macd     long while the MACD histogram (fast, slow, signal) > 0
+      ma_vol   long while close > N-day SMA AND realised vol is below k · its
+               rolling median (skip the high-volatility regime)
+    """
+    m = cfg.strategy_mode
+    if m == "dual_ma":
+        return _rolling_mean(gcl, cfg.ma_fast) > _rolling_mean(gcl, cfg.ma_slow)
+    if m == "macd":
+        c = pd.Series(gcl)
+        macd = (c.ewm(span=cfg.macd_fast, adjust=False).mean()
+                - c.ewm(span=cfg.macd_slow, adjust=False).mean())
+        hist = macd - macd.ewm(span=cfg.macd_signal, adjust=False).mean()
+        return (hist > 0).to_numpy()
+    if m == "ma_vol":
+        c = pd.Series(gcl)
+        v = np.log(c).diff().rolling(cfg.vol_win).std()
+        med = v.rolling(cfg.vol_med_win).median()
+        above = gcl > _rolling_mean(gcl, cfg.ma_window)
+        return (above & (v < cfg.vol_k * med).to_numpy())
+    return gcl > _rolling_mean(gcl, cfg.ma_window)          # "ma"
+
+
+def trend_long_now(cfg, daily):
+    """The trend signal's boolean state on the latest available bar."""
+    gcl = daily["px_close"].to_numpy(float)
+    return bool(trend_long_array(cfg, gcl)[-1]) if len(gcl) else False
+
+
+def trend_line_value(cfg, daily):
+    """Representative price-level line for the trend chart / UI (last value):
+    the slow SMA for dual_ma, else the N-day SMA."""
+    gcl = daily["px_close"].to_numpy(float)
+    if not len(gcl):
+        return float("nan")
+    w = cfg.ma_slow if cfg.strategy_mode == "dual_ma" else cfg.ma_window
+    return float(np.mean(gcl[-w:]))
+
+
+# ── MA / trend-filter strategy ────────────────────────────────────────────
 def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
                     oos_start=None, end=None):
-    """Long into bar i+1 when the PRIMARY close at bar i is above its
-    ``ma_window`` SMA (decision at that close → no look-ahead); flat otherwise.
-    Signal derived from the primary, executed on ``price_col``.  Optional fixed
-    stop.  Returns equity curves + trade log (schema matches ``simulate``)."""
-    ma_window = ma_window if ma_window is not None else cfg.ma_window
+    """Long into bar i+1 when the PRIMARY trend signal is bullish at bar i
+    (decision at that close → no look-ahead); flat otherwise.  Signal derived
+    from the primary via ``trend_long_array``, executed on ``price_col``.  When
+    ``ma_window`` is passed explicitly (the sweep) a plain close>SMA filter with
+    that window is used regardless of mode.  Optional fixed stop.  Returns equity
+    curves + trade log (schema matches ``simulate``)."""
     oos_start = oos_start or cfg.oos_start
     price = preds[price_col].to_numpy(float)
     gcl = preds["px_close"].to_numpy(float)
     dates = preds["target_date"].to_numpy()
     n = len(price)
-    ma = np.array([np.mean(gcl[max(0, i - (ma_window - 1)):i + 1]) for i in range(n)])
-    long_at_close = gcl > ma
+    if ma_window is not None:                               # explicit MA (sweep)
+        long_at_close = gcl > _rolling_mean(gcl, ma_window)
+    else:
+        long_at_close = trend_long_array(cfg, gcl)
     i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
     i1 = n if end is None else int(np.searchsorted(
         dates, np.datetime64(pd.Timestamp(end)), side="right"))

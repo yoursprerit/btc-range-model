@@ -2,15 +2,15 @@
   "ticker": "SOXX",
   "oos_start": "2021-01-01",
   "oos_end": "2026-07-06",
-  "strategy": "Semis Trend-Regime",
-  "mode": "ma",
+  "strategy": "Semis Dual-MA Trend",
+  "mode": "dual_ma",
   "assets": {
     "SOXX": {
       "strategy": {
-        "total_ret": 2.3331312773189286,
-        "cagr": 0.24468128995048843,
-        "mdd": -0.31432155849673826,
-        "sharpe": 0.9423074340895231
+        "total_ret": 4.515395883939067,
+        "cagr": 0.3640294163582154,
+        "mdd": -0.26706402097018667,
+        "sharpe": 1.2259644368166234
       },
       "buy_hold": {
         "total_ret": 3.6201700547348787,
@@ -18,8 +18,8 @@
         "mdd": -0.4624480646318154,
         "sharpe": 0.9348998795502002
       },
-      "n_trades": 46,
-      "win_rate": 47.82608695652174
+      "n_trades": 8,
+      "win_rate": 50.0
     }
   }
 }

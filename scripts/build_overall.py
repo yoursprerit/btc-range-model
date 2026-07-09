@@ -32,14 +32,23 @@ def main():
     pos = oc.position_matrix(results, rets.index)
     print("Return matrix:", rets.shape, rets.index[0].date(), "->", rets.index[-1].date())
 
-    opt = oc.optimize_weights(rets, pos=pos, sata_daily=oc.SATA_DAILY)
+    # Compute every risk profile (Balanced / Growth / Aggressive) so the cached
+    # artifact carries all three, matching what the app renders live.
+    profiles = {}
+    for name, prof in oc.RISK_PROFILES.items():
+        o = oc.optimize_weights(rets, caps=oc.caps_for(name), pos=pos,
+                                sata_daily=oc.SATA_DAILY, mdd_floor=prof["mdd_floor"],
+                                objective=prof["objective"])
+        profiles[name] = o
+        print(f"\n[{name}] optimal ret {o['optimal']['total_ret']*100:7.1f}%  "
+              f"CAGR {o['optimal']['cagr']*100:5.1f}%  MDD {o['optimal']['mdd']*100:6.2f}%  "
+              f"Sharpe {o['optimal']['sharpe']:.2f}  vol {o['optimal']['vol']*100:.1f}%")
+
+    opt = profiles[oc.DEFAULT_PROFILE]
     w = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
-    print("\nOptimal weights:")
+    print(f"\nDefault profile = {oc.DEFAULT_PROFILE}.  Optimal weights:")
     for c in opt["cols"]:
         print(f"  {c:5s} {opt['optimal']['weights'][c]*100:5.1f}%")
-    print(f"  Optimal    ret {opt['optimal']['total_ret']*100:7.1f}%  "
-          f"CAGR {opt['optimal']['cagr']*100:5.1f}%  MDD {opt['optimal']['mdd']*100:6.1f}%  "
-          f"Sharpe {opt['optimal']['sharpe']:.2f}")
     print(f"  EqualWt    ret {opt['equal']['total_ret']*100:7.1f}%  "
           f"CAGR {opt['equal']['cagr']*100:5.1f}%  MDD {opt['equal']['mdd']*100:6.1f}%  "
           f"Sharpe {opt['equal']['sharpe']:.2f}")
@@ -74,11 +83,21 @@ def main():
     # persist compact JSON -------------------------------------------------
     outdir = _REPO / "data" / "overall"
     outdir.mkdir(parents=True, exist_ok=True)
+    # per-profile: store each profile's optimal + its period breakdown
+    profiles_payload = {}
+    for name, o in profiles.items():
+        wv = np.array([o["optimal"]["weights"][c] for c in o["cols"]])
+        pp = oc.period_breakdown(rets, wv, oc.COMBINED_PERIODS, pos=pos, sata_daily=oc.SATA_DAILY)
+        profiles_payload[name] = dict(optimal=o["optimal"], periods=pp,
+                                      objective=oc.RISK_PROFILES[name]["objective"],
+                                      mdd_floor=oc.RISK_PROFILES[name]["mdd_floor"])
     payload = dict(
         as_of=str(rets.index[-1].date()),
         assets=[r["key"] for r in results],
+        default_profile=oc.DEFAULT_PROFILE,
         optimal=opt["optimal"], equal=opt["equal"], risk_parity=opt["risk_parity"],
         cols=opt["cols"],
+        profiles=profiles_payload,
         benchmarks={k: {kk: vv for kk, vv in v.items() if kk != "equity"}
                     for k, v in bm.items()},
         periods=per,

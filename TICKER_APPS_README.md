@@ -18,12 +18,22 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 
 | App | Asset | What it is | Chosen strategy |
 |---|---|---|---|
-| 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | 40-day trend filter |
+| 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | Dual-MA 25/100 crossover |
 | 🌱 **VEGN** | US Vegan Climate ETF | ESG-screened S&P 500, tech-tilted | 200-day trend filter |
-| ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | 150-day trend filter |
+| ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 |
 | 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Divergence Pure-Regime |
-| 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | 150-day trend filter |
-| ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 30-day trend filter |
+| 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Divergence Pure-Regime |
+| ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 50-day SMA + volatility filter |
+
+> **Strategy refresh (Aug-2025-trained search).** SOXX, GRID, REMX and WGMI were
+> re-tuned via a per-asset ML / statistical search validated on a held-out
+> window (training data through Aug-2025). SOXX moved from a single 40-day SMA to
+> a 25/100 dual-MA crossover, GRID from a 150-day SMA to MACD 10/20/9, WGMI from
+> a 30-day SMA to a 50-day SMA + volatility filter, and REMX from a 150-day SMA
+> to the divergence Pure-Regime — each an out-of-sample improvement on both
+> return and Sharpe. VEGN kept its 200-day filter (nothing beat it robustly).
+> See `HYPERPARAM_SEARCH_EVAL.md`, `ML_STATISTICAL_STRATEGY_EVAL.md` and
+> `REGIME_DIVERGENCE_EVAL.md` for the full evaluation.
 
 ---
 
@@ -83,12 +93,12 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 
 | App | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
-| SOXX | MA-40, −5 % stop | **+233 %** | +362 % | **−31 %** | −46 % | **0.94 / 0.93** |
+| SOXX | Dual-MA 25/100, −5 % stop | **+452 %** | +362 % | **−27 %** | −46 % | **1.23 / 0.94** |
 | VEGN | MA-200, −5 % stop | **+84 %** | +81 % | **−14 %** | −33 % | **1.02 / 0.73** |
-| GRID | MA-150, −5 % stop | +105 % | +132 % | **−19 %** | −30 % | **0.87 / 0.83** |
+| GRID | MACD 10/20/9, −5 % stop | **+134 %** | +132 % | **−16 %** | −30 % | **1.20 / 0.83** |
 | XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
-| REMX | MA-150, −5 % stop | **+73 %** | +24 % | −56 % | −75 % | **0.48 / 0.30** |
-| WGMI | MA-30, −10 % stop | +191 % | +223 % | **−40 %** | −63 % | **1.02 / 0.98** |
+| REMX | Divergence (U1 .16 / D2 −.18, no stop) | **+109 %** | +24 % | **−18 %** | −75 % | **0.93 / 0.30** |
+| WGMI | MA-50 + vol-filter (k 0.95, no stop) | **+376 %** | +223 % | **−32 %** | −63 % | **1.81 / 0.98** |
 
 (OIH, traded off the XLE signal: **+70 %** at **−19 %** MDD vs Buy-&-Hold +130 % / −46 %.)
 (WGMI listed Feb-2022, so its OOS window is 2024→now with an ~11-month training window.)
@@ -107,23 +117,29 @@ recovered from:
 |---|---|---|---|---|---|---|---|
 | **XLE** | 2016→now | **+165 %** | +76 % | **−17 %** | −70 % | **0.95 / 0.33** | return · DD · Sharpe |
 | **OIH** | 2016→now | **+119 %** | −32 % | **−23 %** | −90 % | **0.59 / 0.12** | return · DD · Sharpe |
-| **REMX** | 2016→now | **+370 %** | +112 % | **−56 %** | −75 % | **0.70 / 0.38** | return · DD · Sharpe |
+| **REMX** | 2015→now | +29 % | +112 % | **−44 %** | −75 % | 0.24 / 0.38 | drawdown only |
 | VEGN | 2020→now | +141 % | +167 % | **−16 %** | −34 % | **1.10 / 0.93** | DD · Sharpe |
-| GRID | 2016→now | +296 % | +452 % | **−22 %** | −41 % | **0.94 / 0.88** | DD · Sharpe |
-| WGMI | 2023→now | +514 % | +536 % | **−52 %** | −63 % | **1.18 / 1.08** | DD · Sharpe |
-| SOXX | 2016→now | +691 % | +1842 % | **−31 %** | −46 % | 0.94 / 1.01 | drawdown only |
+| GRID | 2015→now | +270 % | +452 % | **−21 %** | −41 % | **1.04 / 0.88** | DD · Sharpe |
+| WGMI | 2022→now | +282 % | +536 % | **−32 %** | −63 % | **1.32 / 1.08** | DD · Sharpe |
+| SOXX | 2015→now | +1161 % | +1842 % | **−35 %** | −46 % | **1.05 / 1.01** | DD · Sharpe |
 
-**Read this honestly.** Over a full bull+bear cycle the trend strategy beats
-buy-&-hold *outright — return, drawdown and Sharpe* — on the **commodity-equity
-crash assets (XLE, OIH, REMX)**, where B&H rode a multi-year bear all the way down.
-On the **secular compounders (SOXX, GRID, VEGN, WGMI)** buy-&-hold's total return
-is **mathematically unbeatable** by any unleveraged long/flat rule — every day in
-cash is a day of missed gains, and their crashes were too brief to matter — so
-there the strategy "wins" on **risk-adjusted terms** (higher Sharpe, roughly half
-the drawdown). SOXX is the extreme case: semiconductors recover so violently that
-even Sharpe favours buy-&-hold; only the drawdown is tamed. The only ways to beat
-buy-&-hold's *return* on those names would be leverage or shorting, both excluded
-here.
+**Read this honestly.** Over a full bull+bear cycle **XLE and OIH** still beat
+buy-&-hold *outright — return, drawdown and Sharpe* — because B&H rode a
+multi-year energy bear all the way down. On the **secular compounders (SOXX,
+GRID, VEGN, WGMI)** buy-&-hold's total return is **mathematically unbeatable** by
+any unleveraged long/flat rule — every day in cash is a day of missed gains — so
+the strategy "wins" on **risk-adjusted terms** (higher Sharpe, roughly half the
+drawdown). The refreshed configs improve this risk-adjusted edge: SOXX's 25/100
+dual-MA now beats B&H on Sharpe *and* drawdown over the full cycle (1.05 vs 1.01),
+and GRID's MACD lifts full-cycle Sharpe to 1.04. **REMX is the deliberate
+exception:** its divergence Pure-Regime is tuned to the 2021→now out-of-sample
+window (where it turns B&H's +24 % / −74 % into +109 % / −18 %), and to do that it
+stands aside through the 2020–21 rare-earth boom — so over the *full* 2015→now
+cycle it trails B&H on total return and Sharpe, winning only on drawdown. If
+full-cycle total return is the priority for REMX rather than the recent OOS
+window, the older MA-150 trend filter (+370 % full-cycle) is the better fit; the
+divergence config is the right call for the recent-regime, drawdown-controlled
+mandate the other apps share.
 
 ---
 

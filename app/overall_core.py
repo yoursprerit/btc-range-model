@@ -162,9 +162,11 @@ def overall_config(key: str) -> TickerConfig:
 
     Every app is aligned to the strategy its own app trades: BTC via the CT
     engine (see run_universe), GLDM via its Divergence Pure-Regime config, and
-    the six ETF apps via their exact ``ticker_config`` entries — including
-    **REMX on its MA150 trend filter** (its app's strategy; an earlier
-    divergence override was reverted so the Overall app matches each source app).
+    the six ETF apps via their exact ``ticker_config`` entries — SOXX on its
+    25/100 dual-MA crossover, GRID on its MACD 10/20/9 filter, WGMI on its
+    50-day SMA + volatility filter, REMX on its divergence Pure-Regime, XLE on
+    its energy divergence.  The Overall app therefore matches each source app
+    bar-for-bar.
     """
     if key == "BTC":
         return BTC_CFG
@@ -352,12 +354,17 @@ def _load_daily(cfg: TickerConfig) -> pd.DataFrame:
 
 
 def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
-                  last_close: float, ma_val: float | None) -> dict:
+                  last_close: float, ma_val: float | None,
+                  long_now: bool | None = None) -> dict:
     """Resolve a single actionable state for the PARENT signal, reconciling the
     instantaneous read with the strategy's actual executed position.
     tone ∈ {buy, hold, exit, watch, flat}."""
-    if cfg.strategy_mode == "ma":
-        above = (ma_val is not None) and (last_close > ma_val)
+    if cfg.is_trend:
+        # ``long_now`` is the engine's actual trend signal for this bar (the one
+        # source of truth across ma / dual_ma / macd / ma_vol); fall back to the
+        # close-vs-line read only if it wasn't supplied.
+        above = long_now if long_now is not None else (
+            (ma_val is not None) and (last_close > ma_val))
         if in_pos:
             # The MA filter decides at the close and acts on the NEXT bar, so a
             # position is still open the day its close first drops below the SMA
@@ -414,9 +421,10 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     if pos["in_pos"] and pos["entry_px"]:
         e_px = float(pos["entry_px"]); e_dt = pd.Timestamp(pos["entry_date"])
         pos["upnl"] = (last_px / e_px - 1) * 100
-        pos["stop_px"] = e_px * (1 - cfg.fixed_stop)
         pos["days"] = int((as_of - e_dt).days)
-        pos["dist_stop"] = (last_px / pos["stop_px"] - 1) * 100
+        if cfg.has_stop:
+            pos["stop_px"] = e_px * (1 - cfg.fixed_stop)
+            pos["dist_stop"] = (last_px / pos["stop_px"] - 1) * 100
     last_trade = r["trade_log"][-1] if r.get("trade_log") else None
 
     meta = ASSET_META.get(label, dict(name=label, kind="core"))
@@ -432,6 +440,7 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         metrics=m, bh_metrics=bh, win_rate=wr, n_trades=int(len(r["trades"])),
         ret=ret, pos_series=pos_series, strat=strat, dates=dates, r=r, as_of=as_of,
         mode=cfg.strategy_mode, ma_window=cfg.ma_window, stop=cfg.fixed_stop,
+        engine_label=cfg.engine_label(),
     )
 
 
@@ -448,7 +457,9 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
     last_close = float(daily["px_close"].iloc[-1])
     prev_close = float(daily["px_close"].iloc[-2]) if len(daily) > 1 else last_close
     dchg = (last_close / prev_close - 1) * 100 if prev_close else 0.0
-    ma_val = float(daily["px_close"].tail(cfg.ma_window).mean()) if cfg.strategy_mode == "ma" else None
+    # trend line for display / live-exit, and the engine's actual long signal
+    ma_val = bt.trend_line_value(cfg, daily) if cfg.is_trend else None
+    long_now = bt.trend_long_now(cfg, daily) if cfg.is_trend else None
     # common momentum read (distance above a 50-day SMA) for cross-asset priority
     ref_ma = float(daily["px_close"].tail(50).mean())
     mom = (last_close / ref_ma - 1) if ref_ma else 0.0
@@ -477,7 +488,8 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
         if len(r["dates"]) < 30:
             continue
         # each traded instrument shares the parent decision but has its own pos
-        dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val)
+        dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val,
+                            long_now=long_now)
         out.append(_asset_result(cfg, label, col, r, daily, dec, alert, bull,
                                  sent, ma_val, dchg, mom))
     return out
@@ -990,14 +1002,15 @@ def apply_entry_basis(results: list[dict], entry_closes: dict) -> None:
 
 
 def live_exit_keys(results: list[dict], spot: dict) -> set:
-    """Keys of MA-mode positions the *live* price says will exit on the next bar
-    — currently long, but the parent's live price has dropped below the trend
-    SMA (the MA filter decides at the close and acts on the next bar). Divergence
-    exits are model-triggered, not price-crossings, so they're not included."""
+    """Keys of price-line trend positions the *live* price says will exit on the
+    next bar — currently long, but the parent's live price has dropped below the
+    trend line (these filters decide at the close and act on the next bar).
+    MACD (oscillator) and divergence exits are signal-triggered, not simple
+    price-crossings, so they're not included."""
     out = set()
     for r in results:
         p = r.get("pos") or {}
-        if not p.get("in_pos") or r.get("mode") != "ma":
+        if not p.get("in_pos") or r.get("mode") not in ("ma", "dual_ma", "ma_vol"):
             continue
         ma = r.get("ma_val")
         plive = (spot.get(r.get("parent")) or {}).get("price")

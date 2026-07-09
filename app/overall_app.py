@@ -529,9 +529,9 @@ with tab_live:
         pnl_col = (C_BUY if (a["upnl"] or 0) >= 0 else C_EXIT) if a["in_pos"] else "#94a3b8"
         _r = by_key[a["key"]]
         off = "" if a["kind"] == "core" else f" · off {a['parent']} signal"
-        if _r["mode"] == "ma" and _r.get("ma_val"):
+        if _r["mode"] in ("ma", "dual_ma", "ma_vol") and _r.get("ma_val"):
             dist = (_r["last_close"] / _r["ma_val"] - 1) * 100
-            sub = f"{a['parent']} close {dist:+.1f}% vs MA{_r['ma_window']}{off}"
+            sub = f"{a['parent']} close {dist:+.1f}% vs {_r.get('engine_label', 'trend')}{off}"
         else:
             sub = f"{a['parent']} alert: {a['alert']}{off}"
         if a["priority"] is not None:
@@ -662,7 +662,8 @@ with tab_live:
         sent = head["sentiment"]
         sent_s = f"{sent:.0f}/100" if sent == sent else "—"
         eng = ("CT-Divergence" if head["mode"] == "ct-divergence"
-               else f"MA{head['ma_window']}" if head["mode"] == "ma" else "Divergence")
+               else head.get("engine_label")
+               or (f"MA{head['ma_window']}" if head["mode"] == "ma" else "Divergence"))
         st.markdown(
             f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 4px 0'>"
             f"<span style='font-size:16px;font-weight:800'>{head['emoji']} {pk}</span>"
@@ -870,7 +871,8 @@ with tab_bt:
             mm = res["metrics"]; bb = res["bh_metrics"]
             beat = mm["total_ret"] >= bb["total_ret"]
             base_eng = ("CT-Divergence" if res["mode"] == "ct-divergence"
-                        else f"MA{res['ma_window']}" if res["mode"] == "ma" else "Divergence")
+                        else res.get("engine_label")
+                        or (f"MA{res['ma_window']}" if res["mode"] == "ma" else "Divergence"))
             if res["key"] == res["parent"]:          # this app's own signal instrument
                 eng = f"{base_eng} signal"
             else:                                     # sibling traded off the parent signal
@@ -948,8 +950,9 @@ signals, positions and back-tests match each source app:
   Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
   −3% stops — reproducing the Gold app's **GDX +272% / UGL +211%**.
 - **SOXX / VEGN / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
-  entries through the same `backtest_ticker` engine their apps use (REMX on its
-  MA150 trend filter). These match their apps bar-for-bar.
+  entries through the same `backtest_ticker` engine their apps use (SOXX 25/100
+  dual-MA, GRID MACD 10/20/9, WGMI 50-day SMA + vol-filter, VEGN MA200, REMX &
+  XLE divergence Pure-Regime). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert

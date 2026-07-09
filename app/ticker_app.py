@@ -69,6 +69,7 @@ st.set_page_config(page_title=f"{cfg.key} Forecaster", page_icon=cfg.emoji,
 # ── theme shorthands ──────────────────────────────────────────────────────
 ACC = cfg.accent; ACCD = cfg.accent_dark; ACCBG = cfg.accent_bg; ACCBG2 = cfg.accent_bg2
 IS_DIV = cfg.strategy_mode == "divergence"
+TUI = None if IS_DIV else cfg.trend_ui()   # trend-rule UI descriptors (ma/dual_ma/macd/ma_vol)
 SIGNAL_LINE = "#475569"     # secondary signal-price line (distinct from any accent)
 
 
@@ -241,14 +242,33 @@ def signatures_asof(target_date):
 
 
 def ma_state(d_df):
-    """Strategy-MA state on the primary close (for the 'ma' mode UI)."""
+    """Trend-filter state on the primary close (ma / dual_ma / macd / ma_vol).
+
+    ``above`` is the engine's ACTUAL long condition on the latest bar (single
+    source of truth), and ``ma`` is the representative price-level line the UI
+    overlays (the slow SMA for dual_ma, the N-day SMA otherwise)."""
+    if IS_DIV or d_df is None or not len(d_df):
+        return None
     c = d_df["px_close"].to_numpy(float)
-    w = cfg.ma_window
+    w = cfg.ma_slow if cfg.strategy_mode == "dual_ma" else cfg.ma_window
     ma = float(np.mean(c[-w:])) if len(c) >= 1 else np.nan
     ma_prev = float(np.mean(c[-(w + 5):-5])) if len(c) >= w + 5 else ma
     close = float(c[-1])
-    return dict(ma=ma, ma_prev=ma_prev, close=close, above=close > ma,
-                slope_pos=ma > ma_prev, window=w)
+    above = bt.trend_long_now(cfg, d_df)          # engine truth for this mode
+    dist = (close / ma - 1) * 100 if ma == ma and ma else 0.0
+    # human phrase describing the current signal state
+    if cfg.strategy_mode == "macd":
+        desc = f"the MACD({cfg.macd_fast}/{cfg.macd_slow}) histogram is {'positive' if above else 'negative'}"
+    elif cfg.strategy_mode == "dual_ma":
+        desc = f"the {cfg.ma_fast}-day SMA is {'above' if above else 'below'} the {cfg.ma_slow}-day SMA ${ma:,.2f}"
+    elif cfg.strategy_mode == "ma_vol":
+        desc = (f"close ${close:,.2f} is {'above' if above else 'below/blocked-by-vol at'} the "
+                f"{cfg.ma_window}-day SMA ${ma:,.2f} (vol filter {'clear' if above else 'active'})")
+    else:
+        desc = f"close ${close:,.2f} is {'above' if above else 'below'} the {w}-day SMA ${ma:,.2f}"
+    return dict(ma=ma, ma_prev=ma_prev, close=close, above=above,
+                slope_pos=ma > ma_prev, window=w, dist=dist, desc=desc,
+                line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
 def strategy_position(col, end=None):
@@ -381,7 +401,7 @@ def net_signal_ma(mst, pos=None):
     if not mst:
         return dict(state="NEUTRAL", label="NO DATA", ico="⬜",
                     bg="#f8fafc", brd="#94a3b8", reason="insufficient bars")
-    above = mst["above"]; c = mst["close"]; ma = mst["ma"]; w = mst["window"]
+    above = mst["above"]; desc = mst["desc"]
     in_pos = bool(pos and pos.get("in_pos_now"))
     just_exit = None
     if pos and not in_pos and pos.get("trade_log"):
@@ -394,22 +414,20 @@ def net_signal_ma(mst, pos=None):
     if in_pos:
         return dict(state="ENTRY", label="LONG — HOLDING", ico="🟢",
                     bg="#f0fdf4", brd="#16a34a",
-                    reason=f"Strategy is long; close ${c:,.2f} is above the {w}-day SMA "
-                           f"${ma:,.2f} — hold.")
+                    reason=f"Strategy is long; {desc} — hold.")
     if above:
-        # Flat but price is back above the SMA → the filter re-enters next bar.
-        base = (f"Strategy is FLAT. Today's close ${c:,.2f} is back above the {w}-day SMA "
-                f"${ma:,.2f}, so the trend filter will RE-ENTER (go long) on the next bar.")
+        # Flat but the trend signal is bullish again → the filter re-enters next bar.
+        base = (f"Strategy is FLAT. The trend signal is bullish again ({desc}), so it "
+                f"will RE-ENTER (go long) on the next bar.")
         if just_exit:
             base += (f" It exited on {pd.Timestamp(just_exit['exit_date']).strftime('%b %d')} "
-                     f"({just_exit['reason']}) because the *prior* close had slipped below the "
-                     f"SMA — a one-bar whipsaw; the close has since recovered.")
+                     f"({just_exit['reason']}) on the *prior* bar — a one-bar whipsaw; the "
+                     f"signal has since recovered.")
         return dict(state="WATCH_UP", label="FLAT — RE-ENTRY PENDING NEXT BAR", ico="🟡",
                     bg="#fefce8", brd="#ca8a04", reason=base)
     return dict(state="EXIT", label="FLAT — BELOW TREND", ico="🔴",
                 bg="#fef2f2", brd="#dc2626",
-                reason=f"Strategy is FLAT; close ${c:,.2f} is below the {w}-day SMA "
-                       f"${ma:,.2f} — stand aside in cash.")
+                reason=f"Strategy is FLAT; {desc} — stand aside in cash.")
 
 
 def render_strategy_card():
@@ -451,7 +469,7 @@ def render_strategy_card():
         ① <b>D2 fade</b> — err_hi 3d-avg &lt; {cfg.d2_errhi_max:+.2f}%<br>
         ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
         {'③ <b>D1 downtrend</b> — err_lo 3d-avg &gt; +' + f'{cfg.d1_errlo_min:.2f}' + '% &amp; ≥2 low-breaks<br>' if cfg.use_d1_exit else ''}
-        {'④' if cfg.use_d1_exit else '③'} <b>fixed stop</b> — −{cfg.fixed_stop*100:.0f}% from entry
+        {((('④' if cfg.use_d1_exit else '③') + ' <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else '<i>no fixed stop — exits are signal-driven</i>')}
       </div>
     </div>
   </div>
@@ -463,13 +481,12 @@ def render_strategy_card():
      padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
   <div style='font-size:15px; font-weight:800; color:{ACCD}; margin-bottom:12px; letter-spacing:0.3px;'>
     {cfg.emoji} {cfg.strategy_name} &nbsp;—&nbsp;
-    <span style='color:{ACC};'>long-above-the-{cfg.ma_window}-day-SMA trend filter</span>
+    <span style='color:{ACC};'>{TUI['headline']}</span>
   </div>
   <div style='background:{ACCBG2}; border-radius:8px; padding:10px 14px; margin-bottom:12px;
        font-size:12.5px; color:{ACCD}; font-weight:600;'>
-    🔁 <b>Core idea:</b> {cfg.key} trends in long cycles with vicious drawdowns. A simple,
-    robust filter — <b>hold {PRIMARY_LABEL} only while its close is above the
-    {cfg.ma_window}-day simple moving average</b> — captures the up-cycles and moves to
+    🔁 <b>Core idea:</b> {cfg.key} trends in long cycles with vicious drawdowns. A robust
+    trend filter — <b>{TUI['core']}</b> — captures the up-cycles and moves to
     cash for the down-cycles, beating buy-&-hold on risk (and often on return).
   </div>
   <div style='display:flex; gap:14px; flex-wrap:wrap;'>
@@ -477,7 +494,7 @@ def render_strategy_card():
       <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
-        ① close crosses <b>above</b> the {cfg.ma_window}-day SMA (decided at the close)<br>
+        ① {TUI['entry']} (decided at the close)<br>
         ② enter on the next bar
       </div>
     </div>
@@ -485,8 +502,8 @@ def render_strategy_card():
       <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
-        ① close crosses <b>below</b> the {cfg.ma_window}-day SMA, or<br>
-        ② <b>fixed stop</b> — −{cfg.fixed_stop*100:.0f}% from entry
+        ① {TUI['exit']}{', or' if cfg.has_stop else ''}<br>
+        {'② <b>fixed stop</b> — ' + cfg.stop_label + ' from entry' if cfg.has_stop else ''}
       </div>
     </div>
   </div>
@@ -534,8 +551,8 @@ def render_conditions_box(sigs, mst, pos=None):
             (row(d1_exit, "D1 downtrend pressure",
                  f"err_lo 3d-avg = {sigs['err_lo_ma3']:+.3f}% (exit &gt; +{cfg.d1_errlo_min:.2f}%) "
                  f"&amp; ≥2 low-breaks") if cfg.use_d1_exit else "") + \
-            row(False, f"Fixed stop −{cfg.fixed_stop*100:.0f}%",
-                "position-level — checked per open trade") + "</table>"
+            (row(False, f"Fixed stop {cfg.stop_label}",
+                 "position-level — checked per open trade") if cfg.has_stop else "") + "</table>"
         st.markdown(f"""
 <div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
   <div style='flex:1; min-width:280px; background:#f0fdf4; border:1.5px solid #86efac;
@@ -575,17 +592,13 @@ def render_conditions_box(sigs, mst, pos=None):
                     f"<td style='padding:3px 10px 3px 0;font-weight:{weight};color:{col};"
                     f"white-space:nowrap;'>{name}</td>"
                     f"<td style='padding:3px 0;font-size:11.5px;color:#475569;'>{detail}</td></tr>")
-        # The trend filter trades on ONE condition only — close vs the SMA.
-        # (The SMA's slope is not part of the entry/exit rule, so it is not
-        # listed here as a condition.)
+        # The trend filter trades on ONE regime condition (mode-specific).
         entry_html = "<table style='border-collapse:collapse;'>" + \
-            rowm(above, f"Close &gt; {mst['window']}-day SMA",
-                 f"close ${mst['close']:,.2f} vs SMA ${mst['ma']:,.2f} "
-                 f"({(mst['close']/mst['ma']-1)*100:+.2f}%)") + "</table>"
+            rowm(above, mst["cond"], mst["desc"]) + "</table>"
         exit_html = "<table style='border-collapse:collapse;'>" + \
-            rowm(not above, f"Close &lt; {mst['window']}-day SMA", "→ move to cash") + \
-            rowm(False, f"Fixed stop −{cfg.fixed_stop*100:.0f}%",
-                 "position-level — checked per open trade") + "</table>"
+            rowm(not above, mst["cond_short"], "→ move to cash") + \
+            (rowm(False, f"Fixed stop {cfg.stop_label}",
+                  "position-level — checked per open trade") if cfg.has_stop else "") + "</table>"
         st.markdown(f"""
 <div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
   <div style='flex:1; min-width:280px; background:#f0fdf4; border:1.5px solid #86efac;
@@ -593,11 +606,11 @@ def render_conditions_box(sigs, mst, pos=None):
     <div style='font-weight:700; color:#15803d; margin-bottom:6px;'>
       📥 LONG conditions {'— ✅ IN TREND' if above else '— not met'}</div>
     {entry_html}
-    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Hold long while the close
-      stays above the {mst['window']}-day SMA. <b>Decisions are made at the daily
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>Hold long while the trend
+      signal ({TUI['cond']}) is bullish. <b>Decisions are made at the daily
       close and executed on the next bar</b> (no look-ahead), so the actual
-      position can lag this instantaneous read by one bar — e.g. a one-day dip
-      below the SMA exits even if price has since recovered.<br>
+      position can lag this instantaneous read by one bar — e.g. a one-day flip
+      exits even if the signal has since recovered.<br>
       Current strategy position: <b>{strat_state}</b>.</div>
   </div>
   <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
@@ -605,8 +618,8 @@ def render_conditions_box(sigs, mst, pos=None):
     <div style='font-weight:700; color:#b91c1c; margin-bottom:6px;'>
       📤 CASH conditions {'— 🔴 ACTIVE' if not above else '— clear'}</div>
     {exit_html}
-    <div style='font-size:11px;color:#64748b;margin-top:6px;'>A close below the SMA (or the
-      stop) moves the position to cash.</div>
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>A bearish flip of the trend
+      signal{' (or the fixed stop)' if cfg.has_stop else ''} moves the position to cash.</div>
   </div>
 </div>
 <div style='background:{ns['bg']}; border:2px solid {ns['brd']}; border-radius:10px;
@@ -756,7 +769,7 @@ def render_ma_signatures(mst, pos=None):
         return
     ns = net_signal_ma(mst, pos)
     c = mst["close"]; ma = mst["ma"]; w = mst["window"]
-    above = mst["above"]
+    above = mst["above"]; line_lbl = mst["line_label"]
     dist = (c / ma - 1) * 100 if ma else 0.0
     in_pos = bool(pos and pos.get("in_pos_now"))
 
@@ -766,36 +779,41 @@ def render_ma_signatures(mst, pos=None):
         <span style="background:{ns['brd']};color:white;font-weight:700;font-size:14px;
         padding:5px 14px;border-radius:20px;">{ns['ico']} {ns['label']}</span>
         <span style="color:#334155;font-size:13px;margin-left:10px;">
-        close <b>${c:,.2f}</b> · {w}-day SMA <b>${ma:,.2f}</b> ·
+        close <b>${c:,.2f}</b> · {line_lbl} <b>${ma:,.2f}</b> ·
         distance <b>{dist:+.2f}%</b></span></div>""",
         unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns(3)
     col1.markdown(_sig_card(
-        f"Trend Filter — long above the {w}-day SMA", "📈", "#16a34a", above,
-        [("close vs SMA", f"${c:,.2f}", f"> ${ma:,.2f}", above),
-         ("distance", f"{dist:+.2f}%", "> 0%", dist > 0)],
-        f"The one condition this strategy trades on: hold {cfg.key} long while the "
-        f"close is above the {w}-day SMA, and exit to cash on the next bar once it "
-        "closes below."), unsafe_allow_html=True)
+        f"Trend Filter — {TUI['headline']}", "📈", "#16a34a", above,
+        [("signal", "bullish" if above else "bearish", mst["cond"], above),
+         ("close vs " + line_lbl, f"${c:,.2f}", f"${ma:,.2f} ({dist:+.2f}%)", dist > 0)],
+        f"The condition this strategy trades on: {TUI['core']}, and exit to cash "
+        "on the next bar once it flips."), unsafe_allow_html=True)
 
-    stop_lbl = "Stop-Loss Guard — −%.0f%% fixed stop" % (cfg.fixed_stop * 100)
-    if in_pos and pos.get("entry_px"):
+    if not cfg.has_stop:
+        col2.markdown(_sig_card(
+            "Exit — signal-driven (no fixed stop)", "🚪", "#94a3b8", False,
+            [("stop", "none", "signal exit only", False)],
+            f"This config carries no fixed stop — the position closes when the "
+            f"trend signal flips ({TUI['cond']} no longer holds)."),
+            unsafe_allow_html=True)
+    elif in_pos and pos.get("entry_px"):
         e_px = float(pos["entry_px"]); stop_px = e_px * (1 - cfg.fixed_stop)
         cushion = (c / stop_px - 1) * 100
         col2.markdown(_sig_card(
-            stop_lbl, "🛑", "#dc2626", cushion < 3.0,
+            f"Stop-Loss Guard — {cfg.stop_label} fixed stop", "🛑", "#dc2626", cushion < 3.0,
             [("stop level", f"${stop_px:,.2f}", "hold above", c > stop_px),
              ("cushion to stop", f"{cushion:+.2f}%", "> 0%", cushion > 0)],
             "A hard stop from the entry caps the single-trade loss if price gaps "
-            "down faster than the SMA can trigger the exit."), unsafe_allow_html=True)
+            "down faster than the trend signal can trigger the exit."), unsafe_allow_html=True)
     else:
         col2.markdown(_sig_card(
-            stop_lbl, "🛑", "#94a3b8", False,
+            f"Stop-Loss Guard — {cfg.stop_label} fixed stop", "🛑", "#94a3b8", False,
             [("status", "inactive (flat)", "opens with a position", False)],
-            "Inactive while in cash. On entry a hard −%.0f%% stop from the fill "
-            "protects against a fast breakdown before the SMA can react."
-            % (cfg.fixed_stop * 100)), unsafe_allow_html=True)
+            f"Inactive while in cash. On entry a hard {cfg.stop_label} stop from the fill "
+            "protects against a fast breakdown before the trend signal can react."),
+            unsafe_allow_html=True)
 
     if in_pos and pos.get("entry_px"):
         e_dt = pd.Timestamp(pos["entry_date"]); e_px = float(pos["entry_px"])
@@ -806,14 +824,14 @@ def render_ma_signatures(mst, pos=None):
             [("entry", f"{e_dt.strftime('%b %d')} @ ${e_px:,.2f}", "—", True),
              ("unrealised P&L", f"{upnl:+.2f}%", "≥ 0", upnl >= 0),
              ("days held", f"{days}d", "—", True)],
-            f"The trend filter is long {cfg.key}; it stays long until a close below "
-            f"the {w}-day SMA or the fixed stop."), unsafe_allow_html=True)
+            f"The trend filter is long {cfg.key}; it stays long until the trend "
+            f"signal flips{' or the fixed stop' if cfg.has_stop else ''}."), unsafe_allow_html=True)
     else:
         col3.markdown(_sig_card(
             "Position — currently FLAT", "⚪", "#94a3b8", False,
             [("state", "in cash", "—", False)],
-            f"No open position. The filter re-enters when {cfg.key} closes back "
-            f"above the {w}-day SMA."), unsafe_allow_html=True)
+            f"No open position. The filter re-enters when the trend signal "
+            f"({TUI['cond']}) turns bullish again."), unsafe_allow_html=True)
 
 
 def position_panel(label, col, col_container, end=None):
@@ -833,20 +851,21 @@ def position_panel(label, col, col_container, end=None):
             f"<td style='font-weight:600'>{v}</td></tr>" for k, v in rows)
         return f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>{body}</table>"
 
-    trig = "U1 + Pure-Regime gate" if IS_DIV else f"Close &gt; {cfg.ma_window}-day SMA"
+    trig = "U1 + Pure-Regime gate" if IS_DIV else TUI["cond"]
     if r["in_pos_now"] and r["entry_px"]:
         e_px = r["entry_px"]; e_date = pd.Timestamp(r["entry_date"])
         upnl = (px / e_px - 1) * 100; col_pnl = "#16a34a" if upnl >= 0 else "#dc2626"
-        stop_px = e_px * (1 - cfg.fixed_stop); days = (as_of - e_date).days
+        days = (as_of - e_date).days
+        rows_ = [("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
+                 ("Trigger", trig), ("Live price", f"${px:,.2f}"),
+                 ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>")]
+        if cfg.has_stop:
+            rows_.append(("Stop (%s)" % cfg.stop_label, f"${e_px * (1 - cfg.fixed_stop):,.2f}"))
+        rows_.append(("Days held", f"{days}d"))
         html = (
             f"<div style='background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
             f"<div style='font-size:13px;font-weight:700;color:#15803d;margin-bottom:6px;'>"
-            f"📍 {label} — LONG</div>"
-            + _tbl([("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
-                    ("Trigger", trig), ("Live price", f"${px:,.2f}"),
-                    ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>"),
-                    ("Stop (−%.0f%%)" % (cfg.fixed_stop * 100), f"${stop_px:,.2f}"),
-                    ("Days held", f"{days}d")]) + "</div>")
+            f"📍 {label} — LONG</div>" + _tbl(rows_) + "</div>")
         col_container.markdown(html, unsafe_allow_html=True)
         return
     tl = r.get("trade_log") or []
@@ -1085,9 +1104,9 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
                                             f"95% CI ${fc_lo:,.2f} – ${fc_hi:,.2f}<extra></extra>")))
     fig.add_vline(x=last_ct, line=dict(color="crimson", width=1.5, dash="dash"))
     # Daily predicted HIGH/LOW bands belong to the divergence (H/L prediction)
-    # strategy; MA-filter apps trade on the SMA (overlaid below) instead, so the
-    # H/L lines are omitted there to keep their hourly plot uncluttered.
-    if hl and cfg.strategy_mode != "ma":
+    # strategy; trend-filter apps trade on their regime line (overlaid below)
+    # instead, so the H/L lines are omitted there to keep the hourly plot clean.
+    if hl and IS_DIV:
         fig.add_hline(y=hl["pred_high"], line=dict(color="green", width=2.5, dash="dot"),
                       annotation_text=f"Daily Pred HIGH ${hl['pred_high']:,.2f}",
                       annotation_position="top right", annotation_font=dict(color="green", size=12),
@@ -1106,21 +1125,21 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
         if lo_up > hl["pred_low"] - hl["band_lo"]:
             fig.add_hrect(y0=hl["pred_low"] - hl["band_lo"], y1=lo_up,
                           fillcolor="rgba(220,30,30,0.12)", line_width=0, layer="below")
-    # MA-mode apps: overlay the SMA the trend filter actually trades on, so the
-    # live hourly price can be read directly against its entry/exit threshold.
-    # (It's a *daily* N-day SMA, ~flat across this 23-hour window, so it's drawn
-    # as a horizontal reference line, coloured by whether price sits above it.)
-    if cfg.strategy_mode == "ma":
+    # Trend-mode apps: overlay the regime price-line the filter references (the
+    # slow SMA for dual_ma, the N-day SMA otherwise), coloured by the strategy's
+    # actual long/flat state.  (It's a *daily* line, ~flat across this 23-hour
+    # window, so it's drawn as a horizontal reference line.)
+    if cfg.is_trend:
         dd = daily if is_live else daily[daily.index <= pd.Timestamp(as_of_date)]
         if dd is not None and len(dd) >= 1:
             mst = ma_state(dd); ma_val = mst["ma"]; w = mst["window"]
             if ma_val == ma_val:                      # not NaN
-                above = last_close > ma_val
+                above = mst["above"]
                 ma_col = "#16a34a" if above else "#dc2626"
                 fig.add_hline(
                     y=ma_val, line=dict(color=ma_col, width=2, dash="dash"),
-                    annotation_text=(f"{w}-day SMA ${ma_val:,.2f} — trend filter "
-                                     f"({'price above → long' if above else 'price below → cash'})"),
+                    annotation_text=(f"{mst['line_label']} ${ma_val:,.2f} — trend filter "
+                                     f"({'signal bullish → long' if above else 'signal bearish → cash'})"),
                     annotation_position="bottom left",
                     annotation_font=dict(color=ma_col, size=12),
                     annotation_bgcolor="rgba(255,255,255,0.92)",
@@ -1416,9 +1435,9 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         cols[ci].metric(f"{lbl} (traded)", f"${spx:,.2f}" if spx else "—",
                         f"{schg:+.2f}% d/d" if schg is not None else None)
         ci += 1
-    if ci < 3:
+    if ci < 3 and not IS_DIV and mst:
         _ma = mst["ma"]
-        cols[ci].metric(f"{cfg.key} {cfg.ma_window}-day SMA", f"${_ma:,.2f}",
+        cols[ci].metric(f"{cfg.key} {mst['line_label']}", f"${_ma:,.2f}",
                         f"${last_px-_ma:+,.2f} vs close",
                         delta_color="normal" if last_px >= _ma else "inverse")
         ci += 1
@@ -1461,11 +1480,11 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         st.markdown("#### 🚪 Entry-gate conditions  ·  _what turns a U1 pressure signal into an actual entry_")
         render_gate_signatures(sigs)
     else:
-        st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {cfg.ma_window}-day moving-average conditions this app trades on_")
+        st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {TUI['headline']} this app trades on_")
         render_ma_signatures(mst, primary_pos)
         with st.expander("🔬 Divergence read (U1 / D2 / D3) — context only, not traded", expanded=False):
             st.caption(f"For parity with the Gold/BTC apps. {cfg.key} is traded by the "
-                       f"{cfg.ma_window}-day trend filter above, so these divergence "
+                       f"{TUI['headline']} above, so these divergence "
                        "signatures do **not** open or close positions here.")
             render_signatures(sigs)
 
@@ -1545,7 +1564,7 @@ Bollinger width, distance from moving averages / extremes) and seasonality.
 (ridge + 95% CI), daily High/Low (calibrated ridge bands), 7-day & 14-day close
 cones, and a 3-class day-type classifier.
 
-**Strategy — {cfg.strategy_name}.** {'The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%)' + (' / D1 downtrend' if cfg.use_d1_exit else '') + ' / D3 exhaustion or a fixed −' + f'{cfg.fixed_stop*100:.0f}' + '% stop.' if IS_DIV else 'A long-above-the-' + f'{cfg.ma_window}' + '-day-SMA trend filter: hold ' + PRIMARY_LABEL + ' only while the ' + cfg.key + ' close is above its ' + f'{cfg.ma_window}' + '-day simple moving average, otherwise move to cash (with a −' + f'{cfg.fixed_stop*100:.0f}' + '% fixed stop).'} The strategy and its thresholds were chosen by a frontier sweep (`backtest_ticker.py {cfg.key} --sweep`) to maximise return subject to a drawdown no worse than buy-&-hold across every backtest period.
+**Strategy — {cfg.strategy_name}.** {('The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%)' + (' / D1 downtrend' if cfg.use_d1_exit else '') + ' / D3 exhaustion' + (' or a fixed ' + cfg.stop_label + ' stop.' if cfg.has_stop else ' (no fixed stop).')) if IS_DIV else ('A ' + TUI['headline'] + ': ' + TUI['core'] + ', otherwise move to cash' + ((' (with a ' + cfg.stop_label + ' fixed stop).') if cfg.has_stop else '.'))} The strategy and its parameters were chosen by a per-asset search validated on a held-out window (training data through Aug-2025) to maximise risk-adjusted return without a drawdown worse than buy-&-hold.
 
 {cfg.results_note}
 

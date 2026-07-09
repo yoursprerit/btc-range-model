@@ -2,15 +2,15 @@
   "ticker": "GRID",
   "oos_start": "2021-01-01",
   "oos_end": "2026-07-06",
-  "strategy": "Grid Trend-Regime",
-  "mode": "ma",
+  "strategy": "Grid MACD Trend",
+  "mode": "macd",
   "assets": {
     "GRID": {
       "strategy": {
-        "total_ret": 1.0534128609804974,
-        "cagr": 0.13975192328085373,
-        "mdd": -0.18976416638154936,
-        "sharpe": 0.870296058005543
+        "total_ret": 1.3388920603862697,
+        "cagr": 0.16704764187368815,
+        "mdd": -0.1584360684357653,
+        "sharpe": 1.1979556116854613
       },
       "buy_hold": {
         "total_ret": 1.3244450521297821,
@@ -18,8 +18,8 @@
         "mdd": -0.3038058207042561,
         "sharpe": 0.829927381700998
       },
-      "n_trades": 15,
-      "win_rate": 46.666666666666664
+      "n_trades": 57,
+      "win_rate": 54.385964912280706
     }
   }
 }
