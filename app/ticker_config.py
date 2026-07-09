@@ -217,7 +217,9 @@ CONFIGS["SOXX"] = TickerConfig(
     name="iShares Semiconductor ETF",
     blurb=("SOXX tracks the ICE Semiconductor index — a high-beta basket of chip "
            "makers (NVDA, AVGO, AMD…). It is one of the most cyclical equity "
-           "groups: it leads tech both up and down, with 50%+ drawdowns."),
+           "groups: it leads tech both up and down, with 50%+ drawdowns. SOXL "
+           "(3× daily semis) is its leveraged sibling — the strategy trades BOTH "
+           "off the SOXX signal, the way the Gold app trades UGL off gold."),
     emoji="🖥️",
     accent="#2563eb", accent_dark="#1e40af", accent_bg="#eff6ff", accent_bg2="#dbeafe",
     primary_symbol="SOXX",
@@ -231,12 +233,12 @@ CONFIGS["SOXX"] = TickerConfig(
         "vix": "^VIX",         # equity vol (risk-off = bearish semis)
         "spx": "^GSPC",        # S&P 500 risk backdrop
     },
-    extra_syms={},
+    extra_syms={"soxl": "SOXL"},   # 3× leveraged semis sibling (traded off SOXX signal)
     sentiment=[("qqq_close", "mom", +1.0), ("tnx_close", "chg", -1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Semis macro sentiment",
-    traded_assets=[("SOXX", "px_close")],
-    asset_labels={"px_close": "SOXX · Semiconductors"},
+    traded_assets=[("SOXX", "px_close"), ("SOXL", "soxl_close")],
+    asset_labels={"px_close": "SOXX · Semiconductors", "soxl_close": "SOXL · 3× Semis"},
     strategy_mode="dual_ma", strategy_name="Semis Dual-MA Trend",
     ma_window=100, ma_fast=25, ma_slow=100, fixed_stop=0.05,
     hl_band_pct=0.012,
@@ -248,7 +250,16 @@ CONFIGS["SOXX"] = TickerConfig(
                   "both the market and the old single-40-day-SMA filter (+233%, "
                   "0.94) on return, risk AND Sharpe, at just ~9 trades. The "
                   "training-selected 25/100 pair is identical to the full-window "
-                  "optimum (no overfitting gap)."),
+                  "optimum (no overfitting gap). The same signal drives the 3× "
+                  "SOXL sibling — a leveraged return-amplifier held only in clean "
+                  "up-trends, so daily-decay is sidestepped (see the SOXL tab)."),
+    eval_note=("**SOXL (3× semis) trades on the SOXX signal, not its own.** The "
+               "25/100 dual-MA holds SOXL only while semis trend up and stands "
+               "aside in the drawdowns where 3× decay is worst. OOS 2021→now the "
+               "SOXL sleeve returns ~+1800%+ at a ~−67% max drawdown (Sharpe "
+               "~1.1); in the Overall blend it is capped as a leveraged sleeve, so "
+               "the max-return (Aggressive) profile leans on it for a large return "
+               "lift while Balanced barely touches it — see SOXL_ERX_ADDITION_EVAL.md."),
 )
 
 
@@ -302,9 +313,9 @@ CONFIGS["XLE"] = TickerConfig(
     key="XLE",
     name="Energy Select Sector SPDR",
     blurb=("XLE is the large-cap US energy sector (XOM, CVX, COP…). It is driven "
-           "by crude oil and is deeply cyclical. OIH (oil-services) is its "
-           "higher-beta sibling — the strategy trades BOTH off the XLE signal, "
-           "the way the Gold app trades GDX & UGL off gold."),
+           "by crude oil and is deeply cyclical. OIH (oil-services) and ERX (2× "
+           "energy) are its higher-beta siblings — the strategy trades ALL THREE "
+           "off the XLE signal, the way the Gold app trades GDX & UGL off gold."),
     emoji="🛢️",
     accent="#ea580c", accent_dark="#9a3412", accent_bg="#fff7ed", accent_bg2="#ffedd5",
     primary_symbol="XLE",
@@ -316,12 +327,13 @@ CONFIGS["XLE"] = TickerConfig(
         "spx": "^GSPC",        # equity risk backdrop
         "vix": "^VIX",         # equity vol
     },
-    extra_syms={"oih": "OIH"},   # high-beta oil-services sibling (traded)
+    extra_syms={"oih": "OIH", "erx": "ERX"},   # OIH oil-services + ERX 2× energy siblings (traded)
     sentiment=[("cl_close", "mom", +1.0), ("dxy_close", "mom", -1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Energy macro sentiment",
-    traded_assets=[("XLE", "px_close"), ("OIH", "oih_close")],
-    asset_labels={"px_close": "XLE · Energy", "oih_close": "OIH · Oil Services"},
+    traded_assets=[("XLE", "px_close"), ("OIH", "oih_close"), ("ERX", "erx_close")],
+    asset_labels={"px_close": "XLE · Energy", "oih_close": "OIH · Oil Services",
+                  "erx_close": "ERX · 2× Energy"},
     strategy_mode="divergence", strategy_name="Energy Divergence Pure-Regime",
     ma_window=80, fixed_stop=0.08,
     u1_errhi_min=0.16, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
@@ -342,7 +354,13 @@ CONFIGS["XLE"] = TickerConfig(
                "its *own* signal returns only +23% (Sharpe 0.29). XLE is a "
                "broader, less-noisy read of the energy tape, so its signal steers "
                "the thin, higher-beta OIH better than OIH's own — the same reason "
-               "the Gold app trades GDX/UGL off the cleaner gold signal."),
+               "the Gold app trades GDX/UGL off the cleaner gold signal. "
+               "**ERX (2× energy) is added off the same XLE signal**: the "
+               "divergence rule holds it only through the crude up-swings and "
+               "stands aside in the crashes where 2× decay bites, so the ERX "
+               "sleeve returns ~+280% at just a ~−17% max drawdown (Sharpe ~1.3) "
+               "OOS — and in the Overall blend it lifts return AND Sharpe AND "
+               "trims drawdown (a rare win-win). See SOXL_ERX_ADDITION_EVAL.md."),
 )
 
 

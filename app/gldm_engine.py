@@ -36,6 +36,7 @@ _META = {
     "GLDM": dict(name="Gold (GLDM)",  kind="core", col="gldm_close"),
     "GDX":  dict(name="Gold Miners",  kind="beta", col="gdx_close"),
     "UGL":  dict(name="2× Gold",      kind="lev",  col="ugl_close"),
+    "NUGT": dict(name="2× Gold Miners", kind="lev", col="nugt_close"),
 }
 
 
@@ -80,17 +81,38 @@ def _decision(sigs, in_pos):
     return dict(state="FLAT", label="FLAT — NO SIGNAL", ico="⬜", tone="flat")
 
 
-def _load_daily() -> pd.DataFrame:
+def _attach_nugt(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach NUGT (2× gold miners) as an extra traded-price column, driven by
+    the same gold signal — the leveraged-miners analog of UGL/GDX.  Fetched here
+    in the Overall wrapper so ``gldm_core`` and the dedicated Gold app stay
+    untouched.  Best-effort: a NUGT fetch failure leaves the gold sleeve intact."""
+    if df is None or df.empty or "nugt_close" in df.columns:
+        return df
     try:
-        df = gc.fetch_daily(start="2018-06-26")
-        if df is not None and not df.empty and "gldm_close" in df.columns and len(df) > 260:
-            return df
+        nugt = gc._merge({"nugt": "NUGT"}, "1d", start="2018-06-26")
+        if not nugt.empty and "nugt_close" in nugt.columns:
+            for suff in ("open", "high", "low", "close"):
+                col = f"nugt_{suff}"
+                if col in nugt:
+                    df[col] = nugt[col].reindex(df.index).ffill()
     except Exception:
         pass
-    csv = gc.GLDM_DATA_DIR / "gldm_macro_daily.csv"
-    if Path(csv).exists():
-        return pd.read_csv(csv, index_col=0, parse_dates=True)
-    return pd.DataFrame()
+    return df
+
+
+def _load_daily() -> pd.DataFrame:
+    df = pd.DataFrame()
+    try:
+        d = gc.fetch_daily(start="2018-06-26")
+        if d is not None and not d.empty and "gldm_close" in d.columns and len(d) > 260:
+            df = d
+    except Exception:
+        df = pd.DataFrame()
+    if df.empty:
+        csv = gc.GLDM_DATA_DIR / "gldm_macro_daily.csv"
+        if Path(csv).exists():
+            df = pd.read_csv(csv, index_col=0, parse_dates=True)
+    return _attach_nugt(df)
 
 
 def run_gldm() -> list[dict]:
@@ -98,6 +120,11 @@ def run_gldm() -> list[dict]:
     if daily is None or daily.empty or "gldm_close" not in daily.columns:
         return []
     preds = bg.build_predictions(daily)
+    # build_predictions only keeps ugl/gdx closes; carry NUGT's price through so
+    # the same gold signal can be simulated on the 2× miners sleeve.
+    if "nugt_close" in daily.columns:
+        preds = preds.copy()
+        preds["nugt_close"] = daily["nugt_close"].reindex(preds.index)
     sig = bg.precompute_signals(preds)
     completed = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
     sigs = gc.compute_trend_signatures(completed.tail(45)) if len(completed) >= 3 else None

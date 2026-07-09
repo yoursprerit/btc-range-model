@@ -137,18 +137,20 @@ BTC_CFG = TickerConfig(
 GLDM_CFG = TickerConfig(
     key="GLDM", name="SPDR Gold MiniShares", emoji="🥇",
     blurb=("Spot gold via GLDM drives the signal; the strategy trades GLDM and "
-           "its higher-beta siblings GDX (miners) and UGL (2× gold) off it."),
+           "its higher-beta siblings GDX (miners), UGL (2× gold) and NUGT "
+           "(2× gold miners) off it."),
     accent="#b8860b", accent_dark="#8b6508", accent_bg="#fffbeb", accent_bg2="#fef3c7",
     primary_symbol="GLDM",
     macro_syms={"gc": "GC=F", "slv": "SLV", "dxy": "DX-Y.NYB",
                 "tnx": "^TNX", "vix": "^VIX", "spx": "^GSPC"},
-    extra_syms={"gdx": "GDX", "ugl": "UGL"},
+    extra_syms={"gdx": "GDX", "ugl": "UGL", "nugt": "NUGT"},
     sentiment=[("gc_close", "mom", +1.0), ("dxy_close", "mom", -1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Gold macro sentiment",
-    traded_assets=[("GLDM", "px_close"), ("GDX", "gdx_close"), ("UGL", "ugl_close")],
+    traded_assets=[("GLDM", "px_close"), ("GDX", "gdx_close"), ("UGL", "ugl_close"),
+                   ("NUGT", "nugt_close")],
     asset_labels={"px_close": "GLDM · Gold", "gdx_close": "GDX · Gold Miners",
-                  "ugl_close": "UGL · 2× Gold"},
+                  "ugl_close": "UGL · 2× Gold", "nugt_close": "NUGT · 2× Gold Miners"},
     strategy_mode="divergence", strategy_name="Gold Divergence Pure-Regime",
     ma_window=50, fixed_stop=0.03,
     u1_errhi_min=0.08, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
@@ -159,7 +161,10 @@ GLDM_CFG = TickerConfig(
                   "bullish-divergence entry confirmed inside a 50-day regime "
                   "gate, D2/D3 exits, −3% stop. The same gold signal steers GDX "
                   "and the 2× UGL. OOS 2021→now: GLDM +73% / −11% / Sharpe 1.29, "
-                  "GDX +156% / −19% / 1.12, UGL +184% / −20% / 1.28."),
+                  "GDX +156% / −19% / 1.12, UGL +184% / −20% / 1.28. The same "
+                  "signal also drives the 2× gold-miners NUGT sleeve (~+497% / "
+                  "−31% / Sharpe 1.21 OOS) — a leveraged win-win in the blend "
+                  "(see SOXL_ERX_ADDITION_EVAL.md)."),
 )
 
 def overall_config(key: str) -> TickerConfig:
@@ -209,10 +214,13 @@ ASSET_META = {
     "GLDM": dict(name="Gold (GLDM)",    kind="core"),
     "GDX":  dict(name="Gold Miners",    kind="beta"),
     "UGL":  dict(name="2× Gold",        kind="lev"),
+    "NUGT": dict(name="2× Gold Miners", kind="lev"),
     "SOXX": dict(name="Semiconductors", kind="core"),
+    "SOXL": dict(name="3× Semiconductors", kind="lev"),
     "GRID": dict(name="Grid Infra",     kind="core"),
     "XLE":  dict(name="Energy",         kind="core"),
     "OIH":  dict(name="Oil Services",   kind="beta"),
+    "ERX":  dict(name="2× Energy",      kind="lev"),
     "REMX": dict(name="Rare-Earth Metals", kind="core"),
     "WGMI": dict(name="Bitcoin Miners", kind="beta"),
     "PBW":  dict(name="Clean Energy",   kind="core"),
@@ -230,13 +238,13 @@ CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 # the quant optimum (see ``optimize_weights(fundamental=True)``) so the strategy,
 # allocation and back-test reflect the forward view, not just past risk/return.
 FUNDAMENTAL_VIEW = {
-    "SOXX": 1.40, "ARTY": 1.40,                 # AI / semiconductor supercycle
+    "SOXX": 1.40, "SOXL": 1.40, "ARTY": 1.40,   # AI / semiconductor supercycle (SOXL = 3× semis)
     "BTC": 1.40, "MSTR": 1.40, "MSTU": 1.40,    # crypto institutional era
-    "GLDM": 1.30, "GDX": 1.40, "UGL": 1.40,     # structural gold bull
+    "GLDM": 1.30, "GDX": 1.40, "UGL": 1.40, "NUGT": 1.40,   # structural gold bull (NUGT = 2× miners)
     "GRID": 1.40,                                # electrification / grid capex
     "WGMI": 1.30,                                # miners' AI/HPC pivot
     "REMX": 1.10,                                # rare-earth supply squeeze
-    "XLE": 1.00,                                 # energy — gas ok, oil soft
+    "XLE": 1.00, "ERX": 1.00,                    # energy — gas ok, oil soft (ERX = 2× energy)
     "OIH": 0.50, "PBW": 0.40,                    # no catalyst / policy headwinds
 }
 FUNDAMENTAL_VIEW_NOTE = (
