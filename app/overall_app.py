@@ -740,6 +740,8 @@ with tab_live:
 # ══════════════════════════════════════════════════════════════════════════
 with tab_bt:
     o = opt["optimal"]
+    _oos_lo, _oos_hi = ov.oos_start_span()
+    _oos_span = _oos_lo if _oos_lo == _oos_hi else f"{_oos_lo}–{_oos_hi}"
     st.markdown("## 📊 The optimal combined strategy")
     st.caption("Each instrument's signal-driven strategy produces a daily return "
                "stream (long when its parent signal is on, otherwise **idle "
@@ -747,7 +749,8 @@ with tab_bt:
                f"blends of all {N_ALL} — leveraged sleeves capped tighter — for the mix "
                "that **maximises return while keeping the drawdown shallow** "
                "(highest raw return among near-max-Sharpe blends). Out-of-sample "
-               "from 2021; $100k start.")
+               f"from {_oos_span} depending on the instrument (staggered starts — "
+               "newer sleeves like BTC begin ~2024); $100k start.")
     if opt.get("fundamental") and "optimal_pretilt" in opt:
         _pt = opt["optimal_pretilt"]
         st.info(f"🔭 **Fundamental overlay applied** — these figures tilt the quant "
@@ -882,7 +885,7 @@ with tab_bt:
                "GLDM/GDX/UGL via the Gold app's Divergence Pure-Regime, the ETFs "
                "via their tuned configs — so these numbers match each source app. "
                "(BTC's CT features begin ~2024, so its sleeve covers a shorter "
-               "window than the 2021-start ETFs.)")
+               "window than the earliest-start ETFs.)")
     ah = ("<tr style='background:#f1f5f9'><th style='text-align:left;padding:6px 10px'>Instrument</th>"
           "<th>Signal / engine</th><th style='text-align:right'>Strat</th>"
           "<th style='text-align:right'>Buy&amp;Hold</th><th style='text-align:right'>Max DD</th>"

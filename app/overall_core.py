@@ -190,6 +190,15 @@ def all_configs() -> list[TickerConfig]:
     return [overall_config(k) for k in PARENT_KEYS]
 
 
+def oos_start_span() -> tuple[str, str]:
+    """(earliest, latest) out-of-sample start YEAR across the traded universe,
+    read from each instrument's ``cfg.oos_start`` — so the app's "out-of-sample
+    from …" framing tracks the configs instead of a hardcoded year and correctly
+    reflects that starts are staggered (most ETFs 2021, newer sleeves later)."""
+    yrs = sorted({c.oos_start[:4] for c in all_configs() if getattr(c, "oos_start", None)})
+    return (yrs[0], yrs[-1]) if yrs else ("", "")
+
+
 # ── per-instrument metadata (label, class, weight cap) ────────────────────
 # kind ∈ {"core", "beta" (high-beta equity), "lev" (leveraged 2×)}.
 # Leveraged sleeves get the tightest cap so the optimiser only leans on them

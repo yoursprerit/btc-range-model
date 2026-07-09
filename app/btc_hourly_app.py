@@ -208,6 +208,15 @@ def _cutoffs():
     return _training_cutoffs(mtime)
 
 
+def _oos_cut_str(fmt: str = "%b %d, %Y") -> str:
+    """Formatted in-sample/OOS boundary — the daily-CT model's ``test_start`` —
+    derived from model metadata so every UI label tracks the real training
+    window instead of a hardcoded date that silently goes stale on retrain.
+    Uses the same fallback the dashboards use when metadata can't be read."""
+    ts = _cutoffs().get("daily H/L test_start")
+    return (ts if ts is not None else pd.Timestamp("2026-03-01")).strftime(fmt)
+
+
 def render_replay_in_sample_warning(target_date):
     """If `target_date` falls inside any model's training window, show a
     yellow warning explaining the predictions on this date are in-sample
@@ -6325,7 +6334,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     s_ref   = _bt_ref["stats"]
 
     # ── Strategy rules card ───────────────────────────────────────────
-    st.markdown("""
+    st.markdown(f"""
 <div style='background:#eff6ff; border:2px solid #2563eb; border-radius:12px;
      padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
 
@@ -6415,7 +6424,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
-    ⚠️ Data before Mar 1, 2026 is <b>in-sample</b> (CT model training + validation period)
+    ⚠️ Data before {_oos_cut_str()} is <b>in-sample</b> (CT model training + validation period)
   </div>
 
 </div>""", unsafe_allow_html=True)
@@ -7040,7 +7049,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         return
 
     # ── Strategy rules card (variant-aware) ──────────────────────────────────
-    _mstr_footer = """
+    _mstr_footer = f"""
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
   <!-- EXIT -->
   <div style='margin-bottom:12px;'>
@@ -7113,7 +7122,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     &nbsp;·&nbsp;
     📅 <b>MSTR prices:</b> split-adjusted (10-for-1 split Aug 2024)
     &nbsp;·&nbsp;
-    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+    ⚠️ Pre-{_oos_cut_str("%b %Y")} data is <b>in-sample</b> for the BTC CT model
   </div>
 </div>"""
 
@@ -7573,7 +7582,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         🔴 Red = worse &nbsp;|&nbsp;
         💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
         💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
-        ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
+        ⚠️ Pre-{_oos_cut_str("%b %Y")} dates are <b>in-sample</b> for the BTC CT model.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         </p>
@@ -7888,9 +7897,9 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
-                    caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_oos_cut_str('%b %Y')} trades are in-sample."
                 else:
-                    caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
+                    caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
                 st.caption(caption)
             lt_idx += 1
 
@@ -7915,7 +7924,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         return
 
     # ── Strategy rules card (variant-aware) ──────────────────────────────────
-    _mstu_footer = """
+    _mstu_footer = f"""
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
   <!-- EXIT -->
   <div style='margin-bottom:12px;'>
@@ -7988,7 +7997,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
     &nbsp;·&nbsp;
     📅 <b>MSTU:</b> T-Rex 2× Long MSTR Daily Target ETF · inception ~Jun 2025 · pre-Jun 2025 = synthetic
     &nbsp;·&nbsp;
-    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+    ⚠️ Pre-{_oos_cut_str("%b %Y")} data is <b>in-sample</b> for the BTC CT model
   </div>
 </div>"""
 
@@ -8445,7 +8454,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         🔴 Red = worse &nbsp;|&nbsp;
         💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
         💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
-        ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
+        ⚠️ Pre-{_oos_cut_str("%b %Y")} dates are <b>in-sample</b> for the BTC CT model.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         🧪 Bull period uses <b>synthetic MSTU prices</b> calibrated from MSTR via OLS (β≈2).
@@ -8761,11 +8770,11 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
-                    caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_oos_cut_str('%b %Y')} trades are in-sample."
                 elif lbl == "bull":
                     caption += "🧪 Synthetic MSTU prices (OLS from MSTR). In-sample for BTC CT model."
                 else:
-                    caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
+                    caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
                 st.caption(caption)
             lt_idx += 1
 
@@ -8786,7 +8795,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         return
 
     # ── Strategy rules card (variant-aware) ──────────────────────────────────
-    _btc_footer = """
+    _btc_footer = f"""
   <div style='border-top:1px solid #fed7aa; margin:10px 0;'></div>
   <!-- EXIT -->
   <div style='margin-bottom:12px;'>
@@ -8833,7 +8842,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     &nbsp;·&nbsp;
     📅 <b>Prices:</b> BTC-USD spot (yfinance daily)
     &nbsp;·&nbsp;
-    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+    ⚠️ Pre-{_oos_cut_str("%b %Y")} data is <b>in-sample</b> for the BTC CT model
   </div>
 </div>"""
 
@@ -9286,7 +9295,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         🔴 Red = worse &nbsp;|&nbsp;
         💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
         💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
-        ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
+        ⚠️ Pre-{_oos_cut_str("%b %Y")} dates are <b>in-sample</b> for the BTC CT model.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         </p>
@@ -9588,9 +9597,9 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
-                    caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_oos_cut_str('%b %Y')} trades are in-sample."
                 else:
-                    caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
+                    caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
                 st.caption(caption)
             lt_idx += 1
 
@@ -9620,7 +9629,7 @@ def render_mstr_options_trading_strategy_dashboard(
         return
 
     # ── Strategy rules card (variant-aware) ──────────────────────────────────
-    _mstr_opts_footer = """
+    _mstr_opts_footer = f"""
       <tr>
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#d97706;'>③</td>
@@ -9677,7 +9686,7 @@ def render_mstr_options_trading_strategy_dashboard(
     &nbsp;·&nbsp;
     🏦 <b>B&amp;H benchmark:</b> MSTR stock (unleveraged)
     &nbsp;·&nbsp;
-    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+    ⚠️ Pre-{_oos_cut_str("%b %Y")} data is <b>in-sample</b> for the BTC CT model
   </div>
 
 </div>"""
@@ -10072,7 +10081,7 @@ def render_mstr_options_trading_strategy_dashboard(
         🔴 Red = worse &nbsp;|&nbsp;
         💡 Options P&amp;L includes BS time-value and volatility effects.
         B&amp;H benchmark is MSTR stock (unleveraged).
-        ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
+        ⚠️ Pre-{_oos_cut_str("%b %Y")} dates are <b>in-sample</b> for the BTC CT model.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         📐 Black-Scholes pricing: σ = 60d rolling HV · r = 4.5% · No dividend.
@@ -10365,9 +10374,9 @@ def render_mstr_options_trading_strategy_dashboard(
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
-                    caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_oos_cut_str('%b %Y')} trades are in-sample."
                 else:
-                    caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
+                    caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
                 st.caption(caption)
             lt_idx += 1
 
@@ -10396,7 +10405,7 @@ def render_mstu_options_trading_strategy_dashboard(
         return
 
     # ── Strategy rules card (variant-aware) ──────────────────────────────────
-    _mstu_opts_footer = """
+    _mstu_opts_footer = f"""
       <tr>
         <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
              color:#0284c7;'>③</td>
@@ -10453,7 +10462,7 @@ def render_mstu_options_trading_strategy_dashboard(
     &nbsp;·&nbsp;
     🏦 <b>B&amp;H benchmark:</b> MSTU stock (T-Rex 2× Long MSTR ETF)
     &nbsp;·&nbsp;
-    ⚠️ Pre-Mar 2026 data is <b>in-sample</b> for the BTC CT model
+    ⚠️ Pre-{_oos_cut_str("%b %Y")} data is <b>in-sample</b> for the BTC CT model
   </div>
 
 </div>"""
@@ -10848,7 +10857,7 @@ def render_mstu_options_trading_strategy_dashboard(
         🔴 Red = worse &nbsp;|&nbsp;
         💡 Options P&amp;L includes BS time-value and volatility effects.
         B&amp;H benchmark is MSTU stock (T-Rex 2× Long MSTR ETF).
-        ⚠️ Pre-Mar 2026 dates are <b>in-sample</b> for the BTC CT model.
+        ⚠️ Pre-{_oos_cut_str("%b %Y")} dates are <b>in-sample</b> for the BTC CT model.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         📐 Black-Scholes pricing: σ = 60d rolling HV · r = 4.5% · No dividend.
@@ -11141,11 +11150,11 @@ def render_mstu_options_trading_strategy_dashboard(
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
                 elif lbl == "full":
-                    caption += "⚠️ Mixed IS/OOS — pre-Mar 2026 trades are in-sample."
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_oos_cut_str('%b %Y')} trades are in-sample."
                 elif lbl == "bull":
                     caption += "🧪 Synthetic MSTU prices (OLS from MSTR). In-sample for BTC CT model."
                 else:
-                    caption += "⚠️ pre-Mar 2026 = in-sample for BTC CT model."
+                    caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
                 st.caption(caption)
             lt_idx += 1
 
