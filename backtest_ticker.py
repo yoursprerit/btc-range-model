@@ -182,6 +182,22 @@ def trend_long_now(cfg, daily):
     return bool(trend_long_array(cfg, gcl)[-1]) if len(gcl) else False
 
 
+def trend_long_now_live(cfg, close_hist, live_px):
+    """The trend signal's boolean state if ``live_px`` is taken as the newest
+    close.  Appends the live price as a provisional latest bar and re-evaluates
+    the mode's ACTUAL long condition (via ``trend_long_array``), so dual_ma
+    re-checks the fast/slow SMA cross — and ma_vol its vol filter — rather than a
+    naive price-vs-single-line read.  Returns None when inputs are unusable."""
+    if live_px is None:
+        return None
+    arr = np.asarray(close_hist, float)
+    arr = arr[np.isfinite(arr)]
+    if not len(arr) or not np.isfinite(live_px):
+        return None
+    arr = np.append(arr, float(live_px))
+    return bool(trend_long_array(cfg, arr)[-1])
+
+
 def trend_line_value(cfg, daily):
     """Representative price-level line for the trend chart / UI (last value):
     the slow SMA for dual_ma, else the N-day SMA."""

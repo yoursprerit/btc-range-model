@@ -64,6 +64,8 @@ def _stale_core(mod) -> bool:
             return True
         if "include_entries" not in _inspect.signature(mod.live_exit_keys).parameters:
             return True
+        if not getattr(mod, "LIVE_EXIT_MODE_AWARE", False):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False

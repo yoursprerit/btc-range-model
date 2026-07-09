@@ -57,6 +57,12 @@ import backtest_ticker as bt                 # noqa: E402
 import ticker_config                         # noqa: E402
 from ticker_config import TickerConfig, get_config, _STD_PERIODS   # noqa: E402
 
+# Capability flag: this build's live_exit_keys re-runs each mode's real trend
+# condition (dual_ma fast/slow cross, etc.) instead of a naive price-vs-line
+# proxy, and _asset_result attaches cfg/close_hist for it.  The app's _stale_core
+# guard checks this so a hot-reload against an older cached module is refreshed.
+LIVE_EXIT_MODE_AWARE = True
+
 
 def _warmup_imports() -> None:
     """Force every heavy, lazily-imported module into ``sys.modules`` on a
@@ -441,6 +447,10 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         ret=ret, pos_series=pos_series, strat=strat, dates=dates, r=r, as_of=as_of,
         mode=cfg.strategy_mode, ma_window=cfg.ma_window, stop=cfg.fixed_stop,
         engine_label=cfg.engine_label(),
+        # committed close history + config so the live-price exit check can re-run
+        # the mode's real trend condition (e.g. dual_ma's fast/slow SMA cross)
+        # rather than a naive price-vs-line proxy.
+        cfg=cfg, close_hist=daily["px_close"].to_numpy(float),
     )
 
 
@@ -1006,18 +1016,22 @@ def apply_entry_basis(results: list[dict], entry_closes: dict) -> None:
 
 def live_exit_keys(results: list[dict], spot: dict,
                    include_entries: bool = False) -> set:
-    """Keys of price-line trend instruments the *live* price says will drop out on
-    the next bar — the parent's live price has fallen below the trend line (these
-    filters decide at the close and act on the next bar).  By default this covers
-    positions currently **held** (long today, but exit next bar).  With
-    ``include_entries=True`` it also covers fresh **entries** signalled off the
-    last close whose live price has since slipped below the trend — they'd open
-    into a broken trend and reverse right back out on the next bar.
+    """Keys of trend instruments the *live* price says will drop out on the next
+    bar.  The mode's REAL long condition is re-evaluated with the live price as
+    the newest close (via ``trend_long_now_live``): for ``ma``/``ma_vol`` that's
+    close-vs-SMA, and for ``dual_ma`` it's the fast/slow SMA cross — NOT a naive
+    price-vs-line read (so a golden-cross name whose price merely dips below its
+    slow SMA is not mis-flagged).  These filters decide at the close and act on
+    the next bar.  By default this covers positions currently **held** (long
+    today, but exit next bar).  With ``include_entries=True`` it also covers fresh
+    **entries** signalled off the last close whose live price has since broken the
+    trend — they'd open into a broken trend and reverse right back out next bar.
     MACD (oscillator) and divergence exits are signal-triggered, not simple
     price-crossings, so they're not included."""
     out = set()
     for r in results:
-        if r.get("mode") not in ("ma", "dual_ma", "ma_vol"):
+        mode = r.get("mode")
+        if mode not in ("ma", "dual_ma", "ma_vol"):
             continue
         p = r.get("pos") or {}
         in_pos = bool(p.get("in_pos"))
@@ -1026,10 +1040,24 @@ def live_exit_keys(results: list[dict], spot: dict,
         is_entry = (not in_pos) and tone == "buy"
         if not (is_hold or (include_entries and is_entry)):
             continue
-        ma = r.get("ma_val")
         plive = (spot.get(r.get("parent")) or {}).get("price")
-        if ma is None or plive is None:
+        if plive is None:
             continue
-        if plive < ma:
-            out.add(r["key"])
+        # Re-run the mode's ACTUAL long condition with the live price as the newest
+        # close.  Critically, dual_ma exits on a fast/slow SMA cross (a "death
+        # cross"), NOT on price dropping below the slow SMA — so a naive
+        # `price < ma_val` proxy would falsely flag a golden-cross name (e.g. REMX)
+        # whose live price dips below its 200-day line while 50-SMA > 200-SMA.
+        cfg = r.get("cfg"); close_hist = r.get("close_hist")
+        _live_fn = getattr(bt, "trend_long_now_live", None)  # absent on a stale reload
+        if cfg is not None and close_hist is not None and _live_fn is not None:
+            long_live = _live_fn(cfg, close_hist, plive)
+            if long_live is False:          # trend genuinely flips flat on live px
+                out.add(r["key"])
+        elif mode == "ma":
+            # fallback for results lacking cfg/close_hist (e.g. stale cache): the
+            # naive price-vs-SMA read IS the real exit rule for plain `ma` only.
+            ma = r.get("ma_val")
+            if ma is not None and plive < ma:
+                out.add(r["key"])
     return out
