@@ -6714,7 +6714,8 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         🔴 Red = worse &nbsp;|&nbsp;
         💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
         💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
-        ⚠️ Jun–Sep 2025 dates are <b>in-sample</b>; Sep 2025–May 2026 are OOS.
+        ⚠️ Dates before {OOS_START.strftime("%b %d, %Y")} are <b>in-sample</b>;
+        {OOS_START.strftime("%b %d, %Y")} onward is OOS.
         🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
         CT model last trained {ct_str}.
         🌐 Full Market: locked to Jun 2024 – May 2026 (mixed IS + OOS).
@@ -7009,12 +7010,13 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                     "💡 P&L at execution prices (1-day lag from signal). "
                     "B&H normalised to $100k at period start. "
                 )
+                _cut = OOS_START.strftime("%b %d, %Y")
                 if lbl == "oos":
                     caption += "✅ Fully OOS — model never saw this data."
                 elif lbl == "full":
-                    caption += "⚠️ Mixed IS/OOS — pre-Sep 2025 trades are in-sample."
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_cut} trades are in-sample."
                 else:
-                    caption += "⚠️ pre-Sep 2025 = in-sample."
+                    caption += f"⚠️ pre-{_cut} = in-sample."
                 st.caption(caption)
             lt_idx += 1
 
@@ -13727,8 +13729,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 + "  Model: GBM point prediction (106 features: BTC momentum, "
                 "macro, yield spread, econ activity, energy, ETH/BTC ratio, "
                 "Chaikin Money Flow) + empirical ±band from return distribution. "
-                "Trained on data through Sep 2025; OOS baseline: "
-                "MAPE ≈8.7%, direction accuracy ≈58.5%, coverage ≈89%."
+                + (lambda _c: f"Trained on data through {_c.strftime('%b %Y')}; "
+                   if _c is not None else "")(_cutoffs().get("14-day cone"))
+                + "OOS baseline: MAPE ≈8.7%, direction accuracy ≈58.5%, coverage ≈89%."
             )
         else:
             st.info(
