@@ -468,8 +468,7 @@ def render_strategy_card():
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① <b>D2 fade</b> — err_hi 3d-avg &lt; {cfg.d2_errhi_max:+.2f}%<br>
         ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
-        {'③ <b>D1 downtrend</b> — err_lo 3d-avg &gt; +' + f'{cfg.d1_errlo_min:.2f}' + '% &amp; ≥2 low-breaks<br>' if cfg.use_d1_exit else ''}
-        {((('④' if cfg.use_d1_exit else '③') + ' <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else '<i>no fixed stop — exits are signal-driven</i>')}
+        {('③ <b>D1 downtrend</b> — err_lo 3d-avg &gt; +' + f'{cfg.d1_errlo_min:.2f}' + '% &amp; ≥2 low-breaks<br>' if cfg.use_d1_exit else '') + ((('④' if cfg.use_d1_exit else '③') + ' <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else '<i>no fixed stop — exits are signal-driven</i>')}
       </div>
     </div>
   </div>
@@ -502,8 +501,7 @@ def render_strategy_card():
       <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
-        ① {TUI['exit']}{', or' if cfg.has_stop else ''}<br>
-        {'② <b>fixed stop</b> — ' + cfg.stop_label + ' from entry' if cfg.has_stop else ''}
+        {('① ' + TUI['exit'] + ', or<br>② <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else ('① ' + TUI['exit'])}
       </div>
     </div>
   </div>
