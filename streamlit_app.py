@@ -30,7 +30,6 @@ import runpy
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 import sys
 _APP_DIR = Path(__file__).resolve().parent / "app"
@@ -45,14 +44,9 @@ for _k, _c in ticker_config.CONFIGS.items():
 
 # ── routing ────────────────────────────────────────────────────────────────
 # Every app is one script run of this router that runpy-executes the selected
-# sub-app.  Switching apps left the previous (often heavy) app's elements
-# ghosting through as faded "stale" text on the new page: across the runpy swap
-# Streamlit reconciles by position and does not reliably tear the old tree down,
-# and a tear-down st.rerun() aborts before the end-of-run prune commits — so the
-# ghost survived.  The one bulletproof fix is to reload the browser on a switch
-# so the new app always renders on a pristine DOM.  The route is persisted in the
-# URL (?app=...) so the reload lands on the right app; the heavy compute stays
-# warm in st.cache_data across the reload, so it's cheap.
+# sub-app.  The selected app is persisted in the URL (``?app=...``) so a shared or
+# refreshed link lands on the right app, and the heavy per-app compute stays warm
+# in ``st.cache_data`` across runs, so switching back and forth is cheap.
 _qp_app = st.query_params.get("app")
 _widget_app = st.session_state.get("gldm_active_app")
 _choice = _widget_app or _qp_app or "OVERALL"
@@ -60,11 +54,22 @@ if _choice not in _ALL_APPS:
     _choice = "OVERALL"
 
 # A real switch = the user picked an app (widget) different from what the URL has
-# currently loaded.  Point the URL at the new app and hard-reload onto a clean DOM.
+# currently loaded.  Sync the URL and re-run cleanly so *only* the newly-selected
+# app renders.
+#
+# Earlier this tried to hard-reload the browser via an injected
+# ``components.html("<script>window.parent.location.reload()</script>")``.  That can
+# never work: Streamlit renders components in an iframe whose sandbox does NOT grant
+# ``allow-top-navigation``, so the browser blocks any attempt to reload/navigate the
+# parent window ("Unsafe attempt to initiate navigation … the frame … is sandboxed").
+# The reload silently failed, the branch ``st.stop()``-ed before rendering anything,
+# and the app was left frozen on the previous page — e.g. stuck on SOXX when switching
+# to Overall Trading.  A server-side ``st.rerun`` re-runs the router from the top with
+# the URL already pointing at the new app, so the switch always takes.
 if _qp_app is not None and _widget_app is not None and _widget_app != _qp_app:
-    st.query_params["app"] = _widget_app
-    components.html("<script>window.parent.location.reload();</script>", height=0)
-    st.stop()
+    st.query_params["app"] = _choice
+    st.session_state["gldm_active_app"] = _choice
+    st.rerun()
 
 st.query_params["app"] = _choice                     # keep the URL in sync
 st.session_state["gldm_active_app"] = _choice        # seed the selector widget
