@@ -436,6 +436,7 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     last_px = float(daily[col].dropna().iloc[-1]) if col in daily else np.nan
     as_of = pd.Timestamp(dates.iloc[-1])
 
+    _stop = cfg.stop_for(col)          # per-asset stop (e.g. SOXL trades no stop)
     pos = dict(in_pos=bool(r.get("in_pos_now")), entry_px=r.get("entry_px"),
                entry_date=r.get("entry_date"), upnl=None, stop_px=None,
                days=None, dist_stop=None)
@@ -443,8 +444,8 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         e_px = float(pos["entry_px"]); e_dt = pd.Timestamp(pos["entry_date"])
         pos["upnl"] = (last_px / e_px - 1) * 100
         pos["days"] = int((as_of - e_dt).days)
-        if cfg.has_stop:
-            pos["stop_px"] = e_px * (1 - cfg.fixed_stop)
+        if _stop < 0.999:
+            pos["stop_px"] = e_px * (1 - _stop)
             pos["dist_stop"] = (last_px / pos["stop_px"] - 1) * 100
     last_trade = r["trade_log"][-1] if r.get("trade_log") else None
 
@@ -460,7 +461,7 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         pos=pos, last_trade=last_trade, mom=mom,
         metrics=m, bh_metrics=bh, win_rate=wr, n_trades=int(len(r["trades"])),
         ret=ret, pos_series=pos_series, strat=strat, dates=dates, r=r, as_of=as_of,
-        mode=cfg.strategy_mode, ma_window=cfg.ma_window, stop=cfg.fixed_stop,
+        mode=cfg.strategy_mode, ma_window=cfg.ma_window, stop=_stop,
         engine_label=cfg.engine_label(),
         # committed close history + config so the live-price exit check can re-run
         # the mode's real trend condition (e.g. dual_ma's fast/slow SMA cross)

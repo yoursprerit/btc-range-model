@@ -121,3 +121,27 @@ book's worst days, and 3× gap-risk in a sudden crash is worse than a daily
 back-test captures. Leveraged-ETF decay **is** in these numbers (real SOXL/ERX
 prices); the long/flat filter mitigates it by holding only in clean up-trends,
 which is why the strategy Sharpe (~1.1) far exceeds a buy-&-hold 3×.
+
+---
+
+## Follow-up — SOXL stop tuned for consistency (higher win-rate + Sharpe)
+
+SOXL initially inherited SOXX's **−5% fixed stop**.  A −5% stop suits 1× SOXX but
+is far too tight for a 3× ETF — a routine 3× wobble trips it — so SOXL whipsawed
+into **18 trades at a 22% win-rate and a 1.09 Sharpe**.  A per-asset stop override
+(`stop_by_asset={"soxl_close": 1.0}` on the SOXX config) lets SOXL trade the SAME
+25/100 dual-MA signal with **no fixed stop** (signal-driven exits only), while
+SOXX itself keeps its tuned −5% stop.
+
+| SOXL (OOS 2021→now) | Win-rate | Sharpe | Return | Max DD | Trades |
+|---|---|---|---|---|---|
+| −5% stop (inherited) | 22% | 1.09 | +2112% | −67% | 18 |
+| **no stop (shipped)** | **80%** | **1.15** | **+2848%** | −69% | **5** |
+| **Δ** | **+58pp** | **+0.06** | +736pp | −2pp | −13 |
+
+Removing the too-tight stop lifts the **win-rate 22%→80%** and **Sharpe
+1.09→1.15**, and (because the stop was also clipping upside on a trending 3×)
+*raises* return — for just 2pp more drawdown.  It's a per-asset override, so SOXX
+and every other sleeve are untouched.  Reproduce the strategy sweep behind this
+with the consistency scan in the eval scratch (ma / dual_ma / macd / ma_vol /
+divergence × stops × both signal sources, scored by Sharpe and win-rate).

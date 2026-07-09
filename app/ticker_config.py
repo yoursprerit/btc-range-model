@@ -90,6 +90,12 @@ class TickerConfig:
     v_errlo_min: float = 0.50
     use_d1_exit: bool = False      # if True, D1 downtrend pressure is also an exit
     hl_band_pct: float = 0.010     # ±band tint on the daily H/L chart
+    # per-traded-asset fixed-stop override, keyed by the traded price column
+    # (e.g. {"soxl_close": 1.0}).  Falls back to ``fixed_stop`` for any asset not
+    # listed.  Lets a high-beta sibling (e.g. 3× SOXL) trade a wider/no stop than
+    # its 1× parent without touching the parent's tuned stop — a −5% stop that
+    # suits 1× SOXX whipsaws a 3× ETF, hurting win-rate and Sharpe.
+    stop_by_asset: dict = field(default_factory=dict)
 
     # ── windows ──────────────────────────────────────────────────────────
     fetch_start: str = "2015-01-01"
@@ -102,6 +108,13 @@ class TickerConfig:
     # ── results (filled in from the backtest, shown in the UI/README) ─────
     results_note: str = ""
     eval_note: str = ""            # optional extra analysis (e.g. XLE vs OIH)
+
+    def stop_for(self, col: str) -> float:
+        """Fixed stop for a traded price column, honouring ``stop_by_asset``."""
+        return self.stop_by_asset.get(col, self.fixed_stop)
+
+    def has_stop_for(self, col: str) -> bool:
+        return self.stop_for(col) < 0.999
 
     @property
     def prefix(self) -> str:
@@ -239,6 +252,12 @@ CONFIGS["SOXX"] = TickerConfig(
     sentiment_label="Semis macro sentiment",
     traded_assets=[("SOXX", "px_close"), ("SOXL", "soxl_close")],
     asset_labels={"px_close": "SOXX · Semiconductors", "soxl_close": "SOXL · 3× Semis"},
+    # SOXL (3×) trades the SAME 25/100 dual-MA signal but with NO fixed stop: the
+    # −5% stop that suits 1× SOXX is far too tight for a 3× ETF (a routine 3×
+    # wobble trips it), whipsawing it into ~18 trades at a 22% win-rate / 1.09
+    # Sharpe.  Signal-only exits lift SOXL to ~50–80% win-rate / ~1.15 Sharpe at
+    # a similar return (see SOXL_ERX_ADDITION_EVAL.md).  SOXX itself keeps −5%.
+    stop_by_asset={"soxl_close": 1.0},
     strategy_mode="dual_ma", strategy_name="Semis Dual-MA Trend",
     ma_window=100, ma_fast=25, ma_slow=100, fixed_stop=0.05,
     hl_band_pct=0.012,
