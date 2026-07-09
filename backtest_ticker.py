@@ -328,7 +328,7 @@ def run_strategy(cfg, preds, sig, price_col, oos_start=None, end=None, stop_pct=
     ``price_col``, falling back to ``cfg.fixed_stop``), so a high-beta sibling can
     trade a different stop than its 1× parent off the same signal."""
     if stop_pct is None:
-        stop_pct = cfg.stop_by_asset.get(price_col, cfg.fixed_stop)
+        stop_pct = getattr(cfg, "stop_by_asset", {}).get(price_col, cfg.fixed_stop)
     if cfg.strategy_mode == "divergence":
         kw.setdefault("use_d1_exit", getattr(cfg, "use_d1_exit", False))
         return simulate(cfg, preds, sig, price_col, stop_pct=stop_pct,
