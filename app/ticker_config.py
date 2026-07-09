@@ -438,7 +438,9 @@ CONFIGS["REMX"] = TickerConfig(
                   "It far exceeds the old 150-day filter (+370% full-cycle) and, "
                   "at just ~7 trades, is a robust, low-turnover signal. OOS "
                   "2021→now it still wins: +135% vs +24% at −27% vs −74% drawdown. "
-                  "This config is tuned to maximise full-period results."),
+                  "This config is tuned to maximise full-period results. (Figures "
+                  "are the committed snapshot; the live Full-history tab recomputes "
+                  "to today, so the total floats with the market while long.)"),
 )
 
 

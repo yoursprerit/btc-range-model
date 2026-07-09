@@ -455,15 +455,21 @@ def main():
            "strategy": cfg.strategy_name, "mode": cfg.strategy_mode, "assets": {}}
     for lbl, col in cfg.traded_assets:
         print(f"\n  {lbl}:")
+        periods = {}
         for plabel, sm, bm, wr, ntr in period_table(cfg, preds, sig, col):
             print(f"    {plabel:38s} STRAT ret={sm['total_ret']*100:+8.1f}% "
                   f"MDD={sm['mdd']*100:6.1f}% Sharpe={sm['sharpe']:.2f} | "
                   f"B&H ret={bm['total_ret']*100:+8.1f}% MDD={bm['mdd']*100:6.1f}%")
+            periods[plabel] = dict(strategy=sm, buy_hold=bm, win_rate=float(wr), n_trades=int(ntr))
         r = run_strategy(cfg, preds, sig, col)
+        # the top-level metrics use the config's default OOS window (oos_start);
+        # ``periods`` carries every window (incl. 🌍 Full history) so the artifact
+        # matches the app's per-period Backtesting tabs.
         out["assets"][lbl] = dict(strategy=_metrics(r["strat"], r["dates"]),
                                   buy_hold=_metrics(r["bh"], r["dates"]),
                                   n_trades=int(len(r["trades"])),
-                                  win_rate=float((r["trades"] > 0).mean() * 100) if len(r["trades"]) else 0.0)
+                                  win_rate=float((r["trades"] > 0).mean() * 100) if len(r["trades"]) else 0.0,
+                                  default_window=cfg.oos_start, periods=periods)
     tc.cache_paths(cfg)["backtest"].write_text(json.dumps(out, indent=2, default=str))
     print(f"\nSaved → {tc.cache_paths(cfg)['backtest']}")
 
