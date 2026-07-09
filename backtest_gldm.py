@@ -63,7 +63,7 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
     df["close_asof"] = prev_c
     df["actual_high"] = high; df["actual_low"] = low
     df["gldm_close"] = close
-    for a in ("ugl", "gdx"):
+    for a in ("ugl", "gdx", "nugt"):
         if f"{a}_close" in daily:
             df[f"{a}_close"] = daily[f"{a}_close"]
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=feat_cols + ["y_hi", "y_lo", "close_asof"])
@@ -91,7 +91,7 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
     df["target_date"] = df.index
     keep = ["close_asof", "pred_high", "pred_low", "actual_high", "actual_low",
             "target_date", "gldm_close"] + \
-           [c for c in ("ugl_close", "gdx_close") if c in df]
+           [c for c in ("ugl_close", "gdx_close", "nugt_close") if c in df]
     return df[keep].copy()
 
 
