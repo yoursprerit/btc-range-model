@@ -321,12 +321,19 @@ def simulate(cfg, preds, sig, price_col, stop_pct=None, U1=None, D2=None, D1=Non
                 entry_px=(float(entry_px) if in_pos else None), entry_date=entry_date)
 
 
-def run_strategy(cfg, preds, sig, price_col, oos_start=None, end=None, **kw):
-    """Dispatch to the config's chosen strategy engine."""
+def run_strategy(cfg, preds, sig, price_col, oos_start=None, end=None, stop_pct=None, **kw):
+    """Dispatch to the config's chosen strategy engine.
+
+    ``stop_pct`` defaults to the per-asset stop (``cfg.stop_by_asset`` keyed by
+    ``price_col``, falling back to ``cfg.fixed_stop``), so a high-beta sibling can
+    trade a different stop than its 1× parent off the same signal."""
+    if stop_pct is None:
+        stop_pct = cfg.stop_by_asset.get(price_col, cfg.fixed_stop)
     if cfg.strategy_mode == "divergence":
         kw.setdefault("use_d1_exit", getattr(cfg, "use_d1_exit", False))
-        return simulate(cfg, preds, sig, price_col, oos_start=oos_start, end=end, **kw)
-    return simulate_regime(cfg, preds, sig, price_col, stop_pct=cfg.fixed_stop,
+        return simulate(cfg, preds, sig, price_col, stop_pct=stop_pct,
+                        oos_start=oos_start, end=end, **kw)
+    return simulate_regime(cfg, preds, sig, price_col, stop_pct=stop_pct,
                            oos_start=oos_start, end=end, **kw)
 
 

@@ -1355,6 +1355,12 @@ def _metrics_table_html(label, col):
 def render_backtest_dashboard(label, col):
     st.markdown(f"## 📊 {label} — {cfg.key} Signal-Driven Backtesting")
     render_strategy_card()
+    if cfg.stop_for(col) != cfg.fixed_stop:
+        _s = cfg.stop_for(col)
+        _txt = "no fixed stop" if _s >= 0.999 else f"a wider −{_s*100:.0f}% stop"
+        st.caption(f"↳ **{label}** trades the same {cfg.key} signal but with {_txt} "
+                   f"(vs {cfg.stop_label} on {cfg.key}) — a 1× stop is too tight for this "
+                   f"higher-beta sibling, so signal-driven exits give a higher win-rate and Sharpe.")
     st.caption(f"All trades are out-of-sample: the {cfg.key} daily H/L signal model is fit once "
                f"on the pre-{cfg.oos_start[:4]} window and predicts every later bar, so all periods "
                "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
