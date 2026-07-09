@@ -1,4 +1,4 @@
-"""Generic multi-ticker Streamlit app (SOXX / VEGN / GRID / XLE / REMX).
+"""Generic multi-ticker Streamlit app (SOXX / GRID / XLE / REMX).
 
 A single, config-driven port of ``app/gldm_hourly_app.py`` — it reproduces the
 Gold app's exact layout, styling and colour coding for whichever ticker the
@@ -8,7 +8,7 @@ the root router (``streamlit_app.py``) dispatches to this module for the five
 new apps and keeps the two originals byte-for-byte unchanged.
 
 Two strategy engines are supported and chosen per ticker in the config:
-  * "ma"          long-above-N-day-SMA trend filter (SOXX / VEGN / GRID)
+  * "ma"          long-above-N-day-SMA trend filter (SOXX / GRID)
   * "divergence"  the Gold/BTC U1·D2·D3 Pure-Regime system (XLE / REMX)
 
 Tabs mirror Gold: 🔴 Live · 🕒 Historical replay · 📊 per-asset Backtesting ·

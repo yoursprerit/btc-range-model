@@ -6,7 +6,7 @@ Streamlit Community Cloud expects the main file at the repo root named
   * ``app/btc_hourly_app.py``   — the original Bitcoin forecaster (unchanged)
   * ``app/gldm_hourly_app.py``  — the gold (GLDM) forecaster (unchanged)
   * ``app/ticker_app.py``       — the generic, config-driven app that serves the
-                                  five new tickers (SOXX / VEGN / GRID / XLE / REMX)
+                                  new tickers (SOXX / GRID / XLE / REMX / …)
 
 A single **Application** radio at the top of the sidebar lists every app.  The
 choice is stored in ``st.session_state['gldm_active_app']``; reading session

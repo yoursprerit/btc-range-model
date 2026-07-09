@@ -1,4 +1,4 @@
-# 📊 Multi-ticker forecasting apps (SOXX · VEGN · GRID · XLE · REMX · WGMI)
+# 📊 Multi-ticker forecasting apps (SOXX · GRID · XLE · REMX · WGMI)
 
 Six new forecasting + trading applications, each built as a faithful sibling of
 the **Gold (GLDM)** app in this repo — same layout, styling, colour coding, cards,
@@ -9,7 +9,7 @@ strategy **re-derived for the specific asset**. The BTC and GLDM apps are
 Pick any app from the **Application radio at the top of the sidebar** (grey panel):
 
 ```
-₿ Bitcoin (BTC)  🥇 Gold (GLDM)  🖥️ SOXX  🌱 VEGN  ⚡ GRID  🛢️ XLE  🧲 REMX  ⛏️ WGMI
+₿ Bitcoin (BTC)  🥇 Gold (GLDM)  🖥️ SOXX  ⚡ GRID  🛢️ XLE  🧲 REMX  ⛏️ WGMI
 ```
 
 ```bash
@@ -19,7 +19,6 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 | App | Asset | What it is | Chosen strategy |
 |---|---|---|---|
 | 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | Dual-MA 25/100 crossover |
-| 🌱 **VEGN** | US Vegan Climate ETF | ESG-screened S&P 500, tech-tilted | 200-day trend filter |
 | ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 |
 | 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Divergence Pure-Regime |
 | 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Dual-MA 50/200 golden cross |
@@ -32,8 +31,7 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 > 50-day SMA + volatility filter — each an out-of-sample improvement on return
 > and Sharpe. REMX was optimised over the **full 2015→now bull+bear cycle** to a
 > 50/200 dual-MA "golden cross" (+510% vs the old 150-day filter's +370%),
-> beating buy-&-hold on return, drawdown and Sharpe. VEGN kept its 200-day
-> filter (nothing beat it robustly). See `HYPERPARAM_SEARCH_EVAL.md`,
+> beating buy-&-hold on return, drawdown and Sharpe. See `HYPERPARAM_SEARCH_EVAL.md`,
 > `ML_STATISTICAL_STRATEGY_EVAL.md` and `REGIME_DIVERGENCE_EVAL.md`.
 
 ---
@@ -69,7 +67,6 @@ plus a purpose-built **0–100 macro-sentiment** composite (each driver signed s
 | App | Macro drivers | Sentiment blend |
 |---|---|---|
 | SOXX | SMH, ^SOX, QQQ, NVDA, ^TNX, DXY, ^VIX, ^GSPC | +QQQ mom − yields − VIX + own mom |
-| VEGN | SPY, QQQ, XLK, ^TNX, DXY, ^VIX | +SPY mom − yields − VIX + own mom |
 | GRID | XLU, ICLN, TAN, CPER, ^TNX, ^GSPC, ^VIX | +SPX mom + copper − yields + own mom |
 | XLE | CL=F, BZ=F, XOM, DXY, ^GSPC, ^VIX (+OIH) | +crude − USD − VIX + own mom |
 | REMX | LIT, CPER, FXI, SLV, DXY, ^GSPC, ^VIX | +copper + lithium − USD + own mom |
@@ -95,7 +92,6 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 | App | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
 | SOXX | Dual-MA 25/100, −5 % stop | **+452 %** | +362 % | **−27 %** | −46 % | **1.23 / 0.94** |
-| VEGN | MA-200, −5 % stop | **+84 %** | +81 % | **−14 %** | −33 % | **1.02 / 0.73** |
 | GRID | MACD 10/20/9, −5 % stop | **+134 %** | +132 % | **−16 %** | −30 % | **1.20 / 0.83** |
 | XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
 | REMX | Dual-MA 50/200, −5 % stop | **+135 %** | +24 % | **−27 %** | −74 % | **0.68 / 0.30** |
@@ -119,7 +115,6 @@ recovered from:
 | **XLE** | 2016→now | **+165 %** | +76 % | **−17 %** | −70 % | **0.95 / 0.33** | return · DD · Sharpe |
 | **OIH** | 2016→now | **+119 %** | −32 % | **−23 %** | −90 % | **0.59 / 0.12** | return · DD · Sharpe |
 | **REMX** | 2015→now | **+510 %** | +112 % | **−27 %** | −75 % | **0.82 / 0.38** | return · DD · Sharpe |
-| VEGN | 2020→now | +141 % | +167 % | **−16 %** | −34 % | **1.10 / 0.93** | DD · Sharpe |
 | GRID | 2015→now | +270 % | +452 % | **−21 %** | −41 % | **1.04 / 0.88** | DD · Sharpe |
 | WGMI | 2022→now | +282 % | +536 % | **−32 %** | −63 % | **1.32 / 1.08** | DD · Sharpe |
 | SOXX | 2015→now | +1161 % | +1842 % | **−35 %** | −46 % | **1.05 / 1.01** | DD · Sharpe |
@@ -129,7 +124,7 @@ buy-&-hold *outright — return, drawdown and Sharpe* — on the **commodity-equ
 crash assets (XLE, OIH, REMX)**, where B&H rode a multi-year bear all the way
 down. REMX's 50/200 golden cross is tuned to maximise the full-cycle result and
 turns B&H's +112 % / −75 % into **+510 % / −27 %** (Sharpe 0.82 vs 0.38). On the
-**secular compounders (SOXX, GRID, VEGN, WGMI)** buy-&-hold's total return is
+**secular compounders (SOXX, GRID, WGMI)** buy-&-hold's total return is
 **mathematically unbeatable** by any unleveraged long/flat rule — every day in
 cash is a day of missed gains — so the strategy "wins" on **risk-adjusted terms**
 (higher Sharpe, roughly half the drawdown). The refreshed configs improve this

@@ -15,7 +15,6 @@ primary plus higher-beta / leveraged siblings — exactly as the dedicated apps 
     Gold    GLDM       GLDM (1×) · GDX (miners) · UGL (2× gold)
     XLE     XLE        XLE (1×) · OIH (oil services, high-beta)
     SOXX    SOXX       SOXX
-    VEGN    VEGN       VEGN
     GRID    GRID       GRID
     REMX    REMX       REMX
     WGMI    WGMI       WGMI
@@ -182,7 +181,7 @@ def overall_config(key: str) -> TickerConfig:
 
 
 # Parent (signal-app) display order.
-PARENT_KEYS = ["BTC", "GLDM", "SOXX", "VEGN", "GRID", "XLE", "REMX", "WGMI",
+PARENT_KEYS = ["BTC", "GLDM", "SOXX", "GRID", "XLE", "REMX", "WGMI",
                "PBW", "ARTY"]
 
 
@@ -211,7 +210,6 @@ ASSET_META = {
     "GDX":  dict(name="Gold Miners",    kind="beta"),
     "UGL":  dict(name="2× Gold",        kind="lev"),
     "SOXX": dict(name="Semiconductors", kind="core"),
-    "VEGN": dict(name="ESG Large-Cap",  kind="core"),
     "GRID": dict(name="Grid Infra",     kind="core"),
     "XLE":  dict(name="Energy",         kind="core"),
     "OIH":  dict(name="Oil Services",   kind="beta"),
@@ -239,13 +237,13 @@ FUNDAMENTAL_VIEW = {
     "WGMI": 1.30,                                # miners' AI/HPC pivot
     "REMX": 1.10,                                # rare-earth supply squeeze
     "XLE": 1.00,                                 # energy — gas ok, oil soft
-    "VEGN": 0.60, "OIH": 0.50, "PBW": 0.40,      # no catalyst / policy headwinds
+    "OIH": 0.50, "PBW": 0.40,                    # no catalyst / policy headwinds
 }
 FUNDAMENTAL_VIEW_NOTE = (
     "Mid-2026 sector outlook: overweight AI/semis (SOXX, ARTY), the crypto "
     "institutional era (BTC/MSTR/MSTU, WGMI), the structural gold bull "
-    "(GLDM/GDX/UGL) and electrification (GRID); underweight clean energy (PBW), "
-    "oil services (OIH) and plain ESG beta (VEGN).")
+    "(GLDM/GDX/UGL) and electrification (GRID); underweight clean energy (PBW) "
+    "and oil services (OIH).")
 
 
 # ── risk profiles — how hard to lean on the high-beta / leveraged proxies ──
@@ -867,7 +865,7 @@ COMBINED_PERIODS = [
 SPOT_SYMBOLS = {
     "BTC": "BTC-USD", "MSTR": "MSTR", "MSTU": "MSTU",
     "GLDM": "GLDM", "GDX": "GDX", "UGL": "UGL",
-    "SOXX": "SOXX", "VEGN": "VEGN", "GRID": "GRID",
+    "SOXX": "SOXX", "GRID": "GRID",
     "XLE": "XLE", "OIH": "OIH", "REMX": "REMX", "WGMI": "WGMI",
     "PBW": "PBW", "ARTY": "ARTY",
 }

@@ -18,7 +18,6 @@ Every field below is re-derived for the specific asset (nothing is copied
 blindly).  The five apps are:
 
     SOXX  iShares Semiconductor ETF        (high-beta tech / semis)
-    VEGN  US Vegan Climate ETF             (ESG large-cap, broad-market tilt)
     GRID  First Trust Clean Edge Grid ETF  (grid infrastructure / electrification)
     XLE   Energy Select Sector SPDR        (energy sector; OIH = high-beta proxy)
     REMX  VanEck Rare Earth/Strategic Metals(rare-earth & strategic metals)
@@ -250,55 +249,6 @@ CONFIGS["SOXX"] = TickerConfig(
                   "0.94) on return, risk AND Sharpe, at just ~9 trades. The "
                   "training-selected 25/100 pair is identical to the full-window "
                   "optimum (no overfitting gap)."),
-)
-
-
-# ════════════════════════════════════════════════════════════════════════
-# VEGN — US Vegan Climate ETF (ESG large-cap, broad-market tilt)
-# ════════════════════════════════════════════════════════════════════════
-CONFIGS["VEGN"] = TickerConfig(
-    key="VEGN",
-    name="US Vegan Climate ETF",
-    blurb=("VEGN tracks the Beyond Investing US Large Cap index — the S&P 500 "
-           "screened to exclude animal-exploitation, fossil-fuel and defence "
-           "names. The result is a tech-tilted large-cap fund that trades very "
-           "close to the broad market, with far lower volatility than a sector ETF."),
-    emoji="🌱",
-    accent="#16a34a", accent_dark="#166534", accent_bg="#f0fdf4", accent_bg2="#dcfce7",
-    primary_symbol="VEGN",
-    macro_syms={
-        "spy": "SPY",          # broad market — VEGN's dominant driver
-        "qqq": "QQQ",          # growth / tech tilt
-        "xlk": "XLK",          # technology sector weight
-        "tnx": "^TNX",         # 10Y yield — duration, inverse
-        "dxy": "DX-Y.NYB",     # US dollar
-        "vix": "^VIX",         # equity vol
-    },
-    extra_syms={},
-    sentiment=[("spy_close", "mom", +1.0), ("tnx_close", "chg", -1.0),
-               ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
-    sentiment_label="Large-cap macro sentiment",
-    traded_assets=[("VEGN", "px_close")],
-    asset_labels={"px_close": "VEGN · ESG Large-Cap"},
-    strategy_mode="ma", strategy_name="Large-Cap Trend-Regime",
-    ma_window=200, fixed_stop=0.05,
-    hl_band_pct=0.007,
-    # VEGN launched Sept-2019: fetch from inception, hold OOS start to 2022 so the
-    # signal model has ~2.3y of pre-OOS training.
-    fetch_start="2019-09-09", oos_start="2022-01-01",
-    periods=[
-        ("🌍 Full history (Bull + Bear)", "2019-09-09", None),
-        ("🐻 Drawdown / Bear (2022)", "2022-01-01", "2022-12-31"),
-        ("🐂 Recovery / Bull (2023 → now)", "2023-01-01", None),
-        ("🌐 Full Out-of-Sample (2022 → now)", "2022-01-01", None),
-        ("🔬 Most-recent OOS (2025 → now)", "2025-01-01", None),
-    ],
-    day_up_thresh=0.005, day_down_thresh=-0.005,
-    results_note=("OOS 2022→now: +82% vs Buy&Hold +81% while HALVING the max "
-                  "drawdown (−15% vs −33%) and lifting Sharpe to 1.00 vs 0.73. "
-                  "A slow 200-day trend filter that side-steps the 2022 bear and "
-                  "stays long through the recovery — beats the market on both "
-                  "return and risk."),
 )
 
 

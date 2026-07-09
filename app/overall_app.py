@@ -958,7 +958,6 @@ signal (never its own), exactly as the dedicated apps do:
 | 🛢️ **XLE** | XLE · OIH (β) | Divergence Pure-Regime, −8% |
 | 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
 | 🖥️ **SOXX** | SOXX | MA40, −5% |
-| 🌱 **VEGN** | VEGN | MA200, −5% |
 | ⚡ **GRID** | GRID | MA150, −5% |
 | ⛏️ **WGMI** | WGMI (β) | MA30, −10% |
 
@@ -975,9 +974,9 @@ signals, positions and back-tests match each source app:
 - **GLDM / GDX / UGL** run the **Gold app's `backtest_gldm`** Divergence
   Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
   −3% stops — reproducing the Gold app's **GDX +272% / UGL +211%**.
-- **SOXX / VEGN / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
+- **SOXX / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
   entries through the same `backtest_ticker` engine their apps use (SOXX 25/100
-  dual-MA, GRID MACD 10/20/9, WGMI 50-day SMA + vol-filter, VEGN MA200, REMX &
+  dual-MA, GRID MACD 10/20/9, WGMI 50-day SMA + vol-filter, REMX &
   XLE divergence Pure-Regime). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
