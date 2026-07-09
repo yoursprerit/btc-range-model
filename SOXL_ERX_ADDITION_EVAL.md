@@ -10,8 +10,9 @@ total return** (accepting a little more drawdown)?
 
 **Implemented.** Unlike the other eval docs this one shipped: SOXL is now a
 sibling in the SOXX config and ERX in the XLE config (`app/ticker_config.py`),
-both registered `kind="lev"` in `app/overall_core.py`. Reproduce the analysis
-with:
+and **NUGT (2× gold miners)** on the gold signal (`GLDM_CFG` in
+`app/overall_core.py`) — all three registered `kind="lev"`. Reproduce the
+analysis with:
 
 ```bash
 python scripts/eval_leveraged_add.py     # SOXL / ERX / NUGT, sleeve + combined deltas
@@ -111,8 +112,8 @@ improvement, with the risk profiles ring-fencing the extra risk.**
 * **ERX** is a strict upgrade on every axis (return ↑, Sharpe ↑, drawdown ↓) and
   diversifies the tech-heavy book — the highest-quality single add.
 * **NUGT** (2× gold miners) tested as a second win-win (+53pp return, −15.8% MDD,
-  Sharpe +0.42) and is a strong optional third; it was left out of this ship to
-  avoid over-stacking the already gold-leveraged sleeve (UGL + GDX).
+  Sharpe +0.42) and **is now also shipped** as a leveraged sibling on the gold
+  signal (alongside GDX + UGL) — own strategy ~+497% / −31% / Sharpe 1.21 OOS.
 
 **Honest caveats.** SOXL is 0.99-correlated to SOXX — it *amplifies* your largest
 exposure, it does not diversify it, so its added drawdown is correlated with the

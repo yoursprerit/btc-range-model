@@ -164,6 +164,8 @@ the same way BTC drives MSTU (2×) and gold drives UGL (2×):
   it in its own Backtesting tab.
 * **ERX** (2× energy) trades off the **XLE energy-divergence** signal — alongside
   XLE and OIH.
+* **NUGT** (2× gold miners) trades off the **gold divergence** signal — alongside
+  GLDM, GDX and UGL — a leveraged win-win (own strat ~+497% / −31% / Sharpe 1.21).
 
 The long/flat rule holds each leveraged ETF **only while its parent trends up** and
 stands aside in the drawdowns where daily-rebalance decay is worst — so the strat
