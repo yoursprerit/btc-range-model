@@ -1355,8 +1355,10 @@ def _metrics_table_html(label, col):
 def render_backtest_dashboard(label, col):
     st.markdown(f"## 📊 {label} — {cfg.key} Signal-Driven Backtesting")
     render_strategy_card()
-    if cfg.stop_for(col) != cfg.fixed_stop:
-        _s = cfg.stop_for(col)
+    # read the per-asset stop from the data field (not the stop_for method) so a
+    # stale/hot-reloaded TickerConfig instance without the method can't crash.
+    _s = getattr(cfg, "stop_by_asset", {}).get(col, cfg.fixed_stop)
+    if _s != cfg.fixed_stop:
         _txt = "no fixed stop" if _s >= 0.999 else f"a wider −{_s*100:.0f}% stop"
         st.caption(f"↳ **{label}** trades the same {cfg.key} signal but with {_txt} "
                    f"(vs {cfg.stop_label} on {cfg.key}) — a 1× stop is too tight for this "

@@ -436,7 +436,9 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     last_px = float(daily[col].dropna().iloc[-1]) if col in daily else np.nan
     as_of = pd.Timestamp(dates.iloc[-1])
 
-    _stop = cfg.stop_for(col)          # per-asset stop (e.g. SOXL trades no stop)
+    # per-asset stop (e.g. SOXL trades no stop) read from the data field, not the
+    # stop_for method, so a hot-reloaded/stale config instance can't AttributeError.
+    _stop = getattr(cfg, "stop_by_asset", {}).get(col, cfg.fixed_stop)
     pos = dict(in_pos=bool(r.get("in_pos_now")), entry_px=r.get("entry_px"),
                entry_date=r.get("entry_date"), upnl=None, stop_px=None,
                days=None, dist_stop=None)
