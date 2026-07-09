@@ -3,7 +3,7 @@
 One implementation of everything that the Gold app's ``gldm_core.py`` does —
 data fetch, feature engineering, the macro-sentiment gauge and the trend-
 signature signal logic — but parameterised by a :class:`ticker_config.TickerConfig`
-so the five new apps (SOXX / VEGN / GRID / XLE / REMX) share a single, tested
+so the new apps (SOXX / GRID / XLE / REMX) share a single, tested
 codebase and stay visually and behaviourally consistent with Gold.
 
 The primary (signal) asset is always column-prefixed ``px_`` in the merged
