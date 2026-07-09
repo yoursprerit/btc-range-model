@@ -873,13 +873,12 @@ COMBINED_PERIODS = [
 # price must be the current spot, so we pull each instrument's live quote
 # separately from the Yahoo chart meta (regularMarketPrice + previous close).
 # ════════════════════════════════════════════════════════════════════════
-SPOT_SYMBOLS = {
-    "BTC": "BTC-USD", "MSTR": "MSTR", "MSTU": "MSTU",
-    "GLDM": "GLDM", "GDX": "GDX", "UGL": "UGL",
-    "SOXX": "SOXX", "GRID": "GRID",
-    "XLE": "XLE", "OIH": "OIH", "REMX": "REMX", "WGMI": "WGMI",
-    "PBW": "PBW", "ARTY": "ARTY",
-}
+# Derived from ASSET_META so every traded instrument — including newly-added
+# leveraged siblings (SOXL, ERX, NUGT, …) — always gets a live quote. A missing
+# entry silently leaves that asset's Price / Chg % on the stale daily-bar close,
+# so we build the map from the single source of truth rather than by hand. The
+# Yahoo symbol equals the key for every asset except BTC (spot ticker BTC-USD).
+SPOT_SYMBOLS = {k: ("BTC-USD" if k == "BTC" else k) for k in ASSET_META}
 
 
 def _quote(symbol: str) -> tuple:
