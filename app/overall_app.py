@@ -710,13 +710,23 @@ with tab_live:
                 ]
                 if pos["in_pos"] and pos["entry_px"]:
                     pcol = C_BUY if (pos["upnl"] or 0) >= 0 else C_EXIT
+                    # Per-asset exit: leveraged / no-stop sleeves (e.g. SOXL 3× and
+                    # WGMI) trade the SAME signal with NO fixed stop, so there is no
+                    # stop price to show — say "signal exit · no fixed stop" instead
+                    # of rendering a misleading "$0.00" (or crashing on a None
+                    # stop_px, which the old unconditional format did).
+                    _stop = res.get("stop") or 1.0
+                    if _stop < 0.999 and pos.get("stop_px"):
+                        exit_txt = (f"stop ${pos['stop_px']:,.2f} "
+                                    f"<span style='color:#94a3b8'>({_pct(pos.get('dist_stop'))})</span>")
+                    else:
+                        exit_txt = "<span style='color:#94a3b8'>signal exit · no fixed stop</span>"
                     body.append(
                         f"<div style='font-size:11.5px;line-height:1.5'>"
                         f"📍 <b>LONG</b> {pd.Timestamp(pos['entry_date']).strftime('%b %d')} "
                         f"@ ${float(pos['entry_px']):,.2f} · {pos['days']}d<br>"
                         f"P&amp;L <b style='color:{pcol}'>{_pct(pos['upnl'])}</b> · "
-                        f"stop ${pos['stop_px']:,.2f} "
-                        f"<span style='color:#94a3b8'>({_pct(pos.get('dist_stop'))})</span></div>")
+                        f"{exit_txt}</div>")
                 elif res["last_trade"]:
                     lt = res["last_trade"]; r_ = lt["ret"] * 100
                     rc = C_BUY if r_ >= 0 else C_EXIT
@@ -981,7 +991,9 @@ signals, positions and back-tests match each source app:
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert
-level, whether we're long, entry price/date, unrealised P&L, stop and days held —
+level, whether we're long, entry price/date, unrealised P&L, stop (or a
+signal-only exit for the no-stop sleeves — the 3× **SOXL** and **WGMI** carry no
+fixed stop, since a 1× stop whipsaws a leveraged/high-beta name) and days held —
 for the primary **and** each sibling (which shares the parent's entry/exit timing
 but has its own fill price and P&L). That drives the **action plan** and the
 **allocation donuts**.
