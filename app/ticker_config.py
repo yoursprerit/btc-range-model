@@ -355,6 +355,13 @@ CONFIGS["XLE"] = TickerConfig(
                   "erx_close": "ERX · 2× Energy"},
     strategy_mode="divergence", strategy_name="Energy Divergence Pure-Regime",
     ma_window=80, fixed_stop=0.08,
+    # ERX (2× energy) trades the SAME XLE divergence signal but with NO fixed stop:
+    # the XLE −8% stop only clips a few fills and never fires in the energy bear
+    # (the D2/D1 divergence exits get out first), so on the 2× it costs return and
+    # Sharpe for zero drawdown or win-rate benefit.  Signal-only exits lift ERX to
+    # ~+311% / Sharpe 1.40 at the same −17.5% MDD / 67% win-rate (see
+    # LEV_SIBLINGS_STOP_EVAL.md).  XLE and OIH keep the tuned −8% stop.
+    stop_by_asset={"erx_close": 1.0},
     u1_errhi_min=0.16, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
     use_d1_exit=True,
     hl_band_pct=0.014,
@@ -374,12 +381,14 @@ CONFIGS["XLE"] = TickerConfig(
                "broader, less-noisy read of the energy tape, so its signal steers "
                "the thin, higher-beta OIH better than OIH's own — the same reason "
                "the Gold app trades GDX/UGL off the cleaner gold signal. "
-               "**ERX (2× energy) is added off the same XLE signal**: the "
-               "divergence rule holds it only through the crude up-swings and "
-               "stands aside in the crashes where 2× decay bites, so the ERX "
-               "sleeve returns ~+280% at just a ~−17% max drawdown (Sharpe ~1.3) "
-               "OOS — and in the Overall blend it lifts return AND Sharpe AND "
-               "trims drawdown (a rare win-win). See SOXL_ERX_ADDITION_EVAL.md."),
+               "**ERX (2× energy) is added off the same XLE signal, traded "
+               "stop-less** (a 1× −8% stop only clips fills on a 2× ETF and never "
+               "fires in the energy bear): the divergence rule holds it only "
+               "through the crude up-swings and stands aside in the crashes where "
+               "2× decay bites, so the ERX sleeve returns ~+311% at just a ~−17.5% "
+               "max drawdown (Sharpe ~1.40) OOS — and in the Overall blend it "
+               "lifts return AND Sharpe AND trims drawdown (a rare win-win). See "
+               "LEV_SIBLINGS_STOP_EVAL.md."),
 )
 
 

@@ -397,12 +397,12 @@ def main():
                                     n_trades=res["n_trades"], win_rate=res["win_rate"])
 
     print(f"\n=== CHOSEN STRATEGY: {gc.STRATEGY_NAME} "
-          f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} stop={gc.FIXED_STOP*100:.0f}%) "
-          f"— traded on GDX & UGL ===")
+          f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} per-asset stops: "
+          f"GLDM/GDX −3%, UGL signal-only, NUGT −5%) — traded on GDX & UGL ===")
     out["divergence_alt"] = {}
     for asset in ("GLDM", "UGL", "GDX"):
         res = run_asset(preds, sig, asset, strategy="divergence",
-                        stop_pct=gc.FIXED_STOP, U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)
+                        stop_pct=gc.stop_for(asset), U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)
         if res is None:
             continue
         print_asset(res)

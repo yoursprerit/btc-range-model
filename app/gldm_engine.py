@@ -164,9 +164,11 @@ def run_gldm() -> list[dict]:
                    days=None, dist_stop=None)
         if pos["in_pos"] and pos["entry_px"]:
             e_px = float(pos["entry_px"]); e_dt = pd.Timestamp(pos["entry_date"])
-            pos.update(upnl=(last_px / e_px - 1) * 100, stop_px=e_px * (1 - stop),
-                       days=int((as_of - e_dt).days),
-                       dist_stop=(last_px / (e_px * (1 - stop)) - 1) * 100)
+            pos.update(upnl=(last_px / e_px - 1) * 100,
+                       days=int((as_of - e_dt).days))
+            if stop < 0.999:                       # no stop_px for a stop-less sibling (UGL)
+                pos.update(stop_px=e_px * (1 - stop),
+                           dist_stop=(last_px / (e_px * (1 - stop)) - 1) * 100)
         last_trade = r["trade_log"][-1] if r.get("trade_log") else None
         out.append(dict(
             key=key, parent="GLDM", name=meta["name"], kind=meta["kind"],

@@ -963,13 +963,13 @@ signal (never its own), exactly as the dedicated apps do:
 
 | App / signal | Traded instruments | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | BTC app's CT-model Divergence Pure-Regime |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) | Gold app's Divergence Pure-Regime, −3% |
-| 🛢️ **XLE** | XLE · OIH (β) | Divergence Pure-Regime, −8% |
+| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · BTC signal-only, MSTR/MSTU −3% |
+| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime · GLDM/GDX −3%, UGL signal-only, NUGT −5% |
+| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime · XLE/OIH −8%, ERX signal-only |
 | 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
-| 🖥️ **SOXX** | SOXX | MA40, −5% |
-| ⚡ **GRID** | GRID | MA150, −5% |
-| ⛏️ **WGMI** | WGMI (β) | MA30, −10% |
+| 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
+| ⚡ **GRID** | GRID | MACD 10/20/9, −5% |
+| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter, no stop |
 
 Every asset runs the **exact engine its own app trades**, so the Overall app's
 signals, positions and back-tests match each source app:
@@ -981,9 +981,11 @@ signals, positions and back-tests match each source app:
   reproduces the BTC app's headline **BTC +102% / MSTR +213% / MSTU +504%**. The
   CT feature data begins ~2023-11, so the BTC sleeve covers ~2024→now (the
   combined engine handles the staggered start).
-- **GLDM / GDX / UGL** run the **Gold app's `backtest_gldm`** Divergence
+- **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** Divergence
   Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
-  −3% stops — reproducing the Gold app's **GDX +272% / UGL +211%**.
+  per-asset stops — GLDM/GDX −3%, but the leveraged siblings are looser (**UGL
+  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF:
+  **GDX +272% · UGL (stop-less) +247% · NUGT +1183%**.
 - **SOXX / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
   entries through the same `backtest_ticker` engine their apps use (SOXX 25/100
   dual-MA, GRID MACD 10/20/9, WGMI 50-day SMA + vol-filter, REMX &

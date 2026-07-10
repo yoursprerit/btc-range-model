@@ -110,6 +110,18 @@ but **not ERX** (67→67%), because ERX's −8% rarely fires, so it clips fills
 without adding losing round-trips. Win-rate alone is, again, a poor guide; the
 return/Sharpe/drawdown trade-off is what drives the recommendation.
 
-*No config change is made here — this is the evaluation. ERX and UGL are the
-clean, low-risk changes to ship; NUGT wants a −5% (not stop-less); MSTU should
-wait for more history.*
+## Shipped
+
+Implemented (MSTU left at −3% pending more history):
+
+* **ERX → stop-less** — `stop_by_asset={"erx_close": 1.0}` on the XLE config
+  (`app/ticker_config.py`). Regenerated `data/xle/backtest_results.json` confirms
+  **+311.1% / −17.5% / Sharpe 1.40** OOS (was +278.6% / 1.33 at −8%).
+* **UGL → stop-less · NUGT → −5%** — `app/gldm_core.STOP_BY_ASSET`
+  (`{"GLDM": −3%, "GDX": −3%, "UGL": none, "NUGT": −5%}`) with a `stop_for()`
+  helper now used by both `gldm_engine` (Overall) and the Gold app.
+
+The XLE, Gold and Overall apps surface each sibling's per-instrument exit
+(strategy card, live position panel, description), and the XLE / Gold / Overall
+back-test artifacts were regenerated. MSTU stays at −3% — only ~6 trades of 2×
+history, too little to act on.

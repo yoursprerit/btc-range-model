@@ -246,7 +246,7 @@ def strategy_position(asset, end=None):
     col = f"{asset.lower()}_close"
     if col not in preds:
         return None
-    r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
+    r = btg.simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
                      gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, end=end)
     r["metrics"] = btg._metrics(r["strat"], r["dates"])
     r["bh_metrics"] = btg._metrics(r["bh"], r["dates"])
@@ -426,6 +426,17 @@ def net_signal(sigs):
                 reason="Flat — awaiting a Pure-Regime entry")
 
 
+def _stops_line() -> str:
+    """Per-asset fixed-stop summary for the strategy card. The leveraged siblings
+    are looser than the 1×/high-beta names: GDX −3% · UGL signal-only · NUGT −5%
+    (a tight 1× stop whipsaws a 2× ETF — see LEV_SIBLINGS_STOP_EVAL.md)."""
+    parts = []
+    for a in gc.TRADEABLE_ASSETS:
+        s = gc.stop_for(a)
+        parts.append(f"<b>{a}</b> " + ("signal-only" if s >= 0.999 else f"−{s * 100:.0f}%"))
+    return " · ".join(parts)
+
+
 def render_strategy_card():
     """Static BTC-style strategy-description card (gold theme)."""
     st.markdown(f"""
@@ -465,14 +476,15 @@ def render_strategy_card():
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① <b>D2 fade</b> — err_hi 3d-avg &lt; {gc.D2_ERRHI_MAX:+.2f}%<br>
         ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
-        ③ <b>fixed stop</b> — −{gc.FIXED_STOP*100:.0f}% from entry
+        ③ <b>fixed stop</b> (per asset) — {_stops_line()}
       </div>
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
     📈 <b>Out-of-sample 2021→now</b> (beats buy &amp; hold on return <i>and</i> drawdown):
-    GDX <b>+270%</b> vs +104% · MDD −16% vs −47% · Sharpe 1.40 &nbsp;|&nbsp;
-    UGL <b>+207%</b> vs +161% · MDD −18% vs −49% · Sharpe 1.29
+    GDX <b>+272%</b> · MDD −16% · Sharpe 1.41 &nbsp;|&nbsp;
+    UGL <i>(stop-less)</i> <b>+247%</b> · MDD −18% · Sharpe 1.37 &nbsp;|&nbsp;
+    NUGT <i>(−5%)</i> <b>+1183%</b> · MDD −28% · Sharpe 1.48
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -518,8 +530,8 @@ def render_conditions_box(sigs):
             f"err_hi 3d-avg = {sigs['err_hi_ma3']:+.3f}% (exit &lt; {gc.D2_ERRHI_MAX:+.2f}%)") + \
         row(sigs["d3_triggered"], "D3 exhaustion",
             f"consec high-breaks = {sigs['consec_hi']} then a low-break") + \
-        row(False, f"Fixed stop −{gc.FIXED_STOP*100:.0f}%",
-            "position-level — checked per open trade") + \
+        row(False, "Fixed stop (per asset)",
+            _stops_line() + " — position-level, per open trade") + \
         "</table>"
 
     st.markdown(f"""
@@ -658,18 +670,23 @@ def position_panel(asset, col_container, end=None):
         e_px = r["entry_px"]; e_date = pd.Timestamp(r["entry_date"])
         upnl = (px / e_px - 1) * 100
         col_pnl = "#16a34a" if upnl >= 0 else "#dc2626"
-        stop_px = e_px * (1 - gc.FIXED_STOP)
         days = (as_of - e_date).days
+        # per-asset stop: UGL (2× gold) trades signal-only (no fixed stop), so show
+        # that instead of a −3%/$0.00 that doesn't apply to it.
+        _stop = gc.stop_for(asset)
+        _rows = [("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
+                 ("Trigger", "U1 + Pure-Regime gate"),
+                 ("Live price", f"${px:,.2f}"),
+                 ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>")]
+        if _stop < 0.999:
+            _rows.append(("Stop (−%.0f%%)" % (_stop * 100), f"${e_px * (1 - _stop):,.2f}"))
+        else:
+            _rows.append(("Exit", "signal-only — <b>no fixed stop</b>"))
+        _rows.append(("Days held", f"{days}d"))
         html = (
             f"<div style='background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
             f"<div style='font-size:13px;font-weight:700;color:#15803d;margin-bottom:6px;'>"
-            f"📍 {label} — LONG</div>"
-            + _tbl([("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
-                    ("Trigger", "U1 + Pure-Regime gate"),
-                    ("Live price", f"${px:,.2f}"),
-                    ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>"),
-                    ("Stop (−%.0f%%)" % (gc.FIXED_STOP * 100), f"${stop_px:,.2f}"),
-                    ("Days held", f"{days}d")]) + "</div>")
+            f"📍 {label} — LONG</div>" + _tbl(_rows) + "</div>")
         col_container.markdown(html, unsafe_allow_html=True)
         return
 
@@ -1163,7 +1180,7 @@ def _metrics_table_html(asset):
                    ("Win Rate", "wr", None), ("Trades", "n", None)]
     per = []
     for lbl, s, e in _PERIODS:
-        r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
+        r = btg.simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
                          gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
         sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
         wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
@@ -1231,7 +1248,7 @@ def render_backtest_dashboard(asset):
     period_tabs = st.tabs([lbl for lbl, _, _ in _PERIODS])
     for (lbl, s, e), tb in zip(_PERIODS, period_tabs):
         with tb:
-            r = btg.simulate(preds, sig, col, gc.FIXED_STOP, gc.U1_ERRHI_MIN,
+            r = btg.simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
                              gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
             if len(r["strat"]) < 2:
                 st.info("Not enough bars in this window.")

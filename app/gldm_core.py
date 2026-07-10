@@ -117,9 +117,27 @@ TRADEABLE_ASSETS = ["GDX", "UGL", "NUGT"]   # GLDM (1x) supplies the signal only
 MA_WINDOW = 50                                   # default trend-filter window
 MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
 
-# Fixed stop per traded asset — the chosen strategy uses a shared −3% stop
-# (FIXED_STOP) across GDX and UGL.
-STOP_BY_ASSET = {"GLDM": FIXED_STOP, "UGL": FIXED_STOP, "GDX": FIXED_STOP}
+# Fixed stop per traded asset.  GLDM (1×) and GDX (high-beta miners) keep the
+# tuned −3% stop.  The leveraged siblings are looser, because a tight 1× stop
+# whipsaws a leveraged ETF (the SOXL lesson — see LEV_SIBLINGS_STOP_EVAL.md):
+#   • UGL  (2× gold)        → NO fixed stop (signal-only exits): the −3% stop cost
+#                             return + Sharpe + win-rate for ~zero drawdown benefit
+#                             (+247% / 1.37 / 67% win  vs  −3%: +211% / 1.30 / 61%).
+#   • NUGT (2× gold miners) → wider −5% stop (NOT stop-less): −5% is the sweet
+#                             spot, beating both the old −3% and stop-less on
+#                             return, Sharpe AND drawdown (+1183% / 1.48 / −28%).
+STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": FIXED_STOP, "UGL": 1.0, "NUGT": 0.05}
+
+
+def stop_for(asset: str) -> float:
+    """Per-asset fixed stop (fraction; 1.0 = no fixed stop, signal-only exits).
+    Single source of truth for the Gold app and the Gold engine so a leveraged
+    sibling's looser/absent stop is never rendered or back-tested as the −3%."""
+    return STOP_BY_ASSET.get(asset, FIXED_STOP)
+
+
+def has_stop_for(asset: str) -> bool:
+    return stop_for(asset) < 0.999
 
 # Day-type classifier return bands (gold-scaled): next-day close-to-close.
 DAY_UP_THRESH   =  0.004    # ≥ +0.4% → Trend Up

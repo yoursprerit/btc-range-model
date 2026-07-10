@@ -159,12 +159,14 @@ GLDM_CFG = TickerConfig(
     day_up_thresh=0.006, day_down_thresh=-0.006,
     results_note=("Divergence Pure-Regime — the Gold app's actual strategy: a U1 "
                   "bullish-divergence entry confirmed inside a 50-day regime "
-                  "gate, D2/D3 exits, −3% stop. The same gold signal steers GDX "
-                  "and the 2× UGL. OOS 2021→now: GLDM +73% / −11% / Sharpe 1.29, "
-                  "GDX +156% / −19% / 1.12, UGL +184% / −20% / 1.28. The same "
-                  "signal also drives the 2× gold-miners NUGT sleeve (~+497% / "
-                  "−31% / Sharpe 1.21 OOS) — a leveraged win-win in the blend "
-                  "(see SOXL_ERX_ADDITION_EVAL.md)."),
+                  "gate, D2/D3 exits, per-asset stops (GLDM/GDX −3%, but the "
+                  "leveraged siblings are looser — UGL signal-only, NUGT −5%). The "
+                  "same gold signal steers GDX and the 2× UGL. OOS 2021→now: GLDM "
+                  "+73% / −11% / Sharpe 1.29, GDX +156% / −19% / 1.12, UGL (now "
+                  "stop-less) +247% / −18% / 1.37. The same signal drives the 2× "
+                  "gold-miners NUGT sleeve — retuned to a −5% stop (vs −3%): "
+                  "+1183% / −28% / Sharpe 1.48 OOS, a leveraged win-win in the "
+                  "blend (see LEV_SIBLINGS_STOP_EVAL.md)."),
 )
 
 def overall_config(key: str) -> TickerConfig:
