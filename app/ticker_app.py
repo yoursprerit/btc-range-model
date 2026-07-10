@@ -167,6 +167,58 @@ TRADED = cfg.traded_assets                      # [(label, col), ...]
 PRIMARY_LABEL = TRADED[0][0]
 
 
+# ── per-traded-asset fixed stop ──────────────────────────────────────────
+# The app runs ONE signal but may trade several instruments off it (e.g. SOXX
+# 1× plus the 3× SOXL sibling).  Each instrument can carry its OWN fixed stop:
+# SOXX keeps its tuned −5% stop, while SOXL trades the SAME signal with NO fixed
+# stop (a −5% stop is far too tight for a 3× ETF — it whipsaws it — so SOXL exits
+# on the signal only).  These helpers read that per-asset stop so the strategy
+# card, live position panel and backtest tabs describe each instrument correctly
+# instead of implying the 1× stop applies to a leveraged sibling.  Read from the
+# data field (not the ``stop_for`` method) so a hot-reloaded/stale TickerConfig
+# instance without the method can't AttributeError.
+def _asset_stop(col):
+    return getattr(cfg, "stop_by_asset", {}).get(col, cfg.fixed_stop)
+
+
+# Siblings whose stop differs from the primary's tuned stop — surfaced so the
+# shared strategy card never implies the 1× stop governs a leveraged sibling.
+_STOP_SIBLINGS = [(lbl, col) for lbl, col in TRADED[1:]
+                  if _asset_stop(col) != cfg.fixed_stop]
+
+
+def _sibling_stop_note():
+    """One-line clarification when a traded sibling exits differently from the
+    1× primary (e.g. SOXL trades the SOXX signal with no fixed stop)."""
+    if not _STOP_SIBLINGS:
+        return ""
+    parts = []
+    for lbl, col in _STOP_SIBLINGS:
+        s = _asset_stop(col)
+        how = ("exits on the signal only — <b>no fixed stop</b>" if s >= 0.999
+               else f"uses a wider <b>−{s * 100:.0f}%</b> stop")
+        parts.append(f"<b>{lbl}</b> {how}")
+    return (f"The {cfg.stop_label} fixed stop applies to <b>{cfg.key}</b> (1×) only; "
+            + "; ".join(parts)
+            + " — a 1× stop is too tight for a leveraged sibling, so it whipsaws it.")
+
+
+def _sibling_stop_note_md():
+    """Markdown (not HTML) variant of ``_sibling_stop_note`` for st.markdown text."""
+    if not _STOP_SIBLINGS:
+        return ""
+    parts = []
+    for lbl, col in _STOP_SIBLINGS:
+        s = _asset_stop(col)
+        how = ("exits on the signal only — **no fixed stop**" if s >= 0.999
+               else f"uses a wider **−{s * 100:.0f}%** stop")
+        parts.append(f"**{lbl}** {how}")
+    return (f"The {cfg.stop_label} fixed stop applies to **{cfg.key}** (1×) only; "
+            + "; ".join(parts)
+            + " — a 1× stop is too tight for a leveraged sibling (it whipsaws it into "
+              "a much lower win-rate and Sharpe), so the sibling exits on the signal only.")
+
+
 # ════════════════════════════════════════════════════════════════════════
 # Inference helpers
 # ════════════════════════════════════════════════════════════════════════
@@ -472,6 +524,7 @@ def render_strategy_card():
       </div>
     </div>
   </div>
+  {("<div style='margin-top:10px; background:#fff7ed; border:1px solid #fdba74; border-radius:7px; padding:7px 12px; font-size:11.5px; color:#9a3412;'>🔀 <b>Per-instrument exits:</b> " + _sibling_stop_note() + "</div>") if _STOP_SIBLINGS else ""}
   <div style='margin-top:12px; font-size:11.5px; color:{ACCD};'>📈 {cfg.results_note}</div>
 </div>""", unsafe_allow_html=True)
     else:
@@ -505,6 +558,7 @@ def render_strategy_card():
       </div>
     </div>
   </div>
+  {("<div style='margin-top:10px; background:#fff7ed; border:1px solid #fdba74; border-radius:7px; padding:7px 12px; font-size:11.5px; color:#9a3412;'>🔀 <b>Per-instrument exits:</b> " + _sibling_stop_note() + "</div>") if _STOP_SIBLINGS else ""}
   <div style='margin-top:12px; font-size:11.5px; color:{ACCD};'>📈 {cfg.results_note}</div>
 </div>""", unsafe_allow_html=True)
 
@@ -857,8 +911,11 @@ def position_panel(label, col, col_container, end=None):
         rows_ = [("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
                  ("Trigger", trig), ("Live price", f"${px:,.2f}"),
                  ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>")]
-        if cfg.has_stop:
-            rows_.append(("Stop (%s)" % cfg.stop_label, f"${e_px * (1 - cfg.fixed_stop):,.2f}"))
+        _s = _asset_stop(col)
+        if _s < 0.999:
+            rows_.append(("Stop (−%.0f%%)" % (_s * 100), f"${e_px * (1 - _s):,.2f}"))
+        else:
+            rows_.append(("Exit", "signal-only — <b>no fixed stop</b>"))
         rows_.append(("Days held", f"{days}d"))
         html = (
             f"<div style='background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
@@ -1499,6 +1556,10 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     st.markdown("#### Strategy conditions (live)")
     render_conditions_box(sigs, mst, pos=primary_pos)
     st.markdown("#### Current positions")
+    if _STOP_SIBLINGS:
+        st.markdown(
+            f"<div style='font-size:12px;color:#64748b;margin:-6px 0 8px;'>↳ {_sibling_stop_note()}</div>",
+            unsafe_allow_html=True)
     pcols = st.columns(max(2, len(TRADED)))
     for (lbl, col), pc in zip(TRADED, pcols):
         position_panel(lbl, col, pc, end=end)
@@ -1572,6 +1633,8 @@ cones, and a 3-class day-type classifier.
 
 **Strategy — {cfg.strategy_name}.** {('The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%)' + (' / D1 downtrend' if cfg.use_d1_exit else '') + ' / D3 exhaustion' + (' or a fixed ' + cfg.stop_label + ' stop.' if cfg.has_stop else ' (no fixed stop).')) if IS_DIV else ('A ' + TUI['headline'] + ': ' + TUI['core'] + ', otherwise move to cash' + ((' (with a ' + cfg.stop_label + ' fixed stop).') if cfg.has_stop else '.'))} The strategy and its parameters were chosen by a per-asset search over the full price history to maximise risk-adjusted return without a drawdown worse than buy-&-hold.
 
+{('**Per-instrument exits.** ' + _sibling_stop_note_md()) if _STOP_SIBLINGS else ''}
+
 {cfg.results_note}
 
 **Honest framing.** Intraday direction is ~coin-flip (like BTC and gold); the
@@ -1579,7 +1642,10 @@ hourly model's value is a tight, well-calibrated CI, not a directional bet. The
 edge is in the trend regime and risk control — quantified in the Backtesting tabs.
 """)
     if cfg.eval_note:
-        st.markdown("#### 🛢️ XLE vs OIH — which signal drives OIH?")
+        _sibs = ", ".join(lbl for lbl, _ in TRADED[1:]) or "sibling"
+        _eval_hdr = ("🛢️ XLE vs OIH — which signal drives OIH?" if cfg.key == "XLE"
+                     else f"🔀 {_sibs} — driven off the {cfg.key} signal (and how it exits)")
+        st.markdown(f"#### {_eval_hdr}")
         st.markdown(cfg.eval_note)
     st.markdown(f"#### Model freshness (`train_end`) — {cfg.key}")
     for label, art in (("hourly close", M_HOURLY), ("daily H/L", M_HL),
