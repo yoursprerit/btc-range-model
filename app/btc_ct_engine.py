@@ -5,15 +5,15 @@ module top), but its H/L prediction + Pure-Regime backtest are byte-identically
 reproduced by the importable research module ``backtest_trailing_stop`` (which
 loads the trained CT ensemble ``models/inference_assets_ct.joblib`` and builds
 the same 116-feature matrix — price + macro + Bitcoin on-chain + Coinbase
-premium).  This module wraps it with the app's *live* per-asset entry gate and
+premium).  This module wraps it with the app's *live* entry gate and
 thresholds (U1 err_hi>+1.3% + ≥2 high-breaks, D2 exit<−1.3%, MA30 regime gate,
 regime-adaptive exit, per-asset stops, SL re-entry) so the Overall app's BTC
 sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
-BTC trades the Pure Regime gate; MSTR/MSTU trade the Standard MA (above-MA30)
-gate — the most profitable and most stable gate for the two equities.
+all three assets trade the Standard MA (above-MA30) gate — the most profitable
+and most stable gate on the current data.
 
-Verified: reproduces the BTC app's headline BTC +89% (Pure Regime) /
-MSTR +148% / MSTU +419% (Standard MA), full period Jun 2024 → May 2026.
+Verified: reproduces the BTC app's headline BTC +88% / MSTR +148% / MSTU +419%
+(all Standard MA), full period Jun 2024 → May 2026.
 
 Caveat: the CT feature data (``data/backtest/raw_features_daily.csv``) spans
 ~2023-11 → the last pull, so BTC-sleeve returns begin ~2024 (not 2021).
@@ -91,14 +91,13 @@ def _ensure_fresh_features() -> None:
 
 
 # live thresholds (btc_hourly_app.py) and per-asset entry gate + stop.
-# 2026-07 retune: BTC uses the Pure Regime gate; MSTR/MSTU the Standard MA
-# (above-MA30) gate — the most profitable and most stable gate for the two
-# equities on the current data (mirrors MSTR_STRATEGY_GATE / MSTU_STRATEGY_GATE
-# in btc_hourly_app.py).
+# 2026-07 retune: all three assets use the Standard MA (above-MA30) gate — the
+# most profitable and most stable gate on the current data (mirrors
+# BTC/MSTR/MSTU_STRATEGY_GATE in btc_hourly_app.py). Only the stop differs.
 U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
 STOP_PCT = {"BTC": None, "MSTR": 0.03, "MSTU": 0.03}   # BTC: no fixed stop
-GATE_BY_ASSET = {"BTC": "pure_regime", "MSTR": "above_ma30", "MSTU": "above_ma30"}
+GATE_BY_ASSET = {"BTC": "above_ma30", "MSTR": "above_ma30", "MSTU": "above_ma30"}
 _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
     "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.03),

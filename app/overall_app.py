@@ -976,12 +976,12 @@ signals, positions and back-tests match each source app:
 
 - **BTC / MSTR / MSTU** run the **BTC app's own trained CT model**
   (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
-  premium) with the app's live per-asset entry gate (U1>+1.3% + ≥2 high-breaks,
-  regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL re-entry) — BTC on
-  the Pure Regime gate, MSTR/MSTU on the Standard MA (above-MA30) gate. This
-  reproduces the BTC app's headline **BTC +89% / MSTR +148% / MSTU +419%**. The
-  CT feature data begins ~2023-11, so the BTC sleeve covers ~2024→now (the
-  combined engine handles the staggered start).
+  premium) with the app's live **Standard MA (above-MA30) entry gate** (U1>+1.3%
+  + ≥2 high-breaks, regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL
+  re-entry) — all three assets share the same gate. This reproduces the BTC app's
+  headline **BTC +88% / MSTR +148% / MSTU +419%**. The CT feature data begins
+  ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine handles the
+  staggered start).
 - **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** Divergence
   Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
   per-asset stops — GLDM/GDX −3%, but the leveraged siblings are looser (**UGL

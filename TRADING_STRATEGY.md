@@ -5,40 +5,46 @@
 
 ---
 
-## ⭐ 2026-07 — Per-asset entry gate: MSTR/MSTU → Standard MA (CURRENT LIVE)
+## ⭐ 2026-07 — Unified entry gate: BTC · MSTR · MSTU → Standard MA (CURRENT LIVE)
 
-The three assets share the same **U1 > +1.3% / D2 < −1.3%** thresholds, the same
-regime-adaptive D2/D3 exit, and SL5 re-entry, but now use a **per-asset entry gate**:
+All three assets now trade the **same Standard MA (above-MA30) entry gate**, sharing the
+same **U1 > +1.3% / D2 < −1.3%** thresholds, the same regime-adaptive D2/D3 exit, and SL5
+re-entry. Only the per-asset **fixed stop** differs.
 
-- **BTC → 🎯 Pure Regime** (no fixed stop): U1 AND (Bull Regime OR washed-out Clean
-  Breakout OR ⚡ V-reversal).
-- **MSTR & MSTU → 📊 Standard MA** (−3% stop): U1 AND ((above-MA30 **XOR** Clean 7d)
-  OR ⚡ V-reversal).
+- **Gate (all three):** U1 AND ((above-MA30 **XOR** Clean 7d) **OR** ⚡ V-reversal).
+- **Stops:** BTC none (D2/D3 manage risk) · MSTR −3% · MSTU −3%.
 
-**Why the switch.** On the current data the Standard MA gate is the **most profitable
-*and* most stable** gate for the two equities across both the bull and full periods —
-best Sharpe and smallest drawdown of any gate. The Pure Regime gate, by contrast, proved
-**fragile to routine BTC-bar data revisions**: because each strategy trades only ~2–6 times,
-a small revision to the 12:00-UTC BTC bars (Binance rebucketing) can shift one Pure-Regime
-entry and swing its return by 90–275 pp, whereas Standard MA barely moves (±10 pp). BTC keeps
-Pure Regime (it is the least sensitive there and carries no fixed stop).
+**Why Standard MA.** For the two equities it is the **most profitable *and* most stable**
+gate across both the bull and full periods — best Sharpe and smallest drawdown of any gate.
+The older Pure Regime gate proved **fragile to routine BTC-bar data revisions**: because each
+strategy trades only ~2–6 times, a small revision to the 12:00-UTC BTC bars (Binance
+rebucketing, plus macro/on-chain feature revisions) can shift one Pure-Regime entry and swing
+its return by 90–275 pp, whereas Standard MA is far steadier. Unifying BTC onto the same gate
+keeps the whole book on one signal.
 
 | Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) |
 |-------|------|----|----|------|---------|---------|---------|---------------|--------------|
+| **BTC** | Standard MA | **+1.3%** | −1.3% | none | +47% | **+13%** | **+88%** | 1.05 | −28% |
 | **MSTR** | Standard MA | **+1.3%** | −1.3% | −3% | +64% | **+51%** | **+148%** | 1.16 | −14% |
 | **MSTU** | Standard MA | **+1.3%** | −1.3% | **−3%** | +142% | **+115%** | **+419%** | 1.25 | −26% |
-| **BTC** | Pure Regime | **+1.3%** | −1.3% | none | +58% | **+5%** | **+89%** | 1.16 | −13% |
 
 Periods (locked): Bull Jun 2024 → May 31 2025, Bear Jun 2025 → May 2026, Full Jun 2024 →
 May 2026. Bull B&H: BTC +53%, MSTR +142%, MSTU +58%. Bear B&H: BTC −30%, MSTR −57%,
 MSTU −92%. Full B&H: BTC +6%, MSTR +4%, MSTU −76%. All three beat Buy & Hold on the full
 period; MSTR/MSTU stay firmly positive through the bear while B&H is deeply negative.
 
-*(Figures are on the 2026-07-11 committed data vintage; because the backtest recomputes
-signals from revisable BTC bars each data re-pull, absolute numbers drift modestly over time
-— which is exactly why the more stable Standard MA gate is preferred for MSTR/MSTU. The prior
+**Note on BTC.** On the full period Standard MA (+88%) ≈ Pure Regime (+89%) for BTC and is
+*better* through the bear (+13% vs +5%), but it gives up ground on **risk**: a deeper
+drawdown (−28% vs −13%) and lower Sharpe (1.05 vs 1.16), because the XOR gate holds BTC
+through choppier stretches than the Pure Regime gate did. BTC is unified onto Standard MA for
+one consistent signal across the book; if BTC risk-adjusted return is the priority, its Pure
+Regime variant remains available in the radio.
+
+*(Figures are on the committed data vintage; because the backtest recomputes signals from
+revisable BTC bars + macro/on-chain features on each data re-pull, absolute numbers drift
+over time. With only a handful of trades per period this drift can be large — the prior
 "unified Pure Regime" configuration reported MSTR +213% / MSTU +504% on the 2026-07-04
-vintage; those figures did not survive the next data refresh.)*
+vintage; those figures did not survive the next refresh. Treat magnitudes as illustrative.)*
 
 **Important caveats (this is heavy in-sample optimization):**
 - These run on **~5–6 trades per period**; the bull window is **in-sample** for the CT
