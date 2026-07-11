@@ -5,12 +5,15 @@ module top), but its H/L prediction + Pure-Regime backtest are byte-identically
 reproduced by the importable research module ``backtest_trailing_stop`` (which
 loads the trained CT ensemble ``models/inference_assets_ct.joblib`` and builds
 the same 116-feature matrix — price + macro + Bitcoin on-chain + Coinbase
-premium).  This module wraps it with the app's *live* Pure-Regime gate and
+premium).  This module wraps it with the app's *live* per-asset entry gate and
 thresholds (U1 err_hi>+1.3% + ≥2 high-breaks, D2 exit<−1.3%, MA30 regime gate,
 regime-adaptive exit, per-asset stops, SL re-entry) so the Overall app's BTC
-sleeve matches the BTC app in both live signal and back-test.
+sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
+BTC trades the Pure Regime gate; MSTR/MSTU trade the Standard MA (above-MA30)
+gate — the most profitable and most stable gate for the two equities.
 
-Verified: reproduces the BTC app's headline BTC +102% / MSTR +213% / MSTU +504%.
+Verified: reproduces the BTC app's headline BTC +89% (Pure Regime) /
+MSTR +148% / MSTU +419% (Standard MA), full period Jun 2024 → May 2026.
 
 Caveat: the CT feature data (``data/backtest/raw_features_daily.csv``) spans
 ~2023-11 → the last pull, so BTC-sleeve returns begin ~2024 (not 2021).
@@ -87,10 +90,15 @@ def _ensure_fresh_features() -> None:
         pass
 
 
-# live Pure-Regime thresholds (btc_hourly_app.py:97-98) and per-asset stops
+# live thresholds (btc_hourly_app.py) and per-asset entry gate + stop.
+# 2026-07 retune: BTC uses the Pure Regime gate; MSTR/MSTU the Standard MA
+# (above-MA30) gate — the most profitable and most stable gate for the two
+# equities on the current data (mirrors MSTR_STRATEGY_GATE / MSTU_STRATEGY_GATE
+# in btc_hourly_app.py).
 U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
 STOP_PCT = {"BTC": None, "MSTR": 0.03, "MSTU": 0.03}   # BTC: no fixed stop
+GATE_BY_ASSET = {"BTC": "pure_regime", "MSTR": "above_ma30", "MSTU": "above_ma30"}
 _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
     "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.03),
@@ -100,10 +108,12 @@ ACCENT = "#f7931a"
 EMOJI = "₿"
 
 
-# ── signals: the live Pure-Regime gate (U1>1.3 / D2<-1.3, OR gate) ────────
+# ── signals: both live entry gates (U1>1.3 / D2<-1.3) ────────────────────
+#   tf2_entry_pure = Pure Regime (OR gate)   — used for BTC
+#   tf2_entry_ma   = Standard MA (XOR gate)  — used for MSTR/MSTU
 def compute_sigs_pure(comp: pd.DataFrame) -> dict:
-    """Byte-identical to the BTC app's run_*_backtest signal arrays, with the
-    live Pure-Regime entry gate and current thresholds."""
+    """Byte-identical to the BTC app's run_*_backtest signal arrays, exposing
+    both live entry gates (Pure Regime + Standard MA) and current thresholds."""
     N = len(comp)
     c = comp["close_asof"].values.astype(float)
     ph = comp["pred_high"].values.astype(float)
@@ -149,8 +159,10 @@ def compute_sigs_pure(comp: pd.DataFrame) -> dict:
                  + (elma3[i] / max(abs(elma3[i]), .10)) * .20 + float(lo[i]) * .20)
     vbar = (dn > 0.8) & (err_lo > 3.0)
     v = np.array([bool(vbar[max(0, i - 2):i + 1].any()) for i in range(N)])
-    tf = u1 & (bull | (clean & ~above) | v)             # PURE-REGIME (OR gate)
-    return dict(d1=d1, d2=d2, d3=d3, u1=u1, bull_regime=bull, tf2_entry=tf,
+    tf_pure = u1 & (bull | (clean & ~above) | v)        # PURE-REGIME (OR gate)  — BTC
+    tf_ma   = u1 & ((above ^ clean) | v)                # STANDARD MA (XOR gate) — MSTR/MSTU
+    return dict(d1=d1, d2=d2, d3=d3, u1=u1, bull_regime=bull,
+                tf2_entry=tf_pure, tf2_entry_pure=tf_pure, tf2_entry_ma=tf_ma,
                 above_ma30=above, clean_7d=clean, v_recent=v,
                 err_hi=err_hi, err_lo=err_lo, ehma3=ehma3, elma3=elma3,
                 hb3=hb3, lb3=lb3)
@@ -276,7 +288,7 @@ def _decision(sigs, i, in_pos):
         return dict(state="AVOID", label=f"STAND ASIDE — EXIT ACTIVE ({why})",
                     ico="🟠", tone="watch")
     if entry:
-        return dict(state="ENTRY", label="ENTER — PURE-REGIME BUY", ico="🟢", tone="buy")
+        return dict(state="ENTRY", label="ENTER — STRATEGY BUY", ico="🟢", tone="buy")
     if u1:
         return dict(state="WATCH", label="WATCH — U1 (GATE PENDING)", ico="🟡", tone="watch")
     return dict(state="FLAT", label="FLAT — NO SIGNAL", ico="⬜", tone="flat")
@@ -317,7 +329,12 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
     out = []
     for key in ("BTC", "MSTR", "MSTU"):
         meta = _META[key]
-        bt = _run_bt(dates, px[key], sigs, STOP_PCT[key], sd)
+        # per-asset entry gate: BTC → Pure Regime, MSTR/MSTU → Standard MA
+        sigs_k = dict(sigs)
+        sigs_k["tf2_entry"] = (sigs["tf2_entry_ma"]
+                               if GATE_BY_ASSET[key] == "above_ma30"
+                               else sigs["tf2_entry_pure"])
+        bt = _run_bt(dates, px[key], sigs_k, STOP_PCT[key], sd)
         nav = bt["nav"]; bh = bt["bh"]
         ret = nav.pct_change().fillna(0.0).rename(key)
         pos_series = bt["pos"].rename(key)
@@ -327,7 +344,7 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
         last_px = float(px[key][last])
         prev_px = float(px[key][last - 1]) if last >= 1 else last_px
         dchg = (last_px / prev_px - 1) * 100 if prev_px else 0.0
-        dec = _decision(sigs, last, bt["open_pos"])
+        dec = _decision(sigs_k, last, bt["open_pos"])
         m = _curve_metrics(nav); bhm = _curve_metrics(bh)
         wr = 100.0 * np.mean([t["ret"] > 0 for t in bt["trades"]]) if bt["trades"] else 0.0
         pos = dict(in_pos=bt["open_pos"], entry_px=None, entry_date=None,
@@ -351,7 +368,7 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
             emoji=EMOJI, kemoji=KIND_EMOJI[meta["kind"]], accent=ACCENT,
             cap=CAP_BY_KIND[meta["kind"]],
             last_close=last_px, dchg=dchg, ma_val=None,
-            sentiment=np.nan, decision=dec, alert=_alert(sigs, last, bt["open_pos"]),
+            sentiment=np.nan, decision=dec, alert=_alert(sigs_k, last, bt["open_pos"]),
             bull_regime=bull_now, pos=pos, last_trade=last_trade, mom=mom,
             metrics=m, bh_metrics=bhm, win_rate=wr, n_trades=len(bt["trades"]),
             ret=ret, pos_series=pos_series, strat=nav.to_numpy(float),

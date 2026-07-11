@@ -1,45 +1,50 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-07-04  
+**Last updated:** 2026-07-11  
 
 ---
 
-## ⭐ 2026-07d — Raise U1 to +1.3% to cut bear losers (CURRENT LIVE)
+## ⭐ 2026-07 — Per-asset entry gate: MSTR/MSTU → Standard MA (CURRENT LIVE)
 
-All three assets share the **same signal config**: 🎯 **Pure Regime** entry,
-**U1 > +1.3%**, **D2 < −1.3%**, regime-adaptive D2/D3 exit, SL5 re-entry. Only the
-**fixed stop** differs per asset. This raises U1 from +0.9% (2026-07c) to **+1.3%** — a
-higher entry bar that filters the marginal entries which become bear-market losers.
-The effect is consistent across every asset: **one fewer losing bear trade**, higher
-bear return and shallower bear drawdown, while **bull capture is nearly maintained**
-(a few points given up) and full-period return is flat-to-higher (MSTR/BTC up, MSTU
-slightly down). Config lineage: 07c raised MSTU to Pure Regime / −3% stop; 07d raises U1.
+The three assets share the same **U1 > +1.3% / D2 < −1.3%** thresholds, the same
+regime-adaptive D2/D3 exit, and SL5 re-entry, but now use a **per-asset entry gate**:
 
-| Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | 07c (U1>0.9) |
-|-------|------|----|----|------|---------|---------|---------|-----------|
-| **MSTR** | Pure Regime | **+1.3%** | −1.3% | −3% | +125% | **+35%** | **+213%** | 131 / 27 / 205 |
-| **MSTU** | Pure Regime | **+1.3%** | −1.3% | **−3%** | +281% | **+71%** | **+504%** | 260 / 66 / 534 |
-| **BTC** | Pure Regime | **+1.3%** | −1.3% | none | +66% | **+7%** | **+102%** | 91 / 3 / 96 |
+- **BTC → 🎯 Pure Regime** (no fixed stop): U1 AND (Bull Regime OR washed-out Clean
+  Breakout OR ⚡ V-reversal).
+- **MSTR & MSTU → 📊 Standard MA** (−3% stop): U1 AND ((above-MA30 **XOR** Clean 7d)
+  OR ⚡ V-reversal).
 
-Bear losing trades per asset dropped from 3/3/2 (MSTR/MSTU/BTC at U1>0.9) to **2/2/1**
-at U1>1.3; bear max-drawdown improved (e.g. BTC −16% → −9%, MSTR −22% → −18%).
+**Why the switch.** On the current data the Standard MA gate is the **most profitable
+*and* most stable** gate for the two equities across both the bull and full periods —
+best Sharpe and smallest drawdown of any gate. The Pure Regime gate, by contrast, proved
+**fragile to routine BTC-bar data revisions**: because each strategy trades only ~2–6 times,
+a small revision to the 12:00-UTC BTC bars (Binance rebucketing) can shift one Pure-Regime
+entry and swing its return by 90–275 pp, whereas Standard MA barely moves (±10 pp). BTC keeps
+Pure Regime (it is the least sensitive there and carries no fixed stop).
 
-**Bull-period end set to 2025-05-31** (was 2025-08-16): the bull window now ends the day
-before the bear window begins (2025-06-01), so the two periods are contiguous and
-non-overlapping and the split matches the Historical Replay tab. Any trade still open at the
-cutoff is marked to its 2025-05-31 close, which drops the one summer-2025 trade the extended
-window had captured (bull trade count 3 → 2 per asset) — raising MSTU bull sharply (+232% →
-+281%), leaving MSTR ~flat (+124% → +125%) and lowering BTC bull (+89% → +66%). Bull B&H over
-this window: BTC +52%, MSTR +142%, MSTU +59%.
+| Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) |
+|-------|------|----|----|------|---------|---------|---------|---------------|--------------|
+| **MSTR** | Standard MA | **+1.3%** | −1.3% | −3% | +64% | **+51%** | **+148%** | 1.16 | −14% |
+| **MSTU** | Standard MA | **+1.3%** | −1.3% | **−3%** | +142% | **+115%** | **+419%** | 1.25 | −26% |
+| **BTC** | Pure Regime | **+1.3%** | −1.3% | none | +58% | **+5%** | **+89%** | 1.16 | −13% |
 
-Full-period B&H (unchanged, ends 2026-05-31): MSTR −2%, MSTU −76%, BTC +6%. All three beat
-Buy & Hold on the full period.
+Periods (locked): Bull Jun 2024 → May 31 2025, Bear Jun 2025 → May 2026, Full Jun 2024 →
+May 2026. Bull B&H: BTC +53%, MSTR +142%, MSTU +58%. Bear B&H: BTC −30%, MSTR −57%,
+MSTU −92%. Full B&H: BTC +6%, MSTR +4%, MSTU −76%. All three beat Buy & Hold on the full
+period; MSTR/MSTU stay firmly positive through the bear while B&H is deeply negative.
+
+*(Figures are on the 2026-07-11 committed data vintage; because the backtest recomputes
+signals from revisable BTC bars each data re-pull, absolute numbers drift modestly over time
+— which is exactly why the more stable Standard MA gate is preferred for MSTR/MSTU. The prior
+"unified Pure Regime" configuration reported MSTR +213% / MSTU +504% on the 2026-07-04
+vintage; those figures did not survive the next data refresh.)*
 
 **Important caveats (this is heavy in-sample optimization):**
-- These are the best of a ~200-config sweep on **~7 trades per period**; the bull window
-  is **in-sample** for the CT model, and MSTU's +504% rides ~2 large rally trades. The
-  gains are real in-sample but the out-of-sample confidence interval is wide.
+- These run on **~5–6 trades per period**; the bull window is **in-sample** for the CT
+  model, and MSTU's +419% rides ~2 large rally trades. The gains are real in-sample but
+  the out-of-sample confidence interval is wide, and — as the Pure-Regime → Standard-MA
+  switch above shows — the ranking of gates can shift on a data re-pull.
 - MSTU's −3% stop on a **2× ETF** is deliberately tight; an even tighter −2% backtests
   higher but is a hair-trigger (likely overfit / high real-world whipsaw) and was rejected.
 - Earlier turns evaluated a *trading-day-correct* grid that disagreed with the live 7-day
