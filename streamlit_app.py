@@ -23,10 +23,11 @@ The BTC and GLDM apps each render their OWN two-option (BTC / GLDM) selector via
 every other ``st.radio`` call passes straight through.  The generic ticker app
 renders the full list natively, so no wrapping is needed for it.
 
-``runpy.run_path`` preserves ``__file__`` as the *actual* path of the target
-module, which every app relies on to resolve the repo root.
+Each sub-app is executed as the top-level script with ``__file__`` set to its
+*actual* path, which every app relies on to resolve the repo root.  The compiled
+code object is cached across reruns (see ``_exec_app``) so the large sub-apps are
+not re-parsed on every rerun.
 """
-import runpy
 from pathlib import Path
 
 import streamlit as st
@@ -42,35 +43,63 @@ _LABELS = {"OVERALL": "🧭  Overall Trading",
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
+
+# ── sub-app execution (compile once, exec on every rerun) ────────────────────
+@st.cache_resource(show_spinner=False)
+def _compiled_app(path_str: str, _mtime: float):
+    """Compile a sub-app's source once and reuse the code object across reruns.
+
+    Streamlit runs this router on every rerun — each ~45 s auto-refresh and every
+    app switch.  The previous ``runpy.run_path`` re-read and re-compiled the target
+    file each time; for ``btc_hourly_app.py`` (~15 k lines / ~760 KB) that recompile
+    was a large, invisible tax on switch latency.  Caching on ``(path, mtime)``
+    recompiles only when the file actually changes on disk."""
+    return compile(Path(path_str).read_text(), path_str, "exec")
+
+
+def _exec_app(path: Path):
+    """Execute a sub-app as the top-level script, mirroring the ``runpy.run_path``
+    contract the apps depend on: ``__name__ == '__main__'`` and ``__file__`` set to
+    the real path (each app resolves the repo root from ``__file__``)."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    code = _compiled_app(str(path), mtime)
+    exec(code, {"__name__": "__main__", "__file__": str(path),
+                "__builtins__": __builtins__})
+
+
 # ── routing ────────────────────────────────────────────────────────────────
-# Every app is one script run of this router that runpy-executes the selected
-# sub-app.  The selected app is persisted in the URL (``?app=...``) so a shared or
-# refreshed link lands on the right app, and the heavy per-app compute stays warm
-# in ``st.cache_data`` across runs, so switching back and forth is cheap.
+# Every app is one script run of this router that executes the selected sub-app.
+# The selected app is persisted in the URL (``?app=...``) so a shared or refreshed
+# link lands on the right app, and the heavy per-app compute stays warm in
+# ``st.cache_data`` across runs, so switching back and forth is cheap.
+#
+# Resolution order: the sidebar radio widget (``gldm_active_app`` in session
+# state) wins, because on the run right after a click Streamlit has already
+# committed the new selection there; otherwise fall back to the URL, then to a
+# sane default.
 _qp_app = st.query_params.get("app")
 _widget_app = st.session_state.get("gldm_active_app")
 _choice = _widget_app or _qp_app or "OVERALL"
 if _choice not in _ALL_APPS:
     _choice = "OVERALL"
 
-# A real switch = the user picked an app (widget) different from what the URL has
-# currently loaded.  Sync the URL and re-run cleanly so *only* the newly-selected
-# app renders.
+# Sync the URL + selector widget to the resolved choice, then render that app in
+# the SAME run.  On a switch, ``_widget_app`` already holds the app the user just
+# clicked, so rendering ``_choice`` now *is* the switch taking effect — a single
+# pass, no round-trip.
 #
-# Earlier this tried to hard-reload the browser via an injected
-# ``components.html("<script>window.parent.location.reload()</script>")``.  That can
-# never work: Streamlit renders components in an iframe whose sandbox does NOT grant
-# ``allow-top-navigation``, so the browser blocks any attempt to reload/navigate the
-# parent window ("Unsafe attempt to initiate navigation … the frame … is sandboxed").
-# The reload silently failed, the branch ``st.stop()``-ed before rendering anything,
-# and the app was left frozen on the previous page — e.g. stuck on SOXX when switching
-# to Overall Trading.  A server-side ``st.rerun`` re-runs the router from the top with
-# the URL already pointing at the new app, so the switch always takes.
-if _qp_app is not None and _widget_app is not None and _widget_app != _qp_app:
-    st.query_params["app"] = _choice
-    st.session_state["gldm_active_app"] = _choice
-    st.rerun()
-
+# An earlier version issued an ``st.rerun()`` here whenever the widget and the URL
+# disagreed, so every switch cost TWO full script executions: the first only
+# re-pointed the URL and bailed via ``st.rerun`` *before rendering anything*,
+# leaving an empty intermediate frame (the previous app "ghosting" under a
+# spinner) and roughly doubling the time-to-switch — long enough that users
+# re-clicked the radio, queuing more reruns and dropping clicks.  (Older still was
+# an injected ``window.parent.location.reload()``, which a sandboxed Streamlit
+# component iframe silently blocks — it froze the app on the previous page.)
+# Rendering the resolved choice directly avoids both.
 st.query_params["app"] = _choice                     # keep the URL in sync
 st.session_state["gldm_active_app"] = _choice        # seed the selector widget
 
@@ -92,7 +121,7 @@ st.set_page_config = lambda *a, **k: None            # sub-apps' calls become no
 def _run_choice():
     if _choice == "OVERALL":
         # The combined cross-asset cockpit renders its own full selector.
-        runpy.run_path(str(_APP_DIR / "overall_app.py"), run_name="__main__")
+        _exec_app(_APP_DIR / "overall_app.py")
     elif _choice in ("BTC", "GLDM"):
         # Upgrade the original app's built-in BTC/GLDM selector to the full list,
         # without touching the app source.  Only the ``gldm_active_app`` widget is
@@ -109,12 +138,12 @@ def _run_choice():
         st.radio = _patched_radio
         try:
             _target = "gldm_hourly_app.py" if _choice == "GLDM" else "btc_hourly_app.py"
-            runpy.run_path(str(_APP_DIR / _target), run_name="__main__")
+            _exec_app(_APP_DIR / _target)
         finally:
             st.radio = _orig_radio
     else:
         # One of the new tickers — the generic app renders the full selector.
-        runpy.run_path(str(_APP_DIR / "ticker_app.py"), run_name="__main__")
+        _exec_app(_APP_DIR / "ticker_app.py")
 
 
 try:
