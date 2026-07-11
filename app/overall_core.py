@@ -633,6 +633,65 @@ def curve_metrics(equity: pd.Series) -> dict:
     return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
 
 
+def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
+                   pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
+                   chunk: int | None = None):
+    """Vectorised ``curve_metrics(_equity(_combine(...)))`` over MANY weight
+    vectors at once.
+
+    Evaluating the optimiser's ~20 000-sample Monte-Carlo one candidate at a
+    time — each building a ``pd.Series`` in ``_combine``/``_equity`` — cost ~10 s
+    per profile (×3 profiles at first load).  This does the identical maths in
+    batched numpy: a handful of array passes instead of 20 000 Python/pandas
+    round-trips.  For a single row it is bit-for-bit equal to ``_combine`` →
+    ``_equity`` → ``curve_metrics``.  Returns five arrays aligned to ``cand``'s
+    rows: ``(total_ret, cagr, mdd, sharpe, vol)``.  Candidates are processed in
+    chunks so the transient ``(chunk, T, N)`` array stays small."""
+    R = returns.to_numpy(float)
+    A = returns.notna().to_numpy()                       # (T, N) availability
+    F = np.nan_to_num(R)                                 # (T, N) returns, 0 where NaN
+    idx = returns.index
+    yrs = max((idx[-1] - idx[0]).days / 365.25, 1e-9)
+    use_sata = pos is not None and bool(sata_daily)
+    if use_sata:
+        idle_w = (1.0 - np.nan_to_num(pos.reindex(idx).to_numpy())) * A   # (T, N)
+    C = np.asarray(cand, float)
+    M, N = C.shape
+    T = R.shape[0]
+    if chunk is None:                                    # bound the (b, T, N) temp
+        chunk = max(1, 3_000_000 // max(T * N, 1))
+    tot = np.empty(M); cag = np.empty(M); mdd = np.empty(M)
+    shp = np.empty(M); vlt = np.empty(M)
+    sq = np.sqrt(TRADING_DAYS)
+    for s0 in range(0, M, chunk):
+        Wb = C[s0:s0 + chunk]                            # (b, N)
+        b = slice(s0, s0 + Wb.shape[0])
+        wt = A[None, :, :] * Wb[:, None, :]              # (b, T, N)
+        denom = wt.sum(axis=2)                           # (b, T)
+        zero = denom == 0
+        # Long-only weights ⇒ a zero row has every ``wt`` zero, so dividing by 1
+        # there yields ew = 0 (and ``port[zero]`` is overwritten below regardless).
+        # Avoiding the NaN sentinel lets us skip nan_to_num / nansum — the two
+        # dominant costs — and use plain division + sum on already-NaN-free arrays.
+        ew = wt / np.where(zero, 1.0, denom)[:, :, None]
+        port = (ew * F[None, :, :]).sum(axis=2)          # (b, T)
+        if use_sata:
+            port = port + sata_daily * (ew * idle_w[None, :, :]).sum(axis=2)
+            port[zero] = sata_daily
+        else:
+            port[zero] = 0.0
+        eq = np.cumprod(1.0 + port, axis=1)              # (b, T)
+        e0 = eq[:, 0]; eL = eq[:, -1]
+        tot[b] = eL / e0 - 1.0
+        cag[b] = (eL / e0) ** (1.0 / yrs) - 1.0
+        mdd[b] = np.min(eq / np.maximum.accumulate(eq, axis=1) - 1.0, axis=1)
+        drets = np.diff(eq, axis=1) / eq[:, :-1]         # (b, T-1)
+        sd = np.std(drets, axis=1)
+        vlt[b] = sd * sq
+        shp[b] = np.mean(drets, axis=1) / (sd + 1e-12) * sq
+    return tot, cag, mdd, shp, vlt
+
+
 def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
                      n_samples: int = 20000, seed: int = 7, mdd_floor: float = -0.35,
                      pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
@@ -663,22 +722,27 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     ew_c = _cap_normalise(ew, cap_vec)
     cand = np.vstack([samples, ew_c, rp]) if len(samples) else np.vstack([ew_c, rp])
 
-    # Evaluate every candidate once, then choose in two stages so the result
-    # both maximises risk-adjusted return AND grabs the most raw return among
-    # near-optimal blends — matching the "maximise returns, minimise losses"
-    # mandate rather than a purely defensive max-Sharpe point.
-    evals = [(w, _cm(w)) for w in cand]
-    feasible = [(w, mm) for w, mm in evals if mm["mdd"] >= mdd_floor]
-    pool = feasible if feasible else evals
+    # Evaluate every candidate once (vectorised — see _metrics_batch), then choose
+    # in two stages so the result both maximises risk-adjusted return AND grabs the
+    # most raw return among near-optimal blends — matching the "maximise returns,
+    # minimise losses" mandate rather than a purely defensive max-Sharpe point.
+    # np.argmax returns the FIRST maximiser, so ties break in candidate order,
+    # exactly as the previous ``max(pool, key=...)`` did.
+    tot, cag, mdd_a, shp, vlt = _metrics_batch(returns, cand, pos, sata_daily)
+    feas = np.nonzero(mdd_a >= mdd_floor)[0]
+    pool = feas if feas.size else np.arange(len(cand))
     if objective == "max_return":
         # highest raw return inside the drawdown budget — leans on β / 2×
-        w_opt, m_opt = max(pool, key=lambda x: x[1]["total_ret"])
+        sel = pool[int(np.argmax(tot[pool]))]
     elif objective == "max_sharpe":
-        w_opt, m_opt = max(pool, key=lambda x: x[1]["sharpe"])
+        sel = pool[int(np.argmax(shp[pool]))]
     else:  # "balanced" — highest return among near-max-Sharpe blends
-        best_sharpe = max(mm["sharpe"] for _, mm in pool)
-        near = [(w, mm) for w, mm in pool if mm["sharpe"] >= 0.92 * best_sharpe]
-        w_opt, m_opt = max(near, key=lambda x: x[1]["total_ret"])
+        best_sharpe = float(shp[pool].max())
+        near = pool[shp[pool] >= 0.92 * best_sharpe]
+        sel = near[int(np.argmax(tot[near]))]
+    w_opt = cand[sel]
+    m_opt = dict(total_ret=float(tot[sel]), cagr=float(cag[sel]), mdd=float(mdd_a[sel]),
+                 sharpe=float(shp[sel]), vol=float(vlt[sel]))
 
     def _pack(w):
         return {c: float(x) for c, x in zip(cols, np.asarray(w, float))}
