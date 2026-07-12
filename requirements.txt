@@ -1,27 +1,27 @@
 # Runtime dependencies for btc-range-model
 #
-# IMPORTANT — do NOT put an upper bound on `streamlit` (or other packages the
-# hosting platform manages). Streamlit Community Cloud force-installs its own
-# streamlit version; a cap here makes the dependency resolver fail, which aborts
-# the whole install and leaves the app running on a base image that is missing
-# app-only packages such as plotly (→ ModuleNotFoundError: plotly).
+# Streamlit Community Cloud IGNORES runtime.txt and force-installs the newest
+# Python (currently 3.14). Every pin here must therefore have a Python-3.14
+# wheel — otherwise the platform tries to BUILD it from source, which hangs the
+# deploy on the "in the oven" screen. That means: no upper bounds that would
+# exclude the 3.14-wheel builds, and scikit-learn kept on the 1.9 line (the
+# oldest sklearn that ships cp314 wheels).
 #
-# The one hard pin that matters is scikit-learn: the trained model
-# (models/inference_assets_ct.joblib) is pickled with scikit-learn 1.8.0, and
-# loading it under a different minor version raises InconsistentVersionWarning
-# and can segfault when predicting through the Cython tree ensembles. Keep numpy
-# and pandas off the bleeding-edge majors the app was not validated against, but
-# with generous ranges so they never collide with the platform's own packages.
-# Validated on Python 3.12 (pip + uv): numpy 2.1.3 · pandas 2.2.3 ·
-# scikit-learn 1.8.0 · scipy 1.14.1 · pyarrow 25 — model loads with no version
-# warning and `streamlit run` starts with no segfault.
+# The trained model (models/inference_assets_ct.joblib) is serialized with
+# scikit-learn 1.9.0 (predictions verified byte-identical to the previous 1.8.0
+# build), so it loads with no version-mismatch warning. Do NOT re-pin sklearn to
+# 1.8.0: that version has no cp314 wheel and reintroduces the oven hang.
+#
+# Verified on Python 3.13 (uv, --only-binary): all wheels, model loads clean,
+# full model-predict pipeline runs with no segfault.
 
-# Core scientific stack
-numpy>=1.26,<2.3          # block numpy 2.3/2.4 bleeding edge; wide enough to co-resolve
-pandas>=2.1,<3            # block pandas 3.x (untested majors); allow all 2.x
+# Core scientific stack — floors only (need the newest, 3.14-wheel builds)
+numpy>=1.26
+pandas>=2.1
 scipy>=1.11
-scikit-learn==1.8.0       # MUST match the pickled model's version
+scikit-learn>=1.9,<1.10   # matches the serialized model; 1.9 ships cp314 wheels
 joblib>=1.3
+pyarrow>=14
 
 # Data feeds
 yfinance>=0.2.40
