@@ -83,9 +83,16 @@ def _ensure_fresh_features() -> None:
                 pass
         _PULL_GUARD.write_text(now.isoformat())     # stamp before running
         import subprocess
-        subprocess.run([sys.executable, str(_PULL_SCRIPT)], cwd=str(_REPO),
-                       timeout=360, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Fire-and-forget — NEVER block the Streamlit render on a network pull.
+        # This bar's render uses the existing committed CSV; the detached pull
+        # freshens it for a later render. A synchronous subprocess.run() here
+        # blocked the first render for up to its timeout (~6 min) on a cold boot
+        # with stale data — long enough that Streamlit Cloud's boot health-check
+        # gave up and the app was stuck "in the oven" / crash-looped.
+        subprocess.Popen([sys.executable, str(_PULL_SCRIPT)], cwd=str(_REPO),
+                         stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     except Exception:
         pass
 
