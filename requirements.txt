@@ -1,18 +1,34 @@
 # Runtime dependencies for btc-range-model
-# Pinned to the major versions known to work; relax if needed.
+#
+# The ABI-critical scientific stack is UPPER-BOUNDED, not just floored. A prior
+# deploy segfaulted after a reboot because the loose ">=" pins let a fresh
+# install pull bleeding-edge majors (numpy 2.4 / pandas 3.0 / scikit-learn 1.9)
+# whose native ABIs did not match each other or the serialized model.
+#
+# The trained model (models/inference_assets_ct.joblib) is pickled with
+# scikit-learn 1.8.0; loading it under a different minor version raises
+# InconsistentVersionWarning and can segfault when predicting through the
+# Cython tree ensembles. Keep scikit-learn pinned to the training version and
+# hold numpy/pandas/scipy on the majors the app + model were validated against.
+# Validated together: numpy 2.1.3 · pandas 2.2.3 · scipy 1.14.1 ·
+# scikit-learn 1.8.0 · joblib 1.5.3 · pyarrow 25.
 
-# Core scientific stack
-numpy>=1.26
-pandas>=2.1
-scikit-learn>=1.8.0
-joblib>=1.3
+# Core scientific stack (ABI-critical — keep the upper bounds)
+numpy>=1.26,<2.2
+pandas>=2.1,<2.3
+scipy>=1.11,<1.15
+scikit-learn==1.8.0        # MUST match the pickled model's version
+joblib>=1.3,<1.6
+# Streamlit serialises dataframes through pyarrow; keep it off the bleeding edge
+# so its native ABI stays compatible with the pinned numpy/pandas.
+pyarrow>=14,<26
 
 # Data feeds
 yfinance>=0.2.40
 requests>=2.31
 
 # Web app
-streamlit>=1.30
+streamlit>=1.30,<1.42
 plotly>=5.18
 # Live auto-refresh of the Overall Trading price column (optional — the app
 # degrades gracefully to click/reload refresh if this is unavailable).
