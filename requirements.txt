@@ -1,27 +1,33 @@
 # Runtime dependencies for btc-range-model
 #
-# Streamlit Community Cloud IGNORES runtime.txt and force-installs the newest
-# Python (currently 3.14). Every pin here must therefore have a Python-3.14
-# wheel — otherwise the platform tries to BUILD it from source, which hangs the
-# deploy on the "in the oven" screen. That means: no upper bounds that would
-# exclude the 3.14-wheel builds, and scikit-learn kept on the 1.9 line (the
-# oldest sklearn that ships cp314 wheels).
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ DEPLOY THIS APP ON PYTHON 3.12.                                          │
+# │ Set it in Streamlit Community Cloud → Manage app → Settings (or the      │
+# │ "Advanced settings" dialog when you (re)deploy). runtime.txt is IGNORED  │
+# │ by Streamlit Cloud (streamlit issue #15326), and the platform default    │
+# │ (Python 3.14) segfaults this app's native ML stack at runtime.           │
+# └─────────────────────────────────────────────────────────────────────────┘
 #
-# The trained model (models/inference_assets_ct.joblib) is serialized with
-# scikit-learn 1.9.0 (predictions verified byte-identical to the previous 1.8.0
-# build), so it loads with no version-mismatch warning. Do NOT re-pin sklearn to
-# 1.8.0: that version has no cp314 wheel and reintroduces the oven hang.
+# Why 3.12: the trained model (models/inference_assets_ct.joblib) is pickled
+# with scikit-learn 1.8.0. On Python 3.14 the only installable builds are the
+# bleeding-edge numpy 2.5 / pandas 3.0 / scikit-learn 1.9 wheels, whose native
+# ABI combination SEGFAULTS after the UI renders (confirmed on the deployed app;
+# not reproducible on 3.12/3.13 with the pinned set below). scikit-learn 1.8.0
+# also has no cp314 wheel, so on 3.14 it would build from source and hang the
+# deploy ("in the oven"). Python 3.12 has wheels for the exact tested set and
+# runs cleanly.
 #
-# Verified on Python 3.13 (uv, --only-binary): all wheels, model loads clean,
-# full model-predict pipeline runs with no segfault.
+# Validated together on Python 3.12 (uv + pip): model loads with no version
+# warning, full model-predict pipeline runs with no segfault, streamlit starts.
+# numpy 2.1.3 · pandas 2.2.3 · scipy 1.14.1 · scikit-learn 1.8.0 · pyarrow 25.
 
-# Core scientific stack — floors only (need the newest, 3.14-wheel builds)
-numpy>=1.26
-pandas>=2.1
-scipy>=1.11
-scikit-learn>=1.9,<1.10   # matches the serialized model; 1.9 ships cp314 wheels
-joblib>=1.3
-pyarrow>=14
+# Core scientific stack — upper-bounded to the tested, no-segfault majors
+numpy>=1.26,<2.3
+pandas>=2.1,<2.3
+scipy>=1.11,<1.15
+scikit-learn==1.8.0       # MUST match the pickled model
+joblib>=1.3,<1.6
+pyarrow>=14,<26           # Streamlit's dataframe serializer — keep off the bleeding edge
 
 # Data feeds
 yfinance>=0.2.40
