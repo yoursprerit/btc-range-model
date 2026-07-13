@@ -12008,6 +12008,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          "BULL regime → re-enter next valid signal · BEAR/Neutral → wait 10 bars",
          "regime-adaptive cooldown avoids dead-cat re-entries",
          False, False),
+        ("Post-stop re-entry override",
+         "MSTR/MSTU: within 12 bars of a stop, a fresh U1 above MA30 re-admits (bypasses XOR block)",
+         "recovers post-capitulation rallies the stop+XOR block used to lock the leveraged sleeves out of (e.g. Apr 2025); BTC unaffected",
+         False, False),
     ]
     st.markdown(
         _sig_card(
@@ -12027,7 +12031,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "both-true and neither-true states. "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 AND MA30 rising) → D3 only (patient); "
                 "<b>BEAR/Neutral</b> → D2 or D3 (defensive). "
-                "Per-asset fixed stop: MSTR/MSTU −3% (SL5 re-entry), BTC none."
+                "Per-asset fixed stop: MSTR/MSTU −3% (SL5 re-entry + post-stop re-entry "
+                "override — a fresh U1 above MA30 re-admits within 12 bars of a stop, so "
+                "the leveraged sleeves recover post-capitulation rallies), BTC none."
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
