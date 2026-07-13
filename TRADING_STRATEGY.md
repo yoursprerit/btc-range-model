@@ -1,11 +1,53 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-07-11  
+**Last updated:** 2026-07-13  
 
 ---
 
-## ⭐ 2026-07 — Unified entry gate: BTC · MSTR · MSTU → Standard MA (CURRENT LIVE)
+## ⭐ 2026-07b — Post-stop re-entry override: MSTR/MSTU recover post-capitulation rallies (CURRENT LIVE)
+
+**Problem diagnosed.** In the mid-April → mid-May 2025 rally (BTC ~$76k → ~$111k, +45%),
+**BTC captured the move** (+44% via a single V-reversal entry at the low — it has no stop),
+but **MSTR and MSTU missed it entirely.** Both entered the same Apr 9 V-reversal bounce and
+were **stopped out the next day** (−8.3% / −15.8% on the fixed −3% close stop), then the XOR
+"combined-filter" late-cycle block **vetoed every subsequent re-entry** (U1 fired on Apr 22,
+Apr 24, May 8, May 19–21 — all blocked because the market was `above-MA30 AND clean`
+simultaneously). The leveraged sleeves got the worst of both worlds: stopped at the low, then
+locked out of the recovery.
+
+Signature-threshold retuning (fit on data ≤ Feb 28 2026, the model's in-sample cutoff)
+**could not fix this without a net loss**: the only threshold that reopens re-entry is D2, but
+D2 is also the exit signal, so loosening it (−1.3 → −1.0) captured the rally but cut Full/Bear
+returns across all assets. U1, D1 and V-reversal thresholds don't touch the re-entry block at
+all. **The signature thresholds are already near-optimal** — the retune reconfirms
+`U1 > +1.3%`, `D2 < −1.3%`, `D1 lo≥2 & err_lo>+0.5%`, `V-rev dn>0.8 & err_lo>+3%`.
+
+**The fix is structural, not a threshold — a post-stop re-entry override** (leveraged sleeves
+only; `REENTRY_OVERRIDE_BARS = 12`). Within 12 bars of a fixed-stop exit, a fresh **U1 above
+the MA30** re-admits the position even when the XOR block would veto. It is surgical: it fires
+**only** right after a stopped-out capitulation (where big rallies begin), never in normal
+late-cycle conditions. Stable across a 12–20 bar window; **Bear and OOS periods are unchanged**;
+**BTC (no stop) is untouched.**
+
+| Asset | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) | Δ vs prior (Full) | mid-Apr→mid-May 2025 |
+|-------|---------|---------|---------|---------------|--------------|-------------------|----------------------|
+| **BTC**  | +47%  | +13%  | **+88%**  | 1.05 | −28% | — (unchanged) | ✅ +29% (already caught) |
+| **MSTR** | +77%  | +51%  | **+165%** | 1.10 | −20% | **+17 pp** (clean win) | ✅ +16% (was 0%) |
+| **MSTU** | +165% | +115% | **+396%** | 1.12 | −39% | −23 pp; deeper DD | ✅ +31% (was 0%) |
+
+**MSTR is a clean win** (Full +148%→+165%, Bull +64%→+77%, Bear/OOS unchanged, small DD
+increase). **MSTU is a genuine risk/return trade** on the 2× fund: it captures the rally
+(Bull +142%→+165%) but its Full return dips (+419%→+396%) and max drawdown deepens
+(−26%→−39%), because MSTU's headline is dominated by ~2 mega-trades and the extra rally
+exposure adds tail risk more than cumulative return. **OOS (Mar→Jul 2026) is identical with
+and without the override** for both — the fix targets the in-sample April 2025 lockout and adds
+no OOS risk. Full end-to-end backtest tables are in the next section; the override lives in
+`REENTRY_OVERRIDE_BARS` (`app/btc_hourly_app.py` and `app/btc_ct_engine.py`).
+
+---
+
+## ⭐ 2026-07 — Unified entry gate: BTC · MSTR · MSTU → Standard MA
 
 All three assets now trade the **same Standard MA (above-MA30) entry gate**, sharing the
 same **U1 > +1.3% / D2 < −1.3%** thresholds, the same regime-adaptive D2/D3 exit, and SL5
@@ -13,6 +55,7 @@ re-entry. Only the per-asset **fixed stop** differs.
 
 - **Gate (all three):** U1 AND ((above-MA30 **XOR** Clean 7d) **OR** ⚡ V-reversal).
 - **Stops:** BTC none (D2/D3 manage risk) · MSTR −3% · MSTU −3%.
+- **Re-entry:** SL5 regime-adaptive **+ post-stop re-entry override** (2026-07b — see section above).
 
 **Why Standard MA.** For the two equities it is the **most profitable *and* most stable**
 gate across both the bull and full periods — best Sharpe and smallest drawdown of any gate.
@@ -25,8 +68,11 @@ keeps the whole book on one signal.
 | Asset | Gate | U1 | D2 | Stop | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) |
 |-------|------|----|----|------|---------|---------|---------|---------------|--------------|
 | **BTC** | Standard MA | **+1.3%** | −1.3% | none | +47% | **+13%** | **+88%** | 1.05 | −28% |
-| **MSTR** | Standard MA | **+1.3%** | −1.3% | −3% | +64% | **+51%** | **+148%** | 1.16 | −14% |
-| **MSTU** | Standard MA | **+1.3%** | −1.3% | **−3%** | +142% | **+115%** | **+419%** | 1.25 | −26% |
+| **MSTR** | Standard MA | **+1.3%** | −1.3% | −3% | +77% | **+51%** | **+165%** | 1.10 | −20% |
+| **MSTU** | Standard MA | **+1.3%** | −1.3% | **−3%** | +165% | **+115%** | **+396%** | 1.12 | −39% |
+
+*(MSTR/MSTU rows include the 2026-07b post-stop re-entry override. Pre-override they were
+MSTR +64%/+51%/+148% (Sharpe 1.16, DD −14%) and MSTU +142%/+115%/+419% (Sharpe 1.25, DD −26%).)*
 
 Periods (locked): Bull Jun 2024 → May 31 2025, Bear Jun 2025 → May 2026, Full Jun 2024 →
 May 2026. Bull B&H: BTC +53%, MSTR +142%, MSTU +58%. Bear B&H: BTC −30%, MSTR −57%,

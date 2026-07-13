@@ -10,6 +10,17 @@ out-of-sample version of itself.
 **Windows:** portfolio weights fit on **2021 only** (through 2021-12-31), frozen, and
 applied **untouched to 2022-01-01 → now** (~4.5-year out-of-sample holdout).
 
+> **Update 2026-07b.** The BTC/MSTR/MSTU sleeves now include the **post-stop re-entry
+> override** (`REENTRY_OVERRIDE_BARS`; see [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)
+> §2026-07b) and the committed `data/overall/overall_results.json` was regenerated with it.
+> The override's effect on the *Overall* portfolio is **small** — isolated on identical data,
+> Aggressive total return moves ~2376%→2367% (CAGR 78.9%→78.8%), Balanced max-drawdown
+> **improves** −9.8%→−9.2%, Sharpe ≈ flat, and the optimal weights are essentially unchanged
+> (MSTR ≈ 0.238). The BTC sleeve is unchanged; the MSTR sleeve gain (~+20 pp) roughly offsets
+> the MSTU give-back (~−31 pp). The decomposition and conclusions below are unaffected.
+> *(The advertised headline figures below reflect the prior live-pulled artifact vintage; the
+> regenerated artifact is now reproducible offline from committed repo data.)*
+
 ---
 
 ## Question

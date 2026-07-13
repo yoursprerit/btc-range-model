@@ -337,6 +337,24 @@ dn_count = D1 + D2 + D3
 > **Note on `clean_10d` naming:** The variable is named `clean_10d` throughout the codebase
 > for historical reasons but the actual look-back is **7 bars** (indices `i-7` to `i-1`).
 
+### Post-stop re-entry override (2026-07b — leveraged sleeves)
+
+The fixed-stop sleeves (MSTR/MSTU) add a **post-stop re-entry override** so they can recover
+a post-capitulation rally instead of being stopped at the low and then locked out by the XOR
+combined-block. Within `REENTRY_OVERRIDE_BARS = 12` bars of a stop-out, a fresh `U1` above the
+MA30 re-admits the position even when `above_ma30 XOR clean_7d` is False:
+
+```python
+# equity sleeves only (BTC has no stop, so from_sl is never True → BTC unaffected)
+reentry_override = (from_sl and bars_since_sl <= 12 and U1 and above_ma30 and not exit_now)
+enter = (TF1_entry and sl5_reentry_ok and (from_sl or not exit_now)) or reentry_override
+```
+
+It fires **only** just after a stopped-out capitulation (where the most explosive rallies
+begin) — never in normal late-cycle conditions — so the bear and OOS periods are unchanged.
+This is what let the mid-Apr→mid-May 2025 rally be captured on MSTR (+16%) and MSTU (+31%)
+after both were stopped out on Apr 10; see [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) §2026-07b.
+
 The Streamlit dashboard renders a "Trend Alert" card with live values for all conditions
 alongside the H/L band, 7-day cone, and 3-class outputs.
 
