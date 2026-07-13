@@ -15370,6 +15370,13 @@ with tab_btc:
     _ds_ver_btc = _backtest_dataset_version()
     _ds_mtime   = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_btc} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
+    st.info(
+        "🔁 **Re-entry:** BTC has **no stop-loss**, so the **post-stop re-entry override** "
+        "(2026-07b — a fresh U1 above the MA30 that re-admits within 12 bars of a stop, "
+        "bypassing the XOR gate) **does not apply here**. It exists only on the stopped "
+        "leveraged sleeves (MSTR/MSTU), where it recovers post-capitulation rallies (e.g. "
+        "mid-Apr→mid-May 2025). BTC exits are managed entirely by the D2/D3 regime rules."
+    )
     _btc_variant = st.radio(
         "Entry gate variant",
         options=["above_ma30", "pure_regime", "bull_regime", "pure_regime_sata"],
@@ -15437,6 +15444,13 @@ with tab_mstr:
     _ds_ver_mstr = _backtest_dataset_version()
     _ds_mtime_mstr = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_mstr} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
+    st.info(
+        "🔁 **Post-stop re-entry override (2026-07b):** after a fixed −3% stop, a fresh "
+        "**U1 above the MA30 re-admits within 12 bars**, bypassing the XOR combined-block. "
+        "This recovers post-capitulation rallies (e.g. mid-Apr→mid-May 2025) that the "
+        "stop + XOR block used to lock MSTR out of — **lifting Full +148%→+165%** — on top of "
+        "the SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
+    )
     _mstr_variant = st.radio(
         "Entry gate variant",
         options=["above_ma30", "pure_regime", "bull_regime", "pure_regime_sata"],
@@ -15506,6 +15520,13 @@ with tab_mstu:
     _ds_ver_mstu = _backtest_dataset_version()
     _ds_mtime_mstu = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_mstu} · pulled via `scripts/pull_backtest_data.py` · OLS β≈1.96 · all QC checks passed")
+    st.info(
+        "🔁 **Post-stop re-entry override (2026-07b):** after a fixed −3% stop, a fresh "
+        "**U1 above the MA30 re-admits within 12 bars**, bypassing the XOR combined-block. "
+        "This captures the mid-Apr→mid-May 2025 rally MSTU used to miss (**Bull +142%→+165%**); "
+        "on the 2× fund it trades a deeper max drawdown (−26%→−39%) for the extra rally exposure. "
+        "Applied on top of SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
+    )
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["above_ma30", "pure_regime", "bull_regime", "pure_regime_sata"],
