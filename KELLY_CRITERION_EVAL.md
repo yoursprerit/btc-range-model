@@ -156,11 +156,16 @@ between Kelly and the current objective.
 ## Recommendation
 
 * **Do NOT adopt full Kelly as a portfolio objective** — it is a no-op or a downgrade.
-* **If anything, expose fractional Kelly as the risk-profile mechanism** (e.g.
-  Aggressive = full, Growth = ½, Balanced = ¼ of the growth-optimal blend, remainder in
-  SATA). This is a theory-grounded replacement for the current hand-tuned drawdown budgets
-  and Pareto-improves risk-adjusted return. **Not implemented here** — this document is
-  evaluation only, per the request.
+* ~~If anything, expose fractional Kelly as the risk-profile mechanism (Aggressive = full,
+  Growth = ½, Balanced = ¼) — it Pareto-improves risk-adjusted return.~~ **CORRECTED — this
+  claim does not survive a matched-risk test.** A follow-up evaluation
+  (`KELLY_DIAL_EVAL.md`, `scripts/eval_kelly_dial.py`) dials `f` to match each existing
+  profile's drawdown/volatility and finds the **existing profiles win at every tier**
+  (Balanced +9pp CAGR / +0.79 Sharpe; Growth +12pp CAGR at equal drawdown). The earlier
+  "Pareto-improves" wording compared *unmatched* risk points (fractional vs full Kelly at the
+  same caps), which is trivially favourable and misleading. The fractional-Kelly dial is an
+  ergonomic simplification, **not** a performance upgrade — see `KELLY_DIAL_EVAL.md`.
+* **Net:** nothing here warrants changing the live strategy. Evaluation only, per the request.
 
 ## Caveats
 
