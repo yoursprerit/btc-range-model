@@ -338,94 +338,103 @@ def optimize(train_end, label):
     return best
 
 # ------------------------------------------------------------------ run
-OOS_START = pd.Timestamp("2026-03-01")   # day after model training cutoff (Feb 28 2026)
+# OOS eval window is held FIXED across every counterfactual so the comparison is
+# apples-to-apples: it is the model's genuine out-of-sample window (post the CT
+# training cutoff of Feb-28-2026). Only the THRESHOLD optimization cutoff changes.
+OOS_START = pd.Timestamp("2026-03-01")
 OOS_END   = DATA_END
 
 CFG_LIVE = dict(u1=1.3, d2=-1.3, mstr_sl=0.03, mstu_sl=0.03, name="LIVE (documented)")
 
-print("="*92)
-print("  COUNTERFACTUAL: threshold optimization window   Feb-28-2026  vs  May-31-2026")
-print("  OOS eval window (post model-training cutoff): 2026-03-01 -> 2026-07-10, fresh $100k")
-print("="*92)
+# Every counterfactual optimization cutoff we want to test, plus the reproduction of
+# the live config (opt-through-May-31 should recover it exactly).
+CUTOFFS = [
+    (pd.Timestamp("2026-05-31"), "opt-thru-May-31-2026 (= live reproduction)"),
+    (pd.Timestamp("2026-02-28"), "opt-thru-Feb-28-2026 (model boundary)"),
+    (pd.Timestamp("2025-08-31"), "opt-thru-Aug-31-2025"),
+]
 
-cfg_may = optimize(pd.Timestamp("2026-05-31"), "OPT-through-MAY-31")
-cfg_feb = optimize(pd.Timestamp("2026-02-28"), "OPT-through-FEB-28")
+print("="*96)
+print("  COUNTERFACTUAL: threshold optimization-window sensitivity")
+print("  Live thresholds were fit to max the FULL period through May-31-2026.")
+print("  We refit them to max the FULL period through each cutoff below, then measure")
+print("  the SAME fixed OOS window 2026-03-01 -> 2026-07-10 (fresh $100k) for each.")
+print("="*96)
+
+configs = {}
+for te, label in CUTOFFS:
+    configs[label] = optimize(te, label)
 
 def show_oos(cfg, name):
     rb, rr, ru = perf(cfg["u1"], cfg["d2"], cfg["mstr_sl"], cfg["mstu_sl"], OOS_START, OOS_END)
-    print(f"  {name:<34} U1>{cfg['u1']:+.2f}/D2<{cfg['d2']:+.2f} "
-          f"stops M{cfg['mstr_sl']}/U{cfg['mstu_sl']:} ->  "
-          f"BTC {rb:+7.1f}%   MSTR {rr:+8.1f}%   MSTU {ru:+8.1f}%")
-    return rb, rr, ru
+    print(f"  {name:<44} U1>{cfg['u1']:+.2f}/D2<{cfg['d2']:+.2f} "
+          f"M{cfg['mstr_sl']}/U{cfg['mstu_sl']} ->  "
+          f"BTC {rb:+7.1f}   MSTR {rr:+8.1f}   MSTU {ru:+8.1f}")
+    return (rb, rr, ru)
 
-print("\n" + "="*92)
-print("  OOS BACKTEST RESULTS  (2026-03-01 -> 2026-07-10, fresh capital at OOS start)")
-print("="*92)
-# B&H over OOS
 def bh(px):
     i0 = max(WARMUP, int(dates.searchsorted(OOS_START)))
     iN = int(dates.searchsorted(OOS_END, side="right"))-1
     return (px[iN]/px[i0]-1)*100
-print(f"  Buy & Hold over OOS:  BTC {bh(btc_px):+.1f}%   MSTR {bh(mstr_px):+.1f}%   MSTU {bh(mstu_px):+.1f}%\n")
-r_live = show_oos(CFG_LIVE, "LIVE / documented (opt thru May)")
-r_may  = show_oos(cfg_may,  "Re-derived opt-thru-May-31")
-r_feb  = show_oos(cfg_feb,  "Counterfactual opt-thru-Feb-28")
 
-print("\n" + "-"*92)
-print("  OOS delta: counterfactual(Feb) MINUS live(documented)")
-print(f"    BTC {r_feb[0]-r_live[0]:+.1f}pp   MSTR {r_feb[1]-r_live[1]:+.1f}pp   MSTU {r_feb[2]-r_live[2]:+.1f}pp")
-print("-"*92)
+print("\n" + "="*96)
+print("  OOS BACKTEST RESULTS  (2026-03-01 -> 2026-07-10, fresh capital at OOS start)")
+print("="*96)
+print(f"  Buy & Hold over OOS:  BTC {bh(btc_px):+.1f}   MSTR {bh(mstr_px):+.1f}   MSTU {bh(mstu_px):+.1f}\n")
+r_live = show_oos(CFG_LIVE, "LIVE / documented")
+r_by = {}
+for _, label in CUTOFFS:
+    r_by[label] = show_oos(configs[label], label)
 
-# also report full-through-May and full-through-Feb for both configs (context)
-print("\n  FULL-period return by config (context):")
-for cfg, nm in [(CFG_LIVE,"live"), (cfg_may,"opt-May"), (cfg_feb,"opt-Feb")]:
-    a = perf(cfg["u1"],cfg["d2"],cfg["mstr_sl"],cfg["mstu_sl"], FULL_START, pd.Timestamp("2026-05-31"))
-    b = perf(cfg["u1"],cfg["d2"],cfg["mstr_sl"],cfg["mstu_sl"], FULL_START, pd.Timestamp("2026-02-28"))
-    print(f"    {nm:<9} thru-May BTC{a[0]:+7.1f}/MSTR{a[1]:+7.1f}/MSTU{a[2]:+7.1f}   "
-          f"thru-Feb BTC{b[0]:+7.1f}/MSTR{b[1]:+7.1f}/MSTU{b[2]:+7.1f}")
+print("\n" + "-"*96)
+print("  OOS delta vs LIVE (documented):  counterfactual MINUS live, in pp")
+for _, label in CUTOFFS:
+    r = r_by[label]
+    print(f"    {label:<44} BTC {r[0]-r_live[0]:+7.1f}   MSTR {r[1]-r_live[1]:+7.1f}   MSTU {r[2]-r_live[2]:+7.1f}")
+print("-"*96)
 
 
 # =====================================================================================
-#  ROBUSTNESS — is the Feb-optimum a knife-edge, and what drives the OOS gap?
+#  ROBUSTNESS (per cutoff) — is the argmax a knife-edge, and what drives the OOS gap?
 # =====================================================================================
-def _perf(cfg, start, end): return perf(cfg["u1"], cfg["d2"], cfg["mstr_sl"], cfg["mstu_sl"], start, end)
+def robustness(train_end, cut_label):
+    rows = []
+    for u1, d2 in itertools.product(U1_GRID, D2_GRID):
+        s = sigs_for(u1, d2)
+        _, nb = run_btc(dates, btc_px, s, FULL_START, train_end); rb = ret_of(nb)
+        for msl, usl in itertools.product(MSTR_STOPS, MSTU_STOPS):
+            _, nr = run_sl(dates, mstr_px, s, msl, FULL_START, train_end)
+            _, nu = run_sl(dates, mstu_px, s, usl, FULL_START, train_end)
+            rows.append(dict(u1=u1, d2=d2, mstr_sl=msl, mstu_sl=usl,
+                             tr=rb + ret_of(nr) + ret_of(nu)))
+    dfc = pd.DataFrame(rows).sort_values("tr", ascending=False).reset_index(drop=True)
 
-FEB = pd.Timestamp("2026-02-28"); MAY = pd.Timestamp("2026-05-31"); JUL = DATA_END
+    print("\n" + "="*96)
+    print(f"  [{cut_label}]  TOP-8 configs by train objective -> genuine OOS (Mar1->Jul10)")
+    print("="*96)
+    print(f"  {'rk':>2} {'U1':>5} {'D2':>6} {'Mst':>5} {'Ust':>5} {'trTot':>7} | {'BTC':>6} {'MSTR':>7} {'MSTU':>7} {'sum':>7}")
+    for i in range(8):
+        c = dfc.iloc[i].to_dict()
+        ob, om, ou = perf(c['u1'], c['d2'], c['mstr_sl'], c['mstu_sl'], OOS_START, OOS_END)
+        print(f"  {i+1:>2} {c['u1']:>+5.2f} {c['d2']:>+6.2f} {str(c['mstr_sl']):>5} {str(c['mstu_sl']):>5} "
+              f"{c['tr']:>7.0f} | {ob:>+6.1f} {om:>+7.1f} {ou:>+7.1f} {ob+om+ou:>+7.1f}")
+    ndec = max(1, len(dfc)//10)
+    oos_sums = [sum(perf(dfc.iloc[i]['u1'], dfc.iloc[i]['d2'], dfc.iloc[i]['mstr_sl'],
+                         dfc.iloc[i]['mstu_sl'], OOS_START, OOS_END)) for i in range(ndec)]
+    print(f"\n  Top-decile ({ndec}) OOS sum: median {np.median(oos_sums):+.1f}   mean {np.mean(oos_sums):+.1f}")
+    mask = ((dfc.u1==1.3)&(dfc.d2==-1.3)&(dfc.mstr_sl==0.03)&(dfc.mstu_sl==0.03))
+    print(f"  LIVE config rank on this objective: {int(dfc.index[mask][0])+1} of {len(dfc)} "
+          f"(tr {dfc[mask].tr.values[0]:.0f} vs top {dfc.tr.iloc[0]:.0f})")
 
-# enumerate ALL (U1, D2, MSTR-stop, MSTU-stop) configs, scored on the FEB-train objective
-rows = []
-for u1, d2 in itertools.product(U1_GRID, D2_GRID):
-    s = sigs_for(u1, d2)
-    _, nb = run_btc(dates, btc_px, s, FULL_START, FEB); rb = ret_of(nb)
-    for msl, usl in itertools.product(MSTR_STOPS, MSTU_STOPS):
-        _, nr = run_sl(dates, mstr_px, s, msl, FULL_START, FEB)
-        _, nu = run_sl(dates, mstu_px, s, usl, FULL_START, FEB)
-        rows.append(dict(u1=u1, d2=d2, mstr_sl=msl, mstu_sl=usl,
-                         feb_total=rb + ret_of(nr) + ret_of(nu)))
-dfc = pd.DataFrame(rows).sort_values("feb_total", ascending=False).reset_index(drop=True)
+    print(f"\n  [{cut_label}]  D2 exit sweep (U1=+1.3, stops 3/3): train obj vs genuine OOS")
+    print(f"  {'D2':>6} {'trainSum':>10} {'oosSum':>9}")
+    argmax_d2 = configs[cut_label]['d2']
+    for d2 in D2_GRID:
+        c = dict(u1=1.3, d2=d2, mstr_sl=0.03, mstu_sl=0.03)
+        tr = sum(perf(c['u1'], c['d2'], c['mstr_sl'], c['mstu_sl'], FULL_START, train_end))
+        oo = sum(perf(c['u1'], c['d2'], c['mstr_sl'], c['mstu_sl'], OOS_START, OOS_END))
+        tag = "  <- argmax" if d2 == argmax_d2 else ("  <- LIVE" if d2 == -1.3 else "")
+        print(f"  {d2:>+6.2f} {tr:>10.0f} {oo:>+9.1f}{tag}")
 
-print("\n" + "="*92)
-print("  TOP-10 configs by FEB-train objective -> their genuine OOS (Mar1->Jul10) returns")
-print("="*92)
-print(f"  {'rk':>2} {'U1':>5} {'D2':>6} {'Mst':>5} {'Ust':>5} {'febTot':>7} | {'BTC':>6} {'MSTR':>7} {'MSTU':>7} {'sum':>7}")
-for i in range(10):
-    c = dfc.iloc[i].to_dict(); ob, om, ou = _perf(c, OOS_START, JUL)
-    print(f"  {i+1:>2} {c['u1']:>+5.2f} {c['d2']:>+6.2f} {str(c['mstr_sl']):>5} {str(c['mstu_sl']):>5} "
-          f"{c['feb_total']:>7.0f} | {ob:>+6.1f} {om:>+7.1f} {ou:>+7.1f} {ob+om+ou:>+7.1f}")
-ndec = max(1, len(dfc)//10)
-oos_sums = [sum(_perf(dfc.iloc[i].to_dict(), OOS_START, JUL)) for i in range(ndec)]
-print(f"\n  Top-decile ({ndec} configs) OOS sum:  median {np.median(oos_sums):+.1f}%   mean {np.mean(oos_sums):+.1f}%")
-mask = ((dfc.u1==1.3)&(dfc.d2==-1.3)&(dfc.mstr_sl==0.03)&(dfc.mstu_sl==0.03))
-print(f"  LIVE config rank on FEB objective: {int(dfc.index[mask][0])+1} of {len(dfc)}  "
-      f"(feb_total {dfc[mask].feb_total.values[0]:.0f} vs top {dfc.feb_total.iloc[0]:.0f})")
-
-print("\n" + "="*92)
-print("  D2 EXIT SWEEP (U1=+1.3, stops 3/3): FEB-train objective vs genuine OOS(Mar1->Jul10)")
-print("  -> the entire optimization-window gap lives in this one threshold")
-print("="*92)
-print(f"  {'D2':>6} {'febTrainSum':>12} {'oosSum':>9}")
-for d2 in D2_GRID:
-    c = dict(u1=1.3, d2=d2, mstr_sl=0.03, mstu_sl=0.03)
-    ft = sum(_perf(c, FULL_START, FEB)); oo = sum(_perf(c, OOS_START, JUL))
-    tag = "  <- FEB argmax" if d2 == cfg_feb["d2"] else ("  <- LIVE (opt-thru-May)" if d2 == -1.3 else "")
-    print(f"  {d2:>+6.2f} {ft:>12.0f} {oo:>+9.1f}{tag}")
+for te, label in CUTOFFS[1:]:   # skip the May reproduction; run Feb + Aug
+    robustness(te, label)
