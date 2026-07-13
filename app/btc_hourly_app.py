@@ -339,6 +339,43 @@ def fetch_data():
             "Please click **Refresh now** in the sidebar to retry."
         )
         st.stop()
+
+    # ── Freshen the BTC tail from Binance hourly ─────────────────────────
+    # Yahoo Finance's hourly BTC-USD bars routinely stall for several hours
+    # when requested from cloud IPs (Streamlit Community Cloud). Left alone,
+    # that stalls the whole feature grid: `valid_mask` (below, via build_features
+    # + F.ffill) can only reach the newest hour with complete features, so the
+    # live next-hour predictions and their band freeze a few hours back — while
+    # the black actual-price line, which is fed by the *independent* Binance 1m
+    # feed (fetch_btc_1m), keeps moving. The chart then shows price plunging with
+    # no predictions tracking it.
+    #
+    # _fetch_binance_hourly() is the SAME source as that 1m line, so overlay its
+    # bars from Yahoo's last close onward: this extends the grid to the current
+    # hour so predictions track the real price, without touching any established
+    # history (rows before the seam stay exactly as Yahoo delivered them, keeping
+    # historical replay / backtests unchanged). Binance wins on the overlapping
+    # seam hour and every newer hour; if Binance is unavailable it internally
+    # falls back to Yahoo, so this degrades gracefully to the prior behaviour.
+    try:
+        _bnb = _fetch_binance_hourly()
+        if _bnb is not None and not _bnb.empty:
+            _bnb = _bnb.rename(columns={c: f"btc_{c}" for c in
+                                        ("open", "high", "low", "close", "volume")})
+            _bnb.index = pd.to_datetime(_bnb.index).floor("h")
+            _bnb = _bnb[~_bnb.index.duplicated(keep="last")].sort_index()
+            _seam = parts["btc"]["btc_close"].last_valid_index()
+            _btc_cols = ["btc_open", "btc_high", "btc_low", "btc_close", "btc_volume"]
+            if _seam is not None and set(_btc_cols).issubset(_bnb.columns):
+                _tail = _bnb.loc[_bnb.index >= _seam, _btc_cols]
+                if not _tail.empty:
+                    merged = _tail.combine_first(parts["btc"])
+                    parts["btc"] = (merged[~merged.index.duplicated(keep="last")]
+                                    .sort_index())
+                    btc = parts["btc"]
+    except Exception:
+        pass
+
     grid = pd.date_range(btc.index.min().floor("h"), btc.index.max().floor("h"),
                          freq="h")
     df = pd.DataFrame(index=grid)
