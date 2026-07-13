@@ -303,7 +303,10 @@ try:
     for _a in gate["actions"]:            # keep the action table price/P&L in sync
         _r = by_key.get(_a["key"])
         if _r:
-            _a["last_close"] = _r["last_close"]; _a["upnl"] = _r["pos"]["upnl"]
+            # _a["last_close"] stays the close of the last completed bar (set in
+            # signal_gated_allocation, before the spot overlay); expose the live
+            # spot separately so the action plan shows both side by side.
+            _a["live_price"] = _r["last_close"]; _a["upnl"] = _r["pos"]["upnl"]
     _n_spot = sum(1 for v in _spot.values() if v.get("price"))
 except Exception:
     _n_spot = 0
@@ -508,7 +511,10 @@ with tab_live:
                "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
                "the live price — they still **hold/open today** but **exit on the "
                "next bar** (either the last close already crossed the trend, or the "
-               "live price has since slipped below it). **Unreal. P&L** is measured "
+               "live price has since slipped below it). **Price (Close of Last Bar)** "
+               "is the official close of the last completed daily bar the signals run "
+               "on; **Live Price** is the current spot quote (coloured green/red vs "
+               "that close). **Unreal. P&L** is measured "
                "against each position's real cost basis — the official close on its "
                "entry bar. **Target % / $ (Last bar)** is the committed allocation "
                "from the last-close signals; **Target % / $ (Live)** re-runs it "
@@ -524,7 +530,8 @@ with tab_live:
     hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
            "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
            "<th>Live signal</th><th style='text-align:center'>Priority</th>"
-           "<th style='text-align:right'>Price</th>"
+           "<th style='text-align:right'>Price (Close of Last Bar)</th>"
+           "<th style='text-align:right'>Live Price</th>"
            "<th style='text-align:right'>Chg %</th>"
            "<th style='text-align:right'>Unreal. P&amp;L</th>"
            "<th style='text-align:right'>Target % (Last bar)</th>"
@@ -566,6 +573,14 @@ with tab_live:
         # highlight a live target that has diverged from the last-bar target
         _live_moved = abs(tgt_live - tgt) > 0.005
         _live_col = (C_EXIT if tgt_live < tgt else C_BUY) if _live_moved else "inherit"
+        # live spot price (falls back to the last-bar close when no live quote);
+        # coloured green/red vs the last-bar close to show the intraday move.
+        _live_px = a.get("live_price")
+        if _live_px is None:
+            _live_px = a["last_close"]
+        _live_px_s = f"${_live_px:,.2f}"
+        _live_px_col = (C_BUY if _live_px > a["last_close"]
+                        else C_EXIT if _live_px < a["last_close"] else "inherit")
         # today's price change (%) — live day-change from the spot overlay
         _dchg = _r.get("dchg")
         if _dchg is None or (isinstance(_dchg, float) and np.isnan(_dchg)):
@@ -605,6 +620,7 @@ with tab_live:
             f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
             f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
+            f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{_live_px_col}'>{_live_px_s}</td>"
             f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{chg_col}'>{chg_s}</td>"
             f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"
             f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td>"
@@ -640,7 +656,8 @@ with tab_live:
         f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
         f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par · +{si['annual_rate']*100:.0f}%/yr coupon</div></td>"
         f"<td style='text-align:center;color:#cbd5e1'>—</td>"
-        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{sa_px_s}</td>"
+        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${si['par']:,.2f}</td>"
+        f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums'>{sa_px_s}</td>"
         f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{sa_dc_col}'>{sa_dc_s}</td>"
         f"<td style='text-align:right;font-weight:600;color:{sa_pnl_col}'>{sa_pnl_s}{sa_pnl_sub}</td>"
         f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
