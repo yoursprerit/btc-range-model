@@ -12,8 +12,9 @@ sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
 all three assets trade the Standard MA (above-MA30) gate — the most profitable
 and most stable gate on the current data.
 
-Verified: reproduces the BTC app's headline BTC +88% / MSTR +148% / MSTU +419%
-(all Standard MA), full period Jun 2024 → May 2026.
+Verified: reproduces the BTC app's headline BTC +88% / MSTR +165% / MSTU +396%
+(all Standard MA, incl. the 2026-07b post-stop re-entry override), full period
+Jun 2024 → May 2026.
 
 Caveat: the CT feature data (``data/backtest/raw_features_daily.csv``) spans
 ~2023-11 → the last pull, so BTC-sleeve returns begin ~2024 (not 2021).
@@ -105,6 +106,13 @@ U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
 STOP_PCT = {"BTC": None, "MSTR": 0.03, "MSTU": 0.03}   # BTC: no fixed stop
 GATE_BY_ASSET = {"BTC": "above_ma30", "MSTR": "above_ma30", "MSTU": "above_ma30"}
+# 2026-07 structural fix — post-stop re-entry override (leveraged sleeves only).
+# Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
+# even when the XOR combined-block is on. Fixes the "stopped out at the
+# capitulation low, then locked out of the recovery" failure that made MSTR/MSTU
+# miss the mid-Apr→mid-May 2025 rally. Surgical: fires only after a stop, never
+# in normal conditions; BTC (no stop) is unaffected. Stable 12–20 bars.
+REENTRY_OVERRIDE_BARS = 12
 _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
     "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.03),
@@ -179,6 +187,7 @@ def compute_sigs_pure(comp: pd.DataFrame) -> dict:
 def _run_bt(dates, asset_px, sigs, fixed_pct, bt_start):
     d2 = sigs["d2"]; d3 = sigs["d3"]; bull = sigs["bull_regime"]
     tf_entry = sigs["tf2_entry"]; above = sigs["above_ma30"]; vr = sigs["v_recent"]
+    u1 = sigs["u1"]
     N = len(dates)
     WARMUP = T.WARMUP
     _bt0 = max(WARMUP, int(pd.DatetimeIndex(dates).searchsorted(bt_start))) \
@@ -227,7 +236,15 @@ def _run_bt(dates, asset_px, sigs, fixed_pct, bt_start):
                 bars_since_sl += 1
             _exit_at_i = d3[i] or (d2[i] and not bull[i])
             _reentry_ok = (not from_sl) or bool(bull[i]) or bars_since_sl >= 10
-            if tf_entry[i] and _reentry_ok and (from_sl or not _exit_at_i):
+            # Post-stop re-entry override (see REENTRY_OVERRIDE_BARS): within the
+            # window after a stop, a fresh U1 above the MA30 re-admits even if the
+            # XOR combined-block would otherwise veto — recovers post-capitulation
+            # rallies on the stopped (leveraged) sleeves. from_sl is only ever True
+            # for MSTR/MSTU (BTC has no stop), so BTC is untouched.
+            _override = bool(REENTRY_OVERRIDE_BARS and from_sl
+                             and bars_since_sl <= REENTRY_OVERRIDE_BARS
+                             and u1[i] and above[i] and not _exit_at_i)
+            if (tf_entry[i] and _reentry_ok and (from_sl or not _exit_at_i)) or _override:
                 qty = nav / price; e_price = price; e_date = dates[i]
                 e_nav = nav; pos = "LONG"; hwm = price
                 from_sl = False; bars_since_sl = 0
