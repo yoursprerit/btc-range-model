@@ -621,7 +621,8 @@ def _equity(daily_ret: pd.Series) -> pd.Series:
 def curve_metrics(equity: pd.Series) -> dict:
     eq = equity.to_numpy(float); idx = equity.index
     if len(eq) < 2:
-        return dict(total_ret=0.0, cagr=0.0, mdd=0.0, sharpe=0.0, vol=0.0)
+        return dict(total_ret=0.0, cagr=0.0, mdd=0.0, sharpe=0.0, vol=0.0,
+                    log_growth=0.0, growth=0.0)
     total = eq[-1] / eq[0] - 1
     yrs = max((idx[-1] - idx[0]).days / 365.25, 1e-9)
     cagr = (eq[-1] / eq[0]) ** (1 / yrs) - 1
@@ -630,7 +631,13 @@ def curve_metrics(equity: pd.Series) -> dict:
     rets = np.diff(eq) / eq[:-1]
     vol = float(np.std(rets) * np.sqrt(TRADING_DAYS))
     sharpe = float(np.mean(rets) / (np.std(rets) + 1e-12) * np.sqrt(TRADING_DAYS))
-    return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
+    # Kelly / log-growth: the per-bar expected log return E[log(1+r)] the Kelly
+    # criterion maximises, plus its annualised growth-optimal rate.  A blend that
+    # maximises ``log_growth`` is the growth-optimal (full-Kelly) portfolio.
+    log_growth = float(np.mean(np.log1p(rets)))
+    growth = float(np.exp(TRADING_DAYS * log_growth) - 1)
+    return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe,
+                vol=vol, log_growth=log_growth, growth=growth)
 
 
 def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
@@ -644,9 +651,11 @@ def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
     per profile (×3 profiles at first load).  This does the identical maths in
     batched numpy: a handful of array passes instead of 20 000 Python/pandas
     round-trips.  For a single row it is bit-for-bit equal to ``_combine`` →
-    ``_equity`` → ``curve_metrics``.  Returns five arrays aligned to ``cand``'s
-    rows: ``(total_ret, cagr, mdd, sharpe, vol)``.  Candidates are processed in
-    chunks so the transient ``(chunk, T, N)`` array stays small."""
+    ``_equity`` → ``curve_metrics``.  Returns six arrays aligned to ``cand``'s
+    rows: ``(total_ret, cagr, mdd, sharpe, vol, log_growth)`` — the last being
+    the Kelly per-bar E[log(1+r)] a growth-optimal blend maximises.  Candidates
+    are processed in chunks so the transient ``(chunk, T, N)`` array stays
+    small."""
     R = returns.to_numpy(float)
     A = returns.notna().to_numpy()                       # (T, N) availability
     F = np.nan_to_num(R)                                 # (T, N) returns, 0 where NaN
@@ -661,7 +670,7 @@ def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
     if chunk is None:                                    # bound the (b, T, N) temp
         chunk = max(1, 3_000_000 // max(T * N, 1))
     tot = np.empty(M); cag = np.empty(M); mdd = np.empty(M)
-    shp = np.empty(M); vlt = np.empty(M)
+    shp = np.empty(M); vlt = np.empty(M); grw = np.empty(M)
     sq = np.sqrt(TRADING_DAYS)
     for s0 in range(0, M, chunk):
         Wb = C[s0:s0 + chunk]                            # (b, N)
@@ -689,7 +698,8 @@ def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
         sd = np.std(drets, axis=1)
         vlt[b] = sd * sq
         shp[b] = np.mean(drets, axis=1) / (sd + 1e-12) * sq
-    return tot, cag, mdd, shp, vlt
+        grw[b] = np.mean(np.log1p(drets), axis=1)        # Kelly per-bar log-growth
+    return tot, cag, mdd, shp, vlt, grw
 
 
 def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
@@ -700,8 +710,10 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     ``"balanced"`` — highest return among near-max-Sharpe blends (holds Sharpe
     high); ``"max_return"`` — highest return within the ``mdd_floor`` budget
     (leans harder on the high-return β / 2× sleeves); ``"max_sharpe"`` — pure
-    Sharpe.  Idle (out-of-market) capital earns the SATA yield when
-    ``pos``/``sata_daily`` are supplied.  Pure-numpy MC."""
+    Sharpe; ``"kelly"`` — the growth-optimal (full-Kelly) blend that maximises
+    the geometric growth rate E[log(1+r)] inside the drawdown budget.  Idle
+    (out-of-market) capital earns the SATA yield when ``pos``/``sata_daily`` are
+    supplied.  Pure-numpy MC."""
     cols = list(returns.columns)
     n = len(cols)
     cap_vec = np.array([(caps or CAP_BY_KEY).get(c, 0.30) for c in cols])
@@ -728,7 +740,7 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     # minimise losses" mandate rather than a purely defensive max-Sharpe point.
     # np.argmax returns the FIRST maximiser, so ties break in candidate order,
     # exactly as the previous ``max(pool, key=...)`` did.
-    tot, cag, mdd_a, shp, vlt = _metrics_batch(returns, cand, pos, sata_daily)
+    tot, cag, mdd_a, shp, vlt, grw = _metrics_batch(returns, cand, pos, sata_daily)
     feas = np.nonzero(mdd_a >= mdd_floor)[0]
     pool = feas if feas.size else np.arange(len(cand))
     if objective == "max_return":
@@ -736,13 +748,20 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
         sel = pool[int(np.argmax(tot[pool]))]
     elif objective == "max_sharpe":
         sel = pool[int(np.argmax(shp[pool]))]
+    elif objective == "kelly":
+        # growth-optimal (full-Kelly) blend: maximise the geometric growth rate
+        # E[log(1+r)] inside the drawdown budget.  Kelly is return-greedy and
+        # drawdown-heavy, so it stays inside the same mdd_floor feasibility pool.
+        sel = pool[int(np.argmax(grw[pool]))]
     else:  # "balanced" — highest return among near-max-Sharpe blends
         best_sharpe = float(shp[pool].max())
         near = pool[shp[pool] >= 0.92 * best_sharpe]
         sel = near[int(np.argmax(tot[near]))]
     w_opt = cand[sel]
     m_opt = dict(total_ret=float(tot[sel]), cagr=float(cag[sel]), mdd=float(mdd_a[sel]),
-                 sharpe=float(shp[sel]), vol=float(vlt[sel]))
+                 sharpe=float(shp[sel]), vol=float(vlt[sel]),
+                 log_growth=float(grw[sel]),
+                 growth=float(np.exp(TRADING_DAYS * grw[sel]) - 1))
 
     def _pack(w):
         return {c: float(x) for c, x in zip(cols, np.asarray(w, float))}
