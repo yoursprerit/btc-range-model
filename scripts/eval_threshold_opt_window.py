@@ -438,3 +438,31 @@ def robustness(train_end, cut_label):
 
 for te, label in CUTOFFS[1:]:   # skip the May reproduction; run Feb + Aug
     robustness(te, label)
+
+
+# =====================================================================================
+#  WHY did the Oct-2025 -> Feb-2026 bear NOT tighten D2?  Sub-period decomposition.
+#  (Answers the natural objection: the Feb window contains a real bear, yet the
+#   optimizer still picks the patient D2 -2.1.)
+# =====================================================================================
+def _sub(u1, d2, s, e):
+    return perf(u1, d2, 0.03, 0.03, pd.Timestamp(s), pd.Timestamp(e))
+
+print("\n" + "="*96)
+print("  SUB-PERIOD DECOMPOSITION — D2 -1.3 (live) vs D2 -2.1 (pre-chop argmax), U1=1.3, 3/3")
+print("  fresh $100k in each sub-window; shows which regime prefers which exit")
+print("="*96)
+SUBS = [("BULL  Jun24-Sep25",        "2024-06-01", "2025-09-30"),
+        ("OCT-BEAR Oct25-Feb26",     "2025-10-01", "2026-02-28"),
+        ("MAR-CHOP Mar26-Jul26 OOS", "2026-03-01", "2026-07-10")]
+print(f"  {'sub-period':<26} {'asset':<5} {'D2=-1.3':>9} {'D2=-2.1':>9} {'-2.1 minus -1.3':>16}")
+for lab, s, e in SUBS:
+    a = _sub(1.3, -1.3, s, e); b = _sub(1.3, -2.1, s, e)
+    for k, asset in enumerate(["BTC", "MSTR", "MSTU"]):
+        print(f"  {lab:<26} {asset:<5} {a[k]:>+8.1f}% {b[k]:>+8.1f}% {b[k]-a[k]:>+14.1f}pp")
+# entry-gate fire counts per sub-period (why the Oct bear is mostly sat out in cash)
+print("\n  U1/entry-gate fires per sub-period (live 1.3/-1.3):")
+_s = sigs_for(1.3, -1.3)
+for lab, s, e in SUBS:
+    i0 = int(dates.searchsorted(pd.Timestamp(s))); iN = int(dates.searchsorted(pd.Timestamp(e), side="right"))
+    print(f"    {lab:<26} tf-fires = {int(_s['tf'][i0:iN].sum())} of {iN-i0} bars")

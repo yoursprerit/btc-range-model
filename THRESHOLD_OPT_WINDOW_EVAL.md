@@ -116,6 +116,36 @@ The live thresholds are OOS-good, but the *procedure* that produced them only la
 them **because the optimization window overlapped the OOS window.** The documented OOS
 outperformance is, to a large degree, a look-ahead artifact of that overlap.
 
+### 3a. "But the Feb window contains the Oct-2025 crash and the Oct→Feb bear — why didn't that tighten D2?"
+
+Because **that bear rewarded the *patient* exit, not the tight one.** Decomposing the
+return by sub-period (fresh $100k each, U1=1.3, stops 3/3):
+
+| Sub-period | BTC (−1.3 / −2.1) | MSTR (−1.3 / −2.1) | MSTU (−1.3 / −2.1) | Prefers |
+|---|---|---|---|---|
+| **Bull** Jun24–Sep25 | +21.4 / **+50.0** | 161.6 / 161.6 | 466.6 / 466.6 | −2.1 (BTC), tie |
+| **Oct-bear** Oct25–Feb26 | **−5.7 / 0.0** | −5.4 / 0.0 | −6.2 / 0.0 | **−2.1 (all three)** |
+| **Mar-chop** Mar26–Jul26 (OOS) | +1.5 / −17.8 | +37.8 / −1.7 | +79.2 / −12.8 | −1.3 (all three) |
+
+Three reasons the Oct bear pushed *toward* −2.1:
+
+1. **The strategy sat the Oct bear out in cash** — the U1 entry gate fired only **1 time
+   in 151 bars** during Oct25→Feb26 (BTC below MA30, no hi-band breaks). You don't need a
+   good exit for a bear you never enter; the bear is avoided by *not entering*, not by D2.
+2. **The one trade it did take, the tight exit lost on.** Under D2 −1.3 there is exactly
+   one Oct trade: enter Oct 1 → D2-exit Oct 11 at **−5.7%** (the Oct-10/11 crash). Under
+   D2 −2.1 that trade never opens (a looser D2 fires less → `clean_7d` True more often →
+   the `above_ma30 XOR clean_7d` rule *blocks* the marginal entry), so the window ends
+   flat at 0.0%. The looser exit accidentally dodged the crash trade.
+3. **The bull dwarfs it anyway.** Even the +5–6pp the Oct bear hands to −2.1 is a rounding
+   error next to MSTU's +466% bull trades, which already prefer the patient exit.
+
+So the optimizer was **not** blind to a bear — it saw one whose lesson was "hold longer."
+The opposite lesson ("cut fast") is uniquely encoded in the **Mar–May 2026 chop**, a
+distinct regime where BTC bounces enough to *trigger* U1 entries (fired 2× in the OOS
+window) and then fades — the one setup where a tight exit saves you. That regime does not
+appear anywhere before March 2026, which is why only the May-31 window recovers D2 −1.3.
+
 ## 4. Robustness — knife-edge, and does an earlier cutoff generalize worse?
 
 | Optimized on | Top-decile OOS sum (median / mean) | LIVE-config rank on that objective |
