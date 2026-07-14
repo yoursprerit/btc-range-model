@@ -7159,7 +7159,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
   <!-- STOP-LOSS & RE-ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
+         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive + Post-Stop Override)</div>
     <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
       <tr>
         <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
@@ -7188,6 +7188,18 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
           Wait <b>10-bar cooldown</b> then re-enter on next valid signal
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dbeafe; color:#1e40af; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🔁 Post-stop override</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Within <b>12 bars</b> of a stop, a fresh <b>U1 above MA30</b> re-admits even if the
+          XOR combined-block would veto — recovers post-capitulation rallies the stop + XOR block
+          used to lock MSTR out of (e.g. mid-Apr→mid-May 2025), <b>lifting Full +148%→+165%</b>
         </td>
       </tr>
     </table>
@@ -8034,7 +8046,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
   <!-- STOP-LOSS & RE-ENTRY -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#0f766e; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive)</div>
+         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive + Post-Stop Override)</div>
     <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
       <tr>
         <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
@@ -8063,6 +8075,19 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
           Wait <b>10-bar cooldown</b> then re-enter on next valid TF2+V-Gate signal
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#cffafe; color:#155e75; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🔁 Post-stop override</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          Within <b>12 bars</b> of a stop, a fresh <b>U1 above MA30</b> re-admits even if the
+          XOR combined-block would veto — captures the mid-Apr→mid-May 2025 rally MSTU used to miss
+          (<b>Bull +142%→+165%</b>); on the 2× fund it trades a deeper max drawdown (−26%→−39%)
+          for the extra rally exposure
         </td>
       </tr>
     </table>
