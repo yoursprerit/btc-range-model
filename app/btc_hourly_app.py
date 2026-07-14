@@ -6076,7 +6076,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
     tf1_exit  = d2 | d3   # TF1 always exits D2|D3
 
-    # ── Backtest loop (1-bar lag) ─────────────────────────────────────────
+    # ── Backtest loop (same-bar: signal on bar i, fill at bar i close) ────
     nav      = initial_capital
     pos      = "CASH"
     btc_qty  = 0.0
@@ -6498,7 +6498,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
 
   <!-- MECHANICS -->
   <div style='font-size:11px; color:#3b5280; line-height:1.8;'>
-    ⏱ <b>Execution:</b> 1-day lag — signal on bar <i>i</i>, trade fills at bar <i>i+1</i> close
+    ⏱ <b>Execution:</b> Same-day — signal on bar <i>i</i>, trade fills at that same bar's close
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -7094,7 +7094,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 else:
                     st.info("No trades in this period — strategy was in cash throughout.")
                 caption = (
-                    "💡 P&L at execution prices (1-day lag from signal). "
+                    "💡 P&L at execution prices (same-day fill on the signal bar). "
                     "B&H normalised to $100k at period start. "
                 )
                 _cut = OOS_START.strftime("%b %d, %Y")
@@ -7206,7 +7206,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
   </div>
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
   <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
-    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTR trade at bar <i>i+1</i> close
+    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the MSTR trade at that same bar's close (after-hours fill)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -7981,7 +7981,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 else:
                     st.info("No trades in this period — strategy was in cash throughout.")
                 caption = (
-                    "💡 P&L at MSTR execution prices (1-day lag from BTC signal). "
+                    "💡 P&L at MSTR execution prices (same-day fill on the BTC signal bar). "
                     "Entry/exit triggered by BTC TF2+V-Gate. MSTR prices split-adjusted. "
                 )
                 if lbl == "oos":
@@ -8094,7 +8094,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
   </div>
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
   <div style='font-size:11px; color:#0f766e; line-height:1.8;'>
-    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, MSTU trade at bar <i>i+1</i> close
+    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the MSTU trade at that same bar's close (after-hours fill)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -8866,7 +8866,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 else:
                     st.info("No trades in this period — strategy was in cash throughout.")
                 caption = (
-                    "💡 P&L at MSTU execution prices (1-day lag from BTC signal). "
+                    "💡 P&L at MSTU execution prices (same-day fill on the BTC signal bar). "
                     "Entry/exit triggered by BTC TF2+V-Gate. "
                     "MSTU = T-Rex 2× Long MSTR Daily Target ETF. "
                 )
@@ -9779,7 +9779,7 @@ def render_mstr_options_trading_strategy_dashboard(
   <div style='border-top:1px solid #fcd34d; margin:10px 0;'></div>
 
   <div style='font-size:11px; color:#b45309; line-height:1.8;'>
-    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, option trade at bar <i>i+1</i> close
+    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the option trade at that same bar's close (after-hours fill)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -10472,7 +10472,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 caption = (
                     "💡 Entry = buy ATM MSTR call (strike = MSTR spot, expiry = 743d out). "
                     "Exit = sell call at Black-Scholes value (σ = 60d HV, r = 4.5%). "
-                    "1-day lag from BTC signal. "
+                    "Same-day fill on the BTC signal bar. "
                 )
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
@@ -10555,7 +10555,7 @@ def render_mstu_options_trading_strategy_dashboard(
   <div style='border-top:1px solid #7dd3fc; margin:10px 0;'></div>
 
   <div style='font-size:11px; color:#0369a1; line-height:1.8;'>
-    ⏱ <b>Execution:</b> 1-day lag — BTC signal on bar <i>i</i>, option trade at bar <i>i+1</i> close
+    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the option trade at that same bar's close (after-hours fill)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -11248,7 +11248,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 caption = (
                     "💡 Entry = buy ATM MSTU call (strike = MSTU spot, expiry = 596d out). "
                     "Exit = sell call at Black-Scholes value (σ = 60d HV, r = 4.5%). "
-                    "1-day lag from BTC signal. "
+                    "Same-day fill on the BTC signal bar. "
                 )
                 if lbl == "oos":
                     caption += "✅ Fully OOS — BTC CT model never saw this data."
