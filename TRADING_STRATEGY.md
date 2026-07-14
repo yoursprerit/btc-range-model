@@ -1,11 +1,48 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-07-13  
+**Last updated:** 2026-07-14  
 
 ---
 
-## ⭐ 2026-07b — Post-stop re-entry override: MSTR/MSTU recover post-capitulation rallies (CURRENT LIVE)
+## ⭐ 2026-07c — Vintage-robust rally capture: V-reversal window widened 3 → 5 (CURRENT LIVE)
+
+**Problem.** The 2026-07b override (below) captured the Apr-2025 rally *on the committed data
+vintage* — but the **live app self-heals its data** (`_ensure_fresh_features()` re-pulls Binance
++ on-chain, which restates historical bars). On the fresh vintage the Apr-2025 capitulation→U1
+timing shifted: the capitulation fired **Apr 6**, U1 confirmed **Apr 9** (a 3-bar gap), and the
+**3-bar `v_recent` window expired before U1 fired** — so no entry triggered, no stop, no override,
+and the XOR block vetoed every subsequent rally U1. The whole book **sat out the +45% rally** on
+the live vintage even though the committed backtest captured it. (Verified: on a fresh pull the
+rally capture was **+0%** for all three vs +29/+16/+31% on the committed vintage; BTC Bull swung
++47% → +16%.)
+
+**Fix.** Widen the V-reversal recency window **3 → 5 bars** (`V_RECENT_WIN = 5`, shared across
+`btc_hourly_app.py` and `btc_ct_engine.py`). This bridges the capitulation→confirmation gap so the
+entry survives routine data revisions. Stable across 4–7 bars (not a knife-edge). Crucially it
+makes the whole strategy **vintage-robust** — near-identical results on successive data pulls
+(e.g. BTC Full +86% / MSTR +212% / MSTU +309% on *both* the 07-10 and 07-12 vintages, vs the wild
++88/+30% BTC swing before).
+
+| Asset | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) | mid-Apr→mid-May 2025 |
+|-------|---------|---------|---------|---------------|--------------|----------------------|
+| **BTC**  | +36%  | +13%  | **+86%**  | 0.93 | −28% | ✅ +29% (robust) |
+| **MSTR** | +99%  | +51%  | **+212%** | 1.21 | −22% | ✅ +16% (robust) |
+| **MSTU** | +155% | +115% | **+309%** | 1.00 | −48% | ✅ +31% (robust) |
+
+**MSTR** is a clear win (Full +212%, reliably in the rally). **BTC** is essentially unchanged on
+the committed vintage but no longer collapses on fresh data. **MSTU** reliably enters the rally,
+but on the 2× fund that V-reversal trade round-trips to a **net loss**, so capturing it **lowers**
+MSTU's full return (+396% → +309%) and deepens drawdown (−48%) — the exposure is reliable but not
+itself profitable on MSTU. **OOS (Mar→Jul 2026) is unchanged** for all three.
+
+*(Numbers are on the committed 07-10 vintage for continuity with the tables below; the live app
+recomputes on its own fresh vintage, which — thanks to this fix — now lands in the same
+neighbourhood instead of missing the rally.)*
+
+---
+
+## ⭐ 2026-07b — Post-stop re-entry override: MSTR/MSTU recover post-capitulation rallies
 
 **Problem diagnosed.** In the mid-April → mid-May 2025 rally (BTC ~$76k → ~$111k, +45%),
 **BTC captured the move** (+44% via a single V-reversal entry at the low — it has no stop),
@@ -29,6 +66,10 @@ the MA30** re-admits the position even when the XOR block would veto. It is surg
 **only** right after a stopped-out capitulation (where big rallies begin), never in normal
 late-cycle conditions. Stable across a 12–20 bar window; **Bear and OOS periods are unchanged**;
 **BTC (no stop) is untouched.**
+
+> **Superseded by 2026-07c above** — the table below reflects the override alone (3-bar
+> V-reversal window). With the window widened to 5, the current numbers are BTC +86% / MSTR
+> +212% / MSTU +309% (see the 2026-07c table); the override still applies on top.
 
 | Asset | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) | Δ vs prior (Full) | mid-Apr→mid-May 2025 |
 |-------|---------|---------|---------|---------------|--------------|-------------------|----------------------|

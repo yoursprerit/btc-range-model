@@ -74,7 +74,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl6-v37-u1_13-reentry-override"
+_BT_LOGIC_VERSION = "sl7-v38-vrecent5-reentry-override"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── Trend-signature signal thresholds (single source of truth) ──────────────
@@ -98,15 +98,19 @@ D2_ERRHI_MAX = -1.3   # D2 exit:  err_hi_ma3 below −1.3%
 # profitable and most stable gate for the equities across both the bull and full
 # periods (best Sharpe + smallest drawdown), whereas the older Pure Regime gate
 # proved fragile to routine BTC-bar data revisions. Only the per-asset STOP differs.
-#   BTC  → Standard MA · no stop     (Full +88% vs B&H +6%; D2/D3 exits manage risk)
-#   MSTR → Standard MA · fixed −3%   (Full +165% vs B&H +4%; Bull +77%; Bear +51%)
-#   MSTU → Standard MA · fixed −3%   (Full +396% vs B&H −87%; Bull +165%; Bear +115%)
+#   BTC  → Standard MA · no stop     (Full +86% vs B&H +6%; Bull +36%; Bear +13%)
+#   MSTR → Standard MA · fixed −3%   (Full +212% vs B&H +4%; Bull +99%; Bear +51%)
+#   MSTU → Standard MA · fixed −3%   (Full +309% vs B&H −87%; Bull +155%; Bear +115%)
 # These are the default-selected options in the BTC/MSTR/MSTU/options radio buttons.
-# 2026-07 structural fix: MSTR/MSTU add a post-stop re-entry override
-# (REENTRY_OVERRIDE_BARS) so the leveraged sleeves recover post-capitulation rallies
-# (mid-Apr→mid-May 2025) instead of being stopped at the low and locked out. It lifts
-# MSTR Full +148%→+165% (clean win) and captures the rally on MSTU (+31% window) at a
-# deeper max drawdown (−26%→−39%); Bear and OOS are unchanged. BTC (no stop) untouched.
+# 2026-07 structural fixes for capturing post-capitulation rallies (mid-Apr→mid-May 2025):
+#   (b) post-stop re-entry override (REENTRY_OVERRIDE_BARS) — after a stop, a fresh U1
+#       above MA30 re-admits the leveraged sleeves even if the XOR block would veto.
+#   (c) V-reversal recency window widened 3→5 bars (V_RECENT_WIN) — the capitulation→U1
+#       bridge was too narrow to survive data-vintage revisions, so the live vintage
+#       missed the +45% Apr-2025 rally entirely. Widening makes the capture vintage-robust
+#       (near-identical results on successive Binance/on-chain data pulls).
+# Net vs pre-fix: MSTR Full +212%, MSTU Full +309% (MSTU trades some return + a deeper
+# drawdown for reliably capturing the rally), BTC +86%. Bear and OOS periods ~unchanged.
 MSTR_STRATEGY_GATE = "above_ma30"
 MSTU_STRATEGY_GATE = "above_ma30"
 BTC_STRATEGY_GATE  = "above_ma30"
@@ -123,6 +127,14 @@ MSTU_STOP_PCT = 0.03   # MSTU fixed stop −3% (tightened from −7%; helps full
 # unaffected). Surgical — fires only after a stop; stable across a 12–20 bar
 # window; leaves the bear and OOS periods unchanged.
 REENTRY_OVERRIDE_BARS = 12
+# 2026-07c — V-reversal recency window (bars). The V-reversal capitulation fires at
+# the bottom; U1 confirms the bounce a few bars later; v_recent bridges the two so
+# entry fires. A 3-bar bridge proved too narrow to survive routine data-vintage
+# revisions (Binance rebucketing + on-chain restatements): on the live vintage the
+# Apr-2025 capitulation→U1 gap widened to 3 bars and the old 3-bar window expired
+# before U1, so the whole book sat out the +45% mid-Apr→mid-May 2025 rally. Widened
+# to 5 (stable 4–7) so the capitulation→confirmation bridge is vintage-robust.
+V_RECENT_WIN = 5
 
 # ── SATA idle-cash yield (Strive Variable Rate Series A Perpetual Preferred) ──
 # Strive's SATA is the first US-listed security to pay a cash dividend every
@@ -2695,9 +2707,11 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
     capitulation_signal = (dn_score_raw > 0.7 and last_lo_err > 3.0)
     v_reversal_likely   = (dn_score_raw > 0.8 and last_lo_err > 3.0)
 
-    # Per-bar V-reversal flags using 3-bar rolling window — matches backtest exactly.
-    # The backtest checks v_recent[i] = any(v_rev_bar[i-2:i+1]), so we must replicate
-    # that per-bar dn_score computation here rather than using the single current-bar value.
+    # Per-bar V-reversal flags — matches backtest exactly. The backtest checks
+    # v_recent[i] = any(v_rev_bar[i-(V_RECENT_WIN-1):i+1]), so we must replicate that
+    # per-bar dn_score computation here rather than using the single current-bar value.
+    # (The dn_score itself still uses the 3-bar error MAs below; only the recency
+    # window that bridges capitulation→U1 is V_RECENT_WIN.)
     _dn_norm_per = np.array([
         float(np.mean(err_hi[max(0, _j - 29): _j + 1])) for _j in range(n)
     ])
@@ -2713,10 +2727,10 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
                 (_el  / max(abs(_el), 0.10))         * 0.20 +
                 float(lo_break[_j])                  * 0.20)
         _v_rev_per_bar[_j] = (_dns > 0.8) and (float(err_lo[_j]) > 3.0)
-    # True if any of the last 3 bars fired a V-reversal (same window as backtest)
-    v_recent_gate = bool(np.any(_v_rev_per_bar[-min(3, n):]))
+    # True if any of the last V_RECENT_WIN bars fired a V-reversal (same window as backtest)
+    v_recent_gate = bool(np.any(_v_rev_per_bar[-min(V_RECENT_WIN, n):]))
     # How many bars ago the most recent V-reversal fired (0=today, 1=yesterday, 2=2d ago)
-    _vr_ages = [i for i in range(min(3, n)) if _v_rev_per_bar[n - 1 - i]]
+    _vr_ages = [i for i in range(min(V_RECENT_WIN, n)) if _v_rev_per_bar[n - 1 - i]]
     v_recent_gate_age = _vr_ages[0] if _vr_ages else None
 
     # ── MA30 / Trend Filter (U1+MA30 strategy entry) ────────────────────
@@ -2762,7 +2776,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
     # TF1/TF2 entry signal (same for both): U1 confirmed by trend context.
     # TF2 adds regime-adaptive exits — BULL regime exits D3 only (patient),
     # BEAR/NEUTRAL exits D2 or D3 (defensive). Entry is identical.
-    # V-gate: V-reversal within last 3 bars (dn_score>0.8, err_lo>3%) satisfies trend gate.
+    # V-gate: V-reversal within last 5 bars (dn_score>0.8, err_lo>3%) satisfies trend gate.
     # Matches backtest exactly — capitulation_signal (threshold 0.7) is display-only diagnostic,
     # not an entry gate, to keep live signal consistent with backtest behaviour.
     v_gate_ok     = v_recent_gate
@@ -3402,7 +3416,7 @@ def run_full_period_backtest(end_date_iso: str,
     # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
     # dn_score replicates the live signal formula; v_rev_bar fires when a
     # single bar shows capitulation (dn_score > 0.8 AND err_lo > 3%).
-    # v_recent[i] = True if v_rev_bar fired within the last 3 bars — bridges
+    # v_recent[i] = True if v_rev_bar fired within the last 5 bars — bridges
     # the 1-2 bar lag before U1 co-fires after the bounce starts.
     # 30-bar rolling mean keeps the normaliser stable across regimes.
     _DN_NORM_W    = 30
@@ -3422,7 +3436,7 @@ def run_full_period_backtest(end_date_iso: str,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     # 2026-07 retune: BTC strategy gate (BTC_STRATEGY_GATE — Standard MA) — matches
     # run_btc_backtest and the live/historical tf1_triggered so live = historical = backtest.
@@ -3526,7 +3540,7 @@ def run_full_period_backtest(end_date_iso: str,
     _dn_c = int(_d1_t) + int(_d2_t) + int(_d3_t); _up_c = int(_u1_t)
     _v_rev_l = bool(v_rev_bar[_L])
     _cap_l   = bool(dn_score_arr[_L] > 0.7 and err_lo[_L] > 3.0)
-    _v_recent_age = next((k for k in range(min(3, _L+1)) if v_rev_bar[_L - k]), None)
+    _v_recent_age = next((k for k in range(min(V_RECENT_WIN, _L+1)) if v_rev_bar[_L - k]), None)
     _streak = 0
     if N >= 2:
         for _k in range(N - 1, 0, -1):
@@ -4269,7 +4283,7 @@ def run_mstr_backtest(end_date_iso: str,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
     # signals of its base gate; the ONLY difference is that idle cash between
@@ -4600,7 +4614,7 @@ def run_btc_backtest(end_date_iso: str,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
     # signals of its base gate; the ONLY difference is that idle cash between
@@ -4918,7 +4932,7 @@ def run_mstu_backtest(end_date_iso: str,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
     # signals of its base gate; the ONLY difference is that idle cash between
@@ -5293,7 +5307,7 @@ def run_mstr_options_backtest(end_date_iso: str,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     if entry_gate == "above_ma30":
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -5662,7 +5676,7 @@ def run_mstu_options_backtest(end_date_iso: str,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     if entry_gate == "above_ma30":
         tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
@@ -6069,7 +6083,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
     v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
     v_recent  = np.zeros(N, dtype=bool)
     for i in range(N):
-        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-2):i+1]))
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
 
     # Require bull_regime (above+rising MA30) in XOR gate: blocks dead-cat bounce entries
     # where price is above MA30 but MA30 slope is negative. clean_7d and V-reversal paths unchanged.
@@ -6449,7 +6463,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; Clean 7d (no D1/D2 in prior 7 bars) <b>while below MA30</b> — fresh thrust after a washout
             <br>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; Capitulation spike detected within the last 3 bars
+            &nbsp; Capitulation spike detected within the last 5 bars
             <span style='color:#7c3aed; font-size:11px;'>
               (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
@@ -7198,8 +7212,9 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
           Within <b>12 bars</b> of a stop, a fresh <b>U1 above MA30</b> re-admits even if the
-          XOR combined-block would veto — recovers post-capitulation rallies the stop + XOR block
-          used to lock MSTR out of (e.g. mid-Apr→mid-May 2025), <b>lifting Full +148%→+165%</b>
+          XOR combined-block would veto. Paired with a <b>5-bar V-reversal window</b> (2026-07c)
+          so the capitulation→U1 entry survives data-vintage revisions — together they reliably
+          capture post-capitulation rallies (e.g. mid-Apr→mid-May 2025); <b>MSTR Full +212%</b>
         </td>
       </tr>
     </table>
@@ -7267,7 +7282,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -7318,7 +7333,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -7377,7 +7392,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -8085,9 +8100,10 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
           Within <b>12 bars</b> of a stop, a fresh <b>U1 above MA30</b> re-admits even if the
-          XOR combined-block would veto — captures the mid-Apr→mid-May 2025 rally MSTU used to miss
-          (<b>Bull +142%→+165%</b>); on the 2× fund it trades a deeper max drawdown (−26%→−39%)
-          for the extra rally exposure
+          XOR combined-block would veto. Paired with a <b>5-bar V-reversal window</b> (2026-07c),
+          MSTU reliably enters the mid-Apr→mid-May 2025 rally across data vintages — but on the 2×
+          fund that trade nets a loss, so the capture <b>lowers Full +396%→+309%</b> and deepens
+          drawdown (−48%)
         </td>
       </tr>
     </table>
@@ -8155,7 +8171,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -8206,7 +8222,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -8265,7 +8281,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -8999,7 +9015,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#fed7aa; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#ea580c; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -9049,7 +9065,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fed7aa; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#ea580c; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -9107,7 +9123,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fed7aa; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#ea580c; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -9852,7 +9868,7 @@ def render_mstr_options_trading_strategy_dashboard(
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -9873,7 +9889,7 @@ def render_mstr_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -9901,7 +9917,7 @@ def render_mstr_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -10628,7 +10644,7 @@ def render_mstu_options_trading_strategy_dashboard(
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -10649,7 +10665,7 @@ def render_mstu_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -10677,7 +10693,7 @@ def render_mstu_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 3 bars
+            &nbsp; BTC capitulation spike within last 5 bars
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -11996,17 +12012,17 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
            if _clean else "NO — a D1 or D2 fired in the prior 7 bars")),
          "= YES  (gate path B — Clean 7d while BELOW MA30)",
          _clean_breakout, True),
-        ("② ⚡ V-reversal (3-bar)",
+        ("② ⚡ V-reversal (5-bar)",
          (("ACTIVE today — dn_score={:.2f}, err_lo={:+.1f}% (threshold: >0.8 & >3%)"
            .format(sigs.get("dn_score_raw", 0), sigs.get("last_lo_err", 0)))
           if sigs.get("v_recent_gate_age") == 0
           else ("ACTIVE — fired {} bar{} ago (gate open for {} more bar{})"
                 .format(sigs.get("v_recent_gate_age", "?"),
                         "s" if (sigs.get("v_recent_gate_age") or 0) != 1 else "",
-                        2 - (sigs.get("v_recent_gate_age") or 0),
-                        "s" if 2 - (sigs.get("v_recent_gate_age") or 0) != 1 else ""))
+                        (V_RECENT_WIN - 1) - (sigs.get("v_recent_gate_age") or 0),
+                        "s" if (V_RECENT_WIN - 1) - (sigs.get("v_recent_gate_age") or 0) != 1 else ""))
           if _vrev
-          else "○ not active — no capitulation spike in last 3 bars (dn_score < 0.8 or err_lo < 3%)"),
+          else "○ not active — no capitulation spike in last 5 bars (dn_score < 0.8 or err_lo < 3%)"),
          "= ACTIVE  (gate override — capitulation dn_score > 0.8 AND err_lo > 3%)",
          _vrev, True),
         ("② Standard MA gate",
@@ -12068,10 +12084,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             ),
             prob_txt=(
                 "Full period (Jun 2024–May 2026), Standard MA, live stops + post-stop re-entry override: "
-                "<b>BTC +88%</b> (B&amp;H +6%) · <b>MSTR +165%</b> (B&amp;H +4%) · "
-                "<b>MSTU +396%</b> (B&amp;H −76%). "
+                "<b>BTC +86%</b> (B&amp;H +6%) · <b>MSTR +212%</b> (B&amp;H +4%) · "
+                "<b>MSTU +309%</b> (B&amp;H −76%). "
                 "Bear period: MSTR +51% · MSTU +115% · BTC +13% — all positive vs deeply-negative B&amp;H. "
-                "Bull (Jun 2024–May 2025): BTC +47% · MSTR +77% · MSTU +165%."
+                "Bull (Jun 2024–May 2025): BTC +36% · MSTR +99% · MSTU +155%."
             ),
             conf_txt=(
                 "⚠️ Heavy in-sample optimization: bull window is in-sample for the CT model, "
@@ -12124,7 +12140,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         v_bg    = "#f8fafc"; v_brd = "#cbd5e1"
         v_label = "⚡ V-Reversal Gate — not active"
         v_body  = (
-            f"No capitulation in the last 3 bars (today: dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
+            f"No capitulation in the last 5 bars (today: dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
             f"err_lo = <b>{sigs.get('last_lo_err', 0):+.2f}%</b>). "
             f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on any bar within the last 3. "
             f"<br><br>"
@@ -12209,7 +12225,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
   ((above-MA30 **XOR** Clean 7d) **OR** ⚡ V-reversal) — the most profitable and most stable gate on the current data
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
 - **Stops (per-asset):** MSTR −3% · MSTU −3% (tightened from −7%) · BTC none — all with SL5 regime-adaptive re-entry + post-stop re-entry override (see below)
-- **Full period** (Jun 2024–May 2026): **BTC +88%** · **MSTR +165%** · **MSTU +396%** (vs B&H +6% / +4% / −76%)
+- **Full period** (Jun 2024–May 2026): **BTC +86%** · **MSTR +212%** · **MSTU +309%** (vs B&H +6% / +4% / −76%)
 - **Bear period:** MSTR +51% · MSTU +115% · BTC +13% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%, BTC −30%)
 
 **Probability context:**
@@ -15459,22 +15475,25 @@ with tab_mstr:
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
         "**⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) — on the "
         "current data it is the most profitable *and* most stable gate for MSTR, delivering "
-        "**Full +165%** (vs B&H +4%), Bull +77%, and staying positive in bear (+51% vs "
-        "B&H −57%), with strong Sharpe (1.10) and −20% drawdown. "
+        "**Full +212%** (vs B&H +4%), Bull +99%, and staying positive in bear (+51% vs "
+        "B&H −57%), with strong Sharpe (1.21) and −22% drawdown. "
         "Exit is the shared regime-adaptive D2/D3 rule; stop is fixed −3% with "
         "SL5 re-entry **plus the post-stop re-entry override** (re-admits a fresh U1 above the "
-        "MA30 within 12 bars of a stop) — this recovers the mid-Apr→mid-May 2025 rally that the "
-        "stop+XOR block used to lock MSTR out of, lifting Full +148%→+165%. Switch gates with the radio below."
+        "MA30 within 12 bars of a stop) and a **5-bar V-reversal window** so the "
+        "capitulation→U1 bridge reliably captures the mid-Apr→mid-May 2025 rally across data "
+        "vintages. Switch gates with the radio below."
     )
     _ds_ver_mstr = _backtest_dataset_version()
     _ds_mtime_mstr = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_mstr} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     st.info(
-        "🔁 **Post-stop re-entry override (2026-07b):** after a fixed −3% stop, a fresh "
-        "**U1 above the MA30 re-admits within 12 bars**, bypassing the XOR combined-block. "
-        "This recovers post-capitulation rallies (e.g. mid-Apr→mid-May 2025) that the "
-        "stop + XOR block used to lock MSTR out of — **lifting Full +148%→+165%** — on top of "
-        "the SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
+        "🔁 **Post-capitulation rally capture (2026-07b/c):** two changes let MSTR reliably "
+        "catch V-reversal rallies like mid-Apr→mid-May 2025. (b) **Post-stop re-entry override** "
+        "— after a −3% stop, a fresh U1 above the MA30 re-admits within 12 bars, bypassing the "
+        "XOR block. (c) **5-bar V-reversal window** (was 3) — bridges the capitulation→U1 gap so "
+        "the entry survives data-vintage revisions (on the narrower window the live vintage missed "
+        "the rally entirely). Together: **MSTR Full +212%**, capture stable across data pulls. "
+        "On top of SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
     )
     _mstr_variant = st.radio(
         "Entry gate variant",
@@ -15532,13 +15551,14 @@ with tab_mstu:
     st.markdown(
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
         "signals. **⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) "
-        "with a **fixed −3% stop** — for the 2× fund this is the most profitable *and* most "
-        "stable gate, delivering **Full +396%** (vs B&H −76%), Bull +165%, and keeping Bear "
-        "positive (+115% vs B&H −92%) by avoiding the leveraged-ETF volatility decay B&H suffers. "
-        "Exit is the shared regime-adaptive D2/D3 rule with SL5 re-entry **plus the post-stop "
-        "re-entry override** (re-admits a fresh U1 above the MA30 within 12 bars of a stop). The "
-        "override captures the mid-Apr→mid-May 2025 rally MSTU used to miss (Bull +142%→+165%); on "
-        "the 2× fund this trades a deeper max drawdown (−26%→−39%) for the extra rally exposure. "
+        "with a **fixed −3% stop** — the Standard MA gate delivers **Full +309%** (vs B&H −76%), "
+        "Bull +155%, and keeps Bear positive (+115% vs B&H −92%) by avoiding the leveraged-ETF "
+        "volatility decay B&H suffers. Exit is the shared regime-adaptive D2/D3 rule with SL5 "
+        "re-entry **plus the post-stop re-entry override** (fresh U1 above the MA30 within 12 bars "
+        "of a stop) and a **5-bar V-reversal window** so MSTU reliably enters the mid-Apr→mid-May "
+        "2025 rally across data vintages. **Note:** on the 2× fund that rally trade round-trips to "
+        "a net loss, so capturing it *lowers* full return (was +396% before these fixes) and "
+        "deepens max drawdown (−48%) — the exposure is reliable but not itself profitable on MSTU. "
         "MSTU launched Sep 18 2024; the Bull period uses synthetic MSTU prices (OLS from MSTR). "
         "Switch gates with the radio below."
     )
@@ -15546,16 +15566,17 @@ with tab_mstu:
     _ds_mtime_mstu = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_mstu} · pulled via `scripts/pull_backtest_data.py` · OLS β≈1.96 · all QC checks passed")
     st.info(
-        "🔁 **Post-stop re-entry override (2026-07b):** after a fixed −3% stop, a fresh "
-        "**U1 above the MA30 re-admits within 12 bars**, bypassing the XOR combined-block. "
-        "This captures the mid-Apr→mid-May 2025 rally MSTU used to miss (**Bull +142%→+165%**); "
-        "on the 2× fund it trades a deeper max drawdown (−26%→−39%) for the extra rally exposure. "
-        "Applied on top of SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
+        "🔁 **Post-capitulation rally capture (2026-07b/c):** the **post-stop re-entry override** "
+        "(fresh U1 above MA30 re-admits within 12 bars of a stop) plus the **5-bar V-reversal "
+        "window** (was 3) let MSTU reliably enter V-reversal rallies like mid-Apr→mid-May 2025 "
+        "across data vintages. **Trade-off:** on the 2× fund that rally trade nets a loss, so the "
+        "capture *lowers* MSTU full return (**+396%→+309%**) and deepens drawdown (−48%). "
+        "On top of SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
     )
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["above_ma30", "pure_regime", "bull_regime", "pure_regime_sata"],
-        index=0,   # ⭐ MSTU default = Standard MA (2026-07: Full +396% w/ post-stop re-entry override)
+        index=0,   # ⭐ MSTU default = Standard MA (2026-07c: Full +309% w/ vintage-robust rally capture)
         format_func=lambda x: (
             "📊 Standard MA — Above rising MA30  ⭐ MSTU STRATEGY"
             if x == "above_ma30" else

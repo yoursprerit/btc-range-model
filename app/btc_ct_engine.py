@@ -12,9 +12,9 @@ sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
 all three assets trade the Standard MA (above-MA30) gate — the most profitable
 and most stable gate on the current data.
 
-Verified: reproduces the BTC app's headline BTC +88% / MSTR +165% / MSTU +396%
-(all Standard MA, incl. the 2026-07b post-stop re-entry override), full period
-Jun 2024 → May 2026.
+Verified: reproduces the BTC app's headline BTC +86% / MSTR +212% / MSTU +309%
+(all Standard MA, incl. the 2026-07b post-stop re-entry override and the 2026-07c
+5-bar V-reversal window), full period Jun 2024 → May 2026.
 
 Caveat: the CT feature data (``data/backtest/raw_features_daily.csv``) spans
 ~2023-11 → the last pull, so BTC-sleeve returns begin ~2024 (not 2021).
@@ -113,6 +113,11 @@ GATE_BY_ASSET = {"BTC": "above_ma30", "MSTR": "above_ma30", "MSTU": "above_ma30"
 # miss the mid-Apr→mid-May 2025 rally. Surgical: fires only after a stop, never
 # in normal conditions; BTC (no stop) is unaffected. Stable 12–20 bars.
 REENTRY_OVERRIDE_BARS = 12
+# 2026-07c — V-reversal recency window (bars). Bridges the capitulation bar to the
+# U1 confirmation a few bars later; widened 3→5 so the bridge survives data-vintage
+# revisions (the Apr-2025 rally was missed on the live vintage when the old 3-bar
+# window expired before U1 fired). Must match btc_hourly_app.V_RECENT_WIN.
+V_RECENT_WIN = 5
 _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
     "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.03),
@@ -172,7 +177,7 @@ def compute_sigs_pure(comp: pd.DataFrame) -> dict:
         dn[i] = ((-ehma3[i] / nrm) * .30 + (lb3[i] / 3.) * .30
                  + (elma3[i] / max(abs(elma3[i]), .10)) * .20 + float(lo[i]) * .20)
     vbar = (dn > 0.8) & (err_lo > 3.0)
-    v = np.array([bool(vbar[max(0, i - 2):i + 1].any()) for i in range(N)])
+    v = np.array([bool(vbar[max(0, i - (V_RECENT_WIN - 1)):i + 1].any()) for i in range(N)])
     tf_pure = u1 & (bull | (clean & ~above) | v)        # PURE-REGIME (OR gate)  — BTC
     tf_ma   = u1 & ((above ^ clean) | v)                # STANDARD MA (XOR gate) — MSTR/MSTU
     return dict(d1=d1, d2=d2, d3=d3, u1=u1, bull_regime=bull,

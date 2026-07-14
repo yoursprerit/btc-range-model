@@ -355,6 +355,18 @@ begin) — never in normal late-cycle conditions — so the bear and OOS periods
 This is what let the mid-Apr→mid-May 2025 rally be captured on MSTR (+16%) and MSTU (+31%)
 after both were stopped out on Apr 10; see [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) §2026-07b.
 
+### V-reversal recency window: 3 → 5 bars (2026-07c — vintage robustness)
+
+The V-reversal capitulation fires at the bottom; `U1` confirms the bounce a few bars later;
+`v_recent` bridges the two so entry fires. The original **3-bar** bridge was too narrow to
+survive routine data-vintage revisions — when the live app re-pulls Binance + on-chain data,
+historical bars are restated and the capitulation→`U1` gap can widen. On the live vintage the
+Apr-2025 gap became 3 bars and the 3-bar window expired *before* `U1`, so the entry never fired
+and the whole book missed the +45% rally. Widening `V_RECENT_WIN` to **5 bars** makes the
+capitulation→confirmation bridge vintage-robust (stable across 4–7; near-identical backtests on
+successive data pulls). This is the parameter that actually restores the rally capture on the
+live data — the override above only engages once an entry (and its stop) exist.
+
 The Streamlit dashboard renders a "Trend Alert" card with live values for all conditions
 alongside the H/L band, 7-day cone, and 3-class outputs.
 
