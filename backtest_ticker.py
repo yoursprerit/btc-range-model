@@ -148,6 +148,17 @@ def _rolling_mean(x, w):
     return np.array([np.mean(x[max(0, i - (w - 1)):i + 1]) for i in range(len(x))])
 
 
+def macd_hist_array(cfg, gcl):
+    """Raw MACD histogram (``macd_fast`` / ``macd_slow`` / ``macd_signal``) on the
+    PRIMARY close array ``gcl``.  The histogram is ``(EMA_fast − EMA_slow)`` minus
+    its own ``macd_signal``-span EMA, in price units.  The long condition in macd
+    mode is simply ``histogram > 0`` (see ``trend_long_array``)."""
+    c = pd.Series(np.asarray(gcl, float))
+    macd = (c.ewm(span=cfg.macd_fast, adjust=False).mean()
+            - c.ewm(span=cfg.macd_slow, adjust=False).mean())
+    return (macd - macd.ewm(span=cfg.macd_signal, adjust=False).mean()).to_numpy()
+
+
 def trend_long_array(cfg, gcl):
     """Boolean long-at-close signal for the config's trend mode, computed on the
     PRIMARY close array ``gcl`` (decision at each close → executed next bar).
@@ -162,11 +173,7 @@ def trend_long_array(cfg, gcl):
     if m == "dual_ma":
         return _rolling_mean(gcl, cfg.ma_fast) > _rolling_mean(gcl, cfg.ma_slow)
     if m == "macd":
-        c = pd.Series(gcl)
-        macd = (c.ewm(span=cfg.macd_fast, adjust=False).mean()
-                - c.ewm(span=cfg.macd_slow, adjust=False).mean())
-        hist = macd - macd.ewm(span=cfg.macd_signal, adjust=False).mean()
-        return (hist > 0).to_numpy()
+        return macd_hist_array(cfg, gcl) > 0
     if m == "ma_vol":
         c = pd.Series(gcl)
         v = np.log(c).diff().rolling(cfg.vol_win).std()
