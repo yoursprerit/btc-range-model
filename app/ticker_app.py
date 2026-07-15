@@ -368,8 +368,9 @@ def _sig_card(title, icon, color, triggered, rows, interpretation):
 def _gate_card(title, icon, fired, rows, interpretation):
     """Render an ENTRY-GATE condition card. Each row is
     (label, current_value, criterion, met, kind) where kind ∈ {'threshold',
-    'context'} — a threshold row is a hard numeric comparison, a context row is a
-    regime/lookback state (no single cut-off)."""
+    'context'} — 'threshold' marks a MANDATORY condition the gate requires (every
+    required component, whether a single-bar cut-off or a lookback-window state);
+    'context' is reserved for genuinely non-required, informational rows."""
     color = "#4f46e5"                       # indigo — an enabling gate, not a directional signal
     border = color if fired else "#cbd5e1"
     bg = "#eef2ff" if fired else "#f8fafc"
@@ -760,8 +761,8 @@ def render_gate_signatures(sigs):
     """Entry-gate condition cards (divergence mode). A U1 pressure signal only
     opens a position when a trend gate also holds:
     ``U1 AND (Bull Regime OR Clean Breakout OR V-Reversal)``. Each card shows the
-    criterion, where the live value stands, and whether it's a hard threshold or
-    a regime/context read."""
+    criterion, where the live value stands, and — since every row is a mandatory
+    component of that gate — tags each as a required THRESHOLD."""
     if not sigs:
         return
     close = sigs["detail_rows"][-1]["close"] if sigs.get("detail_rows") else None
@@ -794,7 +795,7 @@ def render_gate_signatures(sigs):
         "the entry gate on its own."), unsafe_allow_html=True)
     g2.markdown(_gate_card(
         "Clean Breakout", "🧹", clean_gate,
-        [("no D1/D2 last ~8 bars", "clean" if clean else "recent damage", "clean", clean, "context"),
+        [("no D1/D2 last ~8 bars", "clean" if clean else "recent damage", "clean", clean, "threshold"),
          ("close vs 20-day SMA", close_s, f"< {ma_s}", (not above), "threshold")],
         "A fresh breakout from <i>below</i> the average with no recent downside damage — "
         "lets U1 fire early, before the regime formally turns bullish."),
@@ -802,7 +803,7 @@ def render_gate_signatures(sigs):
     g3.markdown(_gate_card(
         "V-Reversal", "⚡", vgate,
         [("washout in last 3 bars", "yes — ≤3 bars ago" if vgate else "none",
-          "capitulation ≤3 bars ago", vgate, "context"),
+          "capitulation ≤3 bars ago", vgate, "threshold"),
          ("capitulation score (today)", f"{vdn:.2f}", "> 0.80 + deep low", vgate, "threshold")],
         "A recent sharp washout / capitulation-low undershoot (V-shaped reversal setup) — "
         "also satisfies the entry gate. The gate arms when the capitulation score clears "
