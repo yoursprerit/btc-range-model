@@ -47,10 +47,12 @@ TRADED = [("XLE", "px_close"), ("OIH", "oih_close"), ("ERX", "erx_close")]
 LEV_STOPLESS = {"erx_close": 1.0}
 
 
-# ── H/L prediction builder with a configurable train boundary + drop filter ──
-def build_preds(daily, train_end, drop_below=None):
-    """Fit the daily H/L ridge on data <= train_end, predict EVERY bar.
+# ── H/L prediction builder with a configurable train window + drop filter ──
+def build_preds(daily, train_end, drop_below=None, train_start=None):
+    """Fit the daily H/L ridge on data in [train_start, train_end], predict EVERY bar.
 
+    ``train_start`` (e.g. "2020-01-01"): left edge of the training window.  None
+    keeps the full history back to the first available bar (the committed default).
     ``drop_below`` (e.g. -0.07): exclude training rows whose realised XLE daily
     close-to-close return is below that level, so drastic energy crash days do
     not distort the ridge fit / residual bias.  Prediction is still produced for
@@ -76,6 +78,8 @@ def build_preds(daily, train_end, drop_below=None):
         subset=feat_cols + ["y_hi", "y_lo", "close_asof"])
 
     train = df.loc[:train_end]
+    if train_start is not None:
+        train = train.loc[train_start:]
     if drop_below is not None:
         keep = train["ret_cc"] >= drop_below
         train = train[keep]
