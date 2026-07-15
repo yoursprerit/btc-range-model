@@ -611,4 +611,9 @@ def compute_trend_signatures(completed: pd.DataFrame) -> dict | None:
         consec_hi=consec_hi, alert_level=alert_level,
         dn_count=dn_count, up_count=up_count, detail_rows=detail_rows,
         n_bars=n, as_of_date=completed["target_date"].iloc[-1],
+        # Per-bar D1/D2 history (aligned to sig_dates) — the exact arrays the
+        # Clean-Breakout gate scans (clean_10d = no D1/D2 in the prior 7 bars).
+        # Exposed so the daily-H/L chart can mark where D1/D2 fired.
+        d1_hist=d1_hist, d2_hist=d2_hist,
+        sig_dates=pd.to_datetime(completed["target_date"]).to_numpy(),
     )

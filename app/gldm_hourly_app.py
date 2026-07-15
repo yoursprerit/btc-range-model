@@ -726,10 +726,61 @@ _GRID = dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False)
 _HL_BAND_PCT = 0.006   # ±0.6% uncertainty tint (gold's daily range is ~⅓ of BTC's)
 
 
-def _hl_forecast_fig(d_df, n_bars=8):
+# The Clean-Breakout gate flags an entry only when NO D1/D2 fired in the prior
+# 7 bars (clean_10d). The daily-H/L chart therefore shows at least this many
+# bars of history so the whole Clean-Breakout window is visible at a glance.
+CLEAN_BREAKOUT_LOOKBACK = 7
+
+
+def _add_clean_breakout_markers(fig, sub, sigs):
+    """Overlay D1 / D2 trigger markers on the daily-H/L chart.
+
+    ``sigs`` is the compute_trend_signatures() dict; it carries per-bar
+    ``d1_hist`` / ``d2_hist`` aligned to ``sig_dates`` — the exact arrays the
+    Clean-Breakout gate scans. D1 (downtrend / low-break pressure) is anchored to
+    the predicted-LOW line, D2 (high-momentum fade) to the predicted-HIGH line,
+    so a glance shows whether the Clean-Breakout window is clear."""
+    if not sigs or sigs.get("d1_hist") is None or sigs.get("sig_dates") is None:
+        return
+    dts = pd.to_datetime(sigs["sig_dates"])
+    d1_by = dict(zip(dts, [bool(x) for x in sigs["d1_hist"]]))
+    d2_by = dict(zip(dts, [bool(x) for x in sigs["d2_hist"]]))
+    d1x, d1y, d2x, d2y = [], [], [], []
+    for _, r in sub.iterrows():
+        td = pd.Timestamp(r["target_date"])
+        if d1_by.get(td):
+            d1x.append(td); d1y.append(r["pred_low"])
+        if d2_by.get(td):
+            d2x.append(td); d2y.append(r["pred_high"])
+    if d1x:
+        fig.add_trace(go.Scatter(
+            x=d1x, y=d1y, mode="markers+text", text=["D1"] * len(d1x),
+            textposition="bottom center", textfont=dict(size=10, color="#b91c1c"),
+            marker=dict(symbol="triangle-down", size=13, color="#dc2626",
+                        line=dict(width=1.4, color="white")),
+            name="D1 fired — downtrend pressure",
+            hovertemplate="%{x|%b %d}: 🔻 D1 — downtrend pressure "
+                          "(≥2 low-breaks in 3d)<extra></extra>"))
+    if d2x:
+        fig.add_trace(go.Scatter(
+            x=d2x, y=d2y, mode="markers+text", text=["D2"] * len(d2x),
+            textposition="top center", textfont=dict(size=10, color="#c2410c"),
+            marker=dict(symbol="triangle-down", size=13, color="#f97316",
+                        line=dict(width=1.4, color="white")),
+            name="D2 fired — momentum fade",
+            hovertemplate="%{x|%b %d}: 🔻 D2 — momentum fade "
+                          "(3d-avg high undershoot)<extra></extra>"))
+
+
+def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
     """Daily H/L predictions-vs-actuals over the last N completed bars + the next
     forecast — same layout/colors as the BTC Live-tab H/L chart (green predicted
-    HIGH line + tint, red predicted LOW line + tint, ✕ actual markers)."""
+    HIGH line + tint, red predicted LOW line + tint, ✕ actual markers), with
+    🔻 D1/D2 markers over the Clean-Breakout lookback window."""
+    # Show enough history to cover the Clean-Breakout lookback (prior 7 bars) plus
+    # the current bar — max(lookback, 7) + 1.
+    if n_bars is None:
+        n_bars = max(CLEAN_BREAKOUT_LOOKBACK, 7) + 1
     sub = preds[preds["target_date"] <= d_df.index[-1]].tail(n_bars).copy()
     if sub.empty:
         return None
@@ -771,8 +822,10 @@ def _hl_forecast_fig(d_df, n_bars=8):
         fig.add_trace(go.Scatter(x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]],
                                  mode="markers", marker=dict(symbol="diamond", size=12, color="#b8860b"),
                                  name="Next-bar forecast"))
+    _add_clean_breakout_markers(fig, sub, sigs)
     fig.update_layout(height=340, margin=dict(l=0, r=10, t=44, b=0),
-                      title=dict(text="📈 Daily H/L — predictions vs actuals (last bars + next forecast)",
+                      title=dict(text="📈 Daily H/L — predictions vs actuals · 🔻 D1/D2 mark the "
+                                      "Clean-Breakout window (prior 7 bars)",
                                  font=dict(size=13), x=0, xanchor="left"),
                       yaxis_title="Price ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
@@ -1006,7 +1059,7 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
     return fig
 
 
-def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None):
+def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None, sigs=None):
     """Hourly + Daily H/L + 7-day + 14-day forecast charts (Live & Replay)."""
     st.markdown("### 🔮 Model forecast charts (GLDM)")
     hl = predict_next_daily_hl(d_df)   # overlaid on the hourly chart as H/L lines
@@ -1015,7 +1068,7 @@ def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None):
         st.plotly_chart(fhr, use_container_width=True, key=f"{key_prefix}_hr")
     else:
         st.caption("_Hourly forecast unavailable for this date (hourly history starts ~Aug 2023)._")
-    fhl = _hl_forecast_fig(d_df)
+    fhl = _hl_forecast_fig(d_df, sigs=sigs)
     if fhl:
         st.plotly_chart(fhl, use_container_width=True, key=f"{key_prefix}_hl")
     as_of_iso = str(d_df.index[-1])
@@ -1375,7 +1428,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     # ── model forecast charts (hourly + Daily H/L + 7d & 14d close cones) ──
     st.markdown("---")
     render_prediction_plots(d_df, key_prefix=("live" if is_live else "hist"),
-                            is_live=is_live, as_of_date=as_of_date)
+                            is_live=is_live, as_of_date=as_of_date, sigs=sigs)
 
 
 with tab_live:
