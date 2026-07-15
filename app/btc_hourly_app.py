@@ -147,6 +147,12 @@ REENTRY_OVERRIDE_BARS = 12
 # to 5 (stable 4–7) so the capitulation→confirmation bridge is vintage-robust.
 V_RECENT_WIN = 5
 
+# Clean-Breakout gate lookback: the gate flags an entry only when NO D1/D2 fired
+# in the prior 7 bars (clean_10d = not any(d1_hist[-8:-1] | d2_hist[-8:-1])). The
+# daily-H/L chart shows at least this many bars of history so the whole
+# Clean-Breakout window is visible, with 🔻 D1/D2 markers over it.
+CLEAN_BREAKOUT_LOOKBACK = 7
+
 # ── SATA idle-cash yield (Strive Variable Rate Series A Perpetual Preferred) ──
 # Strive's SATA is the first US-listed security to pay a cash dividend every
 # business day: a 13% annual coupon on its $100 stated par value, distributed on
@@ -2876,6 +2882,12 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
         detail_rows  = detail_rows,
         n_bars       = n,
         as_of_date   = completed["target_date"].iloc[-1],
+        # Per-bar D1/D2 history (aligned to sig_dates) — the exact arrays the
+        # Clean-Breakout gate scans (clean_10d = no D1/D2 in the prior 7 bars).
+        # Exposed so the daily-H/L chart can mark where D1/D2 fired.
+        d1_hist      = _d1_hist,
+        d2_hist      = _d2_hist,
+        sig_dates    = pd.to_datetime(completed["target_date"]).to_numpy(),
     )
 
 
@@ -13144,15 +13156,18 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         else:
             ref = as_of_t.replace(tzinfo=timezone.utc) if as_of_t.tzinfo is None else as_of_t
             end_target = pd.Timestamp((ref - timedelta(hours=ANCHOR_HOUR_UTC)).date())
-    series = compute_daily_series(end_target.strftime("%Y-%m-%d"), days_back=7,
+    # Show the full Clean-Breakout lookback (prior 7 bars, or ≥7) + the viewing bar.
+    _hl_days_back = max(CLEAN_BREAKOUT_LOOKBACK, 7)
+    series = compute_daily_series(end_target.strftime("%Y-%m-%d"), days_back=_hl_days_back,
                                   data_end=_data_end)
 
     if len(series) > 0:
         st.markdown(
             f"#### 📈 Daily H/L — predictions vs actuals "
-            f"(last 7 completed bars + viewing date; each bar opens 12:00 UTC = 7am CT · "
+            f"(last {_hl_days_back} completed bars + viewing date; each bar opens 12:00 UTC = 7am CT · "
             f"viewing date = **{end_target.strftime('%Y-%m-%d')}** — "
-            f"signals based on completed bars through viewing date; ◆ = in-progress bar overlay)"
+            f"signals based on completed bars through viewing date; ◆ = in-progress bar overlay · "
+            f"🔻 D1/D2 mark the Clean-Breakout window)"
         )
         fig2 = go.Figure()
         # ±2 % uncertainty bands around each predicted line — added first so
@@ -13246,6 +13261,43 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                     hovertemplate=("Viewing date %{x|%Y-%m-%d}<br>"
                                    "Realized LOW $%{y:,.0f}<extra></extra>"),
                 ))
+
+        # 🔻 D1 / D2 markers over the Clean-Breakout lookback window.  sigs carries
+        # per-bar d1_hist / d2_hist (aligned to sig_dates) — the exact arrays the
+        # gate scans (clean_10d = no D1/D2 in the prior 7 bars).  D1 (downtrend /
+        # low-break pressure) sits on the predicted-LOW line, D2 (high-momentum
+        # fade) on the predicted-HIGH line, so it's obvious whether the window is
+        # clear.  Marker positions are read from the plotted series so they land
+        # exactly on the dotted lines.
+        if sigs and sigs.get("d1_hist") is not None and sigs.get("sig_dates") is not None:
+            _sig_dts = pd.to_datetime(sigs["sig_dates"])
+            _d1_by = dict(zip(_sig_dts, [bool(x) for x in sigs["d1_hist"]]))
+            _d2_by = dict(zip(_sig_dts, [bool(x) for x in sigs["d2_hist"]]))
+            _d1x, _d1y, _d2x, _d2y = [], [], [], []
+            for _, _r in series.iterrows():
+                _td = pd.Timestamp(_r["target_date"])
+                if _d1_by.get(_td):
+                    _d1x.append(_td); _d1y.append(_r["pred_low"])
+                if _d2_by.get(_td):
+                    _d2x.append(_td); _d2y.append(_r["pred_high"])
+            if _d1x:
+                fig2.add_trace(go.Scatter(
+                    x=_d1x, y=_d1y, mode="markers+text", text=["D1"] * len(_d1x),
+                    textposition="bottom center", textfont=dict(size=11, color="#b91c1c"),
+                    marker=dict(symbol="triangle-down", size=14, color="#dc2626",
+                                line=dict(width=1.4, color="white")),
+                    name="D1 fired — downtrend pressure",
+                    hovertemplate=("Bar %{x|%Y-%m-%d}: 🔻 D1 — downtrend pressure "
+                                   "(≥2 low-breaks in 3d)<extra></extra>")))
+            if _d2x:
+                fig2.add_trace(go.Scatter(
+                    x=_d2x, y=_d2y, mode="markers+text", text=["D2"] * len(_d2x),
+                    textposition="top center", textfont=dict(size=11, color="#c2410c"),
+                    marker=dict(symbol="triangle-down", size=14, color="#f97316",
+                                line=dict(width=1.4, color="white")),
+                    name="D2 fired — momentum fade",
+                    hovertemplate=("Bar %{x|%Y-%m-%d}: 🔻 D2 — momentum fade "
+                                   "(3d-avg high undershoot)<extra></extra>")))
 
         # Direction-correctness per day, computed SEPARATELY for HIGH and LOW.
         # For each day D, compare the day-over-day MOVE of the plotted lines:
