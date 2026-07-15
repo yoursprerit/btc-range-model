@@ -323,6 +323,30 @@ def ma_state(d_df):
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
+# Distinct, non-green/red colours so the SMA overlays never clash with the
+# HIGH (green) / LOW (red) traces on the daily H/L chart.
+_SMA_LINE_COLORS = ["#2563eb", "#ea580c", "#7c3aed", "#0891b2"]
+
+
+def strategy_sma_windows():
+    """The SMA window(s) this app's strategy actually references, each paired
+    with a stable overlay colour so a given window is drawn the same colour on
+    both the daily-H/L and hourly charts.
+
+    * dual_ma  → fast + slow SMA (e.g. REMX 50 & 200, SOXX 25 & 100)
+    * ma / ma_vol / macd → the N-day trend / context window
+    * divergence → the 20-day SMA the Bull-Regime gate is decided against
+    """
+    if IS_DIV:
+        windows = [20]
+    elif cfg.strategy_mode == "dual_ma":
+        windows = [cfg.ma_fast, cfg.ma_slow]
+    else:
+        windows = [cfg.ma_window]
+    return [(int(w), _SMA_LINE_COLORS[i % len(_SMA_LINE_COLORS)])
+            for i, w in enumerate(windows)]
+
+
 def strategy_position(col, end=None):
     if col not in preds:
         return None
@@ -1049,6 +1073,16 @@ def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
         fig.add_trace(go.Scatter(x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]],
                                  mode="markers", marker=dict(symbol="diamond", size=12, color=ACC),
                                  name="Next-bar forecast"))
+    # ── strategy trend line(s): the SMA window(s) the app's gate is decided
+    #    against (dual_ma → fast + slow, e.g. REMX 50 & 200; divergence → the
+    #    20-day Bull-Regime SMA; else the N-day trend filter), drawn as a rolling
+    #    daily series aligned to the visible bars. ──
+    for w, col in strategy_sma_windows():
+        sma = d_df["px_close"].sort_index().rolling(w, min_periods=1).mean()
+        ys = [float(sma.asof(d)) for d in x]
+        fig.add_trace(go.Scatter(x=x, y=ys, mode="lines",
+                                 line=dict(color=col, width=1.7, dash="dash"),
+                                 name=f"{w}-day SMA"))
     _add_clean_breakout_markers(fig, sub, sigs)
     fig.update_layout(height=340, margin=dict(l=0, r=10, t=44, b=0),
                       title=dict(text="📈 Daily H/L — predictions vs actuals · 🔻 D1/D2 mark the "
@@ -1234,45 +1268,42 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
         if lo_up > hl["pred_low"] - hl["band_lo"]:
             fig.add_hrect(y0=hl["pred_low"] - hl["band_lo"], y1=lo_up,
                           fillcolor="rgba(220,30,30,0.12)", line_width=0, layer="below")
-    # Trend-mode apps: overlay the regime price-line the filter references (the
-    # slow SMA for dual_ma, the N-day SMA otherwise), coloured by the strategy's
-    # actual long/flat state.  (It's a *daily* line, ~flat across this 23-hour
-    # window, so it's drawn as a horizontal reference line.)
-    if cfg.is_trend:
+    # Overlay the SMA window(s) the app's strategy references so the live hourly
+    # price reads directly against them: dual_ma → fast + slow SMA (e.g. REMX
+    # 50 & 200), divergence → the 20-day Bull-Regime SMA, else the N-day trend
+    # filter.  Each window keeps the same colour it has on the daily-H/L chart.
+    # (Daily SMAs are ~flat across this 23-hour window, so drawn as horizontal
+    # reference lines.)
+    if cfg.is_trend or IS_DIV:
         dd = daily if is_live else daily[daily.index <= pd.Timestamp(as_of_date)]
         if dd is not None and len(dd) >= 1:
-            mst = ma_state(dd); ma_val = mst["ma"]; w = mst["window"]
-            if ma_val == ma_val:                      # not NaN
-                above = mst["above"]
-                ma_col = "#16a34a" if above else "#dc2626"
+            cl = dd["px_close"]
+            mst = ma_state(dd) if cfg.is_trend else None
+            specs = strategy_sma_windows()
+            for i, (w, col) in enumerate(specs):
+                ww = int(min(w, len(cl)))
+                ma_val = float(cl.tail(ww).mean())
+                if ma_val != ma_val:                  # NaN guard
+                    continue
+                primary = (i == len(specs) - 1)       # slow / N-day / 20-day line
+                above = last_close > ma_val
+                if cfg.is_trend and primary and mst is not None:
+                    sig_on = mst["above"]
+                    note = (f"{w}-day SMA ${ma_val:,.2f} — trend filter "
+                            f"({'signal bullish → long' if sig_on else 'signal bearish → cash'})")
+                elif IS_DIV:
+                    note = (f"{w}-day SMA ${ma_val:,.2f} — Bull-Regime gate "
+                            f"({'price above' if above else 'price below'})")
+                else:
+                    note = (f"{w}-day SMA ${ma_val:,.2f} "
+                            f"({'price above' if above else 'price below'})")
                 fig.add_hline(
-                    y=ma_val, line=dict(color=ma_col, width=2, dash="dash"),
-                    annotation_text=(f"{mst['line_label']} ${ma_val:,.2f} — trend filter "
-                                     f"({'signal bullish → long' if above else 'signal bearish → cash'})"),
-                    annotation_position="bottom left",
-                    annotation_font=dict(color=ma_col, size=12),
+                    y=ma_val, line=dict(color=col, width=2, dash="dash"),
+                    annotation_text=note,
+                    annotation_position="bottom left" if primary else "top left",
+                    annotation_font=dict(color=col, size=12),
                     annotation_bgcolor="rgba(255,255,255,0.92)",
-                    annotation_bordercolor=ma_col, annotation_borderwidth=1)
-    # Divergence apps (PBW / ARTY / …) trade on the U1/D2 divergence gate whose
-    # Bull-Regime leg is decided against the 20-day SMA.  Overlay that same
-    # 20-day SMA so the live hourly price can be read directly against the gate's
-    # trend threshold.  (It's a *daily* SMA, ~flat across this 23-hour window, so
-    # it's drawn as a horizontal reference line, coloured by price above/below.)
-    if IS_DIV:
-        dd = daily if is_live else daily[daily.index <= pd.Timestamp(as_of_date)]
-        if dd is not None and len(dd) >= 1:
-            ma20 = float(dd["px_close"].tail(20).mean())
-            if ma20 == ma20:                          # not NaN
-                above20 = last_close > ma20
-                ma20_col = "#16a34a" if above20 else "#dc2626"
-                fig.add_hline(
-                    y=ma20, line=dict(color=ma20_col, width=2, dash="dash"),
-                    annotation_text=(f"20-day SMA ${ma20:,.2f} — Bull-Regime gate "
-                                     f"({'price above' if above20 else 'price below'})"),
-                    annotation_position="bottom left",
-                    annotation_font=dict(color=ma20_col, size=12),
-                    annotation_bgcolor="rgba(255,255,255,0.92)",
-                    annotation_bordercolor=ma20_col, annotation_borderwidth=1)
+                    annotation_bordercolor=col, annotation_borderwidth=1)
     title = (f"🕐 {cfg.key} — rolling next-hour close forecast (last 23 hours)"
              if is_live else f"🕐 {cfg.key} hourly forecast as of {pd.Timestamp(as_of_date).date()}")
     fig.update_layout(template="plotly_white", height=420,
