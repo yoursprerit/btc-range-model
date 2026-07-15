@@ -12313,6 +12313,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _data_end   = _raw_latest.index.max().strftime("%Y-%m-%d") if not _raw_latest.empty else None
     daily = compute_daily_forecast(target_date.strftime("%Y-%m-%d"), data_end=_data_end)
 
+    # 30-day SMA of the daily close — the Bull-Regime trend gate the strategy is
+    # decided against (btc_ct_engine `ma30`/`above_ma30`).  Overlaid on both the
+    # hourly and daily-H/L charts below so live price reads against the gate line.
+    _sma30_series = (_raw_latest["btc_close"].sort_index().rolling(30, min_periods=1).mean()
+                     if not _raw_latest.empty else pd.Series(dtype=float))
+    _sma30_now = float(_sma30_series.iloc[-1]) if len(_sma30_series) else float("nan")
+
     # Pre-compute cached results (no latency hit) for display at top of page.
     _bt_end      = target_date.strftime("%Y-%m-%d")
     # Pass model mtime so cache auto-invalidates when inference_assets_ct.joblib changes.
@@ -13028,6 +13035,21 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             annotation_bordercolor="red",
             annotation_borderwidth=1,
         )
+        # 30-day SMA — the Bull-Regime trend gate; blue dashed so it never blends
+        # with the green/red H/L threshold lines.
+        if _sma30_now == _sma30_now:                 # not NaN
+            _above30 = latest_close > _sma30_now
+            fig.add_hline(
+                y=_sma30_now,
+                line=dict(color="#2563eb", width=2, dash="dash"),
+                annotation_text=(f"30-day SMA ${_sma30_now:,.0f} — Bull-Regime gate "
+                                 f"({'price above' if _above30 else 'price below'})"),
+                annotation_position="bottom left",
+                annotation_font=dict(color="#2563eb", size=12),
+                annotation_bgcolor="rgba(255,255,255,0.92)",
+                annotation_bordercolor="#2563eb",
+                annotation_borderwidth=1,
+            )
         # ±2.5% bands around HIGH (green) and LOW (red).  When the ±2.5%
         # zones would overlap, we CLIP each at the midpoint between the two
         # predictions so the green and red never blend into yellow.
@@ -13229,6 +13251,14 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             mode="lines", line=dict(color="rgba(220,20,60,0)"),
             fill="tonexty", fillcolor="rgba(220,20,60,0.13)",
             name=f"LOW ±{DAILY_BAND_PCT*100:.0f}% band", hoverinfo="skip",
+        ))
+        # Strategy trend line: the 30-day SMA the Bull-Regime gate is decided
+        # against, as a rolling daily series aligned to the visible target dates.
+        _sma30_y = [float(_sma30_series.asof(d)) for d in series["target_date"]]
+        fig2.add_trace(go.Scatter(
+            x=series["target_date"], y=_sma30_y, mode="lines",
+            line=dict(color="#2563eb", width=1.7, dash="dash"),
+            name="30-day SMA",
         ))
         # Predicted HIGH line
         fig2.add_trace(go.Scatter(
