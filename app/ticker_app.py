@@ -308,9 +308,14 @@ def ma_state(d_df):
     close = float(c[-1])
     above = bt.trend_long_now(cfg, d_df)          # engine truth for this mode
     dist = (close / ma - 1) * 100 if ma == ma and ma else 0.0
+    # config-driven MACD histogram value on the latest bar (macd mode only)
+    macd_hist = None
+    if cfg.strategy_mode == "macd" and len(c):
+        macd_hist = float(bt.macd_hist_array(cfg, c)[-1])
     # human phrase describing the current signal state
     if cfg.strategy_mode == "macd":
-        desc = f"the MACD({cfg.macd_fast}/{cfg.macd_slow}) histogram is {'positive' if above else 'negative'}"
+        desc = (f"the MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) histogram "
+                f"is {macd_hist:+.4f} ({'positive' if above else 'negative'})")
     elif cfg.strategy_mode == "dual_ma":
         desc = f"the {cfg.ma_fast}-day SMA is {'above' if above else 'below'} the {cfg.ma_slow}-day SMA ${ma:,.2f}"
     elif cfg.strategy_mode == "ma_vol":
@@ -320,6 +325,7 @@ def ma_state(d_df):
         desc = f"close ${close:,.2f} is {'above' if above else 'below'} the {w}-day SMA ${ma:,.2f}"
     return dict(ma=ma, ma_prev=ma_prev, close=close, above=above,
                 slope_pos=ma > ma_prev, window=w, dist=dist, desc=desc,
+                macd_hist=macd_hist,
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
@@ -849,7 +855,16 @@ def render_ma_signatures(mst, pos=None):
     above = mst["above"]; line_lbl = mst["line_label"]
     dist = (c / ma - 1) * 100 if ma else 0.0
     in_pos = bool(pos and pos.get("in_pos_now"))
+    is_macd = cfg.strategy_mode == "macd"
+    mh = mst.get("macd_hist")
 
+    # In macd mode surface the actual histogram value next to the signal — it IS
+    # the traded quantity (long while histogram > 0), so the banner shows it
+    # alongside the close/MA read.
+    hist_html = ""
+    if is_macd and mh is not None:
+        hist_html = (f" · MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist "
+                     f"<b>{mh:+.4f}</b>")
     st.markdown(
         f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
         border-radius:10px;padding:12px 16px;margin:8px 0;">
@@ -857,14 +872,20 @@ def render_ma_signatures(mst, pos=None):
         padding:5px 14px;border-radius:20px;">{ns['ico']} {ns['label']}</span>
         <span style="color:#334155;font-size:13px;margin-left:10px;">
         close <b>${c:,.2f}</b> · {line_lbl} <b>${ma:,.2f}</b> ·
-        distance <b>{dist:+.2f}%</b></span></div>""",
+        distance <b>{dist:+.2f}%</b>{hist_html}</span></div>""",
         unsafe_allow_html=True)
 
+    trend_rows = [("signal", "bullish" if above else "bearish", mst["cond"], above)]
+    if is_macd and mh is not None:
+        trend_rows.append(
+            (f"MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist",
+             f"{mh:+.4f}", "> 0", mh > 0))
+    trend_rows.append(
+        ("close vs " + line_lbl, f"${c:,.2f}", f"${ma:,.2f} ({dist:+.2f}%)", dist > 0))
     col1, col2, col3 = st.columns(3)
     col1.markdown(_sig_card(
         f"Trend Filter — {TUI['headline']}", "📈", "#16a34a", above,
-        [("signal", "bullish" if above else "bearish", mst["cond"], above),
-         ("close vs " + line_lbl, f"${c:,.2f}", f"${ma:,.2f} ({dist:+.2f}%)", dist > 0)],
+        trend_rows,
         f"The condition this strategy trades on: {TUI['core']}, and exit to cash "
         "on the next bar once it flips."), unsafe_allow_html=True)
 
@@ -1316,6 +1337,34 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None):
     return fig
 
 
+def _macd_hist_fig(d_df, months=9):
+    """MACD-histogram bar chart (macd mode only) — the exact quantity the trend
+    filter trades on: long into the next bar while the histogram is > 0.  Green
+    bars mark a positive (bullish) histogram, red a negative (bearish) one."""
+    if cfg.strategy_mode != "macd" or d_df is None or not len(d_df):
+        return None
+    c = d_df["px_close"].to_numpy(float)
+    if len(c) < cfg.macd_slow + cfg.macd_signal:
+        return None
+    hist = bt.macd_hist_array(cfg, c)          # config-driven fast/slow/signal
+    dts = pd.to_datetime(d_df.index)
+    n = min(len(hist), max(60, months * 21))   # a readable recent window
+    dts, hist = dts[-n:], hist[-n:]
+    colors = ["#16a34a" if h > 0 else "#dc2626" for h in hist]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=dts, y=hist, marker_color=colors, name="MACD histogram",
+                         hovertemplate="%{x|%b %d, %Y}: %{y:+.4f}<extra>MACD hist</extra>"))
+    fig.add_hline(y=0, line_color="#334155", line_width=1)
+    fig.update_layout(
+        title=dict(text=(f"📊 MACD histogram ({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) "
+                         f"— the traded signal (long while &gt; 0)"),
+                   font=dict(size=13), x=0, xanchor="left"),
+        height=270, margin=dict(l=0, r=10, t=46, b=0), bargap=0.15,
+        yaxis_title="Histogram (price units)",
+        xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
+    return fig
+
+
 def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None, sigs=None):
     st.markdown(f"### 🔮 Model forecast charts ({cfg.key})")
     hl = predict_next_daily_hl(d_df)
@@ -1334,6 +1383,10 @@ def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None, sig
         st.plotly_chart(f7, use_container_width=True, key=f"{key_prefix}_c7")
     if f14:
         st.plotly_chart(f14, use_container_width=True, key=f"{key_prefix}_c14")
+    # MACD histogram — the traded signal — anchored below every other chart.
+    fmh = _macd_hist_fig(d_df)
+    if fmh:
+        st.plotly_chart(fmh, use_container_width=True, key=f"{key_prefix}_macdhist")
 
 
 # ════════════════════════════════════════════════════════════════════════
