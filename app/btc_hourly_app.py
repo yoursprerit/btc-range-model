@@ -1043,9 +1043,18 @@ def _seed_daily_raw_from_versioned(df: pd.DataFrame) -> pd.DataFrame:
             seed["coinbase_close"] = seed["btc_close"] * (1.0 + seed["cb_premium"] / 100.0)
         seed = seed.drop(columns=[c for c in ("cb_premium", "cb_premium_ma3", "cb_premium_z7")
                                   if c in seed.columns])
-        # Keep only columns the live frame also produces (schema alignment).
-        seed = seed[[c for c in seed.columns if c in df.columns or c == "coinbase_close"]]
-        # combine_first: live values win where present; CSV fills older dates.
+        # Keep columns the live frame produces, PLUS the raw on-chain (oc_*) and
+        # coinbase_close inputs the daily H/L model needs.  The on-chain series come
+        # from blockchain.info, which is frequently unreachable from the deploy host;
+        # when that live fetch fails the live frame has no oc_* columns at all, and a
+        # strict "only columns already in df" filter would drop the CSV's on-chain
+        # data too — leaving compute_daily_forecast unable to build ~33 oc_* features
+        # and crashing with a KeyError.  Letting the versioned CSV introduce these
+        # columns keeps real (if slightly stale) on-chain data flowing.
+        seed = seed[[c for c in seed.columns
+                     if c in df.columns or c == "coinbase_close" or c.startswith("oc_")]]
+        # combine_first: live values win where present; CSV fills older dates (and
+        # supplies whole columns the live fetch dropped).
         return df.combine_first(seed).sort_index()
     except Exception:
         return df
@@ -1193,6 +1202,20 @@ def compute_daily_forecast(target_date_iso, data_end=None):
         f["cb_premium_z7"]  = (_prem - _prem.rolling(7).mean()) / _prem.rolling(7).std()
 
     f = f.replace([np.inf,-np.inf], np.nan)
+    # Robustness backstop: the model's feat_cols include on-chain (oc_*) and
+    # Coinbase-premium (cb_*) features sourced from external APIs (blockchain.info
+    # / Coinbase). When those are unreachable — and the versioned seed can't reach
+    # the most recent bars — the columns are absent or NaN, which previously raised
+    # a hard KeyError (or silently dropped the as-of bar). These features are diffs
+    # / z-scores / premia centred on 0, so a neutral 0 fill is a safe fallback that
+    # keeps a fresh forecast flowing on the ~80 always-available price/macro
+    # features rather than taking the whole app down.
+    _missing = [col for col in fc if col not in f.columns]
+    for col in _missing:
+        f[col] = 0.0
+    _optional = [c for c in fc if c.startswith("oc_") or c.startswith("cb_")]
+    if _optional:
+        f[_optional] = f[_optional].fillna(0.0)
     F = f[fc].dropna()
     if F.empty:
         return None
@@ -3005,6 +3028,16 @@ def _build_ct_batch_predictions(data_end=None):
 
     fc = AD["feat_cols"]
     f  = f.replace([np.inf, -np.inf], np.nan)
+    # Same robustness backstop as compute_daily_forecast: neutral-fill on-chain /
+    # premium features when their external sources (blockchain.info / Coinbase) are
+    # unreachable, so a missing oc_* / cb_* column degrades gracefully instead of
+    # raising a KeyError. These features are diffs / z-scores / premia centred on 0.
+    for col in fc:
+        if col not in f.columns:
+            f[col] = 0.0
+    _optional = [c for c in fc if c.startswith("oc_") or c.startswith("cb_")]
+    if _optional:
+        f[_optional] = f[_optional].fillna(0.0)
     F  = f[fc].dropna()
     if F.empty:
         return None
