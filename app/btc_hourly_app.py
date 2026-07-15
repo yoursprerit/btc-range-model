@@ -74,7 +74,7 @@ CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
 # Backtest logic version — bump this string whenever backtest loop logic changes
 # so @st.cache_data returns fresh results rather than stale cached ones.
-_BT_LOGIC_VERSION = "sl7-v38-vrecent5-reentry-override"
+_BT_LOGIC_VERSION = "sl8-v39-mstr-nostop-mstu6-vrecent5-reentry-override"
 _BACKTEST_DATA_DIR = _REPO_ROOT / "data" / "backtest"
 
 # ── Trend-signature signal thresholds (single source of truth) ──────────────
@@ -99,33 +99,44 @@ D2_ERRHI_MAX = -1.3   # D2 exit:  err_hi_ma3 below −1.3%
 # periods (best Sharpe + smallest drawdown), whereas the older Pure Regime gate
 # proved fragile to routine BTC-bar data revisions. Only the per-asset STOP differs.
 #   BTC  → Standard MA · no stop     (Full +86% vs B&H +6%; Bull +36%; Bear +13%)
-#   MSTR → Standard MA · fixed −3%   (Full +212% vs B&H +4%; Bull +99%; Bear +51%)
-#   MSTU → Standard MA · fixed −3%   (Full +309% vs B&H −87%; Bull +155%; Bear +115%)
+#   MSTR → Standard MA · no stop     (Full +266% vs B&H +4%; Bull +142%; Bear +57%)
+#   MSTU → Standard MA · fixed −6%   (Full +524% vs B&H −87%; Bull +229%; Bear +101%)
 # These are the default-selected options in the BTC/MSTR/MSTU/options radio buttons.
+# 2026-07e per-asset STOP retune (k-fold + synthetic-OOS validated — see the stop-loss
+# eval): MSTR's fixed −3% only ever whipsawed it out during bull pullbacks (it sat at
+# ~0.6σ and a 1× name has no wipeout tail), so MSTR now runs SIGNAL-EXIT-ONLY with no
+# fixed stop — Full +212→+266%, Sharpe 1.34→1.41, MDD unchanged −22%, win-rate 75→85%.
+# MSTU's −3% sat at only ~0.3σ on a 2× fund and stopped out on routine noise; widening
+# to a vol-matched −6% (≈2× MSTR's old 3%) lifts Full +309→+524%, Sharpe 1.08→1.27,
+# MDD −48→−42%, win-rate 33→62%, while still truncating the crash tail that going
+# stopless opens up (P(MDD<−80%) climbs toward ~44% stopless vs ~26% at 6–8%).
 # 2026-07 structural fixes for capturing post-capitulation rallies (mid-Apr→mid-May 2025):
 #   (b) post-stop re-entry override (REENTRY_OVERRIDE_BARS) — after a stop, a fresh U1
-#       above MA30 re-admits the leveraged sleeves even if the XOR block would veto.
+#       above MA30 re-admits the STOPPED sleeve even if the XOR block would veto. With
+#       the 2026-07e retune only MSTU carries a stop, so the override now applies to MSTU
+#       alone; MSTR (no stop) never sets from_sl and is unaffected.
 #   (c) V-reversal recency window widened 3→5 bars (V_RECENT_WIN) — the capitulation→U1
 #       bridge was too narrow to survive data-vintage revisions, so the live vintage
 #       missed the +45% Apr-2025 rally entirely. Widening makes the capture vintage-robust
 #       (near-identical results on successive Binance/on-chain data pulls).
-# Net vs pre-fix: MSTR Full +212%, MSTU Full +309% (MSTU trades some return + a deeper
-# drawdown for reliably capturing the rally), BTC +86%. Bear and OOS periods ~unchanged.
+# Net vs pre-retune: MSTR Full +266%, MSTU Full +524%, BTC +86%. Bear and OOS improve
+# (MSTU Bear +61→+101%, OOS +95→+144%); the only trade-off is a slightly deeper MSTU
+# Bull drawdown (−27→ still −27% at 6%; wider stops deepen it).
 MSTR_STRATEGY_GATE = "above_ma30"
 MSTU_STRATEGY_GATE = "above_ma30"
 BTC_STRATEGY_GATE  = "above_ma30"
 MSTR_STRATEGY_LABEL = "Standard MA"
 MSTU_STRATEGY_LABEL = "Standard MA"
 BTC_STRATEGY_LABEL  = "Standard MA"
-MSTR_STOP_PCT = 0.03   # MSTR fixed stop −3%
-MSTU_STOP_PCT = 0.03   # MSTU fixed stop −3% (tightened from −7%; helps full & bear)
-# 2026-07 structural fix — post-stop re-entry override (leveraged sleeves only).
+MSTR_STOP_PCT = None   # MSTR: no fixed stop (signal exits only) — 2026-07e retune
+MSTU_STOP_PCT = 0.06   # MSTU fixed stop −6% (vol-matched to ~2× vol; was −3%) — 2026-07e
+# 2026-07 structural fix — post-stop re-entry override (STOPPED leveraged sleeve only).
 # Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
 # even when the XOR combined-block is on. Fixes the "stopped out at the
-# capitulation low, then locked out of the recovery" failure that made MSTR/MSTU
-# miss the mid-Apr→mid-May 2025 rally (BTC, with no stop, caught it and is
-# unaffected). Surgical — fires only after a stop; stable across a 12–20 bar
-# window; leaves the bear and OOS periods unchanged.
+# capitulation low, then locked out of the recovery" failure that made the sleeve
+# miss the mid-Apr→mid-May 2025 rally. Fires only after a fixed-stop exit, so with the
+# 2026-07e retune it applies to MSTU alone — BTC and MSTR carry no stop (from_sl is
+# never set) and are unaffected. Surgical; stable across a 12–20 bar window.
 REENTRY_OVERRIDE_BARS = 12
 # 2026-07c — V-reversal recency window (bars). The V-reversal capitulation fires at
 # the bottom; U1 confirms the bounce a few bars later; v_recent bridges the two so
@@ -4302,11 +4313,16 @@ def run_mstr_backtest(end_date_iso: str,
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
+    # 2026-07e: MSTR runs SIGNAL-EXIT-ONLY (MSTR_STOP_PCT is None). With no fixed
+    # stop, `_has_stop` is False → the stop never fires, `from_sl` is never set,
+    # and the post-stop re-entry override / SL5 cooldown stay inert. Exits are the
+    # D2/D3 regime signals only.
+    _has_stop = MSTR_STOP_PCT is not None
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
     e_reentry = False   # True when current position was entered after an SL exit
     stop_px  = 0.0
-    # SL5 regime-adaptive re-entry state
+    # SL5 regime-adaptive re-entry state (inert when _has_stop is False)
     from_sl = False; bars_since_sl = 0
     trades  = []; nav_arr = np.full(N, np.nan)
 
@@ -4326,7 +4342,7 @@ def run_mstr_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstr_qty * price
-            if price <= stop_px:                   # triggered on close (matches research evaluation)
+            if _has_stop and price <= stop_px:     # triggered on close (matches research evaluation)
                 exit_px  = price                   # fill at close price
                 exit_nav = mstr_qty * exit_px
                 nav = exit_nav
@@ -4334,7 +4350,7 @@ def run_mstr_backtest(end_date_iso: str,
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
                     entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
+                    pnl_abs=nav-e_nav,   exit_signal=f"SL-fixed-{int(MSTR_STOP_PCT*100)}%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                     was_reentry=e_reentry,
                 ))
@@ -4370,9 +4386,11 @@ def run_mstr_backtest(end_date_iso: str,
             # Post-stop re-entry override (see REENTRY_OVERRIDE_BARS): within the
             # window after a stop, a fresh U1 above the MA30 re-admits even when the
             # XOR combined-block would otherwise veto. Recovers post-capitulation
-            # rallies (e.g. Apr 2025) that the fixed −3% stop + XOR block otherwise
-            # locks the sleeve out of. Fires only after a stop; never in normal state.
-            _reentry_override = bool(REENTRY_OVERRIDE_BARS and from_sl
+            # rallies (e.g. Apr 2025) that a fixed stop + XOR block would otherwise
+            # lock the sleeve out of. Fires only after a stop; never in normal state.
+            # Override is gated on _has_stop: it can only fire after a fixed-stop
+            # exit, so with MSTR now stop-less (2026-07e) it is permanently inert here.
+            _reentry_override = bool(_has_stop and REENTRY_OVERRIDE_BARS and from_sl
                                      and bars_since_sl <= REENTRY_OVERRIDE_BARS
                                      and u1[i] and above_ma30[i] and not _exit_at_i)
             # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
@@ -4381,7 +4399,8 @@ def run_mstr_backtest(end_date_iso: str,
             if (tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i)) or _reentry_override:
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstr_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * (1 - MSTR_STOP_PCT)
+                e_nav = nav; pos = "LONG"
+                stop_px = price * (1 - MSTR_STOP_PCT) if _has_stop else 0.0
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
@@ -4441,7 +4460,7 @@ def run_mstr_backtest(end_date_iso: str,
         last_price    = float(mstr_px[N-1]) if N > 0 and np.isfinite(mstr_px[N-1]) else None,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
                              entry_trigger=e_trigger,
-                             stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+                             stop_price=(round(stop_px, 4) if _has_stop else None)) if pos == "LONG" else None),
         from_sl       = from_sl,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
@@ -4951,6 +4970,10 @@ def run_mstu_backtest(end_date_iso: str,
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
     # ── Backtest loop — execute in MSTU ───────────────────────────────────────
+    # 2026-07e: MSTU keeps a fixed stop, widened −3% → −6% (vol-matched to its ~2×
+    # volatility). It is the only sleeve that still carries a stop, so the post-stop
+    # re-entry override applies to MSTU alone.
+    _has_stop = MSTU_STOP_PCT is not None
     nav      = initial_capital; pos = "CASH"; mstu_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
     e_reentry = False   # True when current position was entered after an SL exit
@@ -4975,7 +4998,7 @@ def run_mstu_backtest(end_date_iso: str,
             continue
         if pos == "LONG":
             cur = mstu_qty * price
-            if price <= stop_px:                   # triggered on close (matches research evaluation)
+            if _has_stop and price <= stop_px:     # triggered on close (matches research evaluation)
                 exit_px  = price                   # fill at close price
                 exit_nav = mstu_qty * exit_px
                 nav = exit_nav
@@ -4983,7 +5006,7 @@ def run_mstu_backtest(end_date_iso: str,
                     entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
                     entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
                     exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
-                    pnl_abs=nav-e_nav,   exit_signal="SL-fixed-3%",
+                    pnl_abs=nav-e_nav,   exit_signal=f"SL-fixed-{int(MSTU_STOP_PCT*100)}%",
                     duration_days=(dates[i]-e_date).days, stop_triggered=True,
                     was_reentry=e_reentry,
                 ))
@@ -5019,9 +5042,9 @@ def run_mstu_backtest(end_date_iso: str,
             # Post-stop re-entry override (see REENTRY_OVERRIDE_BARS): within the
             # window after a stop, a fresh U1 above the MA30 re-admits even when the
             # XOR combined-block would otherwise veto. Recovers post-capitulation
-            # rallies (e.g. Apr 2025) that the fixed −3% stop + XOR block otherwise
+            # rallies (e.g. Apr 2025) that the fixed −6% stop + XOR block otherwise
             # locks the sleeve out of. Fires only after a stop; never in normal state.
-            _reentry_override = bool(REENTRY_OVERRIDE_BARS and from_sl
+            _reentry_override = bool(_has_stop and REENTRY_OVERRIDE_BARS and from_sl
                                      and bars_since_sl <= REENTRY_OVERRIDE_BARS
                                      and u1[i] and above_ma30[i] and not _exit_at_i)
             # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
@@ -5030,7 +5053,8 @@ def run_mstu_backtest(end_date_iso: str,
             if (tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i)) or _reentry_override:
                 e_reentry = bool(from_sl)              # mark if entering after SL
                 mstu_qty = nav / price; e_price = price; e_date = dates[i]
-                e_nav = nav; pos = "LONG"; stop_px = price * (1 - MSTU_STOP_PCT)
+                e_nav = nav; pos = "LONG"
+                stop_px = price * (1 - MSTU_STOP_PCT) if _has_stop else 0.0
                 from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
                 if v_recent[i]:
                     e_trigger = "U1 + V-reversal"
@@ -5090,7 +5114,7 @@ def run_mstu_backtest(end_date_iso: str,
         last_price    = float(mstu_px[N-1]) if N > 0 and np.isfinite(mstu_px[N-1]) else None,
         open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
                              entry_trigger=e_trigger,
-                             stop_price=round(stop_px, 4)) if pos == "LONG" else None),
+                             stop_price=(round(stop_px, 4) if _has_stop else None)) if pos == "LONG" else None),
         from_sl       = from_sl,
         bars_since_sl = bars_since_sl,
         bull_regime_series = bull_regime_series,
@@ -7170,54 +7194,18 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
     </table>
   </div>
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
-  <!-- STOP-LOSS & RE-ENTRY -->
+  <!-- NO STOP-LOSS (2026-07e: MSTR signal-exit-only) -->
   <div style='margin-bottom:12px;'>
     <div style='font-size:11px; font-weight:700; color:#5b21b6; text-transform:uppercase;
-         letter-spacing:0.8px; margin-bottom:6px;'>🛑 Stop-Loss &amp; Re-Entry (SL5 Regime-Adaptive + Post-Stop Override)</div>
-    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#4c1d95;'>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fef9c3; color:#713f12; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>Stop trigger</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−3%</b> from entry price — triggers on daily close below stop level
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐂 BULL re-entry</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Re-enter <b>immediately</b> on next valid signal (BTC above MA30 &amp; MA30 rising)
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🐻 BEAR re-entry</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Wait <b>10-bar cooldown</b> then re-enter on next valid signal
-        </td>
-      </tr>
-      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
-      <tr>
-        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
-          <span style='background:#dbeafe; color:#1e40af; font-weight:700; border-radius:5px;
-               padding:2px 8px; font-size:11px;'>🔁 Post-stop override</span>
-        </td>
-        <td style='vertical-align:top; padding:3px 0;'>
-          Within <b>12 bars</b> of a stop, a fresh <b>U1 above MA30</b> re-admits even if the
-          XOR combined-block would veto. Paired with a <b>5-bar V-reversal window</b> (2026-07c)
-          so the capitulation→U1 entry survives data-vintage revisions — together they reliably
-          capture post-capitulation rallies (e.g. mid-Apr→mid-May 2025); <b>MSTR Full +212%</b>
-        </td>
-      </tr>
-    </table>
+         letter-spacing:0.8px; margin-bottom:6px;'>🔒 Position Management (no fixed stop)</div>
+    <div style='font-size:12px; color:#4c1d95;'>
+      <b>No stop-loss</b> — MSTR positions are closed <b>only</b> by the shared D2/D3 regime
+      exit signals (2026-07e retune). MSTR's old fixed −3% stop sat at only ~0.6σ and, on a 1×
+      instrument with no wipeout tail, only ever whipsawed the sleeve out during bull-market
+      pullbacks; removing it lifts <b>Full +212% → +266%</b> (Sharpe 1.34 → 1.41, drawdown
+      unchanged −22%, win-rate 75% → 85%). With no stop there is no post-stop override or SL
+      cooldown — the V-reversal entry and shared D2/D3 exits carry the sleeve.
+    </div>
   </div>
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
   <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
@@ -8069,7 +8057,10 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>Stop trigger</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Fixed <b>−3%</b> from entry price — triggers on daily close below stop level
+          Fixed <b>−6%</b> from entry price — triggers on daily close below stop level.
+          Widened from −3% (2026-07e): on a 2× fund the old −3% sat at only ~0.3σ and
+          whipsawed out on routine noise. The vol-matched −6% (≈2× MSTR's old 3%) lifts
+          <b>Full +309% → +524%</b> (Sharpe 1.08 → 1.27, MDD −48% → −42%, win-rate 33% → 62%).
         </td>
       </tr>
       <tr><td colspan='2' style='padding:4px 0;'></td></tr>
@@ -8099,11 +8090,11 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                padding:2px 8px; font-size:11px;'>🔁 Post-stop override</span>
         </td>
         <td style='vertical-align:top; padding:3px 0;'>
-          Within <b>12 bars</b> of a stop, a fresh <b>U1 above MA30</b> re-admits even if the
+          Within <b>12 bars</b> of a −6% stop, a fresh <b>U1 above MA30</b> re-admits even if the
           XOR combined-block would veto. Paired with a <b>5-bar V-reversal window</b> (2026-07c),
-          MSTU reliably enters the mid-Apr→mid-May 2025 rally across data vintages — but on the 2×
-          fund that trade nets a loss, so the capture <b>lowers Full +396%→+309%</b> and deepens
-          drawdown (−48%)
+          MSTU reliably enters post-capitulation rallies (e.g. mid-Apr→mid-May 2025) across data
+          vintages. With the wider −6% stop the sleeve is stopped out far less often (fewer, deeper
+          stops instead of noise whipsaws), so the override fires rarely; <b>MSTU Full +524%</b>.
         </td>
       </tr>
     </table>
@@ -11491,7 +11482,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 
         # 2026-07 retune: BTC, MSTR & MSTU all trade the Standard MA (above-MA30) entry
         # gate; the regime-adaptive D2/D3 exit is shared. Only the fixed stop differs
-        # (MSTR/MSTU −3%, BTC none).
+        # (2026-07e: MSTU −6%, MSTR & BTC none / signal-exit-only).
         def _entry_state(entry_ok):
             if entry_ok:               return "🟢 ENTRY FIRES"
             if sigs["u1_triggered"]:   return "🟡 U1 but gate not met"
@@ -11499,7 +11490,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _exit_txt = "🔴 EXIT active" if _exit_signal else "none"
         _eq_sub = (
             f"Entry today → <b>📊 Standard MA:</b> {_entry_state(_entry_mstr)} "
-            f"(same signal as BTC; stops MSTR/MSTU −3%)"
+            f"(same signal as BTC; MSTU −6% stop, MSTR signal-exit-only)"
             f" &nbsp;|&nbsp; Exit (regime-adaptive D2/D3): {_exit_txt}"
             f" &nbsp;|&nbsp; Regime: {_regime_label}"
         )
@@ -11523,7 +11514,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 border-radius:12px; padding:14px 20px; margin:2px 0 4px 0;">
               <div style="font-size:10px; font-weight:700; color:#64748b;
                   text-transform:uppercase; letter-spacing:0.9px; margin-bottom:8px;">
-                📈 MSTR &amp; MSTU (📊 Standard MA · fixed −3% · SL5 re-entry) — shared regime-adaptive D2/D3 exit
+                📈 MSTR &amp; MSTU (📊 Standard MA — MSTR signal-exit-only · MSTU fixed −6% + SL5 re-entry) — shared regime-adaptive D2/D3 exit
               </div>
               <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:7px; align-items:flex-start;">
                 {_chip_html(_mstr_lbl, _mstr_note, _mstr_bg, _mstr_brd, _mstr_col, "MSTR", "Standard MA")}
@@ -11545,6 +11536,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             "SL-trail-7%": ("🛑", "Stop Loss hit — Trailing −7%", "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-3%":  ("🛑", "Stop Loss hit — Fixed −3%",   "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-5%":  ("🛑", "Stop Loss hit — Fixed −5%",   "#fef2f2", "#dc2626", "#991b1b"),
+            "SL-fixed-6%":  ("🛑", "Stop Loss hit — Fixed −6%",   "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-7%":  ("🛑", "Stop Loss hit — Fixed −7%",   "#fef2f2", "#dc2626", "#991b1b"),
             "SL-fixed-10%": ("🛑", "Stop Loss hit — Fixed −10%",  "#fef2f2", "#dc2626", "#991b1b"),
             "D3":          ("📉", "D3 Downtrend Signature",        "#fff7ed", "#ea580c", "#9a3412"),
@@ -12042,16 +12034,16 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
          _exit_signal, False),
         # ── Risk management — per-asset (all share the same signals) ──
         ("Fixed stop (per asset)",
-         "MSTR −3% · MSTU −3% · BTC none — close-triggered, filled at close",
-         "MSTR/MSTU exit if daily close ≤ entry × 0.97; BTC uses D2/D3 only",
+         "MSTU −6% · MSTR none · BTC none — close-triggered, filled at close",
+         "MSTU exits if daily close ≤ entry × 0.94; MSTR & BTC use D2/D3 signal exits only",
          False, False),
         ("Re-entry after stop (SL5)",
-         "BULL regime → re-enter next valid signal · BEAR/Neutral → wait 10 bars",
-         "regime-adaptive cooldown avoids dead-cat re-entries",
+         "MSTU only — BULL regime → re-enter next valid signal · BEAR/Neutral → wait 10 bars",
+         "regime-adaptive cooldown avoids dead-cat re-entries (MSTU is the only stopped sleeve)",
          False, False),
         ("Post-stop re-entry override",
-         "MSTR/MSTU: within 12 bars of a stop, a fresh U1 above MA30 re-admits (bypasses XOR block)",
-         "recovers post-capitulation rallies the stop+XOR block used to lock the leveraged sleeves out of (e.g. Apr 2025); BTC unaffected",
+         "MSTU: within 12 bars of a −6% stop, a fresh U1 above MA30 re-admits (bypasses XOR block)",
+         "recovers post-capitulation rallies the stop+XOR block used to lock MSTU out of (e.g. Apr 2025); MSTR & BTC (no stop) unaffected",
          False, False),
     ]
     st.markdown(
@@ -12072,9 +12064,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "both-true and neither-true states. "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 AND MA30 rising) → D3 only (patient); "
                 "<b>BEAR/Neutral</b> → D2 or D3 (defensive). "
-                "Per-asset fixed stop: MSTR/MSTU −3% (SL5 re-entry + post-stop re-entry "
-                "override — a fresh U1 above MA30 re-admits within 12 bars of a stop, so "
-                "the leveraged sleeves recover post-capitulation rallies), BTC none."
+                "Per-asset fixed stop (2026-07e): MSTU −6% (vol-matched to its ~2× vol; "
+                "SL5 re-entry + post-stop re-entry override — a fresh U1 above MA30 re-admits "
+                "within 12 bars of a stop, so MSTU recovers post-capitulation rallies); "
+                "MSTR & BTC are signal-exit-only (no fixed stop)."
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
@@ -12083,16 +12076,18 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
             prob_txt=(
-                "Full period (Jun 2024–May 2026), Standard MA, live stops + post-stop re-entry override: "
-                "<b>BTC +86%</b> (B&amp;H +6%) · <b>MSTR +212%</b> (B&amp;H +4%) · "
-                "<b>MSTU +309%</b> (B&amp;H −76%). "
-                "Bear period: MSTR +51% · MSTU +115% · BTC +13% — all positive vs deeply-negative B&amp;H. "
-                "Bull (Jun 2024–May 2025): BTC +36% · MSTR +99% · MSTU +155%."
+                "Full period (Jun 2024–May 2026), Standard MA, 2026-07e stops (MSTR none · MSTU −6%) "
+                "+ post-stop re-entry override: "
+                "<b>BTC +86%</b> (B&amp;H +6%) · <b>MSTR +266%</b> (B&amp;H +4%) · "
+                "<b>MSTU +524%</b> (B&amp;H −76%). "
+                "Bear period: MSTR +57% · MSTU +101% · BTC +13% — all positive vs deeply-negative B&amp;H. "
+                "Bull (Jun 2024–May 2025): BTC +36% · MSTR +142% · MSTU +229%."
             ),
             conf_txt=(
                 "⚠️ Heavy in-sample optimization: bull window is in-sample for the CT model, "
-                "results ride ~7 trades/period and (for MSTU) ~2 large rally trades. "
-                "Bear period is partly OOS. MSTU's −3% stop on a 2× ETF is deliberately tight. "
+                "results ride ~8 trades/period and (for MSTU) ~2 large rally trades. "
+                "Bear period is partly OOS. MSTU's −6% stop is vol-matched to its ~2× volatility "
+                "(was −3%); MSTR now runs stop-free. "
                 "Treat magnitudes as illustrative, not forward guarantees."
             ),
         ),
@@ -12224,9 +12219,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - **Entry (all assets — 📊 Standard MA):** U1 (`err_hi_ma3 > +1.3%` AND `hi_breaks_3d ≥ 2`) AND
   ((above-MA30 **XOR** Clean 7d) **OR** ⚡ V-reversal) — the most profitable and most stable gate on the current data
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
-- **Stops (per-asset):** MSTR −3% · MSTU −3% (tightened from −7%) · BTC none — all with SL5 regime-adaptive re-entry + post-stop re-entry override (see below)
-- **Full period** (Jun 2024–May 2026): **BTC +86%** · **MSTR +212%** · **MSTU +309%** (vs B&H +6% / +4% / −76%)
-- **Bear period:** MSTR +51% · MSTU +115% · BTC +13% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%, BTC −30%)
+- **Stops (per-asset · 2026-07e):** MSTU −6% (vol-matched to its ~2× vol; was −3%) with SL5 regime-adaptive re-entry + post-stop re-entry override · MSTR & BTC signal-exit-only (no fixed stop)
+- **Full period** (Jun 2024–May 2026): **BTC +86%** · **MSTR +266%** · **MSTU +524%** (vs B&H +6% / +4% / −76%)
+- **Bear period:** MSTR +57% · MSTU +101% · BTC +13% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%, BTC −30%)
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -12589,7 +12584,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 entry         = (_bt_mstr_oos or {}).get("open_entry"),
                 live_price    = _mstr_panel_px,
                 asset_label   = "MSTR",
-                stop_type     = f"fixed-{int(round(MSTR_STOP_PCT*100))}%",
+                stop_type     = (f"fixed-{int(round(MSTR_STOP_PCT*100))}%" if MSTR_STOP_PCT is not None else "none"),
                 nav           = (_bt_mstr_oos or {}).get("stats", {}).get("final_nav"),
                 last_trade    = _last_closed_trade(_bt_mstr_oos),
                 from_sl       = (_bt_mstr_oos or {}).get("from_sl", False),
@@ -15414,9 +15409,10 @@ with tab_btc:
     st.info(
         "🔁 **Re-entry:** BTC has **no stop-loss**, so the **post-stop re-entry override** "
         "(2026-07b — a fresh U1 above the MA30 that re-admits within 12 bars of a stop, "
-        "bypassing the XOR gate) **does not apply here**. It exists only on the stopped "
-        "leveraged sleeves (MSTR/MSTU), where it recovers post-capitulation rallies (e.g. "
-        "mid-Apr→mid-May 2025). BTC exits are managed entirely by the D2/D3 regime rules."
+        "bypassing the XOR gate) **does not apply here**. After the 2026-07e retune it exists "
+        "only on the **MSTU** sleeve (the sole stopped sleeve — MSTR is now signal-exit-only), "
+        "where it recovers post-capitulation rallies (e.g. mid-Apr→mid-May 2025). BTC exits are "
+        "managed entirely by the D2/D3 regime rules."
     )
     _btc_variant = st.radio(
         "Entry gate variant",
@@ -15475,25 +15471,27 @@ with tab_mstr:
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
         "**⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) — on the "
         "current data it is the most profitable *and* most stable gate for MSTR, delivering "
-        "**Full +212%** (vs B&H +4%), Bull +99%, and staying positive in bear (+51% vs "
-        "B&H −57%), with strong Sharpe (1.21) and −22% drawdown. "
-        "Exit is the shared regime-adaptive D2/D3 rule; stop is fixed −3% with "
-        "SL5 re-entry **plus the post-stop re-entry override** (re-admits a fresh U1 above the "
-        "MA30 within 12 bars of a stop) and a **5-bar V-reversal window** so the "
-        "capitulation→U1 bridge reliably captures the mid-Apr→mid-May 2025 rally across data "
-        "vintages. Switch gates with the radio below."
+        "**Full +266%** (vs B&H +4%), Bull +142%, and staying positive in bear (+57% vs "
+        "B&H −57%), with strong Sharpe (~1.4) and −22% drawdown. "
+        "**2026-07e: MSTR now runs signal-exit-only — no fixed stop.** Its old −3% stop only "
+        "whipsawed the sleeve out during bull pullbacks (a 1× name has no wipeout tail), so "
+        "removing it lifts Full +212% → +266% (Sharpe 1.34 → 1.41, win-rate 75% → 85%, drawdown "
+        "unchanged). Exit is the shared regime-adaptive D2/D3 rule; entries still use the "
+        "**5-bar V-reversal window** so the capitulation→U1 bridge reliably captures rallies like "
+        "mid-Apr→mid-May 2025 across data vintages. With no stop there is no SL re-entry or "
+        "post-stop override. Switch gates with the radio below."
     )
     _ds_ver_mstr = _backtest_dataset_version()
     _ds_mtime_mstr = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_mstr} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
     st.info(
-        "🔁 **Post-capitulation rally capture (2026-07b/c):** two changes let MSTR reliably "
-        "catch V-reversal rallies like mid-Apr→mid-May 2025. (b) **Post-stop re-entry override** "
-        "— after a −3% stop, a fresh U1 above the MA30 re-admits within 12 bars, bypassing the "
-        "XOR block. (c) **5-bar V-reversal window** (was 3) — bridges the capitulation→U1 gap so "
-        "the entry survives data-vintage revisions (on the narrower window the live vintage missed "
-        "the rally entirely). Together: **MSTR Full +212%**, capture stable across data pulls. "
-        "On top of SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
+        "🔒 **MSTR is signal-exit-only (2026-07e):** MSTR carries **no fixed stop** — positions "
+        "close only on the shared D2/D3 regime exits. Its old −3% stop only whipsawed the sleeve "
+        "out during bull pullbacks, so removing it lifts **Full +212% → +266%** (Sharpe 1.34 → 1.41, "
+        "win-rate 75% → 85%, drawdown unchanged −22%). With no stop there is no SL cooldown or "
+        "post-stop override. Entries still use the **5-bar V-reversal window** (2026-07c) so the "
+        "capitulation→U1 bridge reliably captures rallies like mid-Apr→mid-May 2025 across data "
+        "vintages (on the narrower 3-bar window the live vintage missed the rally entirely)."
     )
     _mstr_variant = st.radio(
         "Entry gate variant",
@@ -15551,32 +15549,36 @@ with tab_mstu:
     st.markdown(
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
         "signals. **⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) "
-        "with a **fixed −3% stop** — the Standard MA gate delivers **Full +309%** (vs B&H −76%), "
-        "Bull +155%, and keeps Bear positive (+115% vs B&H −92%) by avoiding the leveraged-ETF "
-        "volatility decay B&H suffers. Exit is the shared regime-adaptive D2/D3 rule with SL5 "
-        "re-entry **plus the post-stop re-entry override** (fresh U1 above the MA30 within 12 bars "
-        "of a stop) and a **5-bar V-reversal window** so MSTU reliably enters the mid-Apr→mid-May "
-        "2025 rally across data vintages. **Note:** on the 2× fund that rally trade round-trips to "
-        "a net loss, so capturing it *lowers* full return (was +396% before these fixes) and "
-        "deepens max drawdown (−48%) — the exposure is reliable but not itself profitable on MSTU. "
-        "MSTU launched Sep 18 2024; the Bull period uses synthetic MSTU prices (OLS from MSTR). "
-        "Switch gates with the radio below."
+        "with a **fixed −6% stop** — the Standard MA gate delivers **Full +524%** (vs B&H −76%), "
+        "Bull +229%, and keeps Bear strongly positive (+101% vs B&H −92%) by avoiding the "
+        "leveraged-ETF volatility decay B&H suffers. **2026-07e: the stop was widened −3% → −6%** "
+        "(vol-matched to MSTU's ~2× volatility — the old −3% sat at only ~0.3σ and whipsawed out "
+        "on routine noise), lifting Full +309% → +524% (Sharpe 1.08 → 1.27, MDD −48% → −42%, "
+        "win-rate 33% → 62%) while still truncating the crash tail that going stopless opens up. "
+        "Exit is the shared regime-adaptive D2/D3 rule with SL5 re-entry **plus the post-stop "
+        "re-entry override** (fresh U1 above the MA30 within 12 bars of a stop) and a **5-bar "
+        "V-reversal window** so MSTU reliably enters rallies like mid-Apr→mid-May 2025 across data "
+        "vintages. MSTU launched Sep 18 2024; the Bull period uses synthetic MSTU prices (OLS from "
+        "MSTR). Switch gates with the radio below."
     )
     _ds_ver_mstu = _backtest_dataset_version()
     _ds_mtime_mstu = _backtest_dataset_mtime()
     st.caption(f"📦 Price dataset {_ds_ver_mstu} · pulled via `scripts/pull_backtest_data.py` · OLS β≈1.96 · all QC checks passed")
     st.info(
-        "🔁 **Post-capitulation rally capture (2026-07b/c):** the **post-stop re-entry override** "
-        "(fresh U1 above MA30 re-admits within 12 bars of a stop) plus the **5-bar V-reversal "
-        "window** (was 3) let MSTU reliably enter V-reversal rallies like mid-Apr→mid-May 2025 "
-        "across data vintages. **Trade-off:** on the 2× fund that rally trade nets a loss, so the "
-        "capture *lowers* MSTU full return (**+396%→+309%**) and deepens drawdown (−48%). "
-        "On top of SL5 regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
+        "🛑 **MSTU stop retune (2026-07e): −3% → −6%.** On a 2× fund the old −3% stop sat at only "
+        "~0.3σ and stopped out on routine noise, whipsawing the sleeve. The **vol-matched −6%** "
+        "(≈2× MSTR's old 3%) fixes this: **Full +309% → +524%** (Sharpe 1.08 → 1.27, MDD −48% → "
+        "−42%, win-rate 33% → 62%), while still truncating the catastrophic crash tail that going "
+        "fully stopless opens up (P(MDD<−80%) climbs toward ~44% stopless vs ~26% at 6–8%). The "
+        "**post-stop re-entry override** (fresh U1 above MA30 within 12 bars of a stop) plus the "
+        "**5-bar V-reversal window** still capture post-capitulation rallies; with the wider stop "
+        "MSTU is stopped out far less often, so the override fires rarely. On top of SL5 "
+        "regime-adaptive re-entry (BULL: next signal · BEAR/Neutral: wait 10 bars)."
     )
     _mstu_variant = st.radio(
         "Entry gate variant",
         options=["above_ma30", "pure_regime", "bull_regime", "pure_regime_sata"],
-        index=0,   # ⭐ MSTU default = Standard MA (2026-07c: Full +309% w/ vintage-robust rally capture)
+        index=0,   # ⭐ MSTU default = Standard MA (2026-07e: −6% stop; Full +524% w/ vintage-robust rally capture)
         format_func=lambda x: (
             "📊 Standard MA — Above rising MA30  ⭐ MSTU STRATEGY"
             if x == "above_ma30" else

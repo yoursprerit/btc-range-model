@@ -12,9 +12,11 @@ sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
 all three assets trade the Standard MA (above-MA30) gate — the most profitable
 and most stable gate on the current data.
 
-Verified: reproduces the BTC app's headline BTC +86% / MSTR +212% / MSTU +309%
-(all Standard MA, incl. the 2026-07b post-stop re-entry override and the 2026-07c
-5-bar V-reversal window), full period Jun 2024 → May 2026.
+Verified: reproduces the BTC app's headline BTC +86% / MSTR +266% / MSTU +524%
+(all Standard MA; 2026-07e per-asset stop retune — MSTR now signal-exit-only with
+no fixed stop, MSTU widened −3% → −6% (vol-matched to its ~2× vol); the post-stop
+re-entry override applies only to MSTU now, plus the 2026-07c 5-bar V-reversal
+window), full period Jun 2024 → May 2026.
 
 Caveat: the CT feature data (``data/backtest/raw_features_daily.csv``) spans
 ~2023-11 → the last pull, so BTC-sleeve returns begin ~2024 (not 2021).
@@ -102,16 +104,27 @@ def _ensure_fresh_features() -> None:
 # 2026-07 retune: all three assets use the Standard MA (above-MA30) gate — the
 # most profitable and most stable gate on the current data (mirrors
 # BTC/MSTR/MSTU_STRATEGY_GATE in btc_hourly_app.py). Only the stop differs.
+# 2026-07e per-asset STOP retune (k-fold + synthetic-OOS validated):
+#   BTC  → no fixed stop      (1× core; signal exits only)
+#   MSTR → no fixed stop      (its −3% was ~0.6σ but only ever whipsawed in bulls;
+#                              removing it lifts Full +212→+266%, Sharpe 1.34→1.41,
+#                              MDD unchanged −22%, win-rate 75→85% — and a 1× name
+#                              has no wipeout tail, so a stop adds nothing)
+#   MSTU → fixed −6%          (2× fund; its −3% sat at only ~0.3σ and stopped out on
+#                              routine noise. Vol-matched −6% (≈2× MSTR's old 3%)
+#                              lifts Full +309→+524%, Sharpe 1.08→1.27, MDD −48→−42%,
+#                              win-rate 33→62%, while still truncating the crash tail
+#                              that going stopless blows open. See stop-loss eval.)
 U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
-STOP_PCT = {"BTC": None, "MSTR": 0.03, "MSTU": 0.03}   # BTC: no fixed stop
+STOP_PCT = {"BTC": None, "MSTR": None, "MSTU": 0.06}   # BTC/MSTR: no fixed stop; MSTU −6%
 GATE_BY_ASSET = {"BTC": "above_ma30", "MSTR": "above_ma30", "MSTU": "above_ma30"}
-# 2026-07 structural fix — post-stop re-entry override (leveraged sleeves only).
+# 2026-07 structural fix — post-stop re-entry override (STOPPED leveraged sleeve only).
 # Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
 # even when the XOR combined-block is on. Fixes the "stopped out at the
-# capitulation low, then locked out of the recovery" failure that made MSTR/MSTU
-# miss the mid-Apr→mid-May 2025 rally. Surgical: fires only after a stop, never
-# in normal conditions; BTC (no stop) is unaffected. Stable 12–20 bars.
+# capitulation low, then locked out of the recovery" failure. It fires only after a
+# fixed-stop exit, so with the 2026-07e retune it applies to MSTU alone — BTC and
+# MSTR now carry no stop (from_sl is never set), leaving them untouched. Stable 12–20 bars.
 REENTRY_OVERRIDE_BARS = 12
 # 2026-07c — V-reversal recency window (bars). Bridges the capitulation bar to the
 # U1 confirmation a few bars later; widened 3→5 so the bridge survives data-vintage
@@ -120,8 +133,8 @@ REENTRY_OVERRIDE_BARS = 12
 V_RECENT_WIN = 5
 _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
-    "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.03),
-    "MSTU": dict(name="2× MSTR",        kind="lev",  stop=0.03),
+    "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.0),
+    "MSTU": dict(name="2× MSTR",        kind="lev",  stop=0.06),
 }
 ACCENT = "#f7931a"
 EMOJI = "₿"

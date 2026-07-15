@@ -1,11 +1,43 @@
 # BTC Trend Signature Trading Strategy
 
 **Document type:** Backtested trading strategy derived from trend signature patterns  
-**Last updated:** 2026-07-14  
+**Last updated:** 2026-07-15  
 
 ---
 
-## ⭐ 2026-07c — Vintage-robust rally capture: V-reversal window widened 3 → 5 (CURRENT LIVE)
+## ⭐ 2026-07e — Per-asset stop retune: MSTR stop-free · MSTU −3% → −6% (CURRENT LIVE)
+
+**Change.** k-fold-cross-validated on history **and** 200 Monte-Carlo synthetic-OOS futures, the
+per-asset fixed stops were retuned. The old flat **−3%** was applied to instruments of very
+different volatility — a classic mistake. Vol-matched to each sleeve:
+
+- **MSTR → no fixed stop (signal-exit-only).** MSTR's −3% sat at only ~0.6σ and, on a **1×** name
+  with no wipeout tail, only ever whipsawed the sleeve out during bull-market pullbacks. Removing
+  it lifts **Full +212% → +266%** (Sharpe 1.34 → 1.41, MaxDD unchanged −22%, win-rate 75% → 85%).
+  With no stop there is no SL cooldown or post-stop override on MSTR.
+- **MSTU → −6% (was −3%).** On a **2×** fund the −3% sat at only ~0.3σ and stopped out on routine
+  noise. The vol-matched **−6%** (≈2× MSTR's old 3%) lifts **Full +309% → +524%** (Sharpe 1.08 →
+  1.27, MaxDD −48% → −42%, win-rate 33% → 62%) while still truncating the crash tail that going
+  fully stopless opens up — P(MaxDD<−80%) climbs toward ~44% stopless vs ~26% at 6–8% across the
+  synthetic futures. The post-stop re-entry override + 5-bar V-reversal window still apply; with
+  the wider stop MSTU is stopped out far less often, so the override fires rarely.
+- **BTC → unchanged (no stop).**
+
+| Asset | 🐂 Bull | 🐻 Bear | 🌐 Full | Sharpe (full) | MaxDD (full) | Stop (2026-07e) |
+|-------|---------|---------|---------|---------------|--------------|-----------------|
+| **BTC**  | +36%  | +13%  | **+86%**  | 1.05 | −28% | none (signal exits) |
+| **MSTR** | +142% | +57%  | **+266%** | 1.41 | −22% | **none** (was −3%) |
+| **MSTU** | +229% | +101% | **+524%** | 1.27 | −42% | **−6%** (was −3%) |
+
+*(Full/Bull/Bear on the committed vintage via `btc_ct_engine` sliced to the app windows; OOS
+Mar→Jul 2026 also improves — MSTU +95% → +144%. The principle is **vol-parity**, not a single
+number: each sleeve's stop scales with its volatility. Full derivation: stop-loss / synthetic-OOS
+evals.)* The sections below document the earlier tuning eras (the −3% derivation, the V-reversal
+and override fixes) and remain valid for their context; the stop config above supersedes them.
+
+---
+
+## 2026-07c — Vintage-robust rally capture: V-reversal window widened 3 → 5
 
 **Problem.** The 2026-07b override (below) captured the Apr-2025 rally *on the committed data
 vintage* — but the **live app self-heals its data** (`_ensure_fresh_features()` re-pulls Binance
@@ -95,8 +127,8 @@ same **U1 > +1.3% / D2 < −1.3%** thresholds, the same regime-adaptive D2/D3 ex
 re-entry. Only the per-asset **fixed stop** differs.
 
 - **Gate (all three):** U1 AND ((above-MA30 **XOR** Clean 7d) **OR** ⚡ V-reversal).
-- **Stops:** BTC none (D2/D3 manage risk) · MSTR −3% · MSTU −3%.
-- **Re-entry:** SL5 regime-adaptive **+ post-stop re-entry override** (2026-07b — see section above).
+- **Stops (2026-07e):** BTC none · MSTR none (signal exits only) · MSTU −6% (vol-matched to ~2× vol; was −3%).
+- **Re-entry:** SL5 regime-adaptive **+ post-stop re-entry override** — MSTU only now (2026-07b/e; see top section).
 
 **Why Standard MA.** For the two equities it is the **most profitable *and* most stable**
 gate across both the bull and full periods — best Sharpe and smallest drawdown of any gate.
@@ -693,7 +725,8 @@ MSTU is the T-Rex 2× Long MSTR ETF (inception Sep 18, 2024). For pre-inception 
 Evaluated using `backtest_stop_loss.py` · Intraday triggering and fill · 1-bar lag execution · $100k start · Run: 2026-06-09
 *(Historical reference — live strategy now uses close-price triggers per `backtest_stop_loss_reentry.py` evaluation)*
 
-**Live strategy configs: BTC → No stop · MSTR → Fixed −3% · MSTU → Fixed −7%**
+**Historical config (this era): BTC → No stop · MSTR → Fixed −3% · MSTU → Fixed −7%**
+*(Superseded by the 2026-07e retune at the top: MSTR → no stop · MSTU → −6%.)*
 
 ### BTC — Total Return by Period
 

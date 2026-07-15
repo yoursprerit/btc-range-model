@@ -980,7 +980,7 @@ signal (never its own), exactly as the dedicated apps do:
 
 | App / signal | Traded instruments | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · BTC signal-only, MSTR/MSTU −3% |
+| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · BTC & MSTR signal-only, MSTU −6% |
 | 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime · GLDM/GDX −3%, UGL signal-only, NUGT −5% |
 | 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime · XLE/OIH −8%, ERX signal-only |
 | 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
