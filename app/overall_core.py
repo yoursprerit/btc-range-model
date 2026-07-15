@@ -90,7 +90,8 @@ _warmup_imports()   # run at import time (single-threaded), before any thread po
 # ════════════════════════════════════════════════════════════════════════
 # CONFIGS — one per signal app; each may trade its 1× primary + siblings.
 # ════════════════════════════════════════════════════════════════════════
-# BTC — daily MA30 trend filter (model-free, robust regime), −3% stop.
+# BTC — daily MA30 trend filter (model-free, robust regime). Per-asset stops
+# (2026-07e): BTC & MSTR signal-exit-only (no fixed stop), MSTU −6%.
 # The dedicated BTC app runs an *hourly* divergence Pure-Regime system that uses
 # a 30-day moving average (``above_ma30``) as its trend-regime gate; that hourly
 # CT-anchored signal can't be reproduced in this daily engine, so BTC is traded
@@ -120,7 +121,8 @@ BTC_CFG = TickerConfig(
     day_up_thresh=0.02, day_down_thresh=-0.02,
     results_note=("Divergence Pure-Regime — the SAME logic and thresholds as the "
                   "BTC app (U1 err_hi>+1.3% + ≥2 high-breaks, D2 exit err_hi<−1.3%, "
-                  "MA30 regime gate, −3% stop), so the live entry/exit signal "
+                  "MA30 regime gate; per-asset stops 2026-07e — BTC & MSTR "
+                  "signal-exit-only, MSTU −6%), so the live entry/exit signal "
                   "tracks the BTC app. NOTE: those thresholds are calibrated for "
                   "the app's HOURLY CT-model; on a daily RidgeCV rebuild the H/L "
                   "predictions are noisier, so the daily back-test is weak and "
