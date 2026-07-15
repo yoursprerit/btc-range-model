@@ -789,7 +789,7 @@ def render_gate_signatures(sigs):
     g1.markdown(_gate_card(
         "Bull Regime", "🐂", bull,
         [("close vs 20-day SMA", close_s, f"> {ma_s}", above, "threshold"),
-         ("20-day SMA slope", "rising" if slope else "falling", "rising", slope, "context")],
+         ("20-day SMA slope", "rising" if slope else "falling", "rising", slope, "threshold")],
         "Price sits above a rising 20-day average — an established uptrend. Satisfies "
         "the entry gate on its own."), unsafe_allow_html=True)
     g2.markdown(_gate_card(
@@ -803,7 +803,7 @@ def render_gate_signatures(sigs):
         "V-Reversal", "⚡", vgate,
         [("washout in last 3 bars", "yes — ≤3 bars ago" if vgate else "none",
           "capitulation ≤3 bars ago", vgate, "context"),
-         ("capitulation score (today)", f"{vdn:.2f}", "> 0.80 + deep low", vgate, "context")],
+         ("capitulation score (today)", f"{vdn:.2f}", "> 0.80 + deep low", vgate, "threshold")],
         "A recent sharp washout / capitulation-low undershoot (V-shaped reversal setup) — "
         "also satisfies the entry gate. The gate arms when the capitulation score clears "
         "0.80 <i>and</i> the day's low deeply undershoots the model, within the last 3 bars."),
