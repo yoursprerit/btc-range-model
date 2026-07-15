@@ -1,0 +1,97 @@
+name: Refresh backtest dataset
+
+# Keeps data/backtest/raw_features_daily.csv (and the sibling CSVs + manifest)
+# current so the live app has a fresh on-chain fallback when blockchain.info is
+# unreachable from the deploy host. The pull script fetches BTC + macro +
+# on-chain + Coinbase premium; a guard script blocks any commit that would
+# regress the versioned dataset, so a failed/partial pull can never overwrite
+# the known-good CSV.
+
+on:
+  schedule:
+    # Daily at 13:15 UTC — just after the 12:00-UTC (7am-CT) daily bar closes,
+    # so the newest completed bar is available. GitHub cron is best-effort.
+    - cron: "15 13 * * *"
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
+
+# Allow the built-in token to push the refreshed data back to the branch.
+permissions:
+  contents: write
+
+# Never let two refreshes race; let an in-flight one finish.
+concurrency:
+  group: refresh-backtest-data
+  cancel-in-progress: false
+
+env:
+  # Alarm (fail the job) when the dataset is older than this, so a silently
+  # broken pipeline is visible before the app's ffill(limit=5) stops covering.
+  MAX_STALE_DAYS: "5"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install data-pull dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Match the app's pins (requirements.txt) for the libraries the pull
+          # script uses; the model/streamlit stack isn't needed to refresh data.
+          pip install "numpy>=1.26,<2.3" "pandas>=2.1,<2.3" "requests>=2.31" "yfinance>=0.2.40"
+
+      - name: Pull fresh dataset (BTC + macro + on-chain + Coinbase premium)
+        id: pull
+        # The pull script exits non-zero on soft QC warnings (e.g. an equity
+        # source lagging) even when it wrote a good CSV; the guard below — not
+        # this exit code — decides whether the result is safe to commit.
+        continue-on-error: true
+        run: python scripts/pull_backtest_data.py
+
+      - name: Validate refreshed CSV (block regressions)
+        run: python scripts/validate_refreshed_data.py
+
+      - name: Commit & push refreshed data
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- data/backtest/; then
+            echo "No changes to data/backtest/ — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/backtest/
+          NEWDATE="$(python -c "import pandas as pd; print(pd.read_csv('data/backtest/raw_features_daily.csv', index_col=0, parse_dates=True).index.max().date())")"
+          git commit \
+            -m "chore(data): refresh backtest dataset (through ${NEWDATE})" \
+            -m "Automated refresh via .github/workflows/refresh-backtest-data.yml"
+          git push
+
+      - name: Alarm if dataset is stale
+        # Runs whether or not anything was committed: surfaces a silently broken
+        # pipeline (e.g. the pull crashing for days) before the app degrades.
+        run: |
+          python - <<'PY'
+          import os, sys
+          from datetime import datetime, timezone
+          import pandas as pd
+          df = pd.read_csv("data/backtest/raw_features_daily.csv",
+                           index_col=0, parse_dates=True)
+          last = df.index.max().normalize()
+          today = pd.Timestamp(datetime.now(timezone.utc).date())  # naive UTC date
+          age = (today - last).days
+          limit = int(os.environ.get("MAX_STALE_DAYS", "5"))
+          print(f"dataset last date {last.date()} — {age} day(s) old (limit {limit})")
+          if age > limit:
+              print(f"::error::backtest dataset is {age} days stale (> {limit}); "
+                    "the daily refresh is not producing fresh data")
+              sys.exit(1)
+          PY
