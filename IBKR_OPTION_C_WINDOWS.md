@@ -33,6 +33,48 @@ book** and trades the IBKR **paper** account.
 
 ---
 
+## ⚡ Quick start — automated setup (steps 2–7 in one script)
+
+Most of the setup below is scripted in **`scripts\setup_windows_option_c.ps1`**.
+It's idempotent (safe to re-run) and each phase is individually selectable.
+
+From an **elevated** PowerShell (Run as Administrator), in the cloned repo:
+
+```powershell
+# full setup: Python 3.12 + Git, venv + deps, secret, IB Gateway installer,
+# IBC (with paper creds), and the daily scheduled task
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -All -IbUser myPaperUser -IbPassword 's3cret'
+```
+
+What it automates vs what stays manual:
+
+| Automated by the script | Stays manual (by design) |
+|---|---|
+| Install Python 3.12 + Git (winget) | IBKR **licence click-through** during install |
+| Create `.venv`, install `requirements-ibkr.txt` | **First IB Gateway login / 2FA** |
+| Set `OVERALL_BOOK_SECRET` (generates one if omitted) | Ticking the API settings (or let IBC enforce them) |
+| Download + launch the IB Gateway installer | Deciding to `--execute` |
+| Download IBC + template its `config.ini` (paper) | |
+| Register the daily Task Scheduler job | |
+| Verify the whole chain | |
+
+Run a single phase instead of everything, e.g. just rebuild the venv and
+re-register the task:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Venv -Task
+```
+
+Phase flags: `-InstallPython -Venv -Secret -Gateway -IBC -Task -Verify` (or
+`-All`). Re-open PowerShell after the run so the new `OVERALL_BOOK_SECRET` is
+visible. Then jump to **§5** to publish/pull a book and do your first dry-run.
+
+> Prefer to understand each step first, or not use winget? The manual walkthrough
+> for steps 2–7 follows below and remains fully supported. The script simply
+> automates it.
+
+---
+
 ## 1. What you need on the Windows laptop
 
 | Component | Purpose |
