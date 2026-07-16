@@ -323,9 +323,13 @@ def ma_state(d_df):
                 f"{cfg.ma_window}-day SMA ${ma:,.2f} (vol filter {'clear' if above else 'active'})")
     else:
         desc = f"close ${close:,.2f} is {'above' if above else 'below'} the {w}-day SMA ${ma:,.2f}"
+    # ma_vol carries a second mandatory gate: realised vol below k × its median.
+    # Surface the live value + threshold so the UI can show it as its own row
+    # rather than folding it into the single close-vs-SMA read.
+    vol_state = bt.vol_filter_state(cfg, d_df) if cfg.strategy_mode == "ma_vol" else None
     return dict(ma=ma, ma_prev=ma_prev, close=close, above=above,
                 slope_pos=ma > ma_prev, window=w, dist=dist, desc=desc,
-                macd_hist=macd_hist,
+                macd_hist=macd_hist, vol_state=vol_state,
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
@@ -675,9 +679,24 @@ def render_conditions_box(sigs, mst, pos=None):
                     f"<td style='padding:3px 10px 3px 0;font-weight:{weight};color:{col};"
                     f"white-space:nowrap;'>{name}</td>"
                     f"<td style='padding:3px 0;font-size:11.5px;color:#475569;'>{detail}</td></tr>")
-        # The trend filter trades on ONE regime condition (mode-specific).
-        entry_html = "<table style='border-collapse:collapse;'>" + \
-            rowm(above, mst["cond"], mst["desc"]) + "</table>"
+        # The trend filter trades on ONE regime condition (mode-specific) — except
+        # ma_vol, which ANDs a close-vs-SMA cut with a volatility-contraction gate.
+        # For ma_vol split the two mandatory cuts into their own rows so the
+        # realised-vol value shows against its required threshold.
+        vs = mst.get("vol_state")
+        if vs:
+            close_ok = mst["dist"] > 0
+            entry_html = "<table style='border-collapse:collapse;'>" + \
+                rowm(close_ok, f"close &gt; {cfg.ma_window}-day SMA",
+                     f"close ${mst['close']:,.2f} vs SMA ${mst['ma']:,.2f} "
+                     f"({mst['dist']:+.2f}%)") + \
+                rowm(vs["ok"], f"{vs['vol_win']}-day realised vol subdued",
+                     f"{vs['vol']*100:.2f}% (need &lt; {vs['vol_k']:g}× "
+                     f"{vs['vol_med_win']}-day median = {vs['thr']*100:.2f}%)") + \
+                "</table>"
+        else:
+            entry_html = "<table style='border-collapse:collapse;'>" + \
+                rowm(above, mst["cond"], mst["desc"]) + "</table>"
         exit_html = "<table style='border-collapse:collapse;'>" + \
             rowm(not above, mst["cond_short"], "→ move to cash") + \
             (rowm(False, f"Fixed stop {cfg.stop_label}",
@@ -882,6 +901,15 @@ def render_ma_signatures(mst, pos=None):
              f"{mh:+.4f}", "> 0", mh > 0))
     trend_rows.append(
         ("close vs " + line_lbl, f"${c:,.2f}", f"${ma:,.2f} ({dist:+.2f}%)", dist > 0))
+    # ma_vol: the volatility-contraction gate is the SECOND mandatory long
+    # condition — show the live realised vol against its required threshold so the
+    # card reflects both cuts, not just the close-vs-SMA read.
+    vs = mst.get("vol_state")
+    if vs:
+        trend_rows.append(
+            (f"{vs['vol_win']}-day realised vol", f"{vs['vol']*100:.2f}%",
+             f"&lt; {vs['vol_k']:g}× {vs['vol_med_win']}-day median "
+             f"({vs['thr']*100:.2f}%)", vs["ok"]))
     col1, col2, col3 = st.columns(3)
     col1.markdown(_sig_card(
         f"Trend Filter — {TUI['headline']}", "📈", "#16a34a", above,

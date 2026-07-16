@@ -215,6 +215,33 @@ def trend_line_value(cfg, daily):
     return float(np.mean(gcl[-w:]))
 
 
+def vol_filter_state(cfg, daily):
+    """The ma_vol volatility-contraction gate on the latest bar, as raw numbers
+    the UI can surface next to the close-vs-SMA read.
+
+    ``ma_vol`` requires realised vol (``vol_win``-day std of daily log-returns) to
+    sit *below* ``vol_k`` × its ``vol_med_win``-day rolling median — i.e. the
+    strategy only holds through subdued-volatility regimes.  This exposes both the
+    live value and the required threshold (the same series ``trend_long_array``
+    computes) so the gate can be shown as its own condition rather than folded
+    into a single boolean.  Returns None when the mode isn't ma_vol or there
+    aren't enough bars for the median to warm up."""
+    if cfg.strategy_mode != "ma_vol":
+        return None
+    gcl = daily["px_close"].to_numpy(float)
+    if len(gcl) < cfg.vol_med_win + cfg.vol_win:
+        return None
+    c = pd.Series(gcl)
+    v = np.log(c).diff().rolling(cfg.vol_win).std()
+    med = v.rolling(cfg.vol_med_win).median()
+    vol = float(v.iloc[-1]); med_v = float(med.iloc[-1])
+    if not (np.isfinite(vol) and np.isfinite(med_v)):
+        return None
+    thr = cfg.vol_k * med_v
+    return dict(vol=vol, median=med_v, thr=thr, ok=bool(vol < thr),
+                vol_win=cfg.vol_win, vol_med_win=cfg.vol_med_win, vol_k=cfg.vol_k)
+
+
 # ── MA / trend-filter strategy ────────────────────────────────────────────
 def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
                     oos_start=None, end=None):
