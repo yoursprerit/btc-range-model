@@ -306,6 +306,11 @@ def ma_state(d_df):
     ma = float(np.mean(c[-w:])) if len(c) >= 1 else np.nan
     ma_prev = float(np.mean(c[-(w + 5):-5])) if len(c) >= w + 5 else ma
     close = float(c[-1])
+    # dual_ma trades the fast-vs-slow SMA cross, so surface the fast SMA too — the
+    # UI shows both the fast (25d) and slow (100d) levels against the cross
+    # threshold rather than a single close-vs-line read.
+    ma_fast_val = (float(np.mean(c[-cfg.ma_fast:]))
+                   if cfg.strategy_mode == "dual_ma" and len(c) >= 1 else None)
     above = bt.trend_long_now(cfg, d_df)          # engine truth for this mode
     dist = (close / ma - 1) * 100 if ma == ma and ma else 0.0
     # config-driven MACD histogram value on the latest bar (macd mode only)
@@ -329,7 +334,7 @@ def ma_state(d_df):
     vol_state = bt.vol_filter_state(cfg, d_df) if cfg.strategy_mode == "ma_vol" else None
     return dict(ma=ma, ma_prev=ma_prev, close=close, above=above,
                 slope_pos=ma > ma_prev, window=w, dist=dist, desc=desc,
-                macd_hist=macd_hist, vol_state=vol_state,
+                macd_hist=macd_hist, vol_state=vol_state, ma_fast_val=ma_fast_val,
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
@@ -694,6 +699,19 @@ def render_conditions_box(sigs, mst, pos=None):
                      f"{vs['vol']*100:.2f}% (need &lt; {vs['vol_k']:g}× "
                      f"{vs['vol_med_win']}-day median = {vs['thr']*100:.2f}%)") + \
                 "</table>"
+        elif cfg.strategy_mode == "dual_ma" and mst.get("ma_fast_val") is not None:
+            # dual_ma trades the fast-vs-slow SMA cross — surface both SMA levels
+            # against the cross threshold (fast must sit above slow) so the card
+            # shows the actual required comparison, not just close-vs-line.
+            maf = mst["ma_fast_val"]; mas = mst["ma"]
+            gap = (maf / mas - 1) * 100 if mas else 0.0
+            entry_html = "<table style='border-collapse:collapse;'>" + \
+                rowm(above, mst["cond"],
+                     f"{cfg.ma_fast}-day SMA ${maf:,.2f} vs {cfg.ma_slow}-day SMA "
+                     f"${mas:,.2f} ({gap:+.2f}%)") + \
+                rowm(maf > mas, f"{cfg.ma_fast}-day SMA &gt; {cfg.ma_slow}-day SMA",
+                     f"${maf:,.2f} &gt; ${mas:,.2f} (need &gt; 0%, now {gap:+.2f}%)") + \
+                "</table>"
         else:
             entry_html = "<table style='border-collapse:collapse;'>" + \
                 rowm(above, mst["cond"], mst["desc"]) + "</table>"
@@ -884,6 +902,12 @@ def render_ma_signatures(mst, pos=None):
     if is_macd and mh is not None:
         hist_html = (f" · MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist "
                      f"<b>{mh:+.4f}</b>")
+    # dual_ma: show the fast SMA next to the slow SMA in the banner — the signal
+    # is the fast-vs-slow cross, not close-vs-line.
+    maf_banner = mst.get("ma_fast_val")
+    if cfg.strategy_mode == "dual_ma" and maf_banner is not None:
+        hist_html = (f" · {cfg.ma_fast}d SMA <b>${maf_banner:,.2f}</b>"
+                     f" vs {cfg.ma_slow}d SMA <b>${ma:,.2f}</b>" + hist_html)
     st.markdown(
         f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
         border-radius:10px;padding:12px 16px;margin:8px 0;">
@@ -899,8 +923,20 @@ def render_ma_signatures(mst, pos=None):
         trend_rows.append(
             (f"MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist",
              f"{mh:+.4f}", "> 0", mh > 0))
-    trend_rows.append(
-        ("close vs " + line_lbl, f"${c:,.2f}", f"${ma:,.2f} ({dist:+.2f}%)", dist > 0))
+    # dual_ma: the traded rule is fast SMA > slow SMA, so show BOTH SMA levels
+    # against the cross threshold instead of a single close-vs-line read.
+    maf = mst.get("ma_fast_val")
+    if cfg.strategy_mode == "dual_ma" and maf is not None:
+        gap = (maf / ma - 1) * 100 if ma else 0.0
+        trend_rows.append(
+            (f"{cfg.ma_fast}-day SMA", f"${maf:,.2f}",
+             f"&gt; {cfg.ma_slow}-day SMA ${ma:,.2f} ({gap:+.2f}%)", maf > ma))
+        trend_rows.append(
+            (f"{cfg.ma_slow}-day SMA", f"${ma:,.2f}",
+             f"&lt; {cfg.ma_fast}-day SMA ${maf:,.2f} to hold long", maf > ma))
+    else:
+        trend_rows.append(
+            ("close vs " + line_lbl, f"${c:,.2f}", f"${ma:,.2f} ({dist:+.2f}%)", dist > 0))
     # ma_vol: the volatility-contraction gate is the SECOND mandatory long
     # condition — show the live realised vol against its required threshold so the
     # card reflects both cuts, not just the close-vs-SMA read.
