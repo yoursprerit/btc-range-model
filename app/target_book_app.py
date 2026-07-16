@@ -75,19 +75,10 @@ def _secret() -> str | None:
     return os.environ.get("OVERALL_BOOK_SECRET")
 
 
-# ── pure reallocation helpers (UI-free, unit-tested) ──────────────────────────
-def adjust_for_selection(weights: dict, cash: float, included) -> tuple:
-    """Apply the user's include/exclude choice.
-
-    Unticked assets are dropped and *their* weight is added to cash — the kept
-    assets' weights are left exactly as published (no redistribution). Returns
-    ``(adj_weights, adj_cash, excluded_keys, deployed, moved_to_cash)``.
-    """
-    inc = set(included)
-    adj = {k: float(w) for k, w in weights.items() if k in inc}
-    excluded = [k for k in weights if k not in inc]
-    moved = sum(float(weights[k]) for k in excluded)
-    return adj, float(cash) + moved, excluded, sum(adj.values()), moved
+# ── reallocation helpers (UI-free, unit-tested) ───────────────────────────────
+# The include/exclude maths lives in overall_core so the Overall app's Live tab
+# and this viewer behave identically (single source of truth).
+adjust_for_selection = ov.adjust_for_selection
 
 
 def build_adjusted_payload(payload: dict, adj_weights: dict, adj_cash: float) -> dict:

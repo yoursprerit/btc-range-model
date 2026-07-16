@@ -66,6 +66,8 @@ def _stale_core(mod) -> bool:
             return True
         if not getattr(mod, "LIVE_EXIT_MODE_AWARE", False):
             return True
+        if not hasattr(mod, "adjust_for_selection"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -472,11 +474,50 @@ with tab_live:
         st.caption("No held position's live price is below its trend filter — the "
                    "live-adjusted book matches **Recommended today**.")
 
-    st.markdown("**Rebalancing moves** — current book → live-adjusted target")
+    # ── 1b. USER INCLUDE / EXCLUDE overlay on the live-adjusted book ─────
+    # Same control as the 📋 Target Book viewer: untick a position and its weight
+    # moves to SATA (idle cash), NOT to the other names. The rebalancing-moves and
+    # target below then reflect the user's selection; with nothing excluded the
+    # result is identical to the pure live-adjusted book.
+    _lt = dict(gate_live["target"])
+    _sel_included = set(_lt)
+    if _lt:
+        with st.expander("🎛️ Adjust the recommended book — include / exclude positions"):
+            st.caption("Untick a position to drop it; its weight moves to **SATA** "
+                       "(idle cash), not to the other names.")
+            _sel_df = pd.DataFrame([
+                dict(Include=True, Signal=kk, Instrument=by_key[kk]["name"],
+                     Weight=_lt[kk] * 100)
+                for kk in sorted(_lt, key=lambda x: -_lt[x])])
+            _edited = st.data_editor(
+                _sel_df, hide_index=True, use_container_width=True,
+                key="overall_live_include",
+                disabled=["Signal", "Instrument", "Weight"],
+                column_config={
+                    "Include": st.column_config.CheckboxColumn("Include", default=True),
+                    "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%")})
+            _sel_included = set(_edited.loc[_edited["Include"], "Signal"])
+
+    # apply the selection (excluded weight → SATA); identity when nothing excluded
+    _adj_target, _adj_sata, _excluded, _adj_dep, _adj_moved = ov.adjust_for_selection(
+        _lt, gate_live["sata"], _sel_included)
+    if _excluded:
+        _pv_sel = st.session_state.get("overall_portfolio_value", 100000.0)
+        st.info(f"Excluded **{', '.join(sorted(_excluded))}** → moved "
+                f"**{_adj_moved*100:.1f}%** (${_adj_moved*_pv_sel:,.0f}) to SATA. "
+                f"Deployed {_adj_dep*100:.0f}% · SATA {_adj_sata*100:.0f}%.")
+        ac2 = st.columns([1, 1, 1])
+        ac2[1].plotly_chart(_alloc_donut(_adj_target, _adj_sata,
+                            "Recommended now (your selection)"),
+                            use_container_width=True)
+
+    _moves_label = ("current book → your selection" if _excluded
+                    else "current book → live-adjusted target")
+    st.markdown(f"**Rebalancing moves** — {_moves_label}")
     moves = []
-    for kk in sorted(set(gate["current"]) | set(gate_live["target"]),
-                     key=lambda x: -(gate_live["target"].get(x, 0))):
-        cur = gate["current"].get(kk, 0.0); tg = gate_live["target"].get(kk, 0.0)
+    for kk in sorted(set(gate["current"]) | set(_adj_target),
+                     key=lambda x: -(_adj_target.get(x, 0))):
+        cur = gate["current"].get(kk, 0.0); tg = _adj_target.get(kk, 0.0)
         d = tg - cur
         if abs(d) < 0.005:
             continue
@@ -486,12 +527,12 @@ with tab_live:
                      f"{cur*100:.0f}% → {tg*100:.0f}% "
                      f"<span style='color:{col};font-weight:700'>"
                      f"{'▲' if d>0 else '▼'}{abs(d)*100:.0f}pt</span></span>")
-    dsata = gate_live["sata"] - gate["sata_now"]
+    dsata = _adj_sata - gate["sata_now"]
     if abs(dsata) >= 0.005:
         col = C_EXIT if dsata > 0 else C_BUY
         moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
                      f"💵 <b>SATA</b> "
-                     f"{gate['sata_now']*100:.0f}% → {gate_live['sata']*100:.0f}% "
+                     f"{gate['sata_now']*100:.0f}% → {_adj_sata*100:.0f}% "
                      f"<span style='color:{col};font-weight:700'>"
                      f"{'▲' if dsata>0 else '▼'}{abs(dsata)*100:.0f}pt</span></span>")
     st.markdown("".join(moves) if moves
@@ -543,7 +584,9 @@ with tab_live:
     for a in gate["actions"]:
         ac = _ACTION_COL[a["action"]]
         tgt = a["target"]                                    # last-bar (committed)
-        tgt_live = gate_live["target"].get(a["key"], 0.0)    # live-adjusted
+        # live-adjusted target, further reduced by the user's include/exclude
+        # selection (an excluded position shows 0 here, its weight in SATA).
+        tgt_live = _adj_target.get(a["key"], 0.0)
         tgt_s = f"{tgt*100:.1f}%" if tgt > 0.0005 else "—"
         pnl = _pct(a["upnl"]) if a["in_pos"] else "—"
         pnl_col = (C_BUY if (a["upnl"] or 0) >= 0 else C_EXIT) if a["in_pos"] else "#94a3b8"

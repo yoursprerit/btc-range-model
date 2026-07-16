@@ -884,6 +884,23 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 sata_info=SATA)
 
 
+def adjust_for_selection(weights: dict, cash: float, included) -> tuple:
+    """Apply a user include/exclude choice to an allocation.
+
+    Unticked (excluded) instruments are dropped and *their* weight is added to
+    ``cash`` (SATA idle-cash in the Overall app) — the kept instruments' weights
+    are left exactly as they were, with NO redistribution to the survivors.  So
+    ``deployed + cash`` is invariant.  Shared by the Overall app's Live tab and
+    the Target Book viewer so both behave identically.  Returns
+    ``(adj_weights, adj_cash, excluded_keys, deployed, moved_to_cash)``.
+    """
+    inc = set(included)
+    adj = {k: float(w) for k, w in weights.items() if k in inc}
+    excluded = [k for k in weights if k not in inc]
+    moved = sum(float(weights[k]) for k in excluded)
+    return adj, float(cash) + moved, excluded, sum(adj.values()), moved
+
+
 def benchmarks(returns: pd.DataFrame, results: list[dict],
                pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
     """Reference curves: equal-weight buy&hold of the underlyings (always
