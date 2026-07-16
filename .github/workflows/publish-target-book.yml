@@ -1,0 +1,72 @@
+name: Publish target book (IBKR Option C)
+
+# Option C, publisher side. Runs the Overall engine and commits the live-adjusted
+# target-book artifact (data/overall/target_book.json) back to THIS branch, so a
+# local executor next to IB Gateway can `git pull` (or fetch the raw URL) and
+# rebalance an IBKR paper account without running the model itself.
+#
+# ┌────────────────────────────────────────────────────────────────────────────┐
+# │ SCHEDULING CAVEAT: GitHub runs `on: schedule` ONLY from the repo's DEFAULT   │
+# │ branch. While this workflow lives only on the feature branch it will NOT     │
+# │ fire on a timer — trigger it manually from the Actions tab (Run workflow →   │
+# │ pick this branch), or via the API. The commented `schedule:` block below     │
+# │ takes effect only once this file is on the default branch.                   │
+# └────────────────────────────────────────────────────────────────────────────┘
+
+on:
+  workflow_dispatch: {}   # manual run (works from any branch, incl. this one)
+  # schedule:
+  #   # Weekdays 13:45 UTC — after the daily bar closes; only active on default branch.
+  #   - cron: "45 13 * * 1-5"
+
+# Allow the built-in token to push the artifact back to the branch.
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-target-book
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (this branch)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"          # the app's pinned interpreter (loads the model)
+
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # The publisher runs the full universe (model inference), so it needs the
+          # app's tested stack — NOT the broker layer (ib_async is executor-only).
+          pip install -r requirements.txt
+
+      - name: Publish target book
+        env:
+          # Set this repo/environment secret to HMAC-sign the artifact so the
+          # executor can verify authenticity. Unset → an unsigned book (a warning).
+          OVERALL_BOOK_SECRET: ${{ secrets.OVERALL_BOOK_SECRET }}
+        run: python scripts/publish_target_book.py --profile Aggressive
+
+      - name: Commit & push the artifact (this branch only)
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- data/overall/target_book.json; then
+            echo "No change to target_book.json — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/overall/target_book.json
+          ASOF="$(python -c "import json; print(json.load(open('data/overall/target_book.json'))['as_of'])")"
+          git commit \
+            -m "chore(ibkr): publish target book (as-of ${ASOF})" \
+            -m "Automated via .github/workflows/publish-target-book.yml"
+          # Push back to the branch this workflow was dispatched from.
+          git push origin "HEAD:${GITHUB_REF_NAME}"

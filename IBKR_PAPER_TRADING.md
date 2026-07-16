@@ -3,12 +3,24 @@
 Connect the **Overall Trading** strategy signals to an Interactive Brokers
 **paper** account and rebalance it once per trading day. The paper account is
 driven to the same allocation the Overall Streamlit app shows as **"Recommended
-now (live-adjusted)"** — no signal logic is re-implemented; the rebalancer calls
-the same `overall_core` engine.
+now (live-adjusted)"** — no signal logic is re-implemented; everything calls the
+same `overall_core` engine.
 
-> **Paper only.** The rebalancer refuses to run against any account whose id does
-> not start with `DU` (IBKR's paper prefix) unless you explicitly pass
+> **Paper only.** Every tool here refuses to run against any account whose id
+> does not start with `DU` (IBKR's paper prefix) unless you explicitly pass
 > `--allow-nonpaper`. `--dry-run` (no orders) is the default.
+
+## Two topologies
+
+| | **A — all-in-one** (`ibkr_rebalance.py`) | **C — publish/execute** (`publish_target_book.py` → `ibkr_execute_book.py`) |
+|---|---|---|
+| Where the model runs | On the trading host | In the cloud (GitHub Action / any host); **not** on the trading host |
+| Trading host needs | full model stack + `ib_async` | only `ib_async` (+ pandas) — lightweight |
+| Decision transport | none (same process) | a signed `target_book.json` artifact |
+| Best when | one box does everything | you want the heavy model run off the trading box, auditable, and split from execution |
+
+Both drive the account identically. **Option C** is documented in its own
+section below; the setup (gateway, IBC, cron) is shared.
 
 ---
 
@@ -137,6 +149,91 @@ Ensure IB Gateway (under IBC) is up **before** 09:45 ET and that its
 `AutoRestartTime` sits well outside the rebalance window.
 
 ---
+
+## Option C — publish in the cloud, execute locally
+
+Split the decision from the execution: a **publisher** runs the model once (in
+the cloud) and emits a small **signed JSON target book**; a lightweight
+**executor** next to IB Gateway consumes it and trades. The trading host never
+runs the model.
+
+```
+ publisher (cloud / GitHub Action)          executor (host with IB Gateway)
+ scripts/publish_target_book.py             scripts/ibkr_execute_book.py
+   run_universe → optimize → gate             load book → verify signature
+   → target_book.json  ──── transport ────►   → validate freshness
+   (HMAC-signed)        (git commit / URL)     → diff vs positions → trade paper
+```
+
+### The artifact (`data/overall/target_book.json`)
+
+Schema `overall-target-book/v1` (see `app/target_book.py`): `as_of`,
+`generated_at_utc`, `profile`, `weights`, `cash_weight`, `exec_price`,
+trimmed `actions`, and an optional `signature` (HMAC-SHA256). It is
+**self-contained** — the executor sizes orders from `weights` × net-liq using
+the book's own `exec_price`, so it makes no market-data calls.
+
+### Signing (recommended)
+
+Because the transport may be public (a branch commit, a raw URL), set a shared
+secret so the executor can prove the book is authentic before trading:
+
+```bash
+export OVERALL_BOOK_SECRET="a-long-random-string"   # same value on both sides
+```
+
+On the publisher it signs the artifact; on the executor it verifies (a mismatch
+or a tampered book aborts the run). Pass `--require-signature` to the executor to
+refuse an unsigned book outright.
+
+### Publish
+
+Run anywhere with the model stack installed (`requirements.txt`):
+
+```bash
+OVERALL_BOOK_SECRET=… python scripts/publish_target_book.py --profile Aggressive
+# writes data/overall/target_book.json
+```
+
+Or let the **GitHub Action** do it: `.github/workflows/publish-target-book.yml`
+runs the publisher and commits the artifact back to the branch.
+
+> **Scheduling caveat:** GitHub runs `on: schedule` **only from the repository's
+> default branch**. While this workflow lives only on the feature branch, trigger
+> it **manually** (Actions tab → *Run workflow* → pick the branch) or via the
+> API. The commented `schedule:` block activates only once the workflow is on the
+> default branch. Add `OVERALL_BOOK_SECRET` as a repo/environment secret to sign.
+
+### Execute
+
+On the host running IB Gateway (needs only `requirements-ibkr.txt`):
+
+```bash
+# preview (default — no orders):
+python scripts/ibkr_execute_book.py --file data/overall/target_book.json
+
+# from the raw artifact URL on the branch:
+python scripts/ibkr_execute_book.py --url https://raw.githubusercontent.com/<owner>/<repo>/<branch>/data/overall/target_book.json
+
+# actually trade paper:
+OVERALL_BOOK_SECRET=… python scripts/ibkr_execute_book.py --file data/overall/target_book.json --execute
+```
+
+If you use the git-commit transport, the executor host just does `git pull` (to
+get the latest committed book) before running with `--file`.
+
+Executor-specific flags: `--file` / `--url` / stdin (source), `--max-age-hours`
+(reject a book generated too long ago, default 12), `--require-signature`. The
+`--execute`, `--band`, `--fractional`, `--port`, `--allow-nonpaper`, `--force`
+flags behave exactly as in the all-in-one rebalancer.
+
+### Automating Option C
+- **Publish**: manual `workflow_dispatch` on the Action (or on the default
+  branch, the scheduled cron), or a cron on any host running the publisher.
+- **Execute**: point `scripts/ibkr_daily.sh`-style cron at the executor instead
+  of the rebalancer — e.g. `git pull && python scripts/ibkr_execute_book.py --file data/overall/target_book.json --execute`.
+  The executor's freshness guard means a missing/late publish is a safe no-trade,
+  not a stale trade.
 
 ## Safety & limitations
 
