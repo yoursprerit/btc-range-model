@@ -22,6 +22,10 @@ same `overall_core` engine.
 Both drive the account identically. **Option C** is documented in its own
 section below; the setup (gateway, IBC, cron) is shared.
 
+> **On a Windows laptop?** See **[`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)**
+> for the complete Windows walkthrough — Python 3.12, IB Gateway + IBC, the
+> `scripts\ibkr_execute_daily.ps1` wrapper, and Task Scheduler automation.
+
 ---
 
 ## How it works
