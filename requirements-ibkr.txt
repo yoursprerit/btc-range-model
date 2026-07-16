@@ -1,0 +1,13 @@
+# IBKR paper-trading rebalancer dependencies — INSTALL SEPARATELY.
+#
+# Kept out of the main requirements.txt on purpose: that file pins a precise,
+# segfault-free scientific stack for the Streamlit app (see its header). The
+# rebalancer runs on a different host (the one running IB Gateway), so its deps
+# live here to avoid perturbing the app's tested set.
+#
+#   pip install -r requirements.txt          # the strategy engine (shared)
+#   pip install -r requirements-ibkr.txt     # + the broker layer
+#
+# ib_async is the maintained community successor to the (now-unmaintained)
+# ib_insync, with the same API surface. Pinned to a recent minor.
+ib_async>=1.0.1,<2.0

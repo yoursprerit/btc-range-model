@@ -1,0 +1,40 @@
+# IBC (IBController) config for unattended IB Gateway auto-login — PAPER.
+# ─────────────────────────────────────────────────────────────────────────────
+# IBC drives the IB Gateway UI so it logs in automatically and survives the daily
+# mandatory restart, which is what makes a cron-driven rebalance possible.
+#
+#   1. Install IB Gateway (the standalone, lighter than TWS): https://www.interactivebrokers.com/en/trading/ib-api.php
+#   2. Install IBC:                                             https://github.com/IbcAlpha/IBC
+#   3. Copy this file to your IBC config location (e.g. ~/ibc/config.ini) and
+#      fill in the blanks below. NEVER commit the filled-in file — it holds your
+#      credentials. This is only an example (.example) with empty secrets.
+#
+# Start IB Gateway under IBC once at boot / on a schedule slightly BEFORE the
+# cron rebalance so the session is up when scripts/ibkr_daily.sh runs.
+
+# ── credentials (leave blank in the committed example) ───────────────────────
+IbLoginId=
+IbPassword=
+
+# ── PAPER trading — this is the whole point; keep it 'paper' ─────────────────
+TradingMode=paper
+
+# ── API / socket — must match scripts/ibkr_rebalance.py defaults ─────────────
+# IB Gateway paper API port is 4002. Enable the API and trust localhost so the
+# rebalancer can connect without a manual "accept connection" popup.
+OverrideTwsApiPort=4002
+AcceptIncomingConnectionAction=accept
+AllowBlindTrading=yes
+
+# ── daily restart / auto-login behaviour ─────────────────────────────────────
+# IB forces a daily restart; let IBC restart (not fully shut down) so the
+# session comes back automatically. Set a restart time OUTSIDE your rebalance
+# window (e.g. small hours) so it never restarts mid-rebalance.
+AutoRestartTime=03:00 AM
+ClosedownAt=
+ReloginAfterSecondFactorAuthenticationTimeout=yes
+
+# ── second-factor auth ───────────────────────────────────────────────────────
+# If your login uses IBKR Mobile 2FA, unattended login needs the "second factor
+# device" handling configured per the IBC docs. Paper-only logins can often use
+# a dedicated paper username with 2FA disabled — simplest for automation.
