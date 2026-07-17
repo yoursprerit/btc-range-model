@@ -59,13 +59,18 @@ jobs:
       - name: Commit & push the artifact (this branch only)
         run: |
           set -euo pipefail
-          if git diff --quiet -- data/overall/target_book.json; then
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stage FIRST, then test the staged diff. `git diff --quiet <path>`
+          # compares tracked files only, so on the first-ever publish (an
+          # untracked file) it would report "no change" and skip the commit — the
+          # run goes green but nothing lands. `git add` + `git diff --cached`
+          # detects a brand-new file too.
+          git add data/overall/target_book.json
+          if git diff --cached --quiet -- data/overall/target_book.json; then
             echo "No change to target_book.json — nothing to commit."
             exit 0
           fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/overall/target_book.json
           ASOF="$(python -c "import json; print(json.load(open('data/overall/target_book.json'))['as_of'])")"
           git commit \
             -m "chore(ibkr): publish target book (as-of ${ASOF})" \
