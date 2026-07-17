@@ -19,9 +19,11 @@ on:
     # is safe: the executor's freshness guard just skips rather than trading stale.
     - cron: "30 12 * * 1-5"
 
-# Allow the built-in token to push the artifact back to the branch.
+# contents: write to push the artifact back to the branch; issues: write so a
+# failed run can open / update a tracking issue (see the "Report failure" step).
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: publish-target-book
@@ -70,3 +72,51 @@ jobs:
             -m "Automated via .github/workflows/publish-target-book.yml"
           # Push back to the branch this workflow was dispatched from.
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      # Make a broken publish loud: on any failure above, open a tracking issue
+      # (or comment on the existing open one, so daily failures don't spam new
+      # issues). The job itself already shows red in the Actions tab; this surfaces
+      # it to anyone watching issues / notifications too.
+      - name: Report failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'publish-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const when = new Date().toISOString();
+            const body = [
+              `The **Publish target book** workflow failed.`,
+              ``,
+              `- Run: ${runUrl}`,
+              `- Trigger: \`${context.eventName}\``,
+              `- Time: ${when}`,
+              ``,
+              `The IBKR executor's freshness guard will skip trading rather than act on a stale book, `,
+              `so no bad orders result — but today's book was not published. Check the run log above.`,
+            ].join('\n');
+            // find an existing open failure issue to avoid one-per-day spam
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 1,
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, body,
+              });
+            } else {
+              // ensure the label exists (ignore error if it already does)
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: 'd24444',
+                  description: 'Automated: target-book publish failed',
+                });
+              } catch (e) { /* label already exists */ }
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: '⚠️ Target-book publish failed',
+                body, labels: [label],
+              });
+            }
