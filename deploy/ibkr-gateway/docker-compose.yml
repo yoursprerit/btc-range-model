@@ -1,0 +1,44 @@
+# Headless IB Gateway (paper) for the cloud executor — Option C.
+#
+# Uses the maintained gnzsnz/ib-gateway image, which bundles IB Gateway + IBC
+# (auto-login / auto-restart) + Xvfb, so the gateway runs unattended on a small
+# Linux VM. The executor (scripts/ibkr_execute_daily.sh via cron) connects to the
+# API port this container exposes and places the paper orders.
+#
+#   cd deploy/ibkr-gateway
+#   cp .env.example .env   &&   edit .env   (paper username/password)
+#   docker compose up -d
+#
+# Ports (image default): the container's internal paper API port 4002 is mapped
+# to host 4004, live 4001 → 4003 (so it never clashes with a local TWS). Point
+# the executor at the PAPER port: IBKR_PORT=4004 (and IBKR_HOST=127.0.0.1).
+#
+# SECURITY: bind the API port to localhost only (127.0.0.1) — never expose it to
+# the internet. The API socket has no real auth beyond a trusted-IP allowlist.
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    environment:
+      # Paper only. A standalone paper account with 2FA DISABLED lets IBC log in
+      # unattended — the key to hands-off cloud operation.
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: paper
+      READ_ONLY_API: "no"            # orders need write access
+      # Let API clients on the container/host network connect without a popup.
+      BYPASS_WARNING: "yes"
+      # Restart the gateway in the small hours, away from the 09:45-ET rebalance.
+      AUTO_RESTART_TIME: "03:00 AM"
+      TZ: America/New_York
+    ports:
+      # host:container — bind to localhost so the port is never internet-facing.
+      - "127.0.0.1:4003:4001"        # live  API (unused here)
+      - "127.0.0.1:4004:4002"        # paper API  → set IBKR_PORT=4004
+      # - "127.0.0.1:5900:5900"      # optional VNC to watch/troubleshoot the GUI
+    volumes:
+      # Persist IBC settings / gateway state across restarts (optional).
+      - ib-settings:/home/ibgateway/Jts
+
+volumes:
+  ib-settings:

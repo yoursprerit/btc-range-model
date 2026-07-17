@@ -1,0 +1,160 @@
+# Cloud executor — run IB Gateway + the Option C executor on a free VM
+
+Host the **executor half** of Option C in the cloud so paper rebalancing runs
+without a laptop. The signals are already published in the cloud (the GitHub
+Action); this box only **consumes the signed target book and places paper
+orders**, so it stays small and cheap — or free.
+
+```
+ GitHub Action (publisher)  ──commits target_book.json──►  this VM
+                                                             ├── IB Gateway (paper, headless via Docker/IBC)
+                                                             └── cron → ibkr_execute_daily.sh → ibkr_execute_book.py → paper orders
+```
+
+> Full pipeline: [`docs/option_c_architecture.md`](option_c_architecture.md).
+> Windows-laptop variant: [`IBKR_OPTION_C_WINDOWS.md`](../IBKR_OPTION_C_WINDOWS.md).
+
+---
+
+## 1. Pick a host (free options)
+
+| Host | Free? | Notes |
+|------|-------|-------|
+| **Oracle Cloud — Always Free (Arm Ampere A1)** | **Free forever** | Up to 4 cores / 24 GB; you need ~1–2 cores / 4–6 GB. **Recommended.** A1 capacity can be scarce — retry or pick a quieter region. |
+| **Google Cloud — e2-micro Always Free** | Free forever | 1 GB RAM (us-west1/central1/east1). Tight for the Java gateway — add ~2 GB swap. |
+| AWS / Azure free tier | 12 months only | `t3.micro` / `B1s`, then billed. Skip for "free forever". |
+| **Hetzner CX22 (~€4/mo)** / $5 DO/Linode | Cheap, not free | Rock-solid fallback if free tiers frustrate you — worth it for anything touching a broker. |
+
+Use **Ubuntu 22.04/24.04**. Only **outbound** access to IBKR is needed — no
+inbound ports; keep the firewall closed and SSH key-only.
+
+> **The 2FA gotcha (read this).** IBKR's daily two-factor auth is what breaks
+> unattended login. Use a **standalone paper-trading account with 2FA disabled**
+> (register a separate paper login, not the paper user tied to a funded account).
+> With 2FA off, IBC logs the gateway in on its own — the whole thing then runs
+> untouched.
+
+---
+
+## 2. Install prerequisites
+
+```bash
+sudo apt-get update
+sudo apt-get install -y docker.io docker-compose-plugin git python3.12 python3.12-venv
+sudo usermod -aG docker "$USER"   # log out/in so docker works without sudo
+```
+
+Clone the repo and build the executor venv (only the light broker deps — **no
+model stack** on this host):
+
+```bash
+git clone https://github.com/yoursprerit/btc-range-model.git
+cd btc-range-model
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements-ibkr.txt
+```
+
+---
+
+## 3. Start IB Gateway (headless, paper) with Docker
+
+A ready compose file lives in `deploy/ibkr-gateway/` and uses the maintained
+`gnzsnz/ib-gateway` image (IB Gateway + IBC auto-login + Xvfb bundled).
+
+```bash
+cd deploy/ibkr-gateway
+cp .env.example .env
+nano .env            # set TWS_USERID / TWS_PASSWORD (your paper login)
+docker compose up -d
+docker compose logs -f    # watch it log in; Ctrl-C when you see it's ready
+```
+
+- The container maps the **paper API port to host `4004`** (live → 4003), bound
+  to `127.0.0.1` only — never internet-facing.
+- It restarts nightly at 03:00 ET (away from the rebalance window) and logs back
+  in automatically.
+
+> To watch the GUI while troubleshooting, uncomment the `5900:5900` VNC line in
+> the compose file and connect a VNC client over an SSH tunnel.
+
+---
+
+## 4. Set the shared secret
+
+Same `OVERALL_BOOK_SECRET` value used by the publisher (GitHub) and the Streamlit
+app, so the book's signature verifies before any order:
+
+```bash
+# add to the login shell so cron inherits it
+echo 'export OVERALL_BOOK_SECRET="your-shared-secret"' >> ~/.profile
+source ~/.profile
+```
+
+---
+
+## 5. Test the executor by hand
+
+Point it at the container's paper port (`4004`). Dry-run first — **no orders**:
+
+```bash
+git pull origin main    # get the latest published book
+.venv/bin/python scripts/ibkr_execute_book.py \
+    --file data/overall/target_book.json --port 4004
+```
+
+You should see the book, `Signature: signature OK`, a freshness line, your `DU…`
+account, and the order plan. When it looks right, place the paper orders:
+
+```bash
+.venv/bin/python scripts/ibkr_execute_book.py \
+    --file data/overall/target_book.json --port 4004 --execute
+```
+
+---
+
+## 6. Automate with cron
+
+`scripts/ibkr_execute_daily.sh` does `git pull` → executor `--execute` → logs.
+Tell it the container's paper port via `IBKR_PORT=4004`:
+
+```cron
+CRON_TZ=America/New_York
+45 9 * * 1-5  IBKR_PORT=4004 /home/ubuntu/btc-range-model/scripts/ibkr_execute_daily.sh >> /home/ubuntu/btc-range-model/logs/ibkr_cron.log 2>&1
+```
+
+- Fires weekdays 09:45 ET — a few minutes after the US open and after the cloud
+  publisher's ~08:30-ET commit, so the `git pull` gets the morning's book.
+- The executor's own guards (weekend/holiday, stale book, signature, paper-only)
+  make a stray or early run a safe no-op — nothing trades unless everything checks
+  out.
+- Env overrides (see the script header): `IBKR_PYTHON`, `IBKR_BRANCH`, `IBKR_BOOK`,
+  `IBKR_BAND`, `IBKR_HOST`, `IBKR_PORT`, `IBKR_EXTRA`, `IBKR_NO_PULL`.
+
+Check the log after the first scheduled run:
+
+```bash
+tail -n 60 ~/btc-range-model/logs/ibkr_cron.log
+```
+
+---
+
+## 7. Security checklist
+
+- **Never expose the API port** (4004/4002) beyond `127.0.0.1`. The compose file
+  already binds to localhost.
+- SSH keys only; disable password login; keep the VM firewall closed to inbound.
+- `.env` holds your paper password — it is gitignored; keep it `chmod 600`.
+- It's a **paper** account, but treat the box as sensitive anyway.
+- Keep Docker and the image updated: `docker compose pull && docker compose up -d`.
+
+---
+
+## 8. Costs & caveats
+
+- **Oracle Always Free** is free indefinitely; a *running* gateway keeps the VM
+  active so it isn't reclaimed as idle.
+- **GCP e2-micro** works but is RAM-tight — add swap:
+  `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` (persist in `/etc/fstab`).
+- IBKR permits running the gateway on a VPS. If your paper login later starts
+  demanding 2FA, switch to a standalone paper account with 2FA off, or follow the
+  IBC second-factor docs.
