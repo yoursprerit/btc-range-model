@@ -27,7 +27,7 @@ import plotly.graph_objects as go
 
 _APP_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _APP_DIR.parent
-for _p in (str(_APP_DIR), str(_REPO_ROOT)):
+for _p in (str(_APP_DIR), str(_REPO_ROOT), str(_REPO_ROOT / "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -35,8 +35,10 @@ import overall_core as ov                 # noqa: E402
 import ticker_config                       # noqa: E402
 import target_book as tb                   # noqa: E402  (shared HMAC verify)
 import executed_book as eb                 # noqa: E402
+import ibkr_symbols as sym                 # noqa: E402  (BTC→IBIT mapping)
 
 REPORT_PATH = _REPO_ROOT / "data" / "overall" / "executed_book.json"
+TARGET_PATH = _REPO_ROOT / "data" / "overall" / "target_book.json"
 
 try:
     st.set_page_config(page_title="Executed Book (IBKR)", page_icon="✅",
@@ -159,6 +161,7 @@ def _render(payload: dict, *, source: str) -> None:
     st.markdown("### 📊 Current IBKR positions")
     if not positions:
         st.info("No open positions reported.")
+        _drift_section(payload)
         _download(payload, secret)
         return
 
@@ -210,7 +213,73 @@ def _render(payload: dict, *, source: str) -> None:
             st.caption("_No market values reported (paper account may lack a "
                        "market-data subscription) — sizing shown by shares/cost._")
 
+    _drift_section(payload)
     _download(payload, secret)
+
+
+def _drift_section(payload: dict) -> None:
+    """Compare what the executor TARGETED (target_book weights) against what it
+    actually HOLDS now (executed positions), per instrument, in percentage points.
+    Small drifts are normal: whole-share rounding, the no-trade band, and fills
+    landing away from the sizing price."""
+    if not TARGET_PATH.exists():
+        return
+    try:
+        tgt = tb.loads(TARGET_PATH.read_text())
+    except Exception:
+        return
+
+    st.markdown("---")
+    st.markdown("### 🎯 vs Target Book — allocation drift")
+    if tgt.get("as_of") and payload.get("as_of") and tgt["as_of"] != payload["as_of"]:
+        st.caption(f"⚠️ Target book bar (**{tgt['as_of']}**) differs from this "
+                   f"report's bar (**{payload['as_of']}**) — comparing the latest of each.")
+
+    t_weights = tgt.get("weights", {}) or {}
+    t_cash = float(tgt.get("cash_weight", 0.0) or 0.0)
+    net_liq = float(payload.get("net_liq") or 0.0)
+    cash = float(payload.get("cash") or 0.0)
+    positions = payload.get("positions") or []
+
+    def _val(p: dict) -> float:
+        mv = float(p.get("market_value") or 0.0)
+        return mv or float(p.get("shares") or 0.0) * float(p.get("avg_cost") or 0.0)
+
+    actual_val: dict[str, float] = {}
+    for p in positions:
+        k = p.get("key") or p.get("symbol")
+        actual_val[k] = actual_val.get(k, 0.0) + _val(p)
+
+    denom = net_liq if net_liq > 0 else (sum(actual_val.values()) + cash)
+    if denom <= 0:
+        st.caption("Not enough account data to compute drift on this run.")
+        return
+
+    seen, ordered = set(), []
+    for k in list(t_weights) + list(actual_val):
+        if k not in seen:
+            seen.add(k); ordered.append(k)
+    ordered.sort(key=lambda k: -float(t_weights.get(k, 0.0)))
+
+    rows = []
+    for k in ordered:
+        tw = float(t_weights.get(k, 0.0)) * 100
+        aw = actual_val.get(k, 0.0) / denom * 100
+        rows.append(dict(Instrument=_name(k, k), IBKR=(sym.trade_symbol(k) or k),
+                         Target=tw, Actual=aw, Drift=aw - tw))
+    rows.append(dict(Instrument="💵 Cash", IBKR="—", Target=t_cash * 100,
+                     Actual=cash / denom * 100, Drift=cash / denom * 100 - t_cash * 100))
+
+    st.dataframe(
+        pd.DataFrame(rows), hide_index=True, use_container_width=True,
+        column_config={
+            "Target": st.column_config.NumberColumn("Target %", format="%.1f%%"),
+            "Actual": st.column_config.NumberColumn("Actual %", format="%.1f%%"),
+            "Drift": st.column_config.NumberColumn("Drift (pp)", format="%+.1f")})
+    max_drift = max((abs(r["Drift"]) for r in rows), default=0.0)
+    st.caption(f"Largest drift **{max_drift:.1f} pp**. Expected sources: whole-share "
+               "rounding, the no-trade band, and fills vs the sizing price. A large "
+               "drift on a name means it didn't fill as intended — check the trades above.")
 
 
 def _download(payload: dict, secret) -> None:
