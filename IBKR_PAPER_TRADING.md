@@ -161,6 +161,9 @@ the cloud) and emits a small **signed JSON target book**; a lightweight
 **executor** next to IB Gateway consumes it and trades. The trading host never
 runs the model.
 
+> **Architecture diagram:** [`docs/option_c_architecture.html`](docs/option_c_architecture.html)
+> shows every step from the cloud weight engine to IBKR paper order placement.
+
 ```
  publisher (cloud / GitHub Action)          executor (host with IB Gateway)
  scripts/publish_target_book.py             scripts/ibkr_execute_book.py

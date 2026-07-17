@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Option C — Signal-to-Order Architecture</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ground:#f5f8fc; --surface:#ffffff; --surface-2:#eef2f8;
+    --ink:#161f2e; --ink-soft:#54607a; --hair:#dbe2ee;
+    --cloud:#3a6ccb; --cloud-bg:#e9f0fb; --cloud-ink:#274a8f;
+    --exec:#c1701f; --exec-bg:#fbf0e2; --exec-ink:#8a4e12;
+    --good:#1c8f50; --bad:#d24444;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0d131e; --surface:#151d2a; --surface-2:#1c2635;
+      --ink:#e6ecf6; --ink-soft:#94a1b8; --hair:#293448;
+      --cloud:#6f9bef; --cloud-bg:#172239; --cloud-ink:#a9c4f5;
+      --exec:#e2984f; --exec-bg:#2a2012; --exec-ink:#eab476;
+      --good:#3bb571; --bad:#e8635f;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0d131e; --surface:#151d2a; --surface-2:#1c2635;
+    --ink:#e6ecf6; --ink-soft:#94a1b8; --hair:#293448;
+    --cloud:#6f9bef; --cloud-bg:#172239; --cloud-ink:#a9c4f5;
+    --exec:#e2984f; --exec-bg:#2a2012; --exec-ink:#eab476;
+    --good:#3bb571; --bad:#e8635f;
+  }
+  :root[data-theme="light"]{
+    --ground:#f5f8fc; --surface:#ffffff; --surface-2:#eef2f8;
+    --ink:#161f2e; --ink-soft:#54607a; --hair:#dbe2ee;
+    --cloud:#3a6ccb; --cloud-bg:#e9f0fb; --cloud-ink:#274a8f;
+    --exec:#c1701f; --exec-bg:#fbf0e2; --exec-ink:#8a4e12;
+    --good:#1c8f50; --bad:#d24444;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:940px;margin:0 auto;padding:44px 22px 72px}
+
+  header h1{font-size:clamp(1.5rem,3.6vw,2.1rem);margin:0 0 6px;letter-spacing:-.02em;
+    text-wrap:balance}
+  header p{margin:0;color:var(--ink-soft);max-width:62ch;font-size:1.02rem}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:22px 0 6px;font-size:.8rem;
+    color:var(--ink-soft)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:3px;flex:none}
+  .dot.cloud{background:var(--cloud)} .dot.exec{background:var(--exec)}
+  .dot.guard{background:var(--bad)} .dot.size{background:var(--good)}
+
+  /* phase band */
+  .phase{margin-top:30px;border:1px solid var(--hair);border-radius:16px;overflow:hidden;
+    background:var(--surface)}
+  .phase-head{display:flex;align-items:baseline;gap:12px;padding:16px 20px;
+    border-bottom:1px solid var(--hair)}
+  .phase-head .env{font-family:var(--mono);font-size:.72rem;letter-spacing:.09em;
+    text-transform:uppercase;font-weight:600;padding:3px 9px;border-radius:999px}
+  .phase.cloud .env{background:var(--cloud-bg);color:var(--cloud-ink)}
+  .phase.exec .env{background:var(--exec-bg);color:var(--exec-ink)}
+  .phase-head h2{margin:0;font-size:1.06rem;letter-spacing:-.01em}
+  .phase-head .runs{margin-left:auto;font-size:.78rem;color:var(--ink-soft);
+    font-family:var(--mono);text-align:right}
+
+  .steps{padding:8px 20px 22px 20px}
+  .spine{border-left:2px solid var(--hair);margin-left:15px;padding-left:0}
+  .step{position:relative;padding:16px 4px 16px 30px;margin-left:0}
+  .step:not(:last-child){border-bottom:1px dashed var(--hair)}
+  .badge{position:absolute;left:-16px;top:18px;width:30px;height:30px;border-radius:50%;
+    display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:.82rem;
+    color:#fff;border:3px solid var(--surface)}
+  .cloud .badge{background:var(--cloud)} .exec .badge{background:var(--exec)}
+  .step.is-guard .badge{background:var(--bad)}
+  .step.is-size .badge{background:var(--good)}
+
+  .step h3{margin:0 0 4px;font-size:1rem;letter-spacing:-.01em;display:flex;
+    flex-wrap:wrap;gap:8px;align-items:center}
+  .tag{font-family:var(--mono);font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;
+    padding:2px 7px;border-radius:5px;font-weight:600}
+  .tag.guard{background:var(--bad);color:#fff}
+  .tag.size{background:var(--good);color:#fff}
+  .step p{margin:2px 0 8px;color:var(--ink-soft);font-size:.92rem;max-width:64ch}
+  code, .ref{font-family:var(--mono);font-size:.8rem}
+  .ref{display:inline-block;background:var(--surface-2);border:1px solid var(--hair);
+    color:var(--ink);padding:2px 8px;border-radius:6px;margin:2px 6px 2px 0;
+    word-break:break-word}
+  .ref b{color:var(--cloud)} .exec .ref b{color:var(--exec)}
+
+  /* connectors between bands */
+  .bridge{display:flex;flex-direction:column;align-items:center;gap:6px;padding:18px 0}
+  .bridge .arrow{color:var(--ink-soft);font-size:1.3rem;line-height:1}
+  .bridge .pill{font-family:var(--mono);font-size:.8rem;background:var(--surface);
+    border:1px solid var(--hair);border-radius:999px;padding:8px 16px;color:var(--ink);
+    text-align:center;max-width:90%}
+  .bridge .pill small{display:block;color:var(--ink-soft);font-family:var(--sans);
+    font-size:.76rem;margin-top:2px}
+
+  .terminal{margin-top:18px;border:1.5px solid var(--exec);border-radius:16px;
+    background:var(--exec-bg);padding:20px 22px;text-align:center}
+  .terminal h2{margin:0 0 4px;font-size:1.1rem;color:var(--exec-ink)}
+  .terminal p{margin:0;color:var(--ink-soft);font-size:.9rem}
+  .terminal .flow{font-family:var(--mono);font-size:.86rem;margin-top:10px;color:var(--ink);
+    display:flex;flex-wrap:wrap;gap:6px 10px;justify-content:center}
+
+  .note{margin-top:26px;border-left:3px solid var(--cloud);background:var(--surface);
+    border-radius:0 12px 12px 0;padding:14px 18px;font-size:.9rem;color:var(--ink-soft)}
+  .note b{color:var(--ink)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  @media (max-width:620px){.split{grid-template-columns:1fr}}
+  .split .card{background:var(--surface);border:1px solid var(--hair);border-radius:12px;
+    padding:14px 16px}
+  .split .card h4{margin:0 0 6px;font-size:.9rem;display:flex;align-items:center;gap:8px}
+  .split .card p{margin:0;font-size:.85rem;color:var(--ink-soft)}
+  .split .card.a h4::before{content:"";width:10px;height:10px;border-radius:3px;
+    background:var(--cloud)}
+  .split .card.b h4::before{content:"";width:10px;height:10px;border-radius:3px;
+    background:var(--exec)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Option C — from signal to order</h1>
+    <p>Every step from the Streamlit / cloud engine that <em>decides the weights</em> to the
+       laptop executor that <em>places the orders</em> on IBKR paper. The heavy model runs in the
+       cloud; the money-moving steps run only on the laptop.</p>
+    <div class="legend">
+      <span><i class="dot cloud"></i>Cloud (Streamlit / GitHub Action)</span>
+      <span><i class="dot exec"></i>Laptop (next to IB Gateway)</span>
+      <span><i class="dot guard"></i>Guard — aborts if it fails</span>
+      <span><i class="dot size"></i>Order sizing</span>
+    </div>
+  </header>
+
+  <!-- ───────────────────────── CLOUD ───────────────────────── -->
+  <section class="phase cloud">
+    <div class="phase-head">
+      <span class="env">Cloud</span>
+      <h2>Decide the weights &amp; publish the signed book</h2>
+      <span class="runs">Python&nbsp;3.12 · full model stack</span>
+    </div>
+    <div class="steps">
+      <div class="spine">
+
+        <div class="step cloud">
+          <span class="badge">1</span>
+          <h3>Run every strategy</h3>
+          <p>Fetch Yahoo data and run each app's signal (BTC via the CT engine, Gold via its
+             divergence engine, the ETFs via the shared daily engine). Yields per-instrument
+             signals, positions and backtests.</p>
+          <span class="ref"><b>overall_core</b>.run_universe()</span>
+        </div>
+
+        <div class="step cloud">
+          <span class="badge">2</span>
+          <h3>Optimise the blend</h3>
+          <p>Search long-only weights (max Sharpe / return) under per-kind caps for the chosen
+             risk profile, then apply the forward fundamental tilt.</p>
+          <span class="ref"><b>overall_core</b>.optimize_weights()</span>
+        </div>
+
+        <div class="step cloud">
+          <span class="badge">3</span>
+          <h3>Overlay live prices</h3>
+          <p>Pull the current spot quote for each instrument and lay it over the last-bar close.</p>
+          <span class="ref"><b>overall_core</b>.fetch_spot() → apply_spot()</span>
+        </div>
+
+        <div class="step cloud">
+          <span class="badge">4</span>
+          <h3>Drop trend-broken names</h3>
+          <p>Flag any position whose live price has fallen through its trend filter — it would
+             exit next bar — so it isn't funded today. <code>include_entries=True</code> covers
+             fresh entries too.</p>
+          <span class="ref"><b>overall_core</b>.live_exit_keys()</span>
+        </div>
+
+        <div class="step cloud">
+          <span class="badge">5</span>
+          <h3>Gate the allocation → target weights</h3>
+          <p>Deploy capital only to instruments the signal is long, size each slice by the optimal
+             weight tilted by entry priority, water-fill to the caps; the undeployed remainder is
+             cash. <em>This produces the <b>target %</b> per instrument.</em></p>
+          <span class="ref"><b>overall_core</b>.signal_gated_allocation(force_exit=…)</span>
+        </div>
+
+        <div class="step cloud">
+          <span class="badge">6</span>
+          <h3>Assemble the book</h3>
+          <p>Package weights + execution prices (<b>BTC → IBIT</b>), the as-of signal bar and a
+             generation timestamp into the v1 schema.</p>
+          <span class="ref"><b>target_book</b>.build_payload()</span>
+          <span class="ref"><b>compute_target_book()</b> wraps steps 1–6</span>
+        </div>
+
+        <div class="step cloud">
+          <span class="badge">7</span>
+          <h3>Sign &amp; write</h3>
+          <p>HMAC-SHA256 sign with <code>OVERALL_BOOK_SECRET</code>, then write the artifact. The
+             GitHub Action runs this and commits it to the branch.</p>
+          <span class="ref"><b>target_book</b>.sign() → data/overall/target_book.json</span>
+          <span class="ref"><b>scripts/publish_target_book.py</b></span>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <div class="note" style="margin-top:14px">
+    The <b>Streamlit app</b> (<span class="ref"><b>overall_app.py</b></span>
+    <span class="ref"><b>target_book_app.py</b></span>) runs the same steps 1–5 to <b>display</b>
+    the allocation, the Target Book viewer, and the include/exclude control — and can download an
+    adjusted, re-signed book. It never connects to IBKR. The <b>automated publisher</b> is the
+    GitHub Action running <code>publish_target_book.py</code>.
+  </div>
+
+  <!-- ───────────────────────── TRANSPORT ───────────────────────── -->
+  <div class="bridge">
+    <div class="arrow">▼</div>
+    <div class="pill">git commit → branch → <code>git pull</code> (or raw URL)
+      <small>the signed target_book.json is the only thing that crosses the boundary</small></div>
+    <div class="arrow">▼</div>
+  </div>
+
+  <!-- ───────────────────────── LAPTOP ───────────────────────── -->
+  <section class="phase exec">
+    <div class="phase-head">
+      <span class="env">Laptop</span>
+      <h2>Verify, size the orders &amp; execute</h2>
+      <span class="runs">ib_async only · no model</span>
+    </div>
+    <div class="steps">
+      <div class="spine">
+
+        <div class="step exec">
+          <span class="badge">8</span>
+          <h3>Pull the latest book</h3>
+          <p>Task Scheduler fires the wrapper, which fast-forwards the branch to grab the freshest
+             committed book, then runs the executor.</p>
+          <span class="ref"><b>scripts/ibkr_execute_daily.ps1</b> → git pull</span>
+        </div>
+
+        <div class="step exec">
+          <span class="badge">9</span>
+          <h3>Load the book</h3>
+          <p>Read the target book from <code>--file</code>, <code>--url</code>, or stdin.</p>
+          <span class="ref"><b>scripts/ibkr_execute_book.py</b></span>
+        </div>
+
+        <div class="step exec is-guard">
+          <span class="badge">10</span>
+          <h3>Verify signature <span class="tag guard">Guard</span></h3>
+          <p>Recompute the HMAC with the shared secret. A tampered or forged book aborts here —
+             no orders.</p>
+          <span class="ref"><b>target_book</b>.verify_signature()</span>
+        </div>
+
+        <div class="step exec is-guard">
+          <span class="badge">11</span>
+          <h3>Validate freshness &amp; market day <span class="tag guard">Guard</span></h3>
+          <p>Reject a stale signal bar or a book generated too long ago; skip weekends and US
+             holidays.</p>
+          <span class="ref"><b>target_book</b>.validate()</span>
+          <span class="ref"><b>ibkr_common</b>.is_trading_day()</span>
+        </div>
+
+        <div class="step exec is-guard">
+          <span class="badge">12</span>
+          <h3>Connect to IB Gateway <span class="tag guard">Guard</span></h3>
+          <p>Open the socket to the paper gateway and confirm the account is a paper (<code>DU…</code>)
+             account — else abort.</p>
+          <span class="ref"><b>ibkr_common</b>.Broker() → 127.0.0.1:4002</span>
+        </div>
+
+        <div class="step exec">
+          <span class="badge">13</span>
+          <h3>Read the account</h3>
+          <p>Fetch net-liquidation value and current positions (IBKR symbols mapped back to signal
+             keys — IBIT → BTC).</p>
+          <span class="ref"><b>Broker</b>.net_liq()</span>
+          <span class="ref"><b>Broker</b>.positions_by_key()</span>
+        </div>
+
+        <div class="step exec is-size">
+          <span class="badge">14</span>
+          <h3>Decide buys / sells &amp; size them <span class="tag size">Sizing</span></h3>
+          <p><code>target_shares = weight × net_liq ÷ price</code>. Diff vs held →
+             <b>delta &gt; 0 buy</b>, <b>delta &lt; 0 sell</b>; a held name at 0% is fully closed.
+             Skip anything inside the no-trade band (1% of NAV). Order sells first.</p>
+          <span class="ref"><b>ibkr_common</b>.build_order_plan()</span>
+        </div>
+
+        <div class="step exec">
+          <span class="badge">15</span>
+          <h3>Place the orders</h3>
+          <p>Transmit market orders — sells leg first (await fills to free buying power), then the
+             buys leg.</p>
+          <span class="ref"><b>ibkr_common</b>.Broker.place() → MarketOrder</span>
+        </div>
+
+        <div class="step exec">
+          <span class="badge">16</span>
+          <h3>Fills land in the paper account</h3>
+          <p>IB Gateway routes to IBKR; the paper portfolio now matches the target book.</p>
+          <span class="ref">IB Gateway → IBKR paper account</span>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <div class="terminal">
+    <h2>✔ Paper account rebalanced to the target book</h2>
+    <p>The only money-moving steps — sizing (14) and placement (15) — ran on the laptop.</p>
+    <div class="flow">
+      <span>build_order_plan</span><span>→</span><span>Broker.place</span><span>→</span>
+      <span>IB Gateway :4002</span><span>→</span><span>IBKR paper</span>
+    </div>
+  </div>
+
+  <div class="split">
+    <div class="card a">
+      <h4>What the cloud holds</h4>
+      <p>The model, the data feeds, and the <b>decision</b> (target weights). Output is a signed
+         JSON book. Never sees your account, never sends an order.</p>
+    </div>
+    <div class="card b">
+      <h4>What the laptop holds</h4>
+      <p>Your IBKR session, account NAV &amp; positions, and the <b>execution</b> (sizing +
+         orders). Needs only <code>ib_async</code> — no model stack.</p>
+    </div>
+  </div>
+
+  <p style="margin-top:22px;font-size:.8rem;color:var(--ink-soft);font-family:var(--mono)">
+    Dry-run is the default everywhere · orders require <code>--execute</code> ·
+    guards 10–12 each abort before any order · full walkthrough in IBKR_PAPER_TRADING.md
+  </p>
+</div>
+</body>
+</html>
