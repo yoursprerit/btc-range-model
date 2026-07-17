@@ -173,6 +173,32 @@ class Broker:
                 return float(v.value)
         raise RuntimeError("could not read NetLiquidation from the account")
 
+    def cash(self) -> float:
+        """Total cash value (best-effort; 0.0 if the tag isn't present)."""
+        for v in self.ib.accountSummary(self.account):
+            if v.tag == "TotalCashValue":
+                return float(v.value)
+        return 0.0
+
+    def portfolio_snapshot(self) -> list[dict]:
+        """Current holdings with cost/market data, one dict per position.
+
+        Uses ``ib.portfolio()`` (richer than ``positions()``): shares, average
+        cost, and — when the paper account has market data — market price/value
+        and unrealised P&L. Fields that IBKR can't supply come back as 0.0, which
+        the UI renders as “—”. Foreign symbols keep ``key=None``."""
+        out = []
+        for item in self.ib.portfolio(self.account):
+            c = item.contract
+            out.append(dict(
+                key=sym.key_for_symbol(c.symbol), symbol=c.symbol,
+                shares=float(getattr(item, "position", 0.0) or 0.0),
+                avg_cost=float(getattr(item, "averageCost", 0.0) or 0.0),
+                market_price=float(getattr(item, "marketPrice", 0.0) or 0.0),
+                market_value=float(getattr(item, "marketValue", 0.0) or 0.0),
+                unrealized_pnl=float(getattr(item, "unrealizedPNL", 0.0) or 0.0)))
+        return out
+
     def positions_by_key(self) -> dict[str, float]:
         """Current holdings as signal-key → shares (foreign symbols ignored)."""
         out: dict[str, float] = {}
@@ -182,9 +208,14 @@ class Broker:
                 out[key] = out.get(key, 0.0) + float(p.position)
         return out
 
-    def place(self, orders: list[Order], fractional: bool, wait: float) -> None:
-        """Transmit market orders, sells first, waiting for each leg to fill."""
+    def place(self, orders: list[Order], fractional: bool, wait: float) -> list[dict]:
+        """Transmit market orders, sells first, waiting for each leg to fill.
+
+        Returns one result dict per transmitted order (action, symbol, qty, the
+        reference price, final status, filled quantity and average fill price) so
+        the caller can build the execution report."""
         from ib_async import MarketOrder
+        results: list[dict] = []
         sells = [o for o in orders if o.action == "SELL"]
         buys = [o for o in orders if o.action == "BUY"]
         for leg_name, legs in (("SELL", sells), ("BUY", buys)):
@@ -196,16 +227,21 @@ class Broker:
                 if qty <= 0:
                     continue
                 order = MarketOrder(o.action, qty)
-                trades.append((o, self.ib.placeOrder(contract, order)))
+                trades.append((o, qty, self.ib.placeOrder(contract, order)))
                 print(f"    sent  {o.action:4s} {qty:g} {o.symbol}")
             deadline = wait                      # wait for this leg before the next
-            while deadline > 0 and any(not t.isDone() for _, t in trades):
+            while deadline > 0 and any(not t.isDone() for _, _, t in trades):
                 self.ib.sleep(1.0)
                 deadline -= 1.0
-            for o, t in trades:
+            for o, qty, t in trades:
                 st = t.orderStatus.status
-                filled = t.orderStatus.filled
+                filled = float(t.orderStatus.filled or 0.0)
+                avg = float(t.orderStatus.avgFillPrice or 0.0)
                 print(f"    {leg_name} {o.symbol}: {st} filled={filled:g}")
+                results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
+                                    qty=float(qty), price=float(o.price), status=st,
+                                    filled=filled, avg_fill_price=avg, reason=o.reason))
+        return results
 
     def disconnect(self) -> None:
         try:

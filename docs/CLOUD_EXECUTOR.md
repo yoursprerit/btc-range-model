@@ -198,6 +198,29 @@ IBKR_ALERT_WEBHOOK=https://hooks.slack.com/services/XXX/YYY/ZZZ
 
 Leave the webhook blank to log to `journalctl` only.
 
+## 6d. Executed Book write-back (optional)
+
+After each `--execute` run the executor writes
+`data/overall/executed_book.json` (trades placed + resulting positions), and the
+daily wrapper **commits and pushes it back** to the branch so the cloud app's
+**✅ Executed Book** tab can show what actually happened.
+
+This is the only step on the VM that **writes** to the repo, so the host needs
+**git write credentials**:
+
+- **SSH deploy key** (recommended): add a key to the repo with *write* access and
+  clone via SSH (`git@github.com:…`), or
+- **HTTPS + a fine-grained token**: set the remote to
+  `https://<token>@github.com/yoursprerit/btc-range-model.git`.
+
+If the host has read-only access, execution still works — the push just fails and
+the wrapper **rolls back** so the branch never diverges (the Executed Book tab
+simply won't update). Set `IBKR_NO_PUSH_REPORT=1` to disable the write-back
+entirely.
+
+> Signing: the report is signed with the same `OVERALL_BOOK_SECRET`, so the
+> Executed Book tab shows "✅ signature verified" when the Streamlit secret matches.
+
 ---
 
 ## 7. Security checklist

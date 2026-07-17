@@ -37,10 +37,12 @@ _APP_DIR = Path(__file__).resolve().parent / "app"
 sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
-_ALL_APPS = ["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS + ["TARGETBOOK"]
+_ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+             + ["TARGETBOOK", "EXECUTEDBOOK"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)",
-           "TARGETBOOK": "📋  Target Book (IBKR)"}
+           "TARGETBOOK": "📋  Target Book (IBKR)",
+           "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
@@ -126,6 +128,9 @@ def _run_choice():
     elif _choice == "TARGETBOOK":
         # Friendly viewer for the published signed IBKR target book.
         _exec_app(_APP_DIR / "target_book_app.py")
+    elif _choice == "EXECUTEDBOOK":
+        # Post-rebalance report: trades executed + current IBKR positions.
+        _exec_app(_APP_DIR / "executed_book_app.py")
     elif _choice in ("BTC", "GLDM"):
         # Upgrade the original app's built-in BTC/GLDM selector to the full list,
         # without touching the app source.  Only the ``gldm_active_app`` widget is

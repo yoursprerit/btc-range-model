@@ -77,5 +77,24 @@ if (-not $NoPull) {
 & $Python "scripts\ibkr_execute_book.py" --file $Book --execute --band $Band --port $Port 2>&1 |
     ForEach-Object { Log $_ }
 
+# Publish the execution report back so the cloud app's "Executed Book" tab shows
+# it. Requires git WRITE credentials on this host. On push failure, reset to
+# origin so the branch never diverges. Set env IBKR_NO_PUSH_REPORT=1 to skip.
+$Report = Join-Path $RepoRoot 'data\overall\executed_book.json'
+if ($env:IBKR_NO_PUSH_REPORT -ne '1' -and (Test-Path $Report)) {
+    git add $Report
+    git diff --cached --quiet -- $Report
+    if ($LASTEXITCODE -ne 0) {
+        git -c user.name="ibkr-executor" -c user.email="executor@localhost" `
+            commit -q -m "chore(ibkr): execution report $(Get-Date -Format 'yyyy-MM-dd')"
+        git push origin "HEAD:$Branch"
+        if ($LASTEXITCODE -eq 0) { Log "published execution report to origin/$Branch" }
+        else {
+            Log "WARN: could not push execution report (this host needs git write access) - rolling back"
+            git reset --hard "origin/$Branch" | Out-Null
+        }
+    } else { Log "no change to executed_book.json - nothing to publish" }
+}
+
 Log "done (exit $LASTEXITCODE)"
 exit $LASTEXITCODE

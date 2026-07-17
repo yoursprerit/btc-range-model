@@ -65,4 +65,25 @@ ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${POR
 # --execute places orders; the executor's own guards decide if it actually trades.
 "${PYTHON}" scripts/ibkr_execute_book.py "${ARGS[@]}"
 
+# Publish the execution report back so the cloud app's "Executed Book" tab shows
+# it. Requires git WRITE credentials on this host (deploy key / token). On push
+# failure we reset to origin so the branch never diverges and tomorrow's
+# ff-merge of the fresh target book still works. Set IBKR_NO_PUSH_REPORT=1 to skip.
+REPORT="${REPO_ROOT}/data/overall/executed_book.json"
+if [ "${IBKR_NO_PUSH_REPORT:-0}" != "1" ] && [ -f "${REPORT}" ]; then
+  git add "${REPORT}"
+  if git diff --cached --quiet -- "${REPORT}"; then
+    log "no change to executed_book.json — nothing to publish"
+  else
+    git -c user.name="ibkr-executor" -c user.email="executor@localhost" \
+      commit -q -m "chore(ibkr): execution report $(date -u +%F)"
+    if git push origin "HEAD:${BRANCH}"; then
+      log "published execution report to origin/${BRANCH}"
+    else
+      log "WARN: could not push execution report (this host needs git write access) — rolling back"
+      git reset --hard "origin/${BRANCH}" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
 log "done"

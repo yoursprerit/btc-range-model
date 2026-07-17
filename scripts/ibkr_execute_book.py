@@ -43,10 +43,37 @@ sys.path.insert(0, str(_REPO / "scripts"))
 sys.path.insert(0, str(_REPO))
 
 import target_book as tb                           # noqa: E402  (light: stdlib + pandas)
+import executed_book as eb                          # noqa: E402
 import ibkr_symbols as sym                          # noqa: E402
 from ibkr_common import (                           # noqa: E402
     DEFAULT_PORT, Broker, build_order_plan, is_trading_day, print_plan,
 )
+
+DEFAULT_REPORT = _REPO / "data" / "overall" / "executed_book.json"
+
+
+def _write_report(broker, payload: dict, mode: str, trades: list[dict],
+                  out_path: str, secret) -> None:
+    """Write the execution report (trades + current positions) the Executed Book
+    page reads. Best-effort — a failure here never fails the rebalance."""
+    try:
+        net_liq = broker.net_liq()
+    except Exception:
+        net_liq = 0.0
+    cash = broker.cash()
+    try:
+        positions = broker.portfolio_snapshot()
+    except Exception:
+        positions = []
+    report = eb.build_payload(
+        as_of=payload.get("as_of", ""), profile=payload.get("profile", ""),
+        mode=mode, account=broker.account, net_liq=net_liq, cash=cash,
+        trades=trades, positions=positions)
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(tb.dumps(report, secret))
+    print(f"Wrote execution report → {out_path} "
+          f"({len(trades)} trade(s), {len(positions)} position(s))")
 
 
 def _load_book(args) -> dict:
@@ -97,6 +124,10 @@ def main() -> int:
                     help="permit a non-DU account (DANGEROUS — disables the paper guard)")
     ap.add_argument("--force", action="store_true",
                     help="ignore the weekend/holiday & freshness guards")
+    ap.add_argument("--report-out", default=str(DEFAULT_REPORT),
+                    help=f"execution-report output path (default {DEFAULT_REPORT})")
+    ap.add_argument("--no-report", action="store_true",
+                    help="do not write the execution report")
     args = ap.parse_args()
 
     payload = _load_book(args)
@@ -145,6 +176,13 @@ def main() -> int:
                                       args.band, args.fractional)
             print(f"\nAccount {broker.account} (PAPER).")
             print_plan(orders, net_liq)
+            if not args.no_report:
+                planned = [dict(key=o.key, symbol=o.symbol, action=o.action,
+                                qty=o.qty, price=o.price, status="PLANNED",
+                                filled=0.0, avg_fill_price=0.0, reason=o.reason)
+                           for o in orders]
+                _write_report(broker, payload, "dry-run", planned,
+                              args.report_out, secret)
             print("\n[dry-run] No orders transmitted. Re-run with --execute to trade.")
         finally:
             broker.disconnect()
@@ -159,9 +197,13 @@ def main() -> int:
                                   args.band, args.fractional)
         print(f"\nAccount {broker.account} (PAPER).")
         print_plan(orders, net_liq)
+        fills: list[dict] = []
         if orders:
             print("\nTransmitting orders (sells → buys)…")
-            broker.place(orders, args.fractional, args.fill_timeout)
+            fills = broker.place(orders, args.fractional, args.fill_timeout)
+        if not args.no_report:
+            # positions read AFTER the fills → the report shows the resulting book
+            _write_report(broker, payload, "execute", fills, args.report_out, secret)
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()
