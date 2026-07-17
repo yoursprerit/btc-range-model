@@ -5,19 +5,19 @@ name: Publish target book (IBKR Option C)
 # local executor next to IB Gateway can `git pull` (or fetch the raw URL) and
 # rebalance an IBKR paper account without running the model itself.
 #
-# ┌────────────────────────────────────────────────────────────────────────────┐
-# │ SCHEDULING CAVEAT: GitHub runs `on: schedule` ONLY from the repo's DEFAULT   │
-# │ branch. While this workflow lives only on the feature branch it will NOT     │
-# │ fire on a timer — trigger it manually from the Actions tab (Run workflow →   │
-# │ pick this branch), or via the API. The commented `schedule:` block below     │
-# │ takes effect only once this file is on the default branch.                   │
-# └────────────────────────────────────────────────────────────────────────────┘
+# NOTE: `on: schedule` fires only from the repo's DEFAULT branch — which this
+# file is now on, so the daily cron below is live. workflow_dispatch also stays,
+# for manual runs / first tests.
 
 on:
-  workflow_dispatch: {}   # manual run (works from any branch, incl. this one)
-  # schedule:
-  #   # Weekdays 13:45 UTC — after the daily bar closes; only active on default branch.
-  #   - cron: "45 13 * * 1-5"
+  workflow_dispatch: {}   # manual run (Actions tab → Run workflow)
+  schedule:
+    # 12:30 UTC on weekdays — after the prior US daily bar has closed, and BEFORE
+    # the laptop executor's 09:45-ET run in BOTH DST regimes (09:45 EDT = 13:45
+    # UTC, 09:45 EST = 14:45 UTC), so the executor's `git pull` always gets a
+    # fresh book. GitHub cron is UTC-only (no DST) and best-effort — a late fire
+    # is safe: the executor's freshness guard just skips rather than trading stale.
+    - cron: "30 12 * * 1-5"
 
 # Allow the built-in token to push the artifact back to the branch.
 permissions:
