@@ -19,6 +19,8 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 ```
 
+**Contents:** [Apps](#whats-inside--the-apps) · [Architecture](#application-architecture) · [Strategy](#trading-strategy) · [Methodology](#methodology) · [Results](#results-summary) · [Quick start](#quick-start) · [Live execution](#live-execution-interactive-brokers) · [Repo structure](#repository-structure) · [Docs map](#documentation-map)
+
 ---
 
 ## What's inside — the apps
