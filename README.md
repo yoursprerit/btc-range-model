@@ -123,6 +123,9 @@ out-of-sample over multiple periods **and** the full bull+bear cycle.
   weights (per-kind caps: 30 % core / 18 % beta / 10 % leveraged) for three
   **risk profiles** — Balanced (max Sharpe), Growth (−22 % DD budget),
   Aggressive (−38 % budget) — with an optional mid-2026 **fundamental overlay**.
+  Today's book is then **signal-gated** and **priority-tilted**, with the
+  undeployed remainder parked in SATA. Full mechanics (universe, optimiser,
+  priority score, allocation) in **[`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md)**.
 
 ### Strategy docs
 
@@ -140,7 +143,7 @@ combines them all.
 | Miner MA-50 + volatility filter | WGMI | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Clean-energy / AI-Tech Divergence | PBW · ARTY | [`TICKER_APPS_README.md`](TICKER_APPS_README.md) |
 | Leveraged-sibling sizing & stops | SOXL · ERX · MSTU · UGL · NUGT | [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) |
-| **Overall combined portfolio** | **all of the above** | **[`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md)** (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) |
+| **Overall combined portfolio** | **all of the above** | **[`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md)** (how it works — universe, optimiser, priority, allocation) · [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) |
 
 All seven ETF apps share one config-driven engine — see
 [`TICKER_APPS_README.md`](TICKER_APPS_README.md).
@@ -391,7 +394,8 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Gold app + strategy | [`GLDM_README.md`](GLDM_README.md) · [`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md) |
 | ETF apps (SOXX/GRID/XLE/REMX/WGMI/PBW/ARTY) | [`TICKER_APPS_README.md`](TICKER_APPS_README.md) |
 | Per-asset strategy evaluations | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) |
-| Combined portfolio walk-forward | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
+| Overall strategy — how it works | [`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md) |
+| Overall strategy — walk-forward performance | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
 | Deploy the dashboard (Streamlit) | [`docs/STREAMLIT_DEPLOY.md`](docs/STREAMLIT_DEPLOY.md) |
 | Legacy (audit only) | [`legacy/README.md`](legacy/README.md) |
