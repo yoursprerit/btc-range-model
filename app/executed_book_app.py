@@ -38,6 +38,7 @@ import executed_book as eb                 # noqa: E402
 import ibkr_symbols as sym                 # noqa: E402  (BTC→IBIT mapping)
 
 REPORT_PATH = _REPO_ROOT / "data" / "overall" / "executed_book.json"
+REPORT_PATH_LIVE = _REPO_ROOT / "data" / "overall" / "executed_book_live.json"
 TARGET_PATH = _REPO_ROOT / "data" / "overall" / "target_book.json"
 
 try:
@@ -106,7 +107,11 @@ def _render(payload: dict, *, source: str) -> None:
     c[2].metric("Cash", f"${cash:,.0f}" if cash else "—")
     c[3].metric("Positions", f"{len(positions)}")
 
-    mode_txt = ("🟢 EXECUTED (paper)" if mode == "execute"
+    acct_mode = (payload.get("account_mode") or "paper").lower()
+    live = acct_mode == "live"
+    acct_txt = "🔴 LIVE — real money" if live else "🧪 PAPER"
+    acct_col = "#dc2626" if live else "#0ea5e9"
+    mode_txt = ("🟢 EXECUTED" if mode == "execute"
                 else "🟡 DRY-RUN (no orders)" if mode == "dry-run" else mode or "—")
     mode_col = "#16a34a" if mode == "execute" else "#d97706"
     if not secret:
@@ -117,6 +122,7 @@ def _render(payload: dict, *, source: str) -> None:
     else:
         sig_col = "#dc2626"; sig_txt = "⛔ signature MISMATCH"
     st.markdown(
+        _badge(acct_txt, acct_col) + "  " +
         _badge(mode_txt, mode_col) + "  " + _badge(sig_txt, sig_col) + "  " +
         _badge(("🟢 " if ok_val else "🟡 ") + val_why, "#16a34a" if ok_val else "#d97706") +
         (f"  {_badge('for signal bar ' + str(payload.get('as_of')), '#0ea5e9')}"
@@ -293,18 +299,28 @@ def _download(payload: dict, secret) -> None:
 
 # ══════════════════════════════════════════════════════════════════════════
 st.title("✅ Executed Book (IBKR)")
-st.caption("What the IBKR **paper** executor actually did on the last rebalance — "
-           "trades placed and the resulting positions.")
+st.caption("What the IBKR executor actually did on the last rebalance — trades "
+           "placed and the resulting positions.")
 
-if REPORT_PATH.exists():
+# Which account views are available? (paper always; live once a live run exists)
+_avail = [("Paper", REPORT_PATH)] + (
+    [("Live", REPORT_PATH_LIVE)] if REPORT_PATH_LIVE.exists() else [])
+if len(_avail) > 1:
+    _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
+                     help="Paper and live executions are kept as separate reports.")
+    _path = dict(_avail)[_pick]
+else:
+    _path = REPORT_PATH
+
+if _path.exists():
     try:
-        payload = tb.loads(REPORT_PATH.read_text())
-        _render(payload, source=f"`{REPORT_PATH.relative_to(_REPO_ROOT)}`")
+        payload = tb.loads(_path.read_text())
+        _render(payload, source=f"`{_path.relative_to(_REPO_ROOT)}`")
     except Exception as e:
         st.error(f"Could not read the execution report: {e}")
 else:
     st.warning("No execution report found at "
-               f"`{REPORT_PATH.relative_to(_REPO_ROOT)}`.")
+               f"`{_path.relative_to(_REPO_ROOT)}`.")
     st.markdown(
         "It appears here once the executor has run a rebalance and committed the "
         "report back to the branch (`scripts/ibkr_execute_book.py` writes it; the "

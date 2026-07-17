@@ -53,7 +53,7 @@ DEFAULT_REPORT = _REPO / "data" / "overall" / "executed_book.json"
 
 
 def _write_report(broker, payload: dict, mode: str, trades: list[dict],
-                  out_path: str, secret) -> None:
+                  out_path: str, secret, account_mode: str = "paper") -> None:
     """Write the execution report (trades + current positions) the Executed Book
     page reads. Best-effort — a failure here never fails the rebalance."""
     try:
@@ -68,7 +68,7 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
     report = eb.build_payload(
         as_of=payload.get("as_of", ""), profile=payload.get("profile", ""),
         mode=mode, account=broker.account, net_liq=net_liq, cash=cash,
-        trades=trades, positions=positions)
+        trades=trades, positions=positions, account_mode=account_mode)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(tb.dumps(report, secret))
@@ -120,15 +120,37 @@ def main() -> int:
                     help="reject a book generated more than this many hours ago")
     ap.add_argument("--require-signature", action="store_true",
                     help="abort unless the book carries a valid signature")
-    ap.add_argument("--allow-nonpaper", action="store_true",
-                    help="permit a non-DU account (DANGEROUS — disables the paper guard)")
     ap.add_argument("--force", action="store_true",
                     help="ignore the weekend/holiday & freshness guards")
-    ap.add_argument("--report-out", default=str(DEFAULT_REPORT),
-                    help=f"execution-report output path (default {DEFAULT_REPORT})")
+    # ── account mode (paper vs LIVE) ─────────────────────────────────────────
+    ap.add_argument("--account-mode", choices=["paper", "live"], default="paper",
+                    help="paper (default) requires a DU… account; live requires a "
+                         "real account + --confirm-live (+ matching --expected-account)")
+    ap.add_argument("--expected-account",
+                    help="pin the exact account id; the run aborts if the connected "
+                         "account differs (strongly recommended for live)")
+    ap.add_argument("--confirm-live", action="store_true",
+                    help="required with --account-mode live (you are trading REAL money)")
+    # ── live safety limits ───────────────────────────────────────────────────
+    ap.add_argument("--max-deploy-frac", type=float, default=1.0,
+                    help="cap total deployed weight at this fraction of net-liq "
+                         "(e.g. 0.25 = never deploy more than 25%%); the rest stays cash")
+    ap.add_argument("--max-order-notional", type=float, default=0.0,
+                    help="clamp any single order to this dollar cap (0 = no cap)")
+    ap.add_argument("--kill-switch-file",
+                    help="if this file exists (or env IBKR_TRADING_DISABLED is set), "
+                         "abort before placing any order")
+    ap.add_argument("--report-out",
+                    help="execution-report output path (default: executed_book.json, "
+                         "or executed_book_live.json in live mode)")
     ap.add_argument("--no-report", action="store_true",
                     help="do not write the execution report")
     args = ap.parse_args()
+
+    live = args.account_mode == "live"
+    report_out = args.report_out or str(
+        _REPO / "data" / "overall" / ("executed_book_live.json" if live
+                                      else "executed_book.json"))
 
     payload = _load_book(args)
     _print_book(payload)
@@ -156,25 +178,50 @@ def main() -> int:
         print("ABORT: book failed freshness validation (use --force to override).")
         return 1
 
-    weights = payload.get("weights", {})
+    weights = dict(payload.get("weights", {}))
     exec_price = payload.get("exec_price", {})
+
+    # ── live-mode banner + confirmation ──────────────────────────────────────
+    if live:
+        print("\n*** LIVE ACCOUNT MODE — REAL MONEY *** "
+              f"(deploy cap {args.max_deploy_frac*100:.0f}% of NAV"
+              + (f", per-order cap ${args.max_order_notional:,.0f}"
+                 if args.max_order_notional else "") + ")")
+
+    # ── exposure cap: scale weights so total deployed ≤ max_deploy_frac ──────
+    total_w = sum(weights.values())
+    if args.max_deploy_frac < 1.0 and total_w > args.max_deploy_frac:
+        scale = args.max_deploy_frac / total_w
+        weights = {k: w * scale for k, w in weights.items()}
+        print(f"Exposure cap: scaling deployed weight {total_w*100:.0f}% → "
+              f"{args.max_deploy_frac*100:.0f}% of NAV (× {scale:.3f}); rest stays cash.")
+
+    # ── kill switch — a manual, instant halt independent of cron/systemd ─────
+    if os.environ.get("IBKR_TRADING_DISABLED") or (
+            args.kill_switch_file and Path(args.kill_switch_file).exists()):
+        print("ABORT: trading is DISABLED (kill switch active). No orders placed.")
+        return 0
+
+    account_kwargs = dict(account_mode=args.account_mode,
+                          expected_account=args.expected_account,
+                          confirm_live=args.confirm_live)
+    tag = args.account_mode.upper()
 
     # ── dry-run: connect only to diff against live positions ─────────────────
     if not args.execute:
         print("\n[dry-run] Connecting only to read positions for the plan preview…")
         try:
-            broker = Broker(args.host, args.port, args.client_id, args.allow_nonpaper)
+            broker = Broker(args.host, args.port, args.client_id, **account_kwargs)
         except Exception as e:
-            print(f"[dry-run] Could not connect to IB Gateway ({e}).")
-            print("[dry-run] Showing the published book only; run with a gateway to "
-                  "diff against live positions.")
+            print(f"[dry-run] Could not connect / guard failed ({e}).")
+            print("[dry-run] Showing the published book only.")
             return 0
         try:
             net_liq = broker.net_liq()
             current = broker.positions_by_key()
             orders = build_order_plan(weights, exec_price, net_liq, current,
-                                      args.band, args.fractional)
-            print(f"\nAccount {broker.account} (PAPER).")
+                                      args.band, args.fractional, args.max_order_notional)
+            print(f"\nAccount {broker.account} ({tag}).")
             print_plan(orders, net_liq)
             if not args.no_report:
                 planned = [dict(key=o.key, symbol=o.symbol, action=o.action,
@@ -182,20 +229,20 @@ def main() -> int:
                                 filled=0.0, avg_fill_price=0.0, reason=o.reason)
                            for o in orders]
                 _write_report(broker, payload, "dry-run", planned,
-                              args.report_out, secret)
+                              report_out, secret, args.account_mode)
             print("\n[dry-run] No orders transmitted. Re-run with --execute to trade.")
         finally:
             broker.disconnect()
         return 0
 
     # ── execute ──────────────────────────────────────────────────────────────
-    broker = Broker(args.host, args.port, args.client_id, args.allow_nonpaper)
+    broker = Broker(args.host, args.port, args.client_id, **account_kwargs)
     try:
         net_liq = broker.net_liq()
         current = broker.positions_by_key()
         orders = build_order_plan(weights, exec_price, net_liq, current,
-                                  args.band, args.fractional)
-        print(f"\nAccount {broker.account} (PAPER).")
+                                  args.band, args.fractional, args.max_order_notional)
+        print(f"\nAccount {broker.account} ({tag}).")
         print_plan(orders, net_liq)
         fills: list[dict] = []
         if orders:
@@ -203,7 +250,8 @@ def main() -> int:
             fills = broker.place(orders, args.fractional, args.fill_timeout)
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
-            _write_report(broker, payload, "execute", fills, args.report_out, secret)
+            _write_report(broker, payload, "execute", fills, report_out, secret,
+                          args.account_mode)
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()

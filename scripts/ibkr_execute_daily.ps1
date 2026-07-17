@@ -73,14 +73,28 @@ if (-not $NoPull) {
     git merge --ff-only "origin/$Branch" 2>&1 | ForEach-Object { Log $_ }
 }
 
+# Account mode: paper (default) or live (set env IBKR_ACCOUNT_MODE=live + a live
+# gateway port). For live the wrapper adds --confirm-live and the safety limits.
+$AccountMode = if ($env:IBKR_ACCOUNT_MODE) { $env:IBKR_ACCOUNT_MODE } else { 'paper' }
+$ExecArgs = @('--file', $Book, '--execute', '--band', $Band, '--port', $Port,
+              '--account-mode', $AccountMode)
+if ($AccountMode -eq 'live') {
+    $ExecArgs += '--confirm-live'
+    if ($env:IBKR_EXPECTED_ACCOUNT)   { $ExecArgs += @('--expected-account', $env:IBKR_EXPECTED_ACCOUNT) }
+    if ($env:IBKR_MAX_DEPLOY_FRAC)    { $ExecArgs += @('--max-deploy-frac', $env:IBKR_MAX_DEPLOY_FRAC) }
+    if ($env:IBKR_MAX_ORDER_NOTIONAL) { $ExecArgs += @('--max-order-notional', $env:IBKR_MAX_ORDER_NOTIONAL) }
+}
+if ($env:IBKR_KILL_SWITCH_FILE) { $ExecArgs += @('--kill-switch-file', $env:IBKR_KILL_SWITCH_FILE) }
+Log "account mode: $AccountMode"
+
 # --execute places orders; the executor's own guards decide if it actually trades.
-& $Python "scripts\ibkr_execute_book.py" --file $Book --execute --band $Band --port $Port 2>&1 |
-    ForEach-Object { Log $_ }
+& $Python "scripts\ibkr_execute_book.py" @ExecArgs 2>&1 | ForEach-Object { Log $_ }
 
 # Publish the execution report back so the cloud app's "Executed Book" tab shows
 # it. Requires git WRITE credentials on this host. On push failure, reset to
 # origin so the branch never diverges. Set env IBKR_NO_PUSH_REPORT=1 to skip.
-$Report = Join-Path $RepoRoot 'data\overall\executed_book.json'
+$ReportName = if ($AccountMode -eq 'live') { 'executed_book_live.json' } else { 'executed_book.json' }
+$Report = Join-Path $RepoRoot "data\overall\$ReportName"
 if ($env:IBKR_NO_PUSH_REPORT -ne '1' -and (Test-Path $Report)) {
     git add $Report
     git diff --cached --quiet -- $Report

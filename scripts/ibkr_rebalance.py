@@ -174,7 +174,8 @@ def main() -> int:
     if not args.execute:
         print("\n[dry-run] Connecting only to read positions for the plan preview…")
         try:
-            broker = Broker(args.host, args.port, args.client_id, args.allow_nonpaper)
+            broker = Broker(args.host, args.port, args.client_id,
+                        account_mode=("any" if args.allow_nonpaper else "paper"))
         except Exception as e:                   # no gateway on this host → preview vs flat
             print(f"[dry-run] Could not connect to IB Gateway ({e}).")
             print("[dry-run] Showing the target book only; run with a gateway to diff "
@@ -193,7 +194,8 @@ def main() -> int:
         return 0
 
     # ── execute ───────────────────────────────────────────────────────────────
-    broker = Broker(args.host, args.port, args.client_id, args.allow_nonpaper)
+    broker = Broker(args.host, args.port, args.client_id,
+                        account_mode=("any" if args.allow_nonpaper else "paper"))
     try:
         net_liq = broker.net_liq()
         current = broker.positions_by_key()

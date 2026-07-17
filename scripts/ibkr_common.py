@@ -82,7 +82,7 @@ class Order:
 
 def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
                      net_liq: float, current: dict[str, float], band: float,
-                     fractional: bool) -> list[Order]:
+                     fractional: bool, max_order_notional: float = 0.0) -> list[Order]:
     """Turn target weights + current share counts into BUY/SELL orders.
 
     ``weights``    signal-key → target portfolio weight (0..1).
@@ -91,6 +91,8 @@ def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
     ``current``    signal-key → shares held now (already translated from IBKR
                    symbols).  A name held but not in ``weights`` is fully closed.
     A per-name no-trade band (``band`` × net-liq) suppresses tiny rebalances.
+    ``max_order_notional`` (>0) clamps any single order's size to that dollar cap
+    — a fat-finger / bug backstop that matters most for live trading.
     """
     orders: list[Order] = []
     keys = set(weights) | set(current)
@@ -122,13 +124,22 @@ def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
         if w > 0 and delta_value < band_value:
             continue                            # inside the no-trade band → leave it
 
+        order_qty = abs(delta)
+        clamped = ""
+        if max_order_notional and px and order_qty * px > max_order_notional:
+            cap_qty = max_order_notional / px
+            order_qty = cap_qty if fractional else float(int(cap_qty))
+            clamped = f" [clamped to ${max_order_notional:,.0f}]"
+            if order_qty < (1e-6 if fractional else 0.5):
+                continue                        # cap too small to place a share
+
         if delta > 0:
-            orders.append(Order(key, symbol, "BUY", abs(delta), px,
-                                f"→ {w*100:.1f}% (hold {held:g}→{target_shares:g})"))
+            orders.append(Order(key, symbol, "BUY", order_qty, px,
+                                f"→ {w*100:.1f}% (hold {held:g}→{target_shares:g}){clamped}"))
         else:
             reason = ("close (no longer in book)" if w <= 0
                       else f"→ {w*100:.1f}% (hold {held:g}→{target_shares:g})")
-            orders.append(Order(key, symbol, "SELL", abs(delta), px, reason))
+            orders.append(Order(key, symbol, "SELL", order_qty, px, reason + clamped))
 
     # sells first (free buying power), then buys; largest value first within each.
     orders.sort(key=lambda o: (0 if o.action == "SELL" else 1, -o.value))
@@ -151,18 +162,58 @@ def print_plan(orders: list[Order], net_liq: float) -> None:
 class Broker:
     """Thin ``ib_async`` wrapper: paper-account guard, positions, net-liq, orders."""
 
-    def __init__(self, host: str, port: int, client_id: int, allow_nonpaper: bool):
+    def __init__(self, host: str, port: int, client_id: int,
+                 account_mode: str = "paper", expected_account: str | None = None,
+                 confirm_live: bool = False):
+        """Connect and enforce the account guard for the chosen mode.
+
+        account_mode:
+          * ``paper`` — the connected account MUST start with ``DU`` (default).
+          * ``live``  — the account must NOT be paper; additionally requires
+            ``confirm_live=True`` and, if ``expected_account`` is given, an EXACT
+            match, so a real account can never be traded by accident or the wrong
+            real account traded by mistake.
+          * ``any``   — no check (escape hatch; not used by the executor).
+        """
         from ib_async import IB
         self.ib = IB()
         self.ib.connect(host, port, clientId=client_id, timeout=30)
         accts = self.ib.managedAccounts()
         self.account = accts[0] if accts else ""
-        if not allow_nonpaper and not self.account.startswith(PAPER_ACCT_PREFIX):
+        self.account_mode = account_mode
+        self._enforce_account_guard(account_mode, expected_account, confirm_live)
+
+    def _enforce_account_guard(self, mode: str, expected: str | None,
+                               confirm_live: bool) -> None:
+        acct = self.account
+        is_paper = acct.startswith(PAPER_ACCT_PREFIX)
+        if mode == "any":
+            return
+        if mode == "paper":
+            if not is_paper:
+                self._abort(f"account '{acct}' is not a paper account "
+                            f"('{PAPER_ACCT_PREFIX}…'). Point IB Gateway at the paper "
+                            f"login, or run with --account-mode live for a real account.")
+            return
+        if mode == "live":
+            if not confirm_live:
+                self._abort("live mode requires --confirm-live (you are about to "
+                            "trade REAL money).")
+            if is_paper:
+                self._abort(f"--account-mode live but the connected account '{acct}' "
+                            f"is a PAPER account. Point the gateway at the live login.")
+            if expected and acct != expected:
+                self._abort(f"connected account '{acct}' does not match the expected "
+                            f"live account '{expected}'. Refusing to trade the wrong account.")
+            return
+        self._abort(f"unknown account mode {mode!r}")
+
+    def _abort(self, msg: str) -> None:
+        try:
             self.ib.disconnect()
-            raise RuntimeError(
-                f"Connected account '{self.account}' is not a paper account "
-                f"(expected '{PAPER_ACCT_PREFIX}…'). Point IB Gateway at the paper "
-                f"login, or pass --allow-nonpaper to override (NOT recommended).")
+        except Exception:
+            pass
+        raise RuntimeError(msg)
 
     def net_liq(self) -> float:
         for v in self.ib.accountSummary(self.account):

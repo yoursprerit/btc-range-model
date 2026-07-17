@@ -58,9 +58,23 @@ if [ "${IBKR_NO_PULL:-0}" != "1" ]; then
   git merge --ff-only "origin/${BRANCH}" || log "ff-merge skipped (local diverged?) — using on-disk book"
 fi
 
-ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${PORT}")
+# Account mode: paper (default) or live. For live the wrapper passes --confirm-live
+# and the live safety limits from the env; set IBKR_ACCOUNT_MODE=live only in the
+# LIVE env file (deploy/systemd/executor-live.env), pointing IBKR_PORT at 4003.
+ACCOUNT_MODE="${IBKR_ACCOUNT_MODE:-paper}"
+ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${PORT}"
+      --account-mode "${ACCOUNT_MODE}")
+if [ "${ACCOUNT_MODE}" = "live" ]; then
+  ARGS+=(--confirm-live)
+  [ -n "${IBKR_EXPECTED_ACCOUNT:-}" ]   && ARGS+=(--expected-account "${IBKR_EXPECTED_ACCOUNT}")
+  [ -n "${IBKR_MAX_DEPLOY_FRAC:-}" ]    && ARGS+=(--max-deploy-frac "${IBKR_MAX_DEPLOY_FRAC}")
+  [ -n "${IBKR_MAX_ORDER_NOTIONAL:-}" ] && ARGS+=(--max-order-notional "${IBKR_MAX_ORDER_NOTIONAL}")
+fi
+[ -n "${IBKR_KILL_SWITCH_FILE:-}" ] && ARGS+=(--kill-switch-file "${IBKR_KILL_SWITCH_FILE}")
 # shellcheck disable=SC2206
 [ -n "${EXTRA}" ] && ARGS+=(${EXTRA})
+
+log "account mode: ${ACCOUNT_MODE}"
 
 # --execute places orders; the executor's own guards decide if it actually trades.
 "${PYTHON}" scripts/ibkr_execute_book.py "${ARGS[@]}"
@@ -69,7 +83,11 @@ ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${POR
 # it. Requires git WRITE credentials on this host (deploy key / token). On push
 # failure we reset to origin so the branch never diverges and tomorrow's
 # ff-merge of the fresh target book still works. Set IBKR_NO_PUSH_REPORT=1 to skip.
-REPORT="${REPO_ROOT}/data/overall/executed_book.json"
+if [ "${ACCOUNT_MODE}" = "live" ]; then
+  REPORT="${REPO_ROOT}/data/overall/executed_book_live.json"
+else
+  REPORT="${REPO_ROOT}/data/overall/executed_book.json"
+fi
 if [ "${IBKR_NO_PUSH_REPORT:-0}" != "1" ] && [ -f "${REPORT}" ]; then
   git add "${REPORT}"
   if git diff --cached --quiet -- "${REPORT}"; then

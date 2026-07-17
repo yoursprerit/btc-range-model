@@ -40,5 +40,29 @@ services:
       # Persist IBC settings / gateway state across restarts (optional).
       - ib-settings:/home/ibgateway/Jts
 
+  # ── LIVE gateway — real money. Start it only when you deliberately go live: ──
+  #     docker compose up -d ib-gateway            # paper only
+  #     docker compose --profile live up -d        # paper + live
+  # Uses a SEPARATE login (your funded account) and TRADING_MODE=live. IBKR
+  # mandates 2FA for live logins, so unattended login here is harder than paper —
+  # see docs/LIVE_TRADING.md. Paper API → host 4004, live API → host 4003.
+  ib-gateway-live:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    profiles: ["live"]                 # not started unless you opt in
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${TWS_USERID_LIVE}
+      TWS_PASSWORD: ${TWS_PASSWORD_LIVE}
+      TRADING_MODE: live
+      READ_ONLY_API: "no"
+      BYPASS_WARNING: "yes"
+      AUTO_RESTART_TIME: "03:00 AM"
+      TZ: America/New_York
+    ports:
+      - "127.0.0.1:4003:4001"          # LIVE API → set the executor's --port 4003
+    volumes:
+      - ib-settings-live:/home/ibgateway/Jts
+
 volumes:
   ib-settings:
+  ib-settings-live:
