@@ -193,24 +193,36 @@ drawdown — the harder tests are **Sharpe** and whether it can beat B&H on
 
 **BTC · MSTR · MSTU — deployed CT-divergence (ML) engine, full 2024-03 → 2026-07
 round-trip (~2.4 yr, one bull→bear).** The Bitcoin signal drives all three
-sleeves; MSTR/MSTU are traded off the **BTC parent** trend with a 3 % intrabar
-stop on the leveraged names.
+sleeves; MSTR/MSTU are traded off the **BTC parent** trend. Stops are the current
+**2026-07e vol-matched** config — **BTC & MSTR signal-exit-only (no fixed stop)**,
+**MSTU −6 %** — matching the live figures in
+[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md).
 
 | Asset | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---:|---:|---:|---:|---:|
-| BTC (core) | **+85 %** | −7 % | **−28 %** | −53 % | **1.05 / 0.14** |
-| MSTR (β) | **+270 %** | −12 % | **−22 %** | −83 % | **1.34 / 0.38** |
-| MSTU (2×) | **+469 %** | −94 % | **−48 %** | −99 % | **1.12 / 0.19** |
+| BTC (core) | **+86 %** | −7 % | **−28 %** | −53 % | **1.05 / 0.14** |
+| MSTR (β) | **+266 %** | −12 % | **−22 %** | −83 % | **1.41 / 0.38** |
+| MSTU (2×) | **+524 %** | −94 % | **−42 %** | −99 % | **1.27 / 0.19** |
 
 Buy & hold is flat-to-catastrophic over this window (MSTU's 2× decay ≈ total
 wipeout); the strategy stays long in the bull, steps aside in the bear, and even
 posts *positive* bear-market returns on MSTR/MSTU. The **Overall** portfolio
 blends every sleeve above into one book — the Aggressive profile roughly doubles
 Balanced's return by loading the leveraged sleeves within its drawdown budget.
-Full analysis: **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**,
+
+> **Which numbers are these?** The current live **2026-07e** stop config (MSTR
+> stop-free, MSTU −6 %). An earlier snapshot with a flat −3 % stop on both
+> leveraged names — reported in
+> [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) — shows MSTR
+> ≈ +270 % (Sharpe 1.34) and MSTU ≈ +469 % (Sharpe 1.12, MDD −48 %); the
+> vol-matched retune is what lifts them. Both are the same engine and window,
+> only the per-asset stop differs.
+
+Full analysis: **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** (live config),
+**[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)** (robustness),
+**[`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md)** (stop retune),
 **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**,
-**[`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md)**,
-**[`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md)**.
+**[`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md)**.
 
 ### Strengths of the methodology
 
