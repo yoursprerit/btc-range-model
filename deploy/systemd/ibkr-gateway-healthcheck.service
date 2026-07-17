@@ -1,0 +1,23 @@
+# Probe IB Gateway: is it up, logged in, and serving the paper account?
+# On failure the healthcheck itself POSTs to IBKR_ALERT_WEBHOOK, and this unit's
+# OnFailure fires the alert unit too (belt and suspenders).
+#
+# Install alongside the executor units:
+#   sudo cp deploy/systemd/ibkr-gateway-healthcheck.* /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ibkr-gateway-healthcheck.timer
+[Unit]
+Description=IB Gateway login healthcheck
+Wants=network-online.target
+After=network-online.target docker.service
+OnFailure=ibkr-alert@%n.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/btc-range-model
+EnvironmentFile=/home/ubuntu/btc-range-model/deploy/systemd/executor.env
+# IBKR_PORT / IBKR_ALERT_WEBHOOK come from the env file; the check reads the port
+# from IBKR_PORT via the flag below.
+ExecStart=/bin/sh -c '/home/ubuntu/btc-range-model/.venv/bin/python \
+  /home/ubuntu/btc-range-model/scripts/ibkr_gateway_healthcheck.py --port "${IBKR_PORT:-4004}"'
+TimeoutStartSec=120

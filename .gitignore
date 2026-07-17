@@ -23,6 +23,8 @@ Thumbs.db
 # IBKR gateway credentials — commit .env.example, never the filled-in .env
 .env
 deploy/ibkr-gateway/.env
+# systemd EnvironmentFile — holds the signing secret; commit only the .example
+deploy/systemd/executor.env
 
 # Large reproducible-from-API/script data — regenerable via src/ scripts
 data/binance_hourly_btc.csv

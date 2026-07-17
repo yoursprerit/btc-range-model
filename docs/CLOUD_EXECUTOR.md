@@ -138,6 +138,68 @@ tail -n 60 ~/btc-range-model/logs/ibkr_cron.log
 
 ---
 
+## 6b. Prefer systemd over cron (more robust)
+
+systemd gives you dependency ordering (start after Docker), `journalctl` logs,
+visible next-run times, and `OnFailure=` alerting. Units are in
+`deploy/systemd/` — **edit the paths / `User=` in each file** (they assume
+`ubuntu` and `/home/ubuntu/btc-range-model`), then:
+
+```bash
+# put the signing secret / port / webhook where systemd can read them
+cp deploy/systemd/executor.env.example deploy/systemd/executor.env
+nano deploy/systemd/executor.env         # OVERALL_BOOK_SECRET, IBKR_PORT=4004, IBKR_ALERT_WEBHOOK
+
+sudo cp deploy/systemd/ibkr-executor.service \
+        deploy/systemd/ibkr-executor.timer \
+        deploy/systemd/ibkr-gateway-healthcheck.service \
+        deploy/systemd/ibkr-gateway-healthcheck.timer \
+        deploy/systemd/ibkr-alert@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ibkr-executor.timer ibkr-gateway-healthcheck.timer
+
+systemctl list-timers 'ibkr-*'                 # confirm next run times
+journalctl -u ibkr-executor.service -f         # watch the next rebalance
+```
+
+- **`ibkr-executor.timer`** fires the executor weekdays 09:45 ET.
+- **`ibkr-gateway-healthcheck.timer`** probes the gateway every 30 min, 08:00–16:30
+  ET (skipping the nightly 03:00-ET restart window to avoid false alarms).
+- Both units carry `OnFailure=ibkr-alert@%n.service`, so a failed run also fires
+  an alert — on top of the healthcheck's own webhook post.
+
+> The `America/New_York` suffix in the `.timer` files needs **systemd v252+**
+> (Ubuntu 24.04 has it). On older systemd, set the host clock to Eastern with
+> `sudo timedatectl set-timezone America/New_York` and delete the suffix from the
+> `OnCalendar=` lines.
+
+## 6c. Gateway healthcheck & alerts
+
+`scripts/ibkr_gateway_healthcheck.py` doesn't just ping the port — it opens an
+IBKR API session and requires a **paper (`DU…`) managed account**, so it catches
+the case where the gateway is running but **not logged in** (a failed login or a
+surprise 2FA prompt).
+
+Run it by hand:
+
+```bash
+.venv/bin/python scripts/ibkr_gateway_healthcheck.py --port 4004
+# 🟢 healthy — 127.0.0.1:4004 logged in, paper account DU1234567
+```
+
+On failure it exits non-zero **and** POSTs to `IBKR_ALERT_WEBHOOK` if set. The
+webhook payload includes both `text` and `content` fields, so a **Slack** or
+**Discord** incoming-webhook URL works as-is:
+
+```bash
+# in deploy/systemd/executor.env
+IBKR_ALERT_WEBHOOK=https://hooks.slack.com/services/XXX/YYY/ZZZ
+```
+
+Leave the webhook blank to log to `journalctl` only.
+
+---
+
 ## 7. Security checklist
 
 - **Never expose the API port** (4004/4002) beyond `127.0.0.1`. The compose file
