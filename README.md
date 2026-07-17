@@ -156,9 +156,13 @@ Deep-dives: **[`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.m
 
 ## Results summary
 
-**Out-of-sample (2021→now unless noted), strategy vs Buy & Hold.** Every app
-beats B&H on **drawdown and Sharpe**; the commodity-crash assets also beat it on
-raw return.
+Read the numbers with two things in mind: the **backtest window differs by
+asset** (each return stream starts at that instrument's usable history), and a
+rule that sits in cash during crashes is *expected* to beat Buy & Hold on
+drawdown — the harder tests are **Sharpe** and whether it can beat B&H on
+**return** at all.
+
+**ETF & Gold — out-of-sample 2021 → now, strategy vs Buy & Hold.**
 
 | Signal | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---:|---:|---:|---:|---:|
@@ -167,20 +171,71 @@ raw return.
 | XLE | Energy divergence | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
 | REMX | Dual-MA 50/200 golden cross | **+135 %** | +24 % | **−27 %** | −74 % | **0.68 / 0.30** |
 | WGMI | MA-50 + vol-filter | **+376 %** | +223 % | **−32 %** | −63 % | **1.81 / 0.98** |
-| Gold (GDX) | Divergence Pure-Regime | **+270 %** | — | **−16 %** | −47 % | **1.40** |
+| Gold (GDX β) | Divergence Pure-Regime | **+270 %** | — | **−16 %** | −47 % | **1.40** |
 | Gold (UGL 2×) | Divergence Pure-Regime | **+207 %** | — | **−18 %** | −49 % | **1.29** |
 
-The **Overall** portfolio blends these into one book; the Aggressive profile
-roughly doubles Balanced's return by loading the leveraged sleeves within its
-drawdown budget. Full per-period and full-cycle tables live in each app's
-Backtesting tab and in **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**,
-**[`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md)**, and
+**BTC · MSTR · MSTU — deployed CT-divergence (ML) engine, full 2024-03 → 2026-07
+round-trip (~2.4 yr, one bull→bear).** The Bitcoin signal drives all three
+sleeves; MSTR/MSTU are traded off the **BTC parent** trend with a 3 % intrabar
+stop on the leveraged names.
+
+| Asset | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
+|---|---:|---:|---:|---:|---:|
+| BTC (core) | **+85 %** | −7 % | **−28 %** | −53 % | **1.05 / 0.14** |
+| MSTR (β) | **+270 %** | −12 % | **−22 %** | −83 % | **1.34 / 0.38** |
+| MSTU (2×) | **+469 %** | −94 % | **−48 %** | −99 % | **1.12 / 0.19** |
+
+Buy & hold is flat-to-catastrophic over this window (MSTU's 2× decay ≈ total
+wipeout); the strategy stays long in the bull, steps aside in the bear, and even
+posts *positive* bear-market returns on MSTR/MSTU. The **Overall** portfolio
+blends every sleeve above into one book — the Aggressive profile roughly doubles
+Balanced's return by loading the leveraged sleeves within its drawdown budget.
+Full analysis: **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**,
+**[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**,
+**[`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md)**,
 **[`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md)**.
 
-> **Read honestly.** On secular compounders (SOXX, GRID, WGMI) an unleveraged
-> long/flat rule *cannot* beat B&H on total return — it wins on **risk-adjusted**
-> terms (higher Sharpe, ~half the drawdown). On assets that rode a multi-year
-> bear all the way down (XLE, OIH, REMX) it beats B&H outright.
+### Strengths of the methodology
+
+- **The edge survives the tests that usually kill backtests.** The BTC/MSTR/MSTU
+  rule holds up under 5-fold contiguous **cross-validation** (BTC-parent mean
+  fold Sharpe 0.78–0.88, beats B&H in 4/5 folds), **walk-forward** with in-sample
+  parameter selection (the picked SMA window barely moves — 30–40 every fold), a
+  **real-tape cross-check** (the edge holds on the *non-synthetic* MSTU fund from
+  2024-09, Sharpe ~1.2), a **bull/bear split**, and **cost sensitivity** (Sharpe
+  holds to 50 bps/switch on the leveraged names).
+- **Leakage-controlled training.** Strict chronological train/val/test splits
+  with a per-horizon embargo; every hyperparameter is chosen on validation with
+  the test slice untouched until final reporting.
+- **Conservative accounting.** Simple-rule comparisons use **next-bar** fills and
+  charge transaction costs per switch; each signal model is fit once on a pre-OOS
+  window, so reported streams are genuinely out-of-sample.
+
+### Limitations of the results
+
+- **Windows differ and can be short.** The BTC/MSTR/MSTU figures span only ~2.4
+  years — one bull→bear cycle, not many — because the CT engine's ML feature
+  warm-up begins ~2024-03. A deep, *unrecovered* bear is exactly the setting where
+  a long/flat rule can flatter itself against Buy & Hold on total return.
+- **Some MSTU history is synthetic.** The long-window MSTU series is an
+  **OLS-synthetic** reconstruction, cross-checked against the real fund only from
+  2024-09-18 — the earlier leveraged path is modelled, not traded.
+- **Execution optimism.** The deployed CT engine executes **same-bar** and stops
+  **intrabar**, which modestly flatters it versus the conservative next-bar fills
+  used for the comparison rules.
+- **Daily-rebuild caveat.** The divergence thresholds are tuned for the app's
+  **hourly** CT model; re-run daily inside the Overall engine the H/L predictions
+  are noisier, so BTC/MSTR/MSTU earn ~0 weight in the *daily* blend — the
+  alignment there is for signal consistency, not daily performance.
+- **In-sample replay in the UI.** Picking a dashboard date inside a model's
+  training window shows memorised fit, not a forecast (a warning banner flags it).
+- **Compounders can't be beaten on return, unleveraged.** On secular compounders
+  (SOXX, GRID, WGMI) a long/flat rule wins only on **risk-adjusted** terms (higher
+  Sharpe, ~half the drawdown), never on raw return — every day in cash is missed
+  upside. It beats B&H outright only on assets that rode a multi-year bear down
+  (XLE, OIH, REMX; BTC/MSTR/MSTU in this window).
+- **Backtests are not forward promises.** Past performance is not indicative of
+  future results; real-money trading is a separate, deliberate decision.
 
 ---
 
