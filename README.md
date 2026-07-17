@@ -124,9 +124,26 @@ out-of-sample over multiple periods **and** the full bull+bear cycle.
   **risk profiles** — Balanced (max Sharpe), Growth (−22 % DD budget),
   Aggressive (−38 % budget) — with an optional mid-2026 **fundamental overlay**.
 
-Full specs: **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** (BTC/MSTR/MSTU),
-**[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** (gold),
-**[`TREND_SIGNATURES.md`](TREND_SIGNATURES.md)** (the divergence signatures).
+### Strategy docs
+
+Every strategy is specified and evaluated in its own doc; the **Overall** book
+combines them all.
+
+| Strategy | Signal(s) | Docs |
+|---|---|---|
+| BTC Divergence Pure-Regime | BTC · MSTR · MSTU | [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) (spec) · [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) (eval) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) (signatures) |
+| Gold Divergence Pure-Regime | GLDM · GDX · UGL · NUGT | [`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md) (spec) · [`GLDM_README.md`](GLDM_README.md) (app) |
+| Semis Dual-MA 25/100 | SOXX · SOXL | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) |
+| Grid MACD 10/20/9 | GRID | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
+| Energy Divergence Pure-Regime | XLE · OIH · ERX | [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) |
+| Metals Dual-MA 50/200 golden cross | REMX | [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
+| Miner MA-50 + volatility filter | WGMI | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
+| Clean-energy / AI-Tech Divergence | PBW · ARTY | [`TICKER_APPS_README.md`](TICKER_APPS_README.md) |
+| Leveraged-sibling sizing & stops | SOXL · ERX · MSTU · UGL · NUGT | [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) |
+| **Overall combined portfolio** | **all of the above** | **[`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md)** (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) |
+
+All seven ETF apps share one config-driven engine — see
+[`TICKER_APPS_README.md`](TICKER_APPS_README.md).
 
 ---
 
@@ -265,7 +282,16 @@ python scripts/ibkr_rebalance.py --execute       # trade the paper account
 ```
 
 Every script and app resolves file paths from `paths.py` (the single source of
-truth). Deploy target is **Python 3.12** (see `requirements.txt` header).
+truth).
+
+### Deploy the dashboard (Streamlit Community Cloud)
+
+Host all apps for free on Streamlit Community Cloud — main file
+`streamlit_app.py`, and you **must** pin **Python 3.12** in the deploy dialog
+(`runtime.txt` is ignored by the platform and the default 3.14 crashes the ML
+stack). Full walkthrough with prerequisites, screenshots of each field, and
+troubleshooting: **[`docs/STREAMLIT_DEPLOY.md`](docs/STREAMLIT_DEPLOY.md)**.
+Official platform docs: <https://docs.streamlit.io/deploy/streamlit-community-cloud>.
 
 ---
 
@@ -355,6 +381,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Per-asset strategy evaluations | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) |
 | Combined portfolio walk-forward | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
+| Deploy the dashboard (Streamlit) | [`docs/STREAMLIT_DEPLOY.md`](docs/STREAMLIT_DEPLOY.md) |
 | Legacy (audit only) | [`legacy/README.md`](legacy/README.md) |
 
 > **Honest bottom line.** This is a research and paper-trading platform for
