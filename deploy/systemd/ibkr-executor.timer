@@ -1,0 +1,18 @@
+# Fire the daily executor on trading mornings.
+[Unit]
+Description=Run the IBKR Option C executor weekday mornings
+
+[Timer]
+# 09:45 America/New_York, Mon–Fri — a few minutes after the US open and after the
+# cloud publisher has committed the morning's book. The timezone suffix needs
+# systemd v252+ (Ubuntu 24.04 has it); on older systemd set the host timezone to
+# America/New_York (timedatectl set-timezone America/New_York) and drop the suffix.
+OnCalendar=Mon-Fri 09:45 America/New_York
+# Small jitter so many VMs don't hit IBKR at the exact same instant.
+RandomizedDelaySec=90
+# Do NOT catch up a missed run hours later (would trade at the wrong time); the
+# executor's own guards keep any run safe, but skipping is the sane default.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

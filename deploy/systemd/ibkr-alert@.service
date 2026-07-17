@@ -1,0 +1,17 @@
+# Templated failure-alert unit. Referenced as `OnFailure=ibkr-alert@%n.service`
+# by the executor and healthcheck units — systemd passes the failed unit name as
+# the instance (%i), and this sends it to IBKR_ALERT_WEBHOOK.
+#
+#   sudo cp deploy/systemd/ibkr-alert@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+[Unit]
+Description=Send an IBKR failure alert for %i
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/btc-range-model
+EnvironmentFile=/home/ubuntu/btc-range-model/deploy/systemd/executor.env
+ExecStart=/home/ubuntu/btc-range-model/.venv/bin/python \
+  /home/ubuntu/btc-range-model/scripts/ibkr_gateway_healthcheck.py \
+  --message "systemd unit %i failed on the IBKR cloud executor host"

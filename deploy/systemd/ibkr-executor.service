@@ -1,0 +1,28 @@
+# IBKR Option C daily paper executor (systemd — robust alternative to cron).
+#
+# Install (edit paths/User for your box, then):
+#   sudo cp deploy/systemd/ibkr-executor.service /etc/systemd/system/
+#   sudo cp deploy/systemd/ibkr-executor.timer   /etc/systemd/system/
+#   sudo cp deploy/systemd/ibkr-alert@.service   /etc/systemd/system/
+#   cp deploy/systemd/executor.env.example ~/btc-range-model/deploy/systemd/executor.env
+#   nano ~/btc-range-model/deploy/systemd/executor.env     # secret, port, webhook
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ibkr-executor.timer
+#   systemctl list-timers ibkr-executor.timer              # confirm next run
+#   journalctl -u ibkr-executor.service -f                 # watch a run
+[Unit]
+Description=IBKR Option C daily paper executor
+Wants=network-online.target
+After=network-online.target docker.service
+# Alert (via webhook) if the run fails.
+OnFailure=ibkr-alert@%n.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/btc-range-model
+# Secret / port / webhook live here (gitignored — never commit the real file).
+EnvironmentFile=/home/ubuntu/btc-range-model/deploy/systemd/executor.env
+ExecStart=/home/ubuntu/btc-range-model/scripts/ibkr_execute_daily.sh
+# Give the whole run a hard ceiling (universe pull + fills).
+TimeoutStartSec=900

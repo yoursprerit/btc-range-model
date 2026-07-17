@@ -1,0 +1,15 @@
+# Run the gateway healthcheck through the trading day.
+[Unit]
+Description=Periodic IB Gateway login healthcheck
+
+[Timer]
+# Every 30 min, 08:00–16:30 ET on weekdays — covers the whole US session with a
+# margin, and deliberately AVOIDS the nightly 03:00-ET gateway restart window so
+# the restart doesn't trigger a false alert. Timezone suffix needs systemd v252+
+# (else set the host timezone to America/New_York and drop the suffix).
+OnCalendar=Mon-Fri 08..16:00/30 America/New_York
+RandomizedDelaySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target
