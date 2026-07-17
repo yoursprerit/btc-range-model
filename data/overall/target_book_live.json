@@ -3,17 +3,19 @@
  "generated_at_utc": "2026-07-17T14:11:32+00:00",
  "as_of": "2026-07-17",
  "profile": "Aggressive",
- "book_mode": "paper",
+ "book_mode": "live",
  "weights": {
   "SOXX": 0.35,
   "SOXL": 0.35,
-  "REMX": 0.08199681981140533
+  "REMX": 0.08199681981140533,
+  "SATA": 0.21800318018859466
  },
- "cash_weight": 0.21800318018859466,
+ "cash_weight": 0.0,
  "exec_price": {
   "SOXX": 523.11,
   "SOXL": 136.525,
-  "REMX": 71.78
+  "REMX": 71.78,
+  "SATA": 97.0
  },
  "actions": [
   {
@@ -155,6 +157,6 @@
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "1bc790d301fa16770a0580063d13dfdd5e3edb2a7e0010222e329b9b97afc998"
+  "value": "d9b4305ecef1fec8bf6612d5d9dedfced41abc116df88c88efd3dc6d2b70c622"
  }
 }
