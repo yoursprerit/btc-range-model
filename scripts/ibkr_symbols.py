@@ -17,10 +17,12 @@ from __future__ import annotations
 
 # ── key → the symbol we actually trade on IBKR ────────────────────────────────
 # Identity for everything except BTC, whose signal is expressed through the IBIT
-# spot-Bitcoin ETF.  Idle cash is held as cash (no SATA leg), per the chosen
-# configuration, so SATA deliberately has no entry here.
+# spot-Bitcoin ETF.  SATA (the idle-cash preferred) is tradeable: the PAPER book
+# leaves idle capital as cash (no SATA weight → never traded on paper), while the
+# LIVE book parks it in a real SATA position — so SATA maps to itself here.
 TRADE_SYMBOL: dict[str, str] = {
     "BTC":  "IBIT",   # spot-BTC signal → iShares Bitcoin Trust ETF (no spot BTC on IBKR)
+    "SATA": "SATA",   # idle-cash park (Strive preferred) — used by the LIVE book only
     "MSTR": "MSTR",
     "MSTU": "MSTU",
     "GLDM": "GLDM",

@@ -36,7 +36,15 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 PYTHON="${IBKR_PYTHON:-${REPO_ROOT}/.venv/bin/python}"
 BRANCH="${IBKR_BRANCH:-main}"
-BOOK="${IBKR_BOOK:-${REPO_ROOT}/data/overall/target_book.json}"
+ACCOUNT_MODE="${IBKR_ACCOUNT_MODE:-paper}"
+# Pick the right published book by mode: live parks idle capital in SATA, paper
+# holds it as cash. Override with IBKR_BOOK.
+if [ "${ACCOUNT_MODE}" = "live" ]; then
+  DEFAULT_BOOK="${REPO_ROOT}/data/overall/target_book_live.json"
+else
+  DEFAULT_BOOK="${REPO_ROOT}/data/overall/target_book.json"
+fi
+BOOK="${IBKR_BOOK:-${DEFAULT_BOOK}}"
 BAND="${IBKR_BAND:-0.01}"
 HOST="${IBKR_HOST:-127.0.0.1}"
 PORT="${IBKR_PORT:-4002}"
@@ -58,10 +66,9 @@ if [ "${IBKR_NO_PULL:-0}" != "1" ]; then
   git merge --ff-only "origin/${BRANCH}" || log "ff-merge skipped (local diverged?) — using on-disk book"
 fi
 
-# Account mode: paper (default) or live. For live the wrapper passes --confirm-live
-# and the live safety limits from the env; set IBKR_ACCOUNT_MODE=live only in the
-# LIVE env file (deploy/systemd/executor-live.env), pointing IBKR_PORT at 4003.
-ACCOUNT_MODE="${IBKR_ACCOUNT_MODE:-paper}"
+# For live the wrapper passes --confirm-live and the live safety limits from the
+# env; set IBKR_ACCOUNT_MODE=live only in the LIVE env file
+# (deploy/systemd/executor-live.env), pointing IBKR_PORT at 4003.
 ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${PORT}"
       --account-mode "${ACCOUNT_MODE}")
 if [ "${ACCOUNT_MODE}" = "live" ]; then

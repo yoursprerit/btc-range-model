@@ -66,14 +66,14 @@ jobs:
           # untracked file) it would report "no change" and skip the commit — the
           # run goes green but nothing lands. `git add` + `git diff --cached`
           # detects a brand-new file too.
-          git add data/overall/target_book.json
-          if git diff --cached --quiet -- data/overall/target_book.json; then
-            echo "No change to target_book.json — nothing to commit."
+          git add data/overall/target_book.json data/overall/target_book_live.json
+          if git diff --cached --quiet -- data/overall/target_book.json data/overall/target_book_live.json; then
+            echo "No change to the target books — nothing to commit."
             exit 0
           fi
           ASOF="$(python -c "import json; print(json.load(open('data/overall/target_book.json'))['as_of'])")"
           git commit \
-            -m "chore(ibkr): publish target book (as-of ${ASOF})" \
+            -m "chore(ibkr): publish target books paper+live (as-of ${ASOF})" \
             -m "Automated via .github/workflows/publish-target-book.yml"
           # Push back to the branch this workflow was dispatched from.
           git push origin "HEAD:${GITHUB_REF_NAME}"
