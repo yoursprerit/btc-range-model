@@ -25,6 +25,10 @@ section below; the setup (gateway, IBC, cron) is shared.
 > **On a Windows laptop?** See **[`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)**
 > for the complete Windows walkthrough — Python 3.12, IB Gateway + IBC, the
 > `scripts\ibkr_execute_daily.ps1` wrapper, and Task Scheduler automation.
+>
+> **On a free cloud VM (no laptop)?** See **[`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md)**
+> — headless IB Gateway via Docker (`deploy/ibkr-gateway/`), the
+> `scripts/ibkr_execute_daily.sh` wrapper, and cron on an Oracle Always-Free VM.
 
 ---
 
