@@ -7,10 +7,10 @@ copper, uranium, platinum, palladium, agriculture, broad-commodity, natural
 gas, lithium or diversified miners — boost the combined portfolio's return and
 performance?
 
-**Answer up front: no 1× commodity candidate earns its place; every one of the
-twelve dilutes the book.** The only add that survives the noise-free tests is
-**SLV/AGQ-style silver traded off the existing gold signal** — and even that is
-marginal (see §5). The earlier finding
+**Answer up front: no. Every one of the twelve candidates dilutes the book as
+its own app.** The only instrument that survives the noise-free tests is
+**AGQ (2× silver) traded off the existing gold signal** — a small,
+Balanced-profile-only win (see §5). The earlier finding
 ([`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md)) generalises: the
 book compounds so fast that a new sleeve helps only if its **own strategy
 out-returns the book**, which no commodity trend signal does.
@@ -109,9 +109,57 @@ candidate is assigned a residual 0.1–1.7% weight (the QQQ-noise signature),
 versus the 14–30% a genuine winner (ERX, SOXL, NUGT) earned in the shipped
 leveraged-sibling eval. The marginal test (§4) confirms it deterministically.
 
-<!-- RESULTS-MARGINAL -->
+## 4. Marginal test — deterministic, and unanimous
 
-<!-- RESULTS-GOLD-SIBS -->
+Each candidate blended into the **frozen** baseline optimal book at fixed
+weights (pure arithmetic — the only way the delta is 100% attributable):
+
+| Add (Balanced book, +859% / Sharpe 3.16) | w=2% | w=5% | w=10% |
+|---|---:|---:|---:|
+| UNG *(best)* | −18pp | −45pp | −90pp |
+| COPX | −19pp | −48pp | −94pp |
+| XME | −20pp | −50pp | −97pp |
+| SLV | −21pp | −52pp | −101pp |
+| … | | | |
+| PALL *(worst)* | −34pp | −84pp | −161pp |
+
+On the Aggressive book (+2510%) the dilution is proportionally larger
+(−87pp … −133pp at just 2% weight; −419pp … −607pp at 10%). Sharpe changes
+are ±0.01–0.15 everywhere — noise-level. **All twelve candidates lose return
+at every weight in every profile.** There is no tuning of the grid that
+rescues this: it is the arithmetic of moving capital from Sharpe-1.1–3.2
+sleeves to Sharpe-0.2–0.7 sleeves.
+
+## 5. The one interesting result — silver ridden on the GOLD signal
+
+Silver is the only candidate economically close enough to an existing signal
+to borrow it. Traded off the gold app's tuned divergence signal (the exact
+architecture that ships GDX / UGL / NUGT), with stops mirroring each sibling's
+shipped analogue (SLV −3% like GLDM, SIL −5% like NUGT, AGQ signal-exit-only
+like UGL), the sleeves transform:
+
+| Sleeve | Own signal (from §2) | Off the gold signal (OOS) |
+|---|---|---|
+| SLV (1× silver) | +64% · −42% · Sharpe 0.45 | **+148% · −17% · Sharpe 1.14** |
+| SIL (silver miners) | +15% · −55% · Sharpe 0.24 | **+180% · −24% · Sharpe 1.10** |
+| AGQ (2× silver) | — | **+339% · −40% · Sharpe 0.98** |
+
+Sharpe 1.1 is GDX-class quality — the gold signal genuinely carries silver.
+But in the blend, the frozen-book marginal test still says the book is faster:
+
+| Add | Balanced w=2% / 5% / 10% | Aggressive w=2% |
+|---|---|---|
+| SLV | −11pp / −28pp / −55pp (Sh +0.02…+0.09) | −70pp |
+| SIL | −9pp / −22pp / −43pp (Sh +0.01…+0.04) | −64pp |
+| **AGQ** | **+3pp / +7pp / +13pp (Sh +0.01, MDD −0.05…−0.23pp)** | −34pp |
+
+**AGQ is the only instrument of the fifteen tested that adds return without
+adding risk** — and it is also the only add whose deterministic equal-weight
+delta is positive (+7.3pp, Sharpe +0.022). It is, however, a *small* win
+confined to the Balanced book; in the return-maximising Growth/Aggressive
+books even a 2× silver sleeve dilutes (−34pp at 2%), because the shipped NUGT
+(2× gold miners, +1183% OOS, Sharpe 1.48) already occupies the
+precious-metals-leverage slot with roughly 3× AGQ's firepower.
 
 ---
 
@@ -131,8 +179,12 @@ overcame.
 (the GDX/UGL/NUGT architecture — see §5): silver is the only candidate whose
 economics let it borrow an existing high-Sharpe signal instead of a weak new
 one. If any commodity expansion were to ship, it would be an **AGQ (2× silver)
-`lev` sibling on the gold signal** — not a new commodity app. The 1×/miner
-variants (SLV, SIL) are not worth their slots.
+`lev` sibling on the gold signal** — not a new commodity app — and it would be
+a Balanced-book diversifier worth ~+7pp / +0.02 Sharpe, not a return engine:
+NUGT already fills the precious-metals-leverage slot with ~3× the firepower.
+The 1×/miner variants (SLV, SIL) are not worth their slots. **Recommendation:
+ship nothing; revisit AGQ only if a Balanced-profile Sharpe polish is ever
+wanted.**
 
 **Honest caveats.** Candidate engines were selected on full-period data (the
 repo's convention), which flatters them — the honest OOS numbers above are
