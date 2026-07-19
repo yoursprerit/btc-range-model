@@ -635,6 +635,27 @@ def curve_metrics(equity: pd.Series) -> dict:
     return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
 
 
+def slice_metrics(equity: pd.Series, start) -> dict | None:
+    """P&L / performance / risk metrics for an equity curve **re-based at
+    ``start``** — i.e. what an investor who put capital into the strategy on
+    that date has experienced since.  Re-basing (dividing the slice by its first
+    value) matters: drawdown, Sharpe and total return are all measured from the
+    entry point, not from the back-test's inception.  Returns ``None`` when the
+    curve has fewer than 2 bars on/after ``start`` (nothing to measure); the
+    first bar on/after ``start`` becomes the actual anchor (weekends/holidays
+    roll forward)."""
+    sub = equity.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return None
+    sub = sub / sub.iloc[0]
+    # daily win-rate and best/worst day round out the risk read
+    rets = sub.pct_change().dropna()
+    return dict(start=sub.index[0], end=sub.index[-1], days=len(sub),
+                win_days=float((rets > 0).mean()),
+                best_day=float(rets.max()), worst_day=float(rets.min()),
+                **curve_metrics(sub))
+
+
 def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
                    pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
                    chunk: int | None = None):

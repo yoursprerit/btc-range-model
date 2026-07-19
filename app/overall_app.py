@@ -68,6 +68,8 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "adjust_for_selection"):
             return True
+        if not hasattr(mod, "slice_metrics"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -806,6 +808,123 @@ with tab_live:
     st.info("Unified **daily** reads. For the canonical hourly Pure-Regime view of "
             "BTC (BTC/MSTR/MSTU) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
             "**🥇 Gold** app in the sidebar.")
+
+    st.markdown("---")
+
+    # ── 4. OVERALL STRATEGY P&L SINCE A USER-CHOSEN START DATE ──────────
+    # What has the combined strategy actually delivered for someone who put
+    # capital in on a given date?  Re-bases the active profile's optimal-blend
+    # equity curve at the chosen date and reads P&L / performance / risk off
+    # the slice — so drawdown, Sharpe etc. are measured from the entry point,
+    # not from back-test inception.  Follows the risk profile selected above
+    # (Aggressive by default) and the fundamental-overlay toggle.
+    st.markdown("### 📈 Overall strategy P&L — from your start date")
+    st.caption(f"P&L, performance and risk of the **combined optimal-blend "
+               f"strategy** measured from the start date below, under the risk "
+               f"profile selected above (currently **`{_profile}`**"
+               f"{' · 🔭 fundamental overlay ON' if _use_fund else ''}). "
+               "Change the profile or the date and every figure recomputes. "
+               "Dollar figures scale the 💼 portfolio value entered above.")
+    _curve_all = _PF["curves"]["Optimal blend"]
+    _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
+    _default_start = pd.Timestamp("2026-03-01").date()
+    pnl_cols = st.columns([1, 3])
+    with pnl_cols[0]:
+        _start_sel = st.date_input(
+            "📅 Start date", value=min(max(_default_start, _d0), _d1),
+            min_value=_d0, max_value=_d1, key="overall_pnl_start",
+            help="First strategy bar on/after this date becomes the cost-basis "
+                 "anchor (weekends/holidays roll forward). Defaults to "
+                 "March 1, 2026.")
+    _sm = ov.slice_metrics(_curve_all, _start_sel)
+    if _sm is None:
+        st.warning("Not enough strategy history on/after that date — pick an "
+                   f"earlier start (data runs {_d0} → {_d1}).")
+    else:
+        _pnl_d = _sm["total_ret"] * portfolio_value
+        _end_v = portfolio_value * (1 + _sm["total_ret"])
+        with pnl_cols[1]:
+            st.markdown(
+                f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
+                f"Measured <b>{_sm['start'].strftime('%b %d, %Y')} → "
+                f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
+                f"days · profile <code>{_profile}</code></div>",
+                unsafe_allow_html=True)
+        pm = st.columns(4)
+        pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
+                     delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
+                     delta_color="normal" if _pnl_d >= 0 else "inverse")
+        pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
+                     delta=f"CAGR {_sm['cagr']*100:+.1f}%")
+        pm[2].metric("Max drawdown since start", f"{_sm['mdd']*100:.1f}%",
+                     help="Deepest peak-to-trough fall measured from the chosen "
+                          "start date, not from back-test inception.")
+        pm[3].metric("Sharpe (ann.)", f"{_sm['sharpe']:.2f}",
+                     delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
+        pm2 = st.columns(4)
+        pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
+        pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
+        pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
+        pm2[3].metric("Trading days", f"{_sm['days']}")
+
+        # same-window benchmark comparison — is the strategy earning its keep?
+        _bench_rows = []
+        for _nm, _cv in _PF["curves"].items():
+            _bm_sm = ov.slice_metrics(_cv, _start_sel)
+            if _bm_sm:
+                _bench_rows.append((_nm, _bm_sm))
+        if len(_bench_rows) > 1:
+            bh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                  "<th style='padding:6px 10px'>Strategy (same window)</th>"
+                  "<th style='text-align:right'>P&amp;L</th>"
+                  "<th style='text-align:right'>$ on portfolio</th>"
+                  "<th style='text-align:right'>Max DD</th>"
+                  "<th style='text-align:right'>Sharpe</th></tr>")
+            br = []
+            for _nm, _m in _bench_rows:
+                _hi = "background:#eff6ff;font-weight:700;" if _nm == "Optimal blend" else ""
+                _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
+                br.append(
+                    f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
+                    f"<td style='padding:6px 10px'>{_nm}"
+                    f"{' ◄ this strategy' if _nm == 'Optimal blend' else ''}</td>"
+                    f"<td style='text-align:right;color:{_pc};font-weight:600'>"
+                    f"{_m['total_ret']*100:+.1f}%</td>"
+                    f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                    f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
+                    f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
+                    f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
+            st.markdown(f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table>",
+                        unsafe_allow_html=True)
+
+        # equity curve re-based to the portfolio value at the chosen start
+        _fig_pnl = go.Figure()
+        _pnl_styles = {"Optimal blend": ("#111827", 3),
+                       "Equal-weight strategies": ("#0ea5e9", 1.5),
+                       "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
+        for _nm, _cv in _PF["curves"].items():
+            _sub = _cv.loc[pd.Timestamp(_start_sel):]
+            if len(_sub) < 2:
+                continue
+            _c, _w = _pnl_styles.get(_nm, ("#888", 1.5))
+            _fig_pnl.add_trace(go.Scatter(
+                x=_sub.index, y=(_sub / _sub.iloc[0]).to_numpy() * portfolio_value,
+                name=_nm, line=dict(color=_c, width=_w)))
+        _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
+                           line_color="#cbd5e1",
+                           annotation_text="break-even", annotation_font_size=10)
+        _fig_pnl.update_layout(
+            height=340, margin=dict(t=30, b=10, l=10, r=10),
+            yaxis_title="Portfolio value ($)", hovermode="x unified",
+            legend=dict(orientation="h", y=1.1),
+            title=dict(text=f"Growth of ${portfolio_value:,.0f} since "
+                            f"{_sm['start'].strftime('%b %d, %Y')} — `{_profile}` profile",
+                       font_size=13))
+        st.plotly_chart(_fig_pnl, use_container_width=True)
+        st.caption("⚠️ Simulated performance of the optimal blend under the "
+                   "selected risk profile (idle capital earning SATA), assuming "
+                   "entry at the close of the anchor bar — the blend weights are "
+                   "fit on the full history (in-sample). Not investment advice.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
