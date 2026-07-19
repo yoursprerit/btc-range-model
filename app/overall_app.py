@@ -1290,17 +1290,28 @@ through **one unified daily engine**, so their signals, positions and back-tests
 sit side-by-side and blend into a single portfolio.
 
 **The universe.** Each sibling is traded off its **parent's**
-signal (never its own), exactly as the dedicated apps do:
+signal (never its own), exactly as the dedicated apps do. Entry and exit rules
+are summarised per app (all decided on **completed daily closes**):
 
-| App / signal | Traded instruments | Engine |
-|---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · BTC & MSTR signal-only, MSTU −6% |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime · GLDM/GDX −3%, UGL signal-only, NUGT −5% |
-| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime · XLE/OIH −8%, ERX signal-only |
-| 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
-| 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
-| ⚡ **GRID** | GRID | MACD 10/20/9, −5% |
-| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter, no stop |
+| App / signal | Traded instruments | Engine | Entry criteria | Exit criteria |
+|---|---|---|---|---|
+| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC & MSTR signal-only, MSTU −6% stop + 5-bar V-reversal re-entry |
+| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime | U1 divergence (err_hi > +8% with ≥2 high-breaks) confirmed inside per-asset regime gates (GLDM 50 / UGL 40 / GDX 100-day) | D2 momentum-fade (err_hi < −10%) or D3 exhaustion; GLDM/GDX −3% stop, UGL signal-only, NUGT −5% |
+| 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
+| ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
+| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime | U1 divergence (err_hi > +16% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −10%) or D1 downtrend (≥2 low-breaks); XLE/OIH −8% stop, ERX signal-only |
+| 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
+| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
+| ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi > +12% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −8%) or D3 exhaustion; −10% stop |
+| 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi > +5% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −18%) or D1 downtrend; −5% stop |
+
+*Shorthand:* **U1** = bullish divergence (the model's predicted daily high
+overshoots while price breaks its recent highs) · **D1** = downtrend pressure
+(repeated low-breaks) · **D2** = momentum fade · **D3** = exhaustion ·
+**regime confirm** = price above a rising short MA, or a clean 10-day recovery,
+or a V-reversal gate · **signal-only** = exits on the signal with no fixed
+stop (a 1× stop whipsaws a leveraged/high-beta sleeve). Siblings share the
+parent's entry/exit **timing** but fill at their own price with their own stop.
 
 Every asset runs the **exact engine its own app trades**, so the Overall app's
 signals, positions and back-tests match each source app:
@@ -1309,36 +1320,61 @@ signals, positions and back-tests match each source app:
   (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
   premium) with the app's live **Standard MA (above-MA30) entry gate** (U1>+1.3%
   + ≥2 high-breaks, regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL
-  re-entry) — all three assets share the same gate. This reproduces the BTC app's
-  headline **BTC +88% / MSTR +148% / MSTU +419%**. The CT feature data begins
-  ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine handles the
-  staggered start).
+  re-entry) — all three assets share the same gate. With the 2026-07 per-asset
+  stop retune (BTC & MSTR signal-exit-only, MSTU −6%) this reproduces the BTC
+  app's headline **BTC +86% / MSTR +266% / MSTU +524%**. The CT feature data
+  begins ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine
+  handles the staggered start).
 - **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** Divergence
   Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
   per-asset stops — GLDM/GDX −3%, but the leveraged siblings are looser (**UGL
-  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF:
-  **GDX +272% · UGL (stop-less) +247% · NUGT +1183%**.
-- **SOXX / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
-  entries through the same `backtest_ticker` engine their apps use (SOXX 25/100
-  dual-MA, GRID MACD 10/20/9, WGMI 50-day SMA + vol-filter, REMX &
-  XLE divergence Pure-Regime). These match their apps bar-for-bar.
+  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF. OOS
+  2021→now: **GLDM +73% · GDX +156% · UGL (stop-less) +247% · NUGT +1183%**
+  (see LEV_SIBLINGS_STOP_EVAL.md).
+- **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
+  `ticker_config`** entries through the same `backtest_ticker` engine their apps
+  use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,
+  WGMI 50-day SMA + vol-filter, REMX 50/200 golden cross, and XLE / PBW / ARTY
+  divergence Pure-Regime — XLE's signal also driving OIH and the stop-less 2×
+  ERX). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert
 level, whether we're long, entry price/date, unrealised P&L, stop (or a
-signal-only exit for the no-stop sleeves — the 3× **SOXL** and **WGMI** carry no
-fixed stop, since a 1× stop whipsaws a leveraged/high-beta name) and days held —
+signal-only exit for the no-stop sleeves — **BTC, MSTR, UGL, ERX, the 3× SOXL**
+and **WGMI** carry no fixed stop, since a tight stop whipsaws a
+leveraged/high-beta name) and days held —
 for the primary **and** each sibling (which shares the parent's entry/exit timing
 but has its own fill price and P&L). That drives the **action plan** and the
 **allocation donuts**.
 
 **The optimal allocation.** Each strategy is long when its signal is on and
 otherwise parks idle capital in **SATA** (see below), producing a daily return
-stream. We Monte-Carlo long-only blends (sum = 100%) with **per-instrument caps**
-— 30% core, 18% high-beta, 10% leveraged — and pick the **highest-return blend
-among the near-max-Sharpe set**, so returns are maximised while drawdown stays
-shallow. The tight caps mean the 2× / β sleeves only get weight when they
+stream. We Monte-Carlo long-only blends (sum = 100%) with **per-instrument caps
+set by the active risk profile** (see below) and pick the winner by that
+profile's objective, so returns are maximised while drawdown stays inside the
+budget. The tight caps mean the 2× / β sleeves only get weight when they
 genuinely improve the risk-adjusted result.
+
+**Risk profiles.** The ⚙️ switch on the Live tab bundles the per-kind caps, the
+optimiser objective and a drawdown budget:
+
+| Profile | Caps (core / β / 2×) | Objective |
+|---|---|---|
+| **Balanced** | 30% / 18% / 10% | Hold Sharpe near its max — best risk-adjusted blend |
+| **Growth** (default) | 30% / 25% / 18% | Maximise return inside a **−22%** drawdown budget |
+| **Aggressive** | 35% / 40% / 35% | Maximise return inside a **−38%** budget — heavy β / 2× |
+
+β / 2× exposure rises Balanced → Aggressive: more return, deeper drawdowns,
+lower Sharpe. Every number on the Live and Backtesting tabs follows the
+selected profile.
+
+**Fundamental overlay.** The 🔭 toggle on the Live tab applies a **mid-2026
+sector forward-view**: a per-instrument conviction multiplier (overweight
+AI/semis, the crypto institutional era, the structural gold bull and
+electrification; underweight clean energy and oil services) that tilts the
+historically-optimal blend, re-water-fills to the same caps, then re-runs the
+allocation and back-test. Untick it for the pure historical quant optimum.
 
 **Entry priority.** When several instruments signal entry at once — or one fires
 while others are already held — a **priority score (0–1)** decides which get
@@ -1364,8 +1400,11 @@ the combined curve reflects cash working rather than sitting dead.
 - SATA is modelled (per the BTC app's framing) as always having existed, flat at
   $100 par, paying its ~13% daily dividend across every period — an assumption,
   not a market-tested series.
-- Leveraged 2× sleeves (MSTU, UGL) and high-beta names compound decay and gap
-  risk; the caps bound but don't remove that.
+- Leveraged sleeves (MSTU, UGL, NUGT, ERX 2× and SOXL 3×) and high-beta names
+  compound decay and gap risk; the caps bound but don't remove that.
+- The fundamental overlay is a discretionary mid-2026 view, not a fitted
+  parameter — it tilts the quant optimum by conviction, so its figures are
+  neither purely historical nor purely systematic.
 - This is a **daily** engine. The BTC and Gold apps' canonical **hourly**
   Pure-Regime signals live in those apps — open them from the sidebar.
 - Nothing here is investment advice.
