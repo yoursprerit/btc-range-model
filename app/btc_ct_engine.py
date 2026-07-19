@@ -380,7 +380,11 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
         ret = nav.pct_change().fillna(0.0).rename(key)
         pos_series = bt["pos"].rename(key)
         # r dict shaped like backtest_ticker.run_strategy for overall_core reuse
+        # (this engine's trades ARE dicts with exit_date/ret, so they double as
+        # the trade_log — without that key, overall_core's since-start trade
+        # counter sees no closed trades for the BTC sleeves)
         r = dict(bh=bh.to_numpy(float), dates=list(nav.index), trades=bt["trades"],
+                 trade_log=bt["trades"],
                  in_pos_now=bt["open_pos"], strat=nav.to_numpy(float))
         last_px = float(px[key][last])
         prev_px = float(px[key][last - 1]) if last >= 1 else last_px
