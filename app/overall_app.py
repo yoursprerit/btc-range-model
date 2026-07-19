@@ -70,6 +70,8 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "slice_metrics"):
             return True
+        if not hasattr(mod, "per_asset_slice_metrics"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -925,6 +927,93 @@ with tab_live:
                    "selected risk profile (idle capital earning SATA), assuming "
                    "entry at the close of the anchor bar — the blend weights are "
                    "fit on the full history (in-sample). Not investment advice.")
+
+        # ── per-asset breakdown — opt-in via expander so the page stays clean ──
+        _pa = ov.per_asset_slice_metrics(results, _start_sel)
+        with st.expander(f"🔬 Per-asset breakdown since "
+                         f"{_sm['start'].strftime('%b %d, %Y')} — every sleeve's "
+                         "return & risk (tap to expand)"):
+            st.caption("Each instrument's **own signal-driven strategy** vs "
+                       "simply buying & holding it, both measured from the same "
+                       "start date. **In mkt** = share of days the sleeve was "
+                       "actually long (it earns SATA when flat inside the blend); "
+                       "**Opt. wt** = its weight in the active profile's optimal "
+                       "blend. Sleeves whose data begins after the start date "
+                       "are measured from their own first bar (noted inline).")
+            if not _pa:
+                st.info("No instrument has enough history after that date.")
+            else:
+                # quick visual: strategy vs buy & hold return per sleeve
+                _pa_sorted = sorted(_pa, key=lambda x: x["strat"]["total_ret"])
+                fig_pa = go.Figure()
+                fig_pa.add_trace(go.Bar(
+                    y=[p["key"] for p in _pa_sorted],
+                    x=[p["strat"]["total_ret"] * 100 for p in _pa_sorted],
+                    name="Strategy", orientation="h",
+                    marker_color=[p["accent"] for p in _pa_sorted],
+                    text=[f"{p['strat']['total_ret']*100:+.1f}%" for p in _pa_sorted],
+                    textposition="outside", cliponaxis=False))
+                fig_pa.add_trace(go.Bar(
+                    y=[p["key"] for p in _pa_sorted],
+                    x=[(p["bh"]["total_ret"] * 100 if p["bh"] else 0) for p in _pa_sorted],
+                    name="Buy & Hold", orientation="h", marker_color="#cbd5e1"))
+                fig_pa.update_layout(
+                    barmode="group", height=max(300, 26 * len(_pa_sorted) + 80),
+                    margin=dict(t=30, b=10, l=10, r=40),
+                    xaxis_title="return since start (%)",
+                    legend=dict(orientation="h", y=1.06),
+                    title=dict(text="Return by sleeve — strategy vs buy & hold",
+                               font_size=13))
+                fig_pa.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                st.plotly_chart(fig_pa, use_container_width=True)
+
+                # detail table, grouped by parent signal like the rest of the app
+                pah = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                       "<th style='padding:6px 10px'>Instrument</th>"
+                       "<th style='text-align:right'>Strat P&amp;L</th>"
+                       "<th style='text-align:right'>Buy&amp;Hold</th>"
+                       "<th style='text-align:right'>Max DD</th>"
+                       "<th style='text-align:right'>Sharpe</th>"
+                       "<th style='text-align:right'>Win days</th>"
+                       "<th style='text-align:right'>In mkt</th>"
+                       "<th style='text-align:right'>Opt. wt</th></tr>")
+                par = []
+                _wts = opt["optimal"]["weights"]
+                _pa_by_key = {p["key"]: p for p in _pa}
+                for pk, grp in parents:
+                    for res in grp:
+                        p = _pa_by_key.get(res["key"])
+                        if not p:
+                            continue
+                        sm_a, bh_a = p["strat"], p["bh"]
+                        beat = bh_a is None or sm_a["total_ret"] >= bh_a["total_ret"]
+                        _rc = C_BUY if sm_a["total_ret"] >= 0 else C_EXIT
+                        _late = (f"<div style='font-size:10px;color:#94a3b8'>since "
+                                 f"{sm_a['start'].strftime('%b %d, %Y')}</div>"
+                                 if sm_a["start"] > _sm["start"] else "")
+                        par.append(
+                            f"<tr style='border-bottom:1px solid #eef2f7'>"
+                            f"<td style='padding:6px 10px;font-weight:700'>"
+                            f"{p['emoji']} {p['key']}{_kind_badge(p['kind'])}"
+                            f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
+                            f" {p['name']}</span>{_late}</td>"
+                            f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
+                            f"{sm_a['total_ret']*100:+.1f}%"
+                            f"{' 🏆' if beat and bh_a is not None else ''}</td>"
+                            f"<td style='text-align:right;color:#64748b'>"
+                            f"{_pct(bh_a['total_ret']*100) if bh_a else '—'}</td>"
+                            f"<td style='text-align:right;color:{C_EXIT}'>{sm_a['mdd']*100:.1f}%</td>"
+                            f"<td style='text-align:right'>{sm_a['sharpe']:.2f}</td>"
+                            f"<td style='text-align:right'>{sm_a['win_days']*100:.0f}%</td>"
+                            f"<td style='text-align:right'>{p['in_market']*100:.0f}%</td>"
+                            f"<td style='text-align:right;font-weight:700'>"
+                            f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
+                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                            f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
+                st.caption("🏆 = the sleeve's strategy beat buying & holding it "
+                           "over this window. Per-sleeve returns exclude the SATA "
+                           "yield earned while flat — that accrues at the blend "
+                           "level, so the sleeves won't sum to the blend P&L.")
 
 
 # ══════════════════════════════════════════════════════════════════════════

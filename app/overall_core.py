@@ -656,6 +656,29 @@ def slice_metrics(equity: pd.Series, start) -> dict | None:
                 **curve_metrics(sub))
 
 
+def per_asset_slice_metrics(results: list[dict], start) -> list[dict]:
+    """Per-instrument read since ``start``: each sleeve's strategy equity and
+    its buy-&-hold equity, both re-based at the anchor (see ``slice_metrics``),
+    plus the share of days it actually spent in the market.  An instrument whose
+    history begins after ``start`` is measured from its own first bar (its
+    ``strat['start']`` says so); one with <2 bars since ``start`` is skipped.
+    Rows come back in ``results`` order (grouped by parent signal)."""
+    rows = []
+    for res in results:
+        sm = slice_metrics(_equity(res["ret"]), start)
+        if sm is None:
+            continue
+        bh_eq = pd.Series(np.asarray(res["r"]["bh"], float),
+                          index=pd.DatetimeIndex(res["dates"]))
+        pos_sub = res["pos_series"].loc[pd.Timestamp(start):]
+        rows.append(dict(
+            key=res["key"], name=res["name"], kind=res["kind"],
+            parent=res["parent"], accent=res["accent"], emoji=res["emoji"],
+            in_market=float(pos_sub.mean()) if len(pos_sub) else 0.0,
+            strat=sm, bh=slice_metrics(bh_eq, start)))
+    return rows
+
+
 def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
                    pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
                    chunk: int | None = None):
