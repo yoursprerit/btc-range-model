@@ -263,8 +263,8 @@ FUNDAMENTAL_VIEW_NOTE = (
 # drawdowns), so loading them boosts raw return at the cost of risk-adjusted
 # return.  A profile bundles the per-kind caps, the optimiser objective and the
 # drawdown budget so the user can dial that trade-off:
-#   Balanced   — hold Sharpe near its max (default; ~unchanged behaviour)
-#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×)
+#   Balanced   — hold Sharpe near its max (~unchanged behaviour)
+#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×; default)
 #   Aggressive — maximise return inside a −38% budget (heavy β / 2×)
 RISK_PROFILES = {
     "Balanced": dict(
@@ -282,7 +282,7 @@ RISK_PROFILES = {
         blurb="Maximum return inside a −38% budget — heavy β / 2× exposure; "
               "highest return, deepest drawdowns, lower Sharpe."),
 }
-DEFAULT_PROFILE = "Aggressive"
+DEFAULT_PROFILE = "Growth"
 
 
 def caps_for(profile: str) -> dict:
