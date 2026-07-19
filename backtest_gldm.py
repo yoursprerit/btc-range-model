@@ -383,31 +383,36 @@ def main():
                   f"B&H ret={b['bh_ret']*100:+.1f}% MDD={b['bh_mdd']*100:.1f}% Sharpe={b['bh_sharpe']:.2f}")
         (gc.GLDM_DATA_DIR / "sweep_results.json").write_text(json.dumps(chosen, indent=2, default=str))
 
+    # The "assets" block is the strategy the Gold app / Overall sleeve actually
+    # trade (see gldm_core.STRATEGY_NAME + STOP_BY_ASSET); the MA50 trend
+    # filter is kept as a labelled reference variant only.
     out = {"oos_start": OOS_START, "oos_end": str(preds["target_date"].iloc[-1].date()),
-           "primary_strategy": "MA50 trend filter (long when GLDM close > 50-day SMA)",
+           "primary_strategy": f"{gc.STRATEGY_NAME} "
+                               f"(U1 {gc.U1_ERRHI_MIN:+.2f} / D2 {gc.D2_ERRHI_MAX:+.2f}, "
+                               "per-asset stops: GLDM/GDX -3%, UGL signal-only, NUGT -5%)",
            "assets": {}}
 
-    print("\n=== PRIMARY: MA50 trend filter — Strategy vs Buy&Hold ===")
-    for asset in ("GLDM", "UGL", "GDX"):
-        res = run_asset(preds, sig, asset, strategy="ma50", ma_window=50)
+    print(f"\n=== PRIMARY (traded): {gc.STRATEGY_NAME} "
+          f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} per-asset stops: "
+          f"GLDM/GDX −3%, UGL signal-only, NUGT −5%) — traded on GDX & UGL ===")
+    for asset in ("GLDM", "UGL", "GDX", "NUGT"):
+        res = run_asset(preds, sig, asset, strategy="divergence",
+                        stop_pct=gc.stop_for(asset), U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)
         if res is None:
             continue
         print_asset(res)
         out["assets"][asset] = dict(strategy=res["strat"], buy_hold=res["bh"],
                                     n_trades=res["n_trades"], win_rate=res["win_rate"])
 
-    print(f"\n=== CHOSEN STRATEGY: {gc.STRATEGY_NAME} "
-          f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} per-asset stops: "
-          f"GLDM/GDX −3%, UGL signal-only, NUGT −5%) — traded on GDX & UGL ===")
-    out["divergence_alt"] = {}
+    print("\n=== REFERENCE (not traded): MA50 trend filter — Strategy vs Buy&Hold ===")
+    out["ma50_alt"] = {}
     for asset in ("GLDM", "UGL", "GDX"):
-        res = run_asset(preds, sig, asset, strategy="divergence",
-                        stop_pct=gc.stop_for(asset), U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)
+        res = run_asset(preds, sig, asset, strategy="ma50", ma_window=50)
         if res is None:
             continue
         print_asset(res)
-        out["divergence_alt"][asset] = dict(strategy=res["strat"], buy_hold=res["bh"],
-                                            n_trades=res["n_trades"])
+        out["ma50_alt"][asset] = dict(strategy=res["strat"], buy_hold=res["bh"],
+                                      n_trades=res["n_trades"], win_rate=res["win_rate"])
 
     RESULTS_JSON.write_text(json.dumps(out, indent=2, default=str))
     print(f"\nSaved results → {RESULTS_JSON}")
