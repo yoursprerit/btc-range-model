@@ -140,8 +140,8 @@ the user dials the return-vs-risk trade-off on the Live tab:
 | Profile | Objective | Drawdown floor | Behaviour |
 |---|---|---:|---|
 | **Balanced** | `balanced` (near-max-Sharpe, then max return) | −35 % | Best historical **risk-adjusted** blend. |
-| **Growth** | `max_return` | −22 % | Leans harder on β / 2× for more return inside a tighter DD budget. |
-| **Aggressive** *(default)* | `max_return` | −38 % | Heaviest β / 2×: highest return, deepest drawdowns, lower Sharpe. |
+| **Growth** *(default)* | `max_return` | −22 % | Leans harder on β / 2× for more return inside a tighter DD budget. |
+| **Aggressive** | `max_return` | −38 % | Heaviest β / 2×: highest return, deepest drawdowns, lower Sharpe. |
 
 Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdown
 deepens faster than the return — which is exactly the knob these profiles expose.

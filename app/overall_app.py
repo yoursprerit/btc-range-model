@@ -821,7 +821,7 @@ with tab_live:
     # equity curve at the chosen date and reads P&L / performance / risk off
     # the slice — so drawdown, Sharpe etc. are measured from the entry point,
     # not from back-test inception.  Follows the risk profile selected above
-    # (Aggressive by default) and the fundamental-overlay toggle.
+    # (Growth by default) and the fundamental-overlay toggle.
     st.markdown("### 📈 Overall strategy P&L — from your start date")
     st.caption(f"P&L, performance and risk of the **combined optimal-blend "
                f"strategy** measured from the start date below, under the risk "
