@@ -687,10 +687,20 @@ def trade_stats_since(res: dict, start) -> dict:
     currently-open position.  ``trade_log`` holds *closed* trades only and the
     open position lives in ``res['pos']``, so there is no double count.  A
     closed trade wins on its realised return; the open one on its current
-    unrealised P&L.  ``win_rate`` is a 0–1 fraction, ``None`` with no trades."""
+    unrealised P&L.  ``win_rate`` is a 0–1 fraction, ``None`` with no trades.
+
+    Not every engine exposes ``trade_log``: the BTC CT engine's ``trades`` ARE
+    dicts of the same shape, so fall back to them when ``trade_log`` is absent
+    (e.g. a stale hot-loaded engine module).  The dict filter also skips
+    engines whose ``trades`` is a bare array of returns — undated trades can't
+    be assigned to the window, so they're (conservatively) not counted."""
     start = pd.Timestamp(start)
+    log = res["r"].get("trade_log")
+    if not log:
+        raw = res["r"].get("trades")           # may be a numpy array — no `or`
+        log = [t for t in (raw if raw is not None else []) if isinstance(t, dict)]
     wins = n = 0
-    for t in (res["r"].get("trade_log") or []):
+    for t in log:
         if pd.Timestamp(t["exit_date"]) >= start:
             n += 1
             wins += t["ret"] > 0
