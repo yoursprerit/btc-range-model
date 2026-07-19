@@ -72,6 +72,8 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "per_asset_slice_metrics"):
             return True
+        if not hasattr(mod, "overall_trade_stats"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -863,11 +865,28 @@ with tab_live:
                           "start date, not from back-test inception.")
         pm[3].metric("Sharpe (ann.)", f"{_sm['sharpe']:.2f}",
                      delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
-        pm2 = st.columns(4)
+        # per-asset since-start reads (also feed the blend-level trade stats)
+        _pa = ov.per_asset_slice_metrics(results, _start_sel)
+        _ots = ov.overall_trade_stats(_pa, opt["optimal"]["weights"])
+        pm2 = st.columns(6)
         pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
         pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
         pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
         pm2[3].metric("Trading days", f"{_sm['days']}")
+        pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
+                      delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
+                      delta_color="off",
+                      help="Round-trip trades across every sleeve the optimal "
+                           "blend holds (weight > 0) that were open at any point "
+                           "since the start date — including trades entered "
+                           "before it — plus currently-open positions.")
+        pm2[5].metric("Win rate",
+                      "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
+                      delta=f"{_ots['wins']}/{_ots['n_trades']} won" if _ots["n_trades"] else None,
+                      delta_color="off",
+                      help="Winning trades out of all counted trades: closed "
+                           "trades on their realised return, open positions on "
+                           "their current unrealised P&L.")
 
         # same-window benchmark comparison — is the strategy earning its keep?
         _bench_rows = []
@@ -929,7 +948,7 @@ with tab_live:
                    "fit on the full history (in-sample). Not investment advice.")
 
         # ── per-asset breakdown — opt-in via expander so the page stays clean ──
-        _pa = ov.per_asset_slice_metrics(results, _start_sel)
+        # (_pa computed above, alongside the blend-level trade stats)
         with st.expander(f"🔬 Per-asset breakdown since "
                          f"{_sm['start'].strftime('%b %d, %Y')} — every sleeve's "
                          "return & risk (tap to expand)"):
@@ -974,6 +993,8 @@ with tab_live:
                        "<th style='text-align:right'>Buy&amp;Hold</th>"
                        "<th style='text-align:right'>Max DD</th>"
                        "<th style='text-align:right'>Sharpe</th>"
+                       "<th style='text-align:right'>Trades</th>"
+                       "<th style='text-align:right'>Win rate</th>"
                        "<th style='text-align:right'>Win days</th>"
                        "<th style='text-align:right'>In mkt</th>"
                        "<th style='text-align:right'>Opt. wt</th></tr>")
@@ -991,6 +1012,15 @@ with tab_live:
                         _late = (f"<div style='font-size:10px;color:#94a3b8'>since "
                                  f"{sm_a['start'].strftime('%b %d, %Y')}</div>"
                                  if sm_a["start"] > _sm["start"] else "")
+                        _tr = p["trades"]
+                        _tr_s = (f"{_tr['n_trades']}"
+                                 + (f" <span style='color:{C_HOLD};font-size:10px'>"
+                                    f"({_tr['n_open']} open)</span>"
+                                    if _tr["n_open"] else ""))
+                        _wr_s = ("—" if _tr["win_rate"] is None
+                                 else f"{_tr['win_rate']*100:.0f}%"
+                                      f" <span style='color:#94a3b8;font-size:10px'>"
+                                      f"({_tr['wins']}/{_tr['n_trades']})</span>")
                         par.append(
                             f"<tr style='border-bottom:1px solid #eef2f7'>"
                             f"<td style='padding:6px 10px;font-weight:700'>"
@@ -1004,16 +1034,46 @@ with tab_live:
                             f"{_pct(bh_a['total_ret']*100) if bh_a else '—'}</td>"
                             f"<td style='text-align:right;color:{C_EXIT}'>{sm_a['mdd']*100:.1f}%</td>"
                             f"<td style='text-align:right'>{sm_a['sharpe']:.2f}</td>"
+                            f"<td style='text-align:right;font-weight:600'>{_tr_s}</td>"
+                            f"<td style='text-align:right;font-weight:600'>{_wr_s}</td>"
                             f"<td style='text-align:right'>{sm_a['win_days']*100:.0f}%</td>"
                             f"<td style='text-align:right'>{p['in_market']*100:.0f}%</td>"
                             f"<td style='text-align:right;font-weight:700'>"
                             f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
+                # SATA — the idle-cash sleeve every flat day drains into
+                _sata_m = ov.sata_slice_metrics(_curve_all.index, _start_sel)
+                if _sata_m:
+                    par.append(
+                        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+                        f"<td style='padding:6px 10px;font-weight:700'>💵 SATA"
+                        f"<span style='font-size:11px;color:#64748b;font-weight:400'>"
+                        f" {ov.SATA['name']}</span></td>"
+                        f"<td style='text-align:right;font-weight:700;color:{C_BUY}'>"
+                        f"{_sata_m['total_ret']*100:+.1f}%</td>"
+                        f"<td style='text-align:right;color:#64748b'>"
+                        f"{_sata_m['total_ret']*100:+.1f}%</td>"
+                        f"<td style='text-align:right;color:#64748b'>0.0%</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right'>100%</td>"
+                        f"<td style='text-align:right'>100%</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>idle bal.</td></tr>")
                 st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
                             f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
                 st.caption("🏆 = the sleeve's strategy beat buying & holding it "
-                           "over this window. Per-sleeve returns exclude the SATA "
-                           "yield earned while flat — that accrues at the blend "
-                           "level, so the sleeves won't sum to the blend P&L.")
+                           "over this window. **Trades** counts round-trips open "
+                           "at any point since the start date (open positions "
+                           "included); **Win rate** judges closed trades on their "
+                           "realised return and the open one on its current "
+                           "unrealised P&L, while **Win days** is the share of "
+                           "positive daily returns. **SATA** is the idle-cash "
+                           "park: a steady ~13%/yr daily yield on a flat $100 "
+                           "par — no drawdown, no trades, its weight is simply "
+                           "whatever the risk sleeves leave undeployed each day. "
+                           "Per-sleeve returns exclude that SATA yield (it "
+                           "accrues at the blend level), so the sleeves won't "
+                           "sum to the blend P&L.")
 
 
 # ══════════════════════════════════════════════════════════════════════════

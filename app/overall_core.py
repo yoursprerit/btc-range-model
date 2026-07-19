@@ -675,8 +675,59 @@ def per_asset_slice_metrics(results: list[dict], start) -> list[dict]:
             key=res["key"], name=res["name"], kind=res["kind"],
             parent=res["parent"], accent=res["accent"], emoji=res["emoji"],
             in_market=float(pos_sub.mean()) if len(pos_sub) else 0.0,
-            strat=sm, bh=slice_metrics(bh_eq, start)))
+            strat=sm, bh=slice_metrics(bh_eq, start),
+            trades=trade_stats_since(res, start)))
     return rows
+
+
+def trade_stats_since(res: dict, start) -> dict:
+    """Trade count and win rate for one sleeve since ``start``.  A trade counts
+    when it was open at any point on/after the anchor — i.e. every closed trade
+    whose exit lands on/after ``start`` (even if entered before it) plus the
+    currently-open position.  ``trade_log`` holds *closed* trades only and the
+    open position lives in ``res['pos']``, so there is no double count.  A
+    closed trade wins on its realised return; the open one on its current
+    unrealised P&L.  ``win_rate`` is a 0–1 fraction, ``None`` with no trades."""
+    start = pd.Timestamp(start)
+    wins = n = 0
+    for t in (res["r"].get("trade_log") or []):
+        if pd.Timestamp(t["exit_date"]) >= start:
+            n += 1
+            wins += t["ret"] > 0
+    n_open = 0
+    pos = res.get("pos") or {}
+    if pos.get("in_pos"):
+        n_open = 1
+        n += 1
+        wins += (pos.get("upnl") or 0) > 0
+    return dict(n_trades=n, n_open=n_open, wins=int(wins),
+                win_rate=(wins / n) if n else None)
+
+
+def overall_trade_stats(pa_rows: list[dict], weights: dict,
+                        min_w: float = 0.002) -> dict:
+    """Blend-level trade count / win rate since the anchor: the sum over every
+    sleeve the optimal blend actually holds (weight > ``min_w`` — a zero-weight
+    sleeve never trades the book), open positions included."""
+    sel = [r["trades"] for r in pa_rows if weights.get(r["key"], 0) > min_w]
+    n = sum(t["n_trades"] for t in sel)
+    wins = sum(t["wins"] for t in sel)
+    return dict(n_trades=n, wins=wins, n_open=sum(t["n_open"] for t in sel),
+                win_rate=(wins / n) if n else None, n_sleeves=len(sel))
+
+
+def sata_slice_metrics(index: pd.Index, start) -> dict | None:
+    """The SATA idle-cash sleeve since ``start`` on the blend's calendar: a
+    constant ``SATA_DAILY`` yield on a flat $100 par — so no drawdown, every
+    day a (tiny) win, and Sharpe/vol meaningless (returned as ``None``/0)."""
+    sub = index[index >= pd.Timestamp(start)]
+    if len(sub) < 2:
+        return None
+    total = float((1 + SATA_DAILY) ** (len(sub) - 1) - 1)
+    yrs = max((sub[-1] - sub[0]).days / 365.25, 1e-9)
+    return dict(start=sub[0], end=sub[-1], days=len(sub), total_ret=total,
+                cagr=float((1 + total) ** (1 / yrs) - 1), mdd=0.0, sharpe=None,
+                vol=0.0, win_days=1.0, best_day=SATA_DAILY, worst_day=SATA_DAILY)
 
 
 def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
