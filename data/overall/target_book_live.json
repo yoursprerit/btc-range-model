@@ -1,21 +1,21 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-20T15:54:01+00:00",
+ "generated_at_utc": "2026-07-20T16:36:37+00:00",
  "as_of": "2026-07-20",
  "profile": "Aggressive",
  "book_mode": "live",
  "weights": {
   "SOXX": 0.35,
   "SOXL": 0.35,
-  "REMX": 0.08315968676904566,
-  "SATA": 0.21684031323095443
+  "REMX": 0.08339774899320311,
+  "SATA": 0.21660225100679698
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "SOXX": 532.825,
-  "SOXL": 143.525,
-  "REMX": 70.37,
-  "SATA": 98.01
+  "SOXX": 533.285,
+  "SOXL": 143.94,
+  "REMX": 70.41,
+  "SATA": 98.0
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.35,
    "in_pos": true,
-   "priority": 0.6033281432616526
+   "priority": 0.6032869318057418
   },
   {
    "key": "SOXX",
@@ -38,9 +38,9 @@
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.08315968676904566,
+   "target": 0.08339774899320311,
    "in_pos": true,
-   "priority": 0.07999999999999999
+   "priority": 0.08190476190476188
   },
   {
    "key": "BTC",
@@ -157,6 +157,6 @@
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "0c8c7caba5ca34a00820b65f43603b0cca8a4ea126c1511971156c699cab6d97"
+  "value": "39b0cdf80b3f6e11e20efdd70c9cf9c0d9e70ad378f6d78037d6c46b182e7b79"
  }
 }
