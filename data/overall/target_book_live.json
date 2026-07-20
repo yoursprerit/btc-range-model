@@ -1,21 +1,21 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-17T14:11:32+00:00",
- "as_of": "2026-07-17",
+ "generated_at_utc": "2026-07-20T14:49:31+00:00",
+ "as_of": "2026-07-20",
  "profile": "Aggressive",
  "book_mode": "live",
  "weights": {
   "SOXX": 0.35,
   "SOXL": 0.35,
-  "REMX": 0.08199681981140533,
-  "SATA": 0.21800318018859466
+  "REMX": 0.0833977489932031,
+  "SATA": 0.21660225100679698
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "SOXX": 523.11,
-  "SOXL": 136.525,
-  "REMX": 71.78,
-  "SATA": 97.0
+  "SOXX": 530.16,
+  "SOXL": 141.07,
+  "REMX": 70.23,
+  "SATA": 97.49
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.35,
    "in_pos": true,
-   "priority": 0.6092994251735311
+   "priority": 0.6032565547094833
   },
   {
    "key": "SOXX",
@@ -32,15 +32,23 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.35,
    "in_pos": true,
-   "priority": 0.5733333333333334
+   "priority": 0.5666666666666667
   },
   {
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.08199681981140533,
+   "target": 0.0833977489932031,
    "in_pos": true,
-   "priority": 0.07428571428571427
+   "priority": 0.08190476190476188
+  },
+  {
+   "key": "ARTY",
+   "action": "WATCH",
+   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null
   },
   {
    "key": "BTC",
@@ -69,7 +77,7 @@
   {
    "key": "GLDM",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -77,7 +85,7 @@
   {
    "key": "GDX",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -85,7 +93,7 @@
   {
    "key": "UGL",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -93,7 +101,7 @@
   {
    "key": "NUGT",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -109,7 +117,7 @@
   {
    "key": "XLE",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -117,7 +125,7 @@
   {
    "key": "OIH",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -125,7 +133,7 @@
   {
    "key": "ERX",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -145,18 +153,10 @@
    "target": 0.0,
    "in_pos": false,
    "priority": null
-  },
-  {
-   "key": "ARTY",
-   "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
   }
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "d9b4305ecef1fec8bf6612d5d9dedfced41abc116df88c88efd3dc6d2b70c622"
+  "value": "4a1a1300f1308abc812ac85188827f1a0f389b2c1f87fa11f277b14b8aedeee4"
  }
 }
