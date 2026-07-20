@@ -1437,23 +1437,23 @@ with tab_live:
                                    font_size=13))
                     st.plotly_chart(fig_wr, use_container_width=True)
 
-            # ── P&L efficiency — average $ P&L per trade per asset ───────────
+            # ── trade efficiency — each trade's average share of total P&L ───
             if st.toggle(
-                    f"💡 P&L efficiency by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — average $ P&L per "
-                    "trade (toggle to show)",
-                    key="overall_pnl_efficiency"):
-                st.caption("Each sleeve's **exact-attribution P&L** (the 📊 "
-                           "chart above) divided by its **number of counted "
-                           "trades** since the start date (closed trades plus "
-                           "any open position — the same counts as the 🎯 win-"
-                           "rate chart): the average dollars each trade "
-                           "contributed to the blend. It separates sleeves that "
-                           "earn a lot per decision from those that churn many "
-                           "trades for little; dollar figures scale with the 💼 "
-                           "portfolio value entered above. **SATA** isn't shown "
-                           "— its yield accrues daily on idle cash, not from "
-                           "trades.")
+                    f"💡 Trade efficiency by asset since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — average % of total "
+                    "P&L earned per trade (toggle to show)",
+                    key="overall_trade_efficiency"):
+                st.caption("**(P&L per trade ÷ total P&L) × 100** for each "
+                           "sleeve: its **exact-attribution P&L** (the 📊 chart "
+                           "above) divided by its **number of counted trades** "
+                           "since the start date (closed trades plus any open "
+                           "position — the same counts as the 🎯 win-rate "
+                           "chart), expressed as a share of the blend's **net "
+                           "total P&L**. A 5% bar means one average trade in "
+                           "that sleeve moved the whole strategy's P&L by 5%; "
+                           "the ratio is independent of the 💼 portfolio value. "
+                           "**SATA** isn't shown — its yield accrues daily on "
+                           "idle cash, not from trades.")
                 _pe_att = ov.pnl_attribution_since(
                     _PF["rets"],
                     np.array([opt["optimal"]["weights"].get(c, 0.0)
@@ -1463,43 +1463,50 @@ with tab_live:
                     sata_daily=ov.SATA_DAILY)
                 _wts_pe = opt["optimal"]["weights"]
                 _pe_bars = []
-                if _pe_att:
+                if _pe_att and _pe_att["total"] > 0:
                     for p in _pa:
                         tr = p["trades"]
                         if _wts_pe.get(p["key"], 0) <= 0.002 or not tr["n_trades"]:
                             continue
                         _pnl_k = (_pe_att["per_key"].get(p["key"], 0.0)
                                   * portfolio_value)
+                        _eff_pct = (_pe_att["per_key"].get(p["key"], 0.0)
+                                    / tr["n_trades"] / _pe_att["total"] * 100)
                         _pe_bars.append((
-                            f"{p['emoji']} {p['key']}",
-                            _pnl_k / tr["n_trades"],
-                            C_BUY if _pnl_k >= 0 else C_EXIT,
+                            f"{p['emoji']} {p['key']}", _eff_pct,
+                            C_BUY if _eff_pct >= 0 else C_EXIT,
                             f"${_pnl_k:+,.0f} P&L over {tr['n_trades']} trade"
                             f"{'s' if tr['n_trades'] != 1 else ''}"
-                            + (f" · {tr['n_open']} open" if tr["n_open"] else "")))
-                if not _pe_bars:
+                            + (f" · {tr['n_open']} open" if tr["n_open"] else "")
+                            + f" = ${_pnl_k/tr['n_trades']:+,.0f}/trade"))
+                if _pe_att and _pe_att["total"] <= 0:
+                    st.info("The blend's net P&L is not positive over this "
+                            "window, so a per-trade **share of total P&L** "
+                            "isn't meaningful — pick a different start date.")
+                elif not _pe_bars:
                     st.info("No sleeve the blend holds traded in this window — "
                             "no per-trade P&L to measure.")
                 else:
-                    # biggest per-trade earner on top, worst at the bottom
+                    # most efficient sleeve on top, worst at the bottom
                     _pe_bars.sort(key=lambda b: b[1])
                     fig_pe = go.Figure(go.Bar(
                         y=[b[0] for b in _pe_bars],
                         x=[b[1] for b in _pe_bars],
                         orientation="h",
                         marker_color=[b[2] for b in _pe_bars],
-                        text=[f"${b[1]:+,.0f}/trade" for b in _pe_bars],
+                        text=[f"{b[1]:+.1f}%/trade" for b in _pe_bars],
                         textposition="outside", cliponaxis=False,
                         customdata=[[b[3]] for b in _pe_bars],
-                        hovertemplate="%{y}: <b>$%{x:+,.0f} per trade</b><br>"
+                        hovertemplate="%{y}: <b>%{x:+.1f}% of total P&L "
+                                      "per trade</b><br>"
                                       "%{customdata[0]}<extra></extra>"))
                     fig_pe.add_vline(x=0, line_color="#94a3b8", line_width=1)
                     fig_pe.update_layout(
                         height=max(300, 26 * len(_pe_bars) + 80),
                         margin=dict(t=40, b=10, l=10, r=100),
-                        xaxis_title="average $ P&L per trade since start",
-                        title=dict(text="P&L efficiency per instrument — "
-                                        "attribution P&L ÷ trades taken",
+                        xaxis_title="average % of total P&L per trade since start",
+                        title=dict(text="Trade efficiency per instrument — "
+                                        "(P&L per trade ÷ total P&L) × 100",
                                    font_size=13))
                     st.plotly_chart(fig_pe, use_container_width=True)
 
