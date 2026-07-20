@@ -272,8 +272,12 @@ results = _PF["results"]
 by_key = {r["key"]: r for r in results}
 opt = _PF["opt"]; gate = _PF["gate"]; bm = _PF["bm"]
 as_of = max(r["as_of"] for r in results)
-# when the signals were last (re)generated — the cached run_universe() time
-signals_updated = _PF.get("computed_at") or pd.Timestamp.utcnow()
+# when the signals were last (re)generated — the cached run_universe() time,
+# shown in US Central Time (CDT/CST picked automatically by the zone)
+signals_updated = pd.Timestamp(_PF.get("computed_at") or pd.Timestamp.utcnow())
+if signals_updated.tzinfo is None:
+    signals_updated = signals_updated.tz_localize("UTC")
+signals_updated = signals_updated.tz_convert("America/Chicago")
 # group instruments by parent signal, preserving parent order
 parents = []
 for pk in ov.PARENT_KEYS:
@@ -363,10 +367,10 @@ with tab_live:
     _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>{_auto}"
                 if _n_spot else " · <span style='color:#dc2626'>spot quote unavailable — showing last bar</span>")
     st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** (daily close) · "
-                f"generated **{signals_updated.strftime('%b %d, %Y %H:%M UTC')}** · "
+                f"generated **{signals_updated.strftime('%b %d, %Y %I:%M %p %Z')}** · "
                 f"{len(results)} instruments across {len(parents)} signals{_px_note}",
                 unsafe_allow_html=True)
-    st.caption(f"🕒 Signals last updated **{signals_updated.strftime('%b %d, %Y at %H:%M:%S UTC')}** — "
+    st.caption(f"🕒 Signals last updated **{signals_updated.strftime('%b %d, %Y at %I:%M:%S %p %Z')}** — "
                f"auto-recomputed every ~30 min, or press **Refresh now** in the sidebar.")
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
