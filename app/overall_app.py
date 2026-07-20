@@ -1378,6 +1378,65 @@ with tab_live:
                                    font_size=13))
                     st.plotly_chart(fig_eff, use_container_width=True)
 
+            # ── win rate per asset — how often each sleeve's trades won ──────
+            if st.toggle(
+                    f"🎯 Win rate by asset since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — share of winning "
+                    "trades per instrument (toggle to show)",
+                    key="overall_win_rate_by_asset"):
+                st.caption("Winning trades out of all counted trades per sleeve "
+                           "the blend holds, since the start date — the same "
+                           "per-sleeve stats behind the blend-level **Win rate** "
+                           "metric above: closed trades judged on their realised "
+                           "return, an open position on its current unrealised "
+                           "P&L. Bars are green at ≥ 50%, red below; the dotted "
+                           "line marks the 50% coin-flip. A sleeve with only a "
+                           "trade or two can sit at 0% or 100% on tiny evidence "
+                           "— the label shows the wins/trades count behind each "
+                           "bar.")
+                _wts_wr = opt["optimal"]["weights"]
+                _wr_bars = []
+                for p in _pa:
+                    tr = p["trades"]
+                    if _wts_wr.get(p["key"], 0) <= 0.002 or not tr["n_trades"]:
+                        continue
+                    _wr = tr["win_rate"] * 100
+                    _wr_bars.append((
+                        f"{p['emoji']} {p['key']}", _wr,
+                        C_BUY if _wr >= 50 else C_EXIT,
+                        f"{_wr:.0f}% ({tr['wins']}/{tr['n_trades']})",
+                        f"{tr['wins']}/{tr['n_trades']} trades won"
+                        + (f" · {tr['n_open']} open" if tr["n_open"] else "")))
+                if not _wr_bars:
+                    st.info("No sleeve the blend holds traded in this window — "
+                            "no win rate to measure.")
+                else:
+                    # best hit-rate on top, worst at the bottom
+                    _wr_bars.sort(key=lambda b: b[1])
+                    fig_wr = go.Figure(go.Bar(
+                        y=[b[0] for b in _wr_bars],
+                        x=[b[1] for b in _wr_bars],
+                        orientation="h",
+                        marker_color=[b[2] for b in _wr_bars],
+                        text=[b[3] for b in _wr_bars],
+                        textposition="outside", cliponaxis=False,
+                        customdata=[[b[4]] for b in _wr_bars],
+                        hovertemplate="%{y}: <b>%{x:.0f}%</b><br>"
+                                      "%{customdata[0]}<extra></extra>"))
+                    fig_wr.add_vline(x=50, line_dash="dot", line_color="#94a3b8",
+                                     line_width=1, annotation_text="50%",
+                                     annotation_font_size=10)
+                    fig_wr.update_layout(
+                        height=max(300, 26 * len(_wr_bars) + 80),
+                        margin=dict(t=40, b=10, l=10, r=90),
+                        xaxis=dict(title="share of winning trades since start (%)",
+                                   range=[0, 112]),
+                        title=dict(text="Win rate per instrument — trades won "
+                                        "since start (open positions on "
+                                        "unrealised P&L)",
+                                   font_size=13))
+                    st.plotly_chart(fig_wr, use_container_width=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # TAB 2 — COMBINED BACKTESTING
