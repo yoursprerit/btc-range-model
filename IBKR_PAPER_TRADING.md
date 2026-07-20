@@ -123,7 +123,7 @@ Useful flags:
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--execute` | off (dry-run) | actually transmit orders |
-| `--profile` | `Aggressive` (app default) | `Balanced` / `Growth` / `Aggressive` |
+| `--profile` | `Balanced` (app default) | `Balanced` / `Growth` / `Aggressive` |
 | `--band` | `0.01` | no-trade band as a fraction of net-liq |
 | `--fractional` | off | allow fractional shares (default: whole shares) |
 | `--port` | `4002` | IB Gateway API port (paper) |

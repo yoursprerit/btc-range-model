@@ -263,8 +263,8 @@ FUNDAMENTAL_VIEW_NOTE = (
 # drawdowns), so loading them boosts raw return at the cost of risk-adjusted
 # return.  A profile bundles the per-kind caps, the optimiser objective and the
 # drawdown budget so the user can dial that trade-off:
-#   Balanced   — hold Sharpe near its max (~unchanged behaviour)
-#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×; default)
+#   Balanced   — hold Sharpe near its max (~unchanged behaviour; default)
+#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×)
 #   Aggressive — maximise return inside a −38% budget (heavy β / 2×)
 RISK_PROFILES = {
     "Balanced": dict(
@@ -282,7 +282,7 @@ RISK_PROFILES = {
         blurb="Maximum return inside a −38% budget — heavy β / 2× exposure; "
               "highest return, deepest drawdowns, lower Sharpe."),
 }
-DEFAULT_PROFILE = "Growth"
+DEFAULT_PROFILE = "Balanced"
 
 
 def caps_for(profile: str) -> dict:
@@ -724,6 +724,65 @@ def overall_trade_stats(pa_rows: list[dict], weights: dict,
     wins = sum(t["wins"] for t in sel)
     return dict(n_trades=n, wins=wins, n_open=sum(t["n_open"] for t in sel),
                 win_rate=(wins / n) if n else None, n_sleeves=len(sel))
+
+
+def trade_log_since(results: list[dict], weights: dict, start,
+                    min_w: float = 0.002) -> list[dict]:
+    """The individual trades behind ``overall_trade_stats``: every round-trip
+    across the sleeves the optimal blend holds (weight > ``min_w``) that was
+    open at any point on/after ``start`` — closed trades whose exit lands on/
+    after the anchor plus any currently-open position (``open=True``, no exit
+    date, ``ret`` = its unrealised P&L at the latest price incl. any live-spot
+    overlay).  Engines disagree on price key names (``entry_px``/``exit_px``
+    vs the BTC CT engine's ``entry_price``/``exit_price``) — normalised here.
+    Rows come back newest-first: open positions, then closed by exit date."""
+    start = pd.Timestamp(start)
+
+    def _px(t: dict, *keys):
+        for k in keys:
+            v = t.get(k)
+            if v is not None and np.isfinite(v):
+                return float(v)
+        return None
+
+    rows = []
+    for res in results:
+        w = weights.get(res["key"], 0)
+        if w <= min_w:
+            continue
+        log = res["r"].get("trade_log")
+        if not log:                            # same fallback as trade_stats_since
+            raw = res["r"].get("trades")       # may be a numpy array — no `or`
+            log = [t for t in (raw if raw is not None else []) if isinstance(t, dict)]
+        base = dict(key=res["key"], name=res["name"], kind=res["kind"],
+                    emoji=res["emoji"], accent=res["accent"], weight=float(w))
+        for t in log:
+            exit_d = pd.Timestamp(t["exit_date"])
+            if exit_d < start:
+                continue
+            entry_d = pd.Timestamp(t["entry_date"])
+            rows.append(dict(base, open=False, entry_date=entry_d, exit_date=exit_d,
+                             entry_px=_px(t, "entry_px", "entry_price"),
+                             exit_px=_px(t, "exit_px", "exit_price"),
+                             ret=float(t["ret"]), reason=str(t.get("reason") or "signal exit"),
+                             days=int((exit_d - entry_d).days)))
+        pos = res.get("pos") or {}
+        if pos.get("in_pos"):
+            e_dt = pd.Timestamp(pos["entry_date"]) if pos.get("entry_date") else None
+            upnl = pos.get("upnl")             # % — refreshed by apply_spot
+            last_px = res.get("last_close")
+            rows.append(dict(base, open=True, entry_date=e_dt, exit_date=None,
+                             entry_px=_px(pos, "entry_px"),
+                             exit_px=(float(last_px) if last_px is not None
+                                      and np.isfinite(last_px) else None),
+                             ret=(upnl / 100 if upnl is not None else None),
+                             reason="open", days=pos.get("days")))
+    _far_past = pd.Timestamp("1900-01-01")
+    rows.sort(key=lambda r: (r["open"],
+                             r["exit_date"] or r["entry_date"] or _far_past,
+                             r["entry_date"] or _far_past),
+              reverse=True)
+    return rows
 
 
 def sata_slice_metrics(index: pd.Index, start) -> dict | None:
