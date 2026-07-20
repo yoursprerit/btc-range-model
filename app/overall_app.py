@@ -1215,65 +1215,82 @@ with tab_live:
                                    font_size=13))
                     st.plotly_chart(fig_cap, use_container_width=True)
 
-            # ── P&L by asset — where the profits actually came from ──────────
+            # ── P&L by asset — exact attribution of the blend's P&L ──────────
             if st.toggle(
                     f"📊 P&L by asset since "
                     f"{_sm['start'].strftime('%b %d, %Y')} — how much each "
                     "instrument earned or lost (toggle to show)",
                     key="overall_pnl_share_by_asset"):
-                st.caption("Each trade's **≈ $ on blend** impact (return × blend "
-                           "weight × 💼 portfolio value, open positions marked to "
-                           "the latest price) summed per instrument shows **which "
-                           "sleeves actually earned the P&L** since the start "
-                           "date — green bars are net winners, red bars net "
-                           "losers, and each bar is labelled with its share of "
-                           "the net total. Like the trade log, this excludes the "
-                           "blend-level SATA yield on idle capital.")
-                if not _tl:
-                    st.info("No sleeve the blend holds traded in this window — "
+                st.caption("The headline **Strategy P&L above, split by sleeve**: "
+                           "each day's blend return is decomposed into every "
+                           "sleeve's weighted share (plus the **SATA** yield on "
+                           "idle capital) and scaled by the blend's compounding "
+                           "value, so the bars **sum exactly to the Strategy "
+                           "P&L dollar figure** for the selected profile and "
+                           "start date. Green bars are net winners, red bars "
+                           "net losers; each is labelled with its share of the "
+                           "net total. (This is exact attribution off the blend "
+                           "curve — unlike the trade log's **≈ $ on blend** "
+                           "column, which is a per-trade approximation.)")
+                _w_arr = np.array([opt["optimal"]["weights"].get(c, 0.0)
+                                   for c in _PF["rets"].columns])
+                _att = ov.pnl_attribution_since(
+                    _PF["rets"], _w_arr, _start_sel,
+                    pos=ov.position_matrix(results, _PF["rets"].index),
+                    sata_daily=ov.SATA_DAILY)
+                if _att is None:
+                    st.info("Not enough blend history after that date — "
                             "no P&L to attribute.")
                 else:
-                    _pnl_by, _pcnt, _pmeta = {}, {}, {}
+                    _pcnt = {}
                     for t in _tl:
-                        if t["ret"] is None:
-                            continue
-                        _pnl_by[t["key"]] = (_pnl_by.get(t["key"], 0.0)
-                                             + t["ret"] * t["weight"] * portfolio_value)
                         _pcnt[t["key"]] = _pcnt.get(t["key"], 0) + 1
-                        _pmeta[t["key"]] = t
-                    _net_tot = sum(_pnl_by.values())
-                    _win_tot = sum(v for v in _pnl_by.values() if v > 0)
-                    _loss_tot = sum(v for v in _pnl_by.values() if v < 0)
+                    _pnl_by = {k: v * portfolio_value
+                               for k, v in _att["per_key"].items()}
+                    _net_tot = (sum(_pnl_by.values())
+                                + _att["sata"] * portfolio_value)
+                    # hide sleeves that contributed nothing (zero-weight);
+                    # totals above already include their (≈ $0) share
+                    _pnl_by = {k: v for k, v in _pnl_by.items() if abs(v) >= 0.5}
+                    _bars = [(f"{by_key[k]['emoji']} {k}", v,
+                              C_BUY if v >= 0 else C_EXIT,
+                              f"{_pcnt.get(k, 0)} trade"
+                              f"{'s' if _pcnt.get(k, 0) != 1 else ''} · blend wt "
+                              f"{opt['optimal']['weights'].get(k, 0)*100:.1f}%")
+                             for k, v in _pnl_by.items()]
+                    if _att["sata"]:
+                        _bars.append(("💵 SATA", _att["sata"] * portfolio_value,
+                                      "#334155", "idle-cash yield on undeployed "
+                                      "capital · no trades"))
+                    _win_tot = sum(v for _, v, _c, _h in _bars if v > 0)
+                    _loss_tot = sum(v for _, v, _c, _h in _bars if v < 0)
                     # biggest earner on top, biggest loser at the bottom
-                    _pk_sorted = sorted(_pnl_by, key=_pnl_by.get)
-                    # share of the net total only reads sensibly when it's positive
-                    _txt = [f"${_pnl_by[k]:+,.0f}"
-                            + (f" · {_pnl_by[k]/_net_tot*100:+.0f}% of net"
+                    _bars.sort(key=lambda b: b[1])
+                    # share of the net total only reads sensibly when positive
+                    _txt = [f"${v:+,.0f}"
+                            + (f" · {v/_net_tot*100:+.0f}% of net"
                                if _net_tot > 0 else "")
-                            for k in _pk_sorted]
+                            for _, v, _c, _h in _bars]
                     fig_pnl_by = go.Figure(go.Bar(
-                        y=[f"{_pmeta[k]['emoji']} {k}" for k in _pk_sorted],
-                        x=[_pnl_by[k] for k in _pk_sorted],
+                        y=[b[0] for b in _bars],
+                        x=[b[1] for b in _bars],
                         orientation="h",
-                        marker_color=[C_BUY if _pnl_by[k] >= 0 else C_EXIT
-                                      for k in _pk_sorted],
+                        marker_color=[b[2] for b in _bars],
                         text=_txt, textposition="outside", cliponaxis=False,
-                        customdata=[[f"{_pcnt[k]} trade"
-                                     f"{'s' if _pcnt[k] != 1 else ''} · blend wt "
-                                     f"{_pmeta[k]['weight']*100:.1f}%"]
-                                    for k in _pk_sorted],
+                        customdata=[[b[3]] for b in _bars],
                         hovertemplate="%{y}: <b>$%{x:+,.0f}</b><br>"
                                       "%{customdata[0]}<extra></extra>"))
                     fig_pnl_by.add_vline(x=0, line_color="#94a3b8", line_width=1)
                     fig_pnl_by.update_layout(
-                        height=max(300, 26 * len(_pk_sorted) + 80),
+                        height=max(300, 26 * len(_bars) + 80),
                         margin=dict(t=40, b=10, l=10, r=90),
-                        xaxis_title="≈ $ P&L on blend since start",
+                        xaxis_title="$ P&L on blend since start",
                         title=dict(text=f"P&L earned per instrument — "
-                                        f"≈ ${_win_tot:+,.0f} profits"
+                                        f"${_win_tot:+,.0f} profits"
                                         + (f" · ${_loss_tot:+,.0f} losses"
                                            if _loss_tot < 0 else "")
-                                        + f" · net ≈ ${_net_tot:+,.0f}",
+                                        + f" · net ${_net_tot:+,.0f} "
+                                          f"({_att['total']*100:+.1f}%)",
                                    font_size=13))
                     st.plotly_chart(fig_pnl_by, use_container_width=True)
 
