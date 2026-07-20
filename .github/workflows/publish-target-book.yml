@@ -12,12 +12,17 @@ name: Publish target book (IBKR Option C)
 on:
   workflow_dispatch: {}   # manual run (Actions tab → Run workflow)
   schedule:
-    # 12:30 UTC on weekdays — after the prior US daily bar has closed, and BEFORE
-    # the laptop executor's 09:45-ET run in BOTH DST regimes (09:45 EDT = 13:45
-    # UTC, 09:45 EST = 14:45 UTC), so the executor's `git pull` always gets a
-    # fresh book. GitHub cron is UTC-only (no DST) and best-effort — a late fire
-    # is safe: the executor's freshness guard just skips rather than trading stale.
-    - cron: "30 12 * * 1-5"
+    # 12:30 UTC EVERY day — Bitcoin trades (and BTC-driven signals move) on
+    # weekends and US market holidays too, so a fresh book is published daily.
+    # The weekend/holiday guard lives ONLY on the executor side
+    # (ibkr_execute_book.py / ibkr_rebalance.py), which still trades exclusively
+    # on US market days. The time is after the prior US daily bar has closed,
+    # and BEFORE the laptop executor's 09:45-ET run in BOTH DST regimes (09:45
+    # EDT = 13:45 UTC, 09:45 EST = 14:45 UTC), so the executor's `git pull`
+    # always gets a fresh book. GitHub cron is UTC-only (no DST) and
+    # best-effort — a late fire is safe: the executor's freshness guard just
+    # skips rather than trading stale.
+    - cron: "30 12 * * *"
 
 # contents: write to push the artifact back to the branch; issues: write so a
 # failed run can open / update a tracking issue (see the "Report failure" step).
