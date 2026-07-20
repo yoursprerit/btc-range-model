@@ -1313,6 +1313,71 @@ with tab_live:
                                    font_size=13))
                     st.plotly_chart(fig_pnl_by, use_container_width=True)
 
+            # ── capital efficiency — P&L per dollar of capital deployed ──────
+            if st.toggle(
+                    f"⚡ Capital efficiency by asset since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — P&L earned per $ "
+                    "of capital traded (toggle to show)",
+                    key="overall_capital_efficiency"):
+                st.caption("Each sleeve's **exact-attribution P&L** (the chart "
+                           "above) divided by the **total capital it deployed** "
+                           "— the sum of every round-trip's entry notional "
+                           "(blend weight × 💼 portfolio value, as in the 🥧 "
+                           "capital-traded chart; a sleeve that traded several "
+                           "times redeploys capital, so its denominator can "
+                           "exceed its blend weight). A high % means the sleeve "
+                           "earned a lot per dollar it put at risk; the ratio "
+                           "is independent of the portfolio value entered. "
+                           "**SATA** isn't shown — its yield accrues on idle "
+                           "cash, not traded capital.")
+                _eff_att = ov.pnl_attribution_since(
+                    _PF["rets"],
+                    np.array([opt["optimal"]["weights"].get(c, 0.0)
+                              for c in _PF["rets"].columns]),
+                    _start_sel,
+                    pos=ov.position_matrix(results, _PF["rets"].index),
+                    sata_daily=ov.SATA_DAILY)
+                if not _tl or _eff_att is None:
+                    st.info("No sleeve the blend holds traded in this window — "
+                            "nothing was deployed.")
+                else:
+                    _ecap, _ecnt = {}, {}
+                    for t in _tl:
+                        _ecap[t["key"]] = (_ecap.get(t["key"], 0.0)
+                                           + t["weight"] * portfolio_value)
+                        _ecnt[t["key"]] = _ecnt.get(t["key"], 0) + 1
+                    _ebars = []
+                    for k, cap in _ecap.items():
+                        if cap <= 0:
+                            continue
+                        _pnl_k = _eff_att["per_key"].get(k, 0.0) * portfolio_value
+                        _ebars.append((
+                            f"{by_key[k]['emoji']} {k}", _pnl_k / cap * 100,
+                            C_BUY if _pnl_k >= 0 else C_EXIT,
+                            f"${_pnl_k:+,.0f} P&L on ${cap:,.0f} deployed · "
+                            f"{_ecnt[k]} trade{'s' if _ecnt[k] != 1 else ''}"))
+                    # most efficient sleeve on top, least efficient at the bottom
+                    _ebars.sort(key=lambda b: b[1])
+                    fig_eff = go.Figure(go.Bar(
+                        y=[b[0] for b in _ebars],
+                        x=[b[1] for b in _ebars],
+                        orientation="h",
+                        marker_color=[b[2] for b in _ebars],
+                        text=[f"{b[1]:+.1f}%" for b in _ebars],
+                        textposition="outside", cliponaxis=False,
+                        customdata=[[b[3]] for b in _ebars],
+                        hovertemplate="%{y}: <b>%{x:+.1f}%</b><br>"
+                                      "%{customdata[0]}<extra></extra>"))
+                    fig_eff.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                    fig_eff.update_layout(
+                        height=max(300, 26 * len(_ebars) + 80),
+                        margin=dict(t=40, b=10, l=10, r=70),
+                        xaxis_title="P&L as % of capital deployed since start",
+                        title=dict(text="Capital efficiency per instrument — "
+                                        "attribution P&L ÷ capital traded",
+                                   font_size=13))
+                    st.plotly_chart(fig_eff, use_container_width=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # TAB 2 — COMBINED BACKTESTING
