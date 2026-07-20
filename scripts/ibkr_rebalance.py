@@ -7,7 +7,7 @@ the paper account mirrors the "Recommended now (live-adjusted)" allocation you
 see on screen — and never re-implements any signal logic:
 
     results   = overall_core.run_universe()                     # every strategy, live
-    opt       = overall_core.optimize_weights(... Aggressive ...)  # app-default blend
+    opt       = overall_core.optimize_weights(... DEFAULT_PROFILE ...)  # app-default blend
     spot      = overall_core.fetch_spot();  apply_spot(results, spot)
     exits     = overall_core.live_exit_keys(results, spot, include_entries=True)
     gate_live = overall_core.signal_gated_allocation(results, weights, force_exit=exits)

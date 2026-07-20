@@ -26,7 +26,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON="${IBKR_PYTHON:-${REPO_ROOT}/.venv/bin/python}"
 
 # Rebalancer flags — override from the environment without editing this file:
-#   IBKR_PROFILE  risk profile (default: the app default, Aggressive)
+#   IBKR_PROFILE  risk profile (default: the app default — currently Balanced)
 #   IBKR_BAND     no-trade band as a fraction of net-liq (default 0.01)
 #   IBKR_PORT     IB Gateway API port (default 4002 = paper)
 #   IBKR_EXTRA    any extra flags (e.g. "--fractional")
