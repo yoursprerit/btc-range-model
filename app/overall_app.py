@@ -161,7 +161,9 @@ def _bucket() -> str:
 
 @st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…")
 def get_results(bucket: str):
-    return ov.run_universe()
+    # computed_at is cached alongside the results, so it records when the
+    # signals were actually (re)generated — not when the page last rendered.
+    return dict(results=ov.run_universe(), computed_at=pd.Timestamp.utcnow())
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -197,7 +199,8 @@ def get_all_profiles(bucket: str, fundamental: bool = True):
     """Compute the full portfolio for EVERY risk profile once, so switching
     profiles (and rendering the comparison table) is instant — no recompute.
     ``fundamental`` applies the mid-2026 sector forward-view overlay."""
-    results = get_results(bucket)
+    res = get_results(bucket)
+    results, computed_at = res["results"], res["computed_at"]
     if not results:
         return None
     rets = ov.returns_matrix(results)
@@ -218,7 +221,8 @@ def get_all_profiles(bucket: str, fundamental: bool = True):
                   **base_curves}
         gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps)
         profiles[name] = dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt)
-    return dict(results=results, rets=rets, bm=bm, profiles=profiles)
+    return dict(results=results, computed_at=computed_at, rets=rets, bm=bm,
+                profiles=profiles)
 
 
 def get_portfolio(bucket: str, profile: str, fundamental: bool = True):
@@ -226,8 +230,8 @@ def get_portfolio(bucket: str, profile: str, fundamental: bool = True):
     if not allp:
         return None
     p = allp["profiles"][profile]
-    return dict(results=allp["results"], rets=allp["rets"], bm=allp["bm"],
-                profile=profile, **p)
+    return dict(results=allp["results"], computed_at=allp["computed_at"],
+                rets=allp["rets"], bm=allp["bm"], profile=profile, **p)
 
 
 def get_profile_comparison(bucket: str, fundamental: bool = True):
@@ -268,6 +272,8 @@ results = _PF["results"]
 by_key = {r["key"]: r for r in results}
 opt = _PF["opt"]; gate = _PF["gate"]; bm = _PF["bm"]
 as_of = max(r["as_of"] for r in results)
+# when the signals were last (re)generated — the cached run_universe() time
+signals_updated = _PF.get("computed_at") or pd.Timestamp.utcnow()
 # group instruments by parent signal, preserving parent order
 parents = []
 for pk in ov.PARENT_KEYS:
@@ -356,9 +362,12 @@ with tab_live:
              if (st_autorefresh is not None and _n_spot) else "")
     _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>{_auto}"
                 if _n_spot else " · <span style='color:#dc2626'>spot quote unavailable — showing last bar</span>")
-    st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** · "
+    st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** (daily close) · "
+                f"generated **{signals_updated.strftime('%b %d, %Y %H:%M UTC')}** · "
                 f"{len(results)} instruments across {len(parents)} signals{_px_note}",
                 unsafe_allow_html=True)
+    st.caption(f"🕒 Signals last updated **{signals_updated.strftime('%b %d, %Y at %H:%M:%S UTC')}** — "
+               f"auto-recomputed every ~30 min, or press **Refresh now** in the sidebar.")
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
     pcomp = {r["name"]: r for r in get_profile_comparison(_bucket(), _use_fund)}
