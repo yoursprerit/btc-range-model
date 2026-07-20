@@ -1152,6 +1152,65 @@ with tab_live:
                 st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
                             f"{tlh}{''.join(tlr)}</table>", unsafe_allow_html=True)
 
+        # ── capital traded by asset — where the strategy put the money ─────
+        with st.expander(
+                f"🥧 Capital traded by asset since "
+                f"{_sm['start'].strftime('%b %d, %Y')} — % of total deployed "
+                "capital (tap to expand)"):
+            st.caption("Each round-trip in the trade log above (open positions "
+                       "included) deploys its sleeve's blend weight of the 💼 "
+                       "portfolio value at entry. Summing those entry notionals "
+                       "per instrument shows **where the strategy actually put "
+                       "capital to work** since the start date. The percentage "
+                       "shares are independent of the portfolio value entered — "
+                       "only the dollar figures scale with it.")
+            if not _tl:
+                st.info("No sleeve the blend holds traded in this window — "
+                        "nothing was deployed.")
+            else:
+                _cap, _cnt, _tl_meta = {}, {}, {}
+                for t in _tl:
+                    _cap[t["key"]] = _cap.get(t["key"], 0.0) + t["weight"] * portfolio_value
+                    _cnt[t["key"]] = _cnt.get(t["key"], 0) + 1
+                    _tl_meta[t["key"]] = t
+                _ck = sorted(_cap, key=_cap.get, reverse=True)
+                _cap_tot = sum(_cap.values())
+                # fold sleeves under 2.5% of the total into one "Other" slice so
+                # the pie stays readable — their split lives in the Other hover
+                _big = [k for k in _ck if _cap[k] / _cap_tot >= 0.025]
+                _small = [k for k in _ck if k not in _big]
+                if len(_small) == 1:          # folding a single sleeve saves nothing
+                    _big, _small = _ck, []
+                _lbls = [f"{_tl_meta[k]['emoji']} {k}" for k in _big]
+                _vals = [_cap[k] for k in _big]
+                _cols = [_tl_meta[k]["accent"] for k in _big]
+                _hov = [f"{_cnt[k]} trade{'s' if _cnt[k] != 1 else ''} · blend wt "
+                        f"{_tl_meta[k]['weight']*100:.1f}%" for k in _big]
+                if _small:
+                    _lbls.append(f"Other ({len(_small)} sleeves)")
+                    _vals.append(sum(_cap[k] for k in _small))
+                    _cols.append("#94a3b8")
+                    _hov.append("<br>".join(
+                        f"{_tl_meta[k]['emoji']} {k}: {_cap[k]/_cap_tot*100:.1f}%"
+                        f" · {_cnt[k]} trade{'s' if _cnt[k] != 1 else ''}"
+                        for k in _small))
+                fig_cap = go.Figure(go.Pie(
+                    labels=_lbls, values=_vals,
+                    customdata=[[h] for h in _hov],
+                    marker=dict(colors=_cols, line=dict(color="#ffffff", width=2)),
+                    hole=0.45, sort=False, direction="clockwise",
+                    textinfo="label+percent",
+                    hovertemplate="%{label}: <b>%{percent}</b> of deployed "
+                                  "capital · ≈ $%{value:,.0f}<br>"
+                                  "%{customdata[0]}<extra></extra>"))
+                fig_cap.update_layout(
+                    height=430, margin=dict(t=40, b=10, l=10, r=10),
+                    title=dict(text=f"Share of deployed capital per instrument — "
+                                    f"total ≈ ${_cap_tot:,.0f} across {len(_tl)} "
+                                    f"trade{'s' if len(_tl) != 1 else ''}",
+                               font_size=13))
+                st.plotly_chart(fig_cap, use_container_width=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # TAB 2 — COMBINED BACKTESTING
