@@ -550,7 +550,7 @@ with tab_live:
     st.markdown("---")
 
     # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
-    with st.expander("🎯 **Today's action plan**", expanded=True):
+    with st.expander("🎯 **Today's action plan**", expanded=False):
         st.caption("What to do now, ranked: **close** exits first, then **open** / "
                    "**hold**, ordered by entry priority. β = higher-beta sibling · "
                    "2× = leveraged (traded off the parent signal). The **priority** "
@@ -744,7 +744,7 @@ with tab_live:
     st.markdown("---")
 
     # ── 3. PER-SIGNAL LIVE CARDS (grouped by parent) ────────────────────
-    with st.expander("🛰️ **Live signal & positions — by app**", expanded=True):
+    with st.expander("🛰️ **Live signal & positions — by app**", expanded=False):
         st.caption("Each app fires one signal; its 1× primary and higher-beta / "
                    "leveraged siblings are all traded off it. Green = long/buy, "
                    "red = exit, amber = watch, grey = stand aside.")
@@ -822,7 +822,7 @@ with tab_live:
     # the slice — so drawdown, Sharpe etc. are measured from the entry point,
     # not from back-test inception.  Follows the risk profile selected above
     # (Balanced by default) and the fundamental-overlay toggle.
-    with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=True):
+    with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
         st.caption(f"P&L, performance and risk of the **combined optimal-blend "
                    f"strategy** measured from the start date below, under the risk "
                    f"profile selected above (currently **`{_profile}`**"
