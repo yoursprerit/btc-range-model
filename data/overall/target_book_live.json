@@ -1,21 +1,21 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-20T14:49:31+00:00",
+ "generated_at_utc": "2026-07-20T15:54:01+00:00",
  "as_of": "2026-07-20",
  "profile": "Aggressive",
  "book_mode": "live",
  "weights": {
   "SOXX": 0.35,
   "SOXL": 0.35,
-  "REMX": 0.0833977489932031,
-  "SATA": 0.21660225100679698
+  "REMX": 0.08315968676904566,
+  "SATA": 0.21684031323095443
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "SOXX": 530.16,
-  "SOXL": 141.07,
-  "REMX": 70.23,
-  "SATA": 97.49
+  "SOXX": 532.825,
+  "SOXL": 143.525,
+  "REMX": 70.37,
+  "SATA": 98.01
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.35,
    "in_pos": true,
-   "priority": 0.6032565547094833
+   "priority": 0.6033281432616526
   },
   {
    "key": "SOXX",
@@ -38,17 +38,9 @@
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.0833977489932031,
+   "target": 0.08315968676904566,
    "in_pos": true,
-   "priority": 0.08190476190476188
-  },
-  {
-   "key": "ARTY",
-   "action": "WATCH",
-   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
+   "priority": 0.07999999999999999
   },
   {
    "key": "BTC",
@@ -153,10 +145,18 @@
    "target": 0.0,
    "in_pos": false,
    "priority": null
+  },
+  {
+   "key": "ARTY",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null
   }
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "4a1a1300f1308abc812ac85188827f1a0f389b2c1f87fa11f277b14b8aedeee4"
+  "value": "0c8c7caba5ca34a00820b65f43603b0cca8a4ea126c1511971156c699cab6d97"
  }
 }
