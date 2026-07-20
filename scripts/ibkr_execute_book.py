@@ -76,13 +76,15 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
           f"({len(trades)} trade(s), {len(positions)} position(s))")
 
 
-def _load_book(args) -> dict:
+def _load_book(args, default_path: str) -> dict:
     if args.file:
         return tb.loads(Path(args.file).read_text())
     if args.url:
         with urllib.request.urlopen(args.url, timeout=30) as r:   # noqa: S310 (user-supplied URL)
             return tb.loads(r.read().decode())
-    return tb.loads(sys.stdin.read())
+    if not sys.stdin.isatty():                 # data piped in → read it
+        return tb.loads(sys.stdin.read())
+    return tb.loads(Path(default_path).read_text())   # else the per-mode default book
 
 
 def _print_book(payload: dict) -> None:
@@ -151,8 +153,10 @@ def main() -> int:
     report_out = args.report_out or str(
         _REPO / "data" / "overall" / ("executed_book_live.json" if live
                                       else "executed_book.json"))
+    default_book = str(_REPO / "data" / "overall" / (
+        "target_book_live.json" if live else "target_book.json"))
 
-    payload = _load_book(args)
+    payload = _load_book(args, default_book)
     _print_book(payload)
 
     # ── signature ────────────────────────────────────────────────────────────
@@ -188,13 +192,25 @@ def main() -> int:
               + (f", per-order cap ${args.max_order_notional:,.0f}"
                  if args.max_order_notional else "") + ")")
 
-    # ── exposure cap: scale weights so total deployed ≤ max_deploy_frac ──────
-    total_w = sum(weights.values())
-    if args.max_deploy_frac < 1.0 and total_w > args.max_deploy_frac:
-        scale = args.max_deploy_frac / total_w
-        weights = {k: w * scale for k, w in weights.items()}
-        print(f"Exposure cap: scaling deployed weight {total_w*100:.0f}% → "
-              f"{args.max_deploy_frac*100:.0f}% of NAV (× {scale:.3f}); rest stays cash.")
+    # ── exposure cap: cap RISK assets at max_deploy_frac; route the freed weight
+    # to SATA on a live book (idle → yield park) or to cash otherwise. SATA itself
+    # is not counted as risk, so a live book's idle park isn't scaled down. ─────
+    risk_keys = [k for k in weights if k != "SATA"]
+    risk_total = sum(weights[k] for k in risk_keys)
+    if args.max_deploy_frac < 1.0 and risk_total > args.max_deploy_frac:
+        scale = args.max_deploy_frac / risk_total
+        freed = 0.0
+        for k in risk_keys:
+            nw = weights[k] * scale
+            freed += weights[k] - nw
+            weights[k] = nw
+        if "SATA" in weights:
+            weights["SATA"] = weights.get("SATA", 0.0) + freed
+            sink = "SATA"
+        else:
+            sink = "cash"
+        print(f"Exposure cap: risk {risk_total*100:.0f}% → {args.max_deploy_frac*100:.0f}% "
+              f"of NAV; freed {freed*100:.0f}% → {sink}.")
 
     # ── kill switch — a manual, instant halt independent of cron/systemd ─────
     if os.environ.get("IBKR_TRADING_DISABLED") or (

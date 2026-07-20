@@ -68,6 +68,12 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "adjust_for_selection"):
             return True
+        if not hasattr(mod, "slice_metrics"):
+            return True
+        if not hasattr(mod, "per_asset_slice_metrics"):
+            return True
+        if not hasattr(mod, "overall_trade_stats"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -807,6 +813,268 @@ with tab_live:
             "BTC (BTC/MSTR/MSTU) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
             "**🥇 Gold** app in the sidebar.")
 
+    st.markdown("---")
+
+    # ── 4. OVERALL STRATEGY P&L SINCE A USER-CHOSEN START DATE ──────────
+    # What has the combined strategy actually delivered for someone who put
+    # capital in on a given date?  Re-bases the active profile's optimal-blend
+    # equity curve at the chosen date and reads P&L / performance / risk off
+    # the slice — so drawdown, Sharpe etc. are measured from the entry point,
+    # not from back-test inception.  Follows the risk profile selected above
+    # (Growth by default) and the fundamental-overlay toggle.
+    st.markdown("### 📈 Overall strategy P&L — from your start date")
+    st.caption(f"P&L, performance and risk of the **combined optimal-blend "
+               f"strategy** measured from the start date below, under the risk "
+               f"profile selected above (currently **`{_profile}`**"
+               f"{' · 🔭 fundamental overlay ON' if _use_fund else ''}). "
+               "Change the profile or the date and every figure recomputes. "
+               "Dollar figures scale the 💼 portfolio value entered above.")
+    _curve_all = _PF["curves"]["Optimal blend"]
+    _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
+    _default_start = pd.Timestamp("2026-03-01").date()
+    pnl_cols = st.columns([1, 3])
+    with pnl_cols[0]:
+        _start_sel = st.date_input(
+            "📅 Start date", value=min(max(_default_start, _d0), _d1),
+            min_value=_d0, max_value=_d1, key="overall_pnl_start",
+            help="First strategy bar on/after this date becomes the cost-basis "
+                 "anchor (weekends/holidays roll forward). Defaults to "
+                 "March 1, 2026.")
+    _sm = ov.slice_metrics(_curve_all, _start_sel)
+    if _sm is None:
+        st.warning("Not enough strategy history on/after that date — pick an "
+                   f"earlier start (data runs {_d0} → {_d1}).")
+    else:
+        _pnl_d = _sm["total_ret"] * portfolio_value
+        _end_v = portfolio_value * (1 + _sm["total_ret"])
+        with pnl_cols[1]:
+            st.markdown(
+                f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
+                f"Measured <b>{_sm['start'].strftime('%b %d, %Y')} → "
+                f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
+                f"days · profile <code>{_profile}</code></div>",
+                unsafe_allow_html=True)
+        pm = st.columns(4)
+        pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
+                     delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
+                     delta_color="normal" if _pnl_d >= 0 else "inverse")
+        pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
+                     delta=f"CAGR {_sm['cagr']*100:+.1f}%")
+        pm[2].metric("Max drawdown since start", f"{_sm['mdd']*100:.1f}%",
+                     help="Deepest peak-to-trough fall measured from the chosen "
+                          "start date, not from back-test inception.")
+        pm[3].metric("Sharpe (ann.)", f"{_sm['sharpe']:.2f}",
+                     delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
+        # per-asset since-start reads (also feed the blend-level trade stats)
+        _pa = ov.per_asset_slice_metrics(results, _start_sel)
+        _ots = ov.overall_trade_stats(_pa, opt["optimal"]["weights"])
+        pm2 = st.columns(6)
+        pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
+        pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
+        pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
+        pm2[3].metric("Trading days", f"{_sm['days']}")
+        pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
+                      delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
+                      delta_color="off",
+                      help="Round-trip trades across every sleeve the optimal "
+                           "blend holds (weight > 0) that were open at any point "
+                           "since the start date — including trades entered "
+                           "before it — plus currently-open positions.")
+        pm2[5].metric("Win rate",
+                      "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
+                      delta=f"{_ots['wins']}/{_ots['n_trades']} won" if _ots["n_trades"] else None,
+                      delta_color="off",
+                      help="Winning trades out of all counted trades: closed "
+                           "trades on their realised return, open positions on "
+                           "their current unrealised P&L.")
+
+        # same-window benchmark comparison — is the strategy earning its keep?
+        _bench_rows = []
+        for _nm, _cv in _PF["curves"].items():
+            _bm_sm = ov.slice_metrics(_cv, _start_sel)
+            if _bm_sm:
+                _bench_rows.append((_nm, _bm_sm))
+        if len(_bench_rows) > 1:
+            bh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                  "<th style='padding:6px 10px'>Strategy (same window)</th>"
+                  "<th style='text-align:right'>P&amp;L</th>"
+                  "<th style='text-align:right'>$ on portfolio</th>"
+                  "<th style='text-align:right'>Max DD</th>"
+                  "<th style='text-align:right'>Sharpe</th></tr>")
+            br = []
+            for _nm, _m in _bench_rows:
+                _hi = "background:#eff6ff;font-weight:700;" if _nm == "Optimal blend" else ""
+                _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
+                br.append(
+                    f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
+                    f"<td style='padding:6px 10px'>{_nm}"
+                    f"{' ◄ this strategy' if _nm == 'Optimal blend' else ''}</td>"
+                    f"<td style='text-align:right;color:{_pc};font-weight:600'>"
+                    f"{_m['total_ret']*100:+.1f}%</td>"
+                    f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                    f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
+                    f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
+                    f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
+            st.markdown(f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table>",
+                        unsafe_allow_html=True)
+
+        # equity curve re-based to the portfolio value at the chosen start
+        _fig_pnl = go.Figure()
+        _pnl_styles = {"Optimal blend": ("#111827", 3),
+                       "Equal-weight strategies": ("#0ea5e9", 1.5),
+                       "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
+        for _nm, _cv in _PF["curves"].items():
+            _sub = _cv.loc[pd.Timestamp(_start_sel):]
+            if len(_sub) < 2:
+                continue
+            _c, _w = _pnl_styles.get(_nm, ("#888", 1.5))
+            _fig_pnl.add_trace(go.Scatter(
+                x=_sub.index, y=(_sub / _sub.iloc[0]).to_numpy() * portfolio_value,
+                name=_nm, line=dict(color=_c, width=_w)))
+        _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
+                           line_color="#cbd5e1",
+                           annotation_text="break-even", annotation_font_size=10)
+        _fig_pnl.update_layout(
+            height=340, margin=dict(t=30, b=10, l=10, r=10),
+            yaxis_title="Portfolio value ($)", hovermode="x unified",
+            legend=dict(orientation="h", y=1.1),
+            title=dict(text=f"Growth of ${portfolio_value:,.0f} since "
+                            f"{_sm['start'].strftime('%b %d, %Y')} — `{_profile}` profile",
+                       font_size=13))
+        st.plotly_chart(_fig_pnl, use_container_width=True)
+        st.caption("⚠️ Simulated performance of the optimal blend under the "
+                   "selected risk profile (idle capital earning SATA), assuming "
+                   "entry at the close of the anchor bar — the blend weights are "
+                   "fit on the full history (in-sample). Not investment advice.")
+
+        # ── per-asset breakdown — opt-in via expander so the page stays clean ──
+        # (_pa computed above, alongside the blend-level trade stats)
+        with st.expander(f"🔬 Per-asset breakdown since "
+                         f"{_sm['start'].strftime('%b %d, %Y')} — every sleeve's "
+                         "return & risk (tap to expand)"):
+            st.caption("Each instrument's **own signal-driven strategy** vs "
+                       "simply buying & holding it, both measured from the same "
+                       "start date. **In mkt** = share of days the sleeve was "
+                       "actually long (it earns SATA when flat inside the blend); "
+                       "**Opt. wt** = its weight in the active profile's optimal "
+                       "blend. Sleeves whose data begins after the start date "
+                       "are measured from their own first bar (noted inline).")
+            if not _pa:
+                st.info("No instrument has enough history after that date.")
+            else:
+                # quick visual: strategy vs buy & hold return per sleeve
+                _pa_sorted = sorted(_pa, key=lambda x: x["strat"]["total_ret"])
+                fig_pa = go.Figure()
+                fig_pa.add_trace(go.Bar(
+                    y=[p["key"] for p in _pa_sorted],
+                    x=[p["strat"]["total_ret"] * 100 for p in _pa_sorted],
+                    name="Strategy", orientation="h",
+                    marker_color=[p["accent"] for p in _pa_sorted],
+                    text=[f"{p['strat']['total_ret']*100:+.1f}%" for p in _pa_sorted],
+                    textposition="outside", cliponaxis=False))
+                fig_pa.add_trace(go.Bar(
+                    y=[p["key"] for p in _pa_sorted],
+                    x=[(p["bh"]["total_ret"] * 100 if p["bh"] else 0) for p in _pa_sorted],
+                    name="Buy & Hold", orientation="h", marker_color="#cbd5e1"))
+                fig_pa.update_layout(
+                    barmode="group", height=max(300, 26 * len(_pa_sorted) + 80),
+                    margin=dict(t=30, b=10, l=10, r=40),
+                    xaxis_title="return since start (%)",
+                    legend=dict(orientation="h", y=1.06),
+                    title=dict(text="Return by sleeve — strategy vs buy & hold",
+                               font_size=13))
+                fig_pa.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                st.plotly_chart(fig_pa, use_container_width=True)
+
+                # detail table, grouped by parent signal like the rest of the app
+                pah = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                       "<th style='padding:6px 10px'>Instrument</th>"
+                       "<th style='text-align:right'>Strat P&amp;L</th>"
+                       "<th style='text-align:right'>Buy&amp;Hold</th>"
+                       "<th style='text-align:right'>Max DD</th>"
+                       "<th style='text-align:right'>Sharpe</th>"
+                       "<th style='text-align:right'>Trades</th>"
+                       "<th style='text-align:right'>Win rate</th>"
+                       "<th style='text-align:right'>Win days</th>"
+                       "<th style='text-align:right'>In mkt</th>"
+                       "<th style='text-align:right'>Opt. wt</th></tr>")
+                par = []
+                _wts = opt["optimal"]["weights"]
+                _pa_by_key = {p["key"]: p for p in _pa}
+                for pk, grp in parents:
+                    for res in grp:
+                        p = _pa_by_key.get(res["key"])
+                        if not p:
+                            continue
+                        sm_a, bh_a = p["strat"], p["bh"]
+                        beat = bh_a is None or sm_a["total_ret"] >= bh_a["total_ret"]
+                        _rc = C_BUY if sm_a["total_ret"] >= 0 else C_EXIT
+                        _late = (f"<div style='font-size:10px;color:#94a3b8'>since "
+                                 f"{sm_a['start'].strftime('%b %d, %Y')}</div>"
+                                 if sm_a["start"] > _sm["start"] else "")
+                        _tr = p["trades"]
+                        _tr_s = (f"{_tr['n_trades']}"
+                                 + (f" <span style='color:{C_HOLD};font-size:10px'>"
+                                    f"({_tr['n_open']} open)</span>"
+                                    if _tr["n_open"] else ""))
+                        _wr_s = ("—" if _tr["win_rate"] is None
+                                 else f"{_tr['win_rate']*100:.0f}%"
+                                      f" <span style='color:#94a3b8;font-size:10px'>"
+                                      f"({_tr['wins']}/{_tr['n_trades']})</span>")
+                        par.append(
+                            f"<tr style='border-bottom:1px solid #eef2f7'>"
+                            f"<td style='padding:6px 10px;font-weight:700'>"
+                            f"{p['emoji']} {p['key']}{_kind_badge(p['kind'])}"
+                            f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
+                            f" {p['name']}</span>{_late}</td>"
+                            f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
+                            f"{sm_a['total_ret']*100:+.1f}%"
+                            f"{' 🏆' if beat and bh_a is not None else ''}</td>"
+                            f"<td style='text-align:right;color:#64748b'>"
+                            f"{_pct(bh_a['total_ret']*100) if bh_a else '—'}</td>"
+                            f"<td style='text-align:right;color:{C_EXIT}'>{sm_a['mdd']*100:.1f}%</td>"
+                            f"<td style='text-align:right'>{sm_a['sharpe']:.2f}</td>"
+                            f"<td style='text-align:right;font-weight:600'>{_tr_s}</td>"
+                            f"<td style='text-align:right;font-weight:600'>{_wr_s}</td>"
+                            f"<td style='text-align:right'>{sm_a['win_days']*100:.0f}%</td>"
+                            f"<td style='text-align:right'>{p['in_market']*100:.0f}%</td>"
+                            f"<td style='text-align:right;font-weight:700'>"
+                            f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
+                # SATA — the idle-cash sleeve every flat day drains into
+                _sata_m = ov.sata_slice_metrics(_curve_all.index, _start_sel)
+                if _sata_m:
+                    par.append(
+                        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+                        f"<td style='padding:6px 10px;font-weight:700'>💵 SATA"
+                        f"<span style='font-size:11px;color:#64748b;font-weight:400'>"
+                        f" {ov.SATA['name']}</span></td>"
+                        f"<td style='text-align:right;font-weight:700;color:{C_BUY}'>"
+                        f"{_sata_m['total_ret']*100:+.1f}%</td>"
+                        f"<td style='text-align:right;color:#64748b'>"
+                        f"{_sata_m['total_ret']*100:+.1f}%</td>"
+                        f"<td style='text-align:right;color:#64748b'>0.0%</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right'>100%</td>"
+                        f"<td style='text-align:right'>100%</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>idle bal.</td></tr>")
+                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                            f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
+                st.caption("🏆 = the sleeve's strategy beat buying & holding it "
+                           "over this window. **Trades** counts round-trips open "
+                           "at any point since the start date (open positions "
+                           "included); **Win rate** judges closed trades on their "
+                           "realised return and the open one on its current "
+                           "unrealised P&L, while **Win days** is the share of "
+                           "positive daily returns. **SATA** is the idle-cash "
+                           "park: a steady ~13%/yr daily yield on a flat $100 "
+                           "par — no drawdown, no trades, its weight is simply "
+                           "whatever the risk sleeves leave undeployed each day. "
+                           "Per-sleeve returns exclude that SATA yield (it "
+                           "accrues at the blend level), so the sleeves won't "
+                           "sum to the blend P&L.")
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # TAB 2 — COMBINED BACKTESTING
@@ -1022,17 +1290,28 @@ through **one unified daily engine**, so their signals, positions and back-tests
 sit side-by-side and blend into a single portfolio.
 
 **The universe.** Each sibling is traded off its **parent's**
-signal (never its own), exactly as the dedicated apps do:
+signal (never its own), exactly as the dedicated apps do. Entry and exit rules
+are summarised per app (all decided on **completed daily closes**):
 
-| App / signal | Traded instruments | Engine |
-|---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · BTC & MSTR signal-only, MSTU −6% |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime · GLDM/GDX −3%, UGL signal-only, NUGT −5% |
-| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime · XLE/OIH −8%, ERX signal-only |
-| 🧲 **REMX** | REMX | Divergence Pure-Regime, −8% |
-| 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
-| ⚡ **GRID** | GRID | MACD 10/20/9, −5% |
-| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter, no stop |
+| App / signal | Traded instruments | Engine | Entry criteria | Exit criteria |
+|---|---|---|---|---|
+| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC & MSTR signal-only, MSTU −6% stop + 5-bar V-reversal re-entry |
+| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime | U1 divergence (err_hi > +8% with ≥2 high-breaks) confirmed inside per-asset regime gates (GLDM 50 / UGL 40 / GDX 100-day) | D2 momentum-fade (err_hi < −10%) or D3 exhaustion; GLDM/GDX −3% stop, UGL signal-only, NUGT −5% |
+| 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
+| ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
+| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime | U1 divergence (err_hi > +16% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −10%) or D1 downtrend (≥2 low-breaks); XLE/OIH −8% stop, ERX signal-only |
+| 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
+| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
+| ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi > +12% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −8%) or D3 exhaustion; −10% stop |
+| 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi > +5% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −18%) or D1 downtrend; −5% stop |
+
+*Shorthand:* **U1** = bullish divergence (the model's predicted daily high
+overshoots while price breaks its recent highs) · **D1** = downtrend pressure
+(repeated low-breaks) · **D2** = momentum fade · **D3** = exhaustion ·
+**regime confirm** = price above a rising short MA, or a clean 10-day recovery,
+or a V-reversal gate · **signal-only** = exits on the signal with no fixed
+stop (a 1× stop whipsaws a leveraged/high-beta sleeve). Siblings share the
+parent's entry/exit **timing** but fill at their own price with their own stop.
 
 Every asset runs the **exact engine its own app trades**, so the Overall app's
 signals, positions and back-tests match each source app:
@@ -1041,36 +1320,61 @@ signals, positions and back-tests match each source app:
   (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
   premium) with the app's live **Standard MA (above-MA30) entry gate** (U1>+1.3%
   + ≥2 high-breaks, regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL
-  re-entry) — all three assets share the same gate. This reproduces the BTC app's
-  headline **BTC +88% / MSTR +148% / MSTU +419%**. The CT feature data begins
-  ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine handles the
-  staggered start).
+  re-entry) — all three assets share the same gate. With the 2026-07 per-asset
+  stop retune (BTC & MSTR signal-exit-only, MSTU −6%) this reproduces the BTC
+  app's headline **BTC +86% / MSTR +266% / MSTU +524%**. The CT feature data
+  begins ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine
+  handles the staggered start).
 - **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** Divergence
   Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
   per-asset stops — GLDM/GDX −3%, but the leveraged siblings are looser (**UGL
-  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF:
-  **GDX +272% · UGL (stop-less) +247% · NUGT +1183%**.
-- **SOXX / GRID / XLE / REMX / WGMI** reuse their **exact `ticker_config`**
-  entries through the same `backtest_ticker` engine their apps use (SOXX 25/100
-  dual-MA, GRID MACD 10/20/9, WGMI 50-day SMA + vol-filter, REMX &
-  XLE divergence Pure-Regime). These match their apps bar-for-bar.
+  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF. OOS
+  2021→now: **GLDM +73% · GDX +156% · UGL (stop-less) +247% · NUGT +1183%**
+  (see LEV_SIBLINGS_STOP_EVAL.md).
+- **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
+  `ticker_config`** entries through the same `backtest_ticker` engine their apps
+  use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,
+  WGMI 50-day SMA + vol-filter, REMX 50/200 golden cross, and XLE / PBW / ARTY
+  divergence Pure-Regime — XLE's signal also driving OIH and the stop-less 2×
+  ERX). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert
 level, whether we're long, entry price/date, unrealised P&L, stop (or a
-signal-only exit for the no-stop sleeves — the 3× **SOXL** and **WGMI** carry no
-fixed stop, since a 1× stop whipsaws a leveraged/high-beta name) and days held —
+signal-only exit for the no-stop sleeves — **BTC, MSTR, UGL, ERX, the 3× SOXL**
+and **WGMI** carry no fixed stop, since a tight stop whipsaws a
+leveraged/high-beta name) and days held —
 for the primary **and** each sibling (which shares the parent's entry/exit timing
 but has its own fill price and P&L). That drives the **action plan** and the
 **allocation donuts**.
 
 **The optimal allocation.** Each strategy is long when its signal is on and
 otherwise parks idle capital in **SATA** (see below), producing a daily return
-stream. We Monte-Carlo long-only blends (sum = 100%) with **per-instrument caps**
-— 30% core, 18% high-beta, 10% leveraged — and pick the **highest-return blend
-among the near-max-Sharpe set**, so returns are maximised while drawdown stays
-shallow. The tight caps mean the 2× / β sleeves only get weight when they
+stream. We Monte-Carlo long-only blends (sum = 100%) with **per-instrument caps
+set by the active risk profile** (see below) and pick the winner by that
+profile's objective, so returns are maximised while drawdown stays inside the
+budget. The tight caps mean the 2× / β sleeves only get weight when they
 genuinely improve the risk-adjusted result.
+
+**Risk profiles.** The ⚙️ switch on the Live tab bundles the per-kind caps, the
+optimiser objective and a drawdown budget:
+
+| Profile | Caps (core / β / 2×) | Objective |
+|---|---|---|
+| **Balanced** | 30% / 18% / 10% | Hold Sharpe near its max — best risk-adjusted blend |
+| **Growth** (default) | 30% / 25% / 18% | Maximise return inside a **−22%** drawdown budget |
+| **Aggressive** | 35% / 40% / 35% | Maximise return inside a **−38%** budget — heavy β / 2× |
+
+β / 2× exposure rises Balanced → Aggressive: more return, deeper drawdowns,
+lower Sharpe. Every number on the Live and Backtesting tabs follows the
+selected profile.
+
+**Fundamental overlay.** The 🔭 toggle on the Live tab applies a **mid-2026
+sector forward-view**: a per-instrument conviction multiplier (overweight
+AI/semis, the crypto institutional era, the structural gold bull and
+electrification; underweight clean energy and oil services) that tilts the
+historically-optimal blend, re-water-fills to the same caps, then re-runs the
+allocation and back-test. Untick it for the pure historical quant optimum.
 
 **Entry priority.** When several instruments signal entry at once — or one fires
 while others are already held — a **priority score (0–1)** decides which get
@@ -1096,8 +1400,11 @@ the combined curve reflects cash working rather than sitting dead.
 - SATA is modelled (per the BTC app's framing) as always having existed, flat at
   $100 par, paying its ~13% daily dividend across every period — an assumption,
   not a market-tested series.
-- Leveraged 2× sleeves (MSTU, UGL) and high-beta names compound decay and gap
-  risk; the caps bound but don't remove that.
+- Leveraged sleeves (MSTU, UGL, NUGT, ERX 2× and SOXL 3×) and high-beta names
+  compound decay and gap risk; the caps bound but don't remove that.
+- The fundamental overlay is a discretionary mid-2026 view, not a fitted
+  parameter — it tilts the quant optimum by conviction, so its figures are
+  neither purely historical nor purely systematic.
 - This is a **daily** engine. The BTC and Gold apps' canonical **hourly**
   Pure-Regime signals live in those apps — open them from the sidebar.
 - Nothing here is investment advice.

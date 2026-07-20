@@ -6,11 +6,13 @@
 > replace it.
 
 Live is **the same pipeline as paper** with a different gateway, a stricter
-account guard, and hard exposure limits. One signed target book drives both; you
-just run the executor twice.
+account guard, and hard exposure limits. The publisher emits **two signed books**
+from one engine run — `target_book.json` (paper: idle → **cash**) and
+`target_book_live.json` (live: idle → a **SATA** position, ~13% yield). Each
+executor picks the book matching its `--account-mode`.
 
 ```
-Cloud publisher → target_book.json  (one signed book)
+Cloud publisher → target_book.json (paper) + target_book_live.json (live)
    ├── paper executor  → gateway :4004 (DU…)  → paper account   (control)
    └── live  executor  → gateway :4003 (U…)   → LIVE account    (real money, capped)
 ```
@@ -24,7 +26,7 @@ Cloud publisher → target_book.json  (one signed book)
 | **Account mode** | `--account-mode live` | Refuses to run unless the account is **non-paper**. |
 | **Explicit confirm** | `--confirm-live` | Live never runs by accident — the wrapper only adds this when `IBKR_ACCOUNT_MODE=live`. |
 | **Pinned account** | `--expected-account U1234567` | Aborts if the connected account isn't **exactly** yours — can't trade the wrong account. |
-| **Exposure cap** | `--max-deploy-frac 0.25` | Deploys at most **25% of net-liq**; the rest stays cash. |
+| **Exposure cap** | `--max-deploy-frac 0.25` | Caps **risk assets** at **25% of net-liq**; the freed weight goes to **SATA** on the live book (idle → yield park), or cash on paper. |
 | **Per-order cap** | `--max-order-notional 5000` | Clamps any single order to a dollar ceiling (fat-finger / bug backstop). |
 | **Kill switch** | `--kill-switch-file …/STOP_LIVE` or `IBKR_TRADING_DISABLED=1` | `touch` the file to halt live on the next run — no cron/systemd edits. |
 | **Dry-run default** | (no `--execute`) | Orders require `--execute`; the wrapper adds it deliberately. |
@@ -70,7 +72,7 @@ Live API is on host **`4003`** (paper stays on `4004`).
 ```bash
 # dry-run against LIVE — places NO orders, just shows the plan + guard result:
 .venv/bin/python scripts/ibkr_execute_book.py \
-    --file data/overall/target_book.json \
+    --file data/overall/target_book_live.json \
     --port 4003 --account-mode live --confirm-live \
     --max-deploy-frac 0.25 --max-order-notional 5000
 ```
@@ -82,7 +84,7 @@ confirm the plan is **capped at 25%** and per-order clamps look right.
 
 ```bash
 .venv/bin/python scripts/ibkr_execute_book.py \
-    --file data/overall/target_book.json \
+    --file data/overall/target_book_live.json \
     --port 4003 --account-mode live --confirm-live \
     --expected-account U1234567 \
     --max-deploy-frac 0.25 --max-order-notional 5000 --execute

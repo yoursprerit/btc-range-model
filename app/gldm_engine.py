@@ -180,7 +180,8 @@ def run_gldm() -> list[dict]:
             metrics=m, bh_metrics=bhm, win_rate=wr, n_trades=int(len(r["trades"])),
             ret=ret, pos_series=pos_series, strat=strat, dates=dates,
             r=dict(bh=np.asarray(r["bh"], float), dates=list(dates), trades=r["trades"],
-                   in_pos_now=bool(r.get("in_pos_now"))),
+                   trade_log=r.get("trade_log"),   # dated closed trades — overall_core's
+                   in_pos_now=bool(r.get("in_pos_now"))),  # since-start counter needs them
             as_of=as_of, mode="divergence", ma_window=gc.MA_WINDOW_BY_ASSET.get(key, 50),
             stop=stop, engine="gldm",
         ))

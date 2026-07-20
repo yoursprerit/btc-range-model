@@ -214,7 +214,18 @@ OVERALL_BOOK_SECRET=… python scripts/publish_target_book.py --profile Aggressi
 ```
 
 Or let the **GitHub Action** do it: `.github/workflows/publish-target-book.yml`
-runs the publisher and commits the artifact back to the branch.
+runs the publisher and commits the artifact back to the branch. The scheduled
+cron fires **every day** (12:30 UTC), weekends and US market holidays included —
+Bitcoin trades continuously, so the book is refreshed daily; only the *executor*
+skips non-trading days.
+
+You can also publish **on demand from the app**: the 📋 Target Book page has a
+**🚀 Publish new target book** button that dispatches the same GitHub Action via
+`workflow_dispatch`, so a fresh signed book is computed and committed without
+leaving the UI. It needs a `GITHUB_TOKEN` in Streamlit secrets (or env) — a
+fine-grained PAT with **Actions: read & write** on this repo. Optional secrets:
+`GITHUB_REPO` (`owner/repo`, auto-detected otherwise) and `GITHUB_PUBLISH_REF`
+(branch to run/commit on, default `main`).
 
 > **Scheduling caveat:** GitHub runs `on: schedule` **only from the repository's
 > default branch**. While this workflow lives only on the feature branch, trigger
@@ -247,11 +258,14 @@ flags behave exactly as in the all-in-one rebalancer.
 
 ### Automating Option C
 - **Publish**: manual `workflow_dispatch` on the Action (or on the default
-  branch, the scheduled cron), or a cron on any host running the publisher.
+  branch, the scheduled cron — daily, 7 days a week), or a cron on any host
+  running the publisher.
 - **Execute**: point `scripts/ibkr_daily.sh`-style cron at the executor instead
   of the rebalancer — e.g. `git pull && python scripts/ibkr_execute_book.py --file data/overall/target_book.json --execute`.
   The executor's freshness guard means a missing/late publish is a safe no-trade,
-  not a stale trade.
+  not a stale trade — and its weekend/holiday guard means no orders are ever
+  placed while the US market is closed, even though a fresh book is published
+  on those days.
 
 ## Safety & limitations
 

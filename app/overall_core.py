@@ -263,8 +263,8 @@ FUNDAMENTAL_VIEW_NOTE = (
 # drawdowns), so loading them boosts raw return at the cost of risk-adjusted
 # return.  A profile bundles the per-kind caps, the optimiser objective and the
 # drawdown budget so the user can dial that trade-off:
-#   Balanced   — hold Sharpe near its max (default; ~unchanged behaviour)
-#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×)
+#   Balanced   — hold Sharpe near its max (~unchanged behaviour)
+#   Growth     — maximise return inside a −22% drawdown budget (more β / 2×; default)
 #   Aggressive — maximise return inside a −38% budget (heavy β / 2×)
 RISK_PROFILES = {
     "Balanced": dict(
@@ -282,7 +282,7 @@ RISK_PROFILES = {
         blurb="Maximum return inside a −38% budget — heavy β / 2× exposure; "
               "highest return, deepest drawdowns, lower Sharpe."),
 }
-DEFAULT_PROFILE = "Aggressive"
+DEFAULT_PROFILE = "Growth"
 
 
 def caps_for(profile: str) -> dict:
@@ -633,6 +633,111 @@ def curve_metrics(equity: pd.Series) -> dict:
     vol = float(np.std(rets) * np.sqrt(TRADING_DAYS))
     sharpe = float(np.mean(rets) / (np.std(rets) + 1e-12) * np.sqrt(TRADING_DAYS))
     return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
+
+
+def slice_metrics(equity: pd.Series, start) -> dict | None:
+    """P&L / performance / risk metrics for an equity curve **re-based at
+    ``start``** — i.e. what an investor who put capital into the strategy on
+    that date has experienced since.  Re-basing (dividing the slice by its first
+    value) matters: drawdown, Sharpe and total return are all measured from the
+    entry point, not from the back-test's inception.  Returns ``None`` when the
+    curve has fewer than 2 bars on/after ``start`` (nothing to measure); the
+    first bar on/after ``start`` becomes the actual anchor (weekends/holidays
+    roll forward)."""
+    sub = equity.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return None
+    sub = sub / sub.iloc[0]
+    # daily win-rate and best/worst day round out the risk read
+    rets = sub.pct_change().dropna()
+    return dict(start=sub.index[0], end=sub.index[-1], days=len(sub),
+                win_days=float((rets > 0).mean()),
+                best_day=float(rets.max()), worst_day=float(rets.min()),
+                **curve_metrics(sub))
+
+
+def per_asset_slice_metrics(results: list[dict], start) -> list[dict]:
+    """Per-instrument read since ``start``: each sleeve's strategy equity and
+    its buy-&-hold equity, both re-based at the anchor (see ``slice_metrics``),
+    plus the share of days it actually spent in the market.  An instrument whose
+    history begins after ``start`` is measured from its own first bar (its
+    ``strat['start']`` says so); one with <2 bars since ``start`` is skipped.
+    Rows come back in ``results`` order (grouped by parent signal)."""
+    rows = []
+    for res in results:
+        sm = slice_metrics(_equity(res["ret"]), start)
+        if sm is None:
+            continue
+        bh_eq = pd.Series(np.asarray(res["r"]["bh"], float),
+                          index=pd.DatetimeIndex(res["dates"]))
+        pos_sub = res["pos_series"].loc[pd.Timestamp(start):]
+        rows.append(dict(
+            key=res["key"], name=res["name"], kind=res["kind"],
+            parent=res["parent"], accent=res["accent"], emoji=res["emoji"],
+            in_market=float(pos_sub.mean()) if len(pos_sub) else 0.0,
+            strat=sm, bh=slice_metrics(bh_eq, start),
+            trades=trade_stats_since(res, start)))
+    return rows
+
+
+def trade_stats_since(res: dict, start) -> dict:
+    """Trade count and win rate for one sleeve since ``start``.  A trade counts
+    when it was open at any point on/after the anchor — i.e. every closed trade
+    whose exit lands on/after ``start`` (even if entered before it) plus the
+    currently-open position.  ``trade_log`` holds *closed* trades only and the
+    open position lives in ``res['pos']``, so there is no double count.  A
+    closed trade wins on its realised return; the open one on its current
+    unrealised P&L.  ``win_rate`` is a 0–1 fraction, ``None`` with no trades.
+
+    Not every engine exposes ``trade_log``: the BTC CT engine's ``trades`` ARE
+    dicts of the same shape, so fall back to them when ``trade_log`` is absent
+    (e.g. a stale hot-loaded engine module).  The dict filter also skips
+    engines whose ``trades`` is a bare array of returns — undated trades can't
+    be assigned to the window, so they're (conservatively) not counted."""
+    start = pd.Timestamp(start)
+    log = res["r"].get("trade_log")
+    if not log:
+        raw = res["r"].get("trades")           # may be a numpy array — no `or`
+        log = [t for t in (raw if raw is not None else []) if isinstance(t, dict)]
+    wins = n = 0
+    for t in log:
+        if pd.Timestamp(t["exit_date"]) >= start:
+            n += 1
+            wins += t["ret"] > 0
+    n_open = 0
+    pos = res.get("pos") or {}
+    if pos.get("in_pos"):
+        n_open = 1
+        n += 1
+        wins += (pos.get("upnl") or 0) > 0
+    return dict(n_trades=n, n_open=n_open, wins=int(wins),
+                win_rate=(wins / n) if n else None)
+
+
+def overall_trade_stats(pa_rows: list[dict], weights: dict,
+                        min_w: float = 0.002) -> dict:
+    """Blend-level trade count / win rate since the anchor: the sum over every
+    sleeve the optimal blend actually holds (weight > ``min_w`` — a zero-weight
+    sleeve never trades the book), open positions included."""
+    sel = [r["trades"] for r in pa_rows if weights.get(r["key"], 0) > min_w]
+    n = sum(t["n_trades"] for t in sel)
+    wins = sum(t["wins"] for t in sel)
+    return dict(n_trades=n, wins=wins, n_open=sum(t["n_open"] for t in sel),
+                win_rate=(wins / n) if n else None, n_sleeves=len(sel))
+
+
+def sata_slice_metrics(index: pd.Index, start) -> dict | None:
+    """The SATA idle-cash sleeve since ``start`` on the blend's calendar: a
+    constant ``SATA_DAILY`` yield on a flat $100 par — so no drawdown, every
+    day a (tiny) win, and Sharpe/vol meaningless (returned as ``None``/0)."""
+    sub = index[index >= pd.Timestamp(start)]
+    if len(sub) < 2:
+        return None
+    total = float((1 + SATA_DAILY) ** (len(sub) - 1) - 1)
+    yrs = max((sub[-1] - sub[0]).days / 365.25, 1e-9)
+    return dict(start=sub[0], end=sub[-1], days=len(sub), total_ret=total,
+                cagr=float((1 + total) ** (1 / yrs) - 1), mdd=0.0, sharpe=None,
+                vol=0.0, win_days=1.0, best_day=SATA_DAILY, worst_day=SATA_DAILY)
 
 
 def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,

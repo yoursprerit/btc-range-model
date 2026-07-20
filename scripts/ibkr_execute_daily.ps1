@@ -43,8 +43,13 @@ $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 
+$AccountMode = if ($env:IBKR_ACCOUNT_MODE) { $env:IBKR_ACCOUNT_MODE } else { 'paper' }
 if (-not $Branch) { $Branch = 'claude/trading-signals-ibkr-paper-jwyvrc' }
-if (-not $Book)   { $Book   = Join-Path $RepoRoot 'data\overall\target_book.json' }
+if (-not $Book)   {
+    # live parks idle capital in SATA (target_book_live.json); paper holds cash.
+    $BookName = if ($AccountMode -eq 'live') { 'target_book_live.json' } else { 'target_book.json' }
+    $Book = Join-Path $RepoRoot "data\overall\$BookName"
+}
 if (-not $Band)   { $Band   = '0.01' }
 if (-not $Port)   { $Port   = '4002' }
 
@@ -73,9 +78,8 @@ if (-not $NoPull) {
     git merge --ff-only "origin/$Branch" 2>&1 | ForEach-Object { Log $_ }
 }
 
-# Account mode: paper (default) or live (set env IBKR_ACCOUNT_MODE=live + a live
-# gateway port). For live the wrapper adds --confirm-live and the safety limits.
-$AccountMode = if ($env:IBKR_ACCOUNT_MODE) { $env:IBKR_ACCOUNT_MODE } else { 'paper' }
+# For live (env IBKR_ACCOUNT_MODE=live + a live gateway port) the wrapper adds
+# --confirm-live and the safety limits.
 $ExecArgs = @('--file', $Book, '--execute', '--band', $Band, '--port', $Port,
               '--account-mode', $AccountMode)
 if ($AccountMode -eq 'live') {

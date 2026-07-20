@@ -12415,7 +12415,20 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     _regime_bull = sigs.get("bull_regime", False) if sigs else None
     if _regime_bull is not None:
         _regime_val   = "🐂 BULL"          if _regime_bull else "🐻 BEAR / NEUTRAL"
-        _regime_delta = "↑MA30 + rising"   if _regime_bull else "below MA30 or flat"
+        # Bull regime = above_ma30 AND ma30_slope_pos. Name the actual failing
+        # leg so this subtitle can't read as "below MA30" when price is in fact
+        # above MA30 but the MA itself is flat/falling (see the Above-MA30 gate).
+        if _regime_bull:
+            _regime_delta = "↑MA30 + rising"
+        else:
+            _r_above = sigs.get("above_ma30", False)
+            _r_slope = sigs.get("ma30_slope_pos", False)
+            if not _r_above:
+                _regime_delta = "below MA30"
+            elif not _r_slope:
+                _regime_delta = "above MA30 but flat/falling"
+            else:
+                _regime_delta = "below MA30 or flat"
         c5.metric("Market Regime", _regime_val, delta=_regime_delta,
                   delta_color="normal" if _regime_bull else "inverse")
     else:

@@ -1,12 +1,26 @@
 # Broader ML / statistical strategy search — SOXX · VEGN · GRID · REMX · WGMI
 
-**Question.** Beyond the MA trend filter (current) and the regime-divergence
-system (evaluated in `REGIME_DIVERGENCE_EVAL.md`), do **other machine-learning
-or statistical strategies** improve the backtest for these five apps — and if
-so, do they help the **Overall Trading** allocation mix?
+> **⚠️ Historical evaluation — the "(current MA…)" labels below are outdated.**
+> This is a point-in-time study. When it was written each app ran a plain MA
+> trend filter, labelled **"current MA"** in the tables. Those filters have since
+> been **superseded** — the live engine (`app/ticker_config.py`) now runs the
+> strategies this study recommended: **SOXX → Dual-MA 25/100**, **GRID → MACD
+> 10/20/9**, **WGMI → MA-50 + volatility filter** (final parameters refined in
+> [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md)). Separately
+> **REMX → 50/200 dual-MA golden cross**, **XLE / PBW / ARTY → divergence**, and
+> **VEGN was removed** ([`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md)). So the
+> MA rules called "current" here are **no longer in use** — read them as the
+> *baseline this study set out to beat*, not the live engine. For the current
+> live config see [`TICKER_APPS_README.md`](TICKER_APPS_README.md).
 
-**Not implemented.** Evaluation only — no strategy, config, or allocation was
-changed. Reproduce with:
+**Question.** Beyond the MA trend filter (the config **at the time of writing**)
+and the regime-divergence system (evaluated in `REGIME_DIVERGENCE_EVAL.md`), do
+**other machine-learning or statistical strategies** improve the backtest for
+these five apps — and if so, do they help the **Overall Trading** allocation mix?
+
+**Evaluation only — not changed by this study.** No strategy, config, or
+allocation was altered *by this document*; its winning recommendations (SOXX,
+GRID, WGMI) were **adopted afterwards** — see the banner above. Reproduce with:
 
 ```bash
 python scripts/eval_ml_strategies.py     # per-asset: 10 strategies vs MA vs B&H
@@ -142,13 +156,20 @@ The gain **persists on the unseen holdout** (Aug-2025→now Sharpe 3.80 → 3.90
 
 ## Bottom line
 
-| App | Best strategy found | Beats current MA? | Recommendation |
-|---|---|---|---|
-| **SOXX** | Dual-MA 20/100 | ✅ ret + Sharpe, both windows | worth adopting |
-| **VEGN** | — | ❌ | keep MA200 |
-| **GRID** | MACD 12/26/9 | ✅ Sharpe + DD, both windows | worth adopting |
-| **REMX** | (divergence, prior eval) | ❌ from this set | see divergence eval |
-| **WGMI** | MA + vol-filter | ✅ ret + Sharpe + DD | worth adopting |
+| App | Best strategy found | Beat current MA (then)? | Recommendation | Live status now |
+|---|---|---|---|---|
+| **SOXX** | Dual-MA 20/100 | ✅ ret + Sharpe, both windows | worth adopting | ✅ **live** as Dual-MA **25/100** (retuned in `HYPERPARAM_SEARCH_EVAL.md`) |
+| **VEGN** | — | ❌ | keep MA200 | ⛔ **removed** (`VEGN_REMOVAL_EVAL.md`) |
+| **GRID** | MACD 12/26/9 | ✅ Sharpe + DD, both windows | worth adopting | ✅ **live** as MACD **10/20/9** (retuned) |
+| **REMX** | (divergence, prior eval) | ❌ from this set | see divergence eval | ✅ **live** as **50/200 dual-MA** golden cross |
+| **WGMI** | MA + vol-filter | ✅ ret + Sharpe + DD | worth adopting | ✅ **live** as **MA-50 + vol-filter** |
+
+> **Outcome.** The three "worth adopting" winners (SOXX, GRID, WGMI) were
+> adopted; SOXX and GRID had their parameters refined in
+> [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) before going live.
+> REMX moved to a 50/200 dual-MA golden cross and VEGN was dropped from the
+> universe — so no app still runs the single-MA filter this study called
+> "current."
 
 * **3 of 5 (SOXX, GRID, WGMI) have a robust improvement** over the current MA
   filter — and in all three the winner is a **simple, low-parameter statistical

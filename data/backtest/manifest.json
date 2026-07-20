@@ -1,7 +1,7 @@
 {
   "version": "v3",
-  "pull_date": "2026-07-16",
-  "pull_ts_utc": "2026-07-16T15:12:40Z",
+  "pull_date": "2026-07-19",
+  "pull_ts_utc": "2026-07-19T14:34:00Z",
   "generated_by": "scripts/pull_backtest_data.py",
   "qc_all_passed": true,
   "btc_bar_anchor": "12:00 UTC (7am CT) \u2014 BTC OHLCV rebucketed from Binance hourly to match the daily model and live view. Macro/on-chain remain calendar-date joined. Equities (MSTR/MSTU) remain exchange-session daily.",
@@ -36,47 +36,47 @@
         "cb_premium_ma3",
         "cb_premium_z7"
       ],
-      "rows": 988,
+      "rows": 991,
       "date_from": "2023-11-01",
-      "date_to": "2026-07-15",
-      "checksum_sha256": "cb36da59456f4748",
+      "date_to": "2026-07-18",
+      "checksum_sha256": "e97bbab7ed9de5ef",
       "qc_passed": true
     },
     "btc_usd_daily": {
       "file": "btc_usd_daily.csv",
       "ticker": "BTC-USD (Binance BTCUSDT, 12:00-UTC bars)",
       "note": "volume is in BTC (base asset); all volume features are scale-invariant",
-      "rows": 988,
+      "rows": 991,
       "date_from": "2023-11-01",
-      "date_to": "2026-07-15",
-      "checksum_sha256": "f738e2ec9b95c12d",
+      "date_to": "2026-07-18",
+      "checksum_sha256": "9b257c89077ef568",
       "qc_passed": true
     },
     "mstr_daily": {
       "file": "mstr_daily.csv",
       "ticker": "MSTR",
-      "rows": 677,
+      "rows": 678,
       "date_from": "2023-11-01",
-      "date_to": "2026-07-16",
-      "checksum_sha256": "a7b207232a0931bb",
+      "date_to": "2026-07-17",
+      "checksum_sha256": "00a65ab1cbb03729",
       "qc_passed": true
     },
     "mstu_daily": {
       "file": "mstu_daily.csv",
       "ticker": "MSTU",
-      "rows": 457,
+      "rows": 458,
       "date_from": "2024-09-18",
-      "date_to": "2026-07-16",
-      "checksum_sha256": "49909d48721641fb",
+      "date_to": "2026-07-17",
+      "checksum_sha256": "fe67a7c3edac3c69",
       "qc_passed": true
     },
     "mstu_synthetic_daily": {
       "file": "mstu_synthetic_daily.csv",
       "ticker": "MSTU (OLS-synthetic)",
-      "rows": 677,
+      "rows": 678,
       "date_from": "2023-11-01",
-      "date_to": "2026-07-16",
-      "checksum_sha256": "6685fe6b79b29d79",
+      "date_to": "2026-07-17",
+      "checksum_sha256": "22f772bc5197d8ad",
       "qc_passed": true
     }
   }

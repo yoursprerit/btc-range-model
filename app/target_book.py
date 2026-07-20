@@ -40,11 +40,13 @@ SIG_ALG = "HMAC-SHA256"
 def build_payload(*, as_of: str, profile: str, weights: dict[str, float],
                   cash_weight: float, exec_price: dict[str, float],
                   actions: list[dict] | None = None,
-                  generated_at_utc: str | None = None) -> dict:
+                  generated_at_utc: str | None = None,
+                  book_mode: str = "paper") -> dict:
     """Assemble a v1 target-book payload (unsigned).
 
     ``actions`` are trimmed to the fields the executor / audit log care about, so
     the artifact stays compact and stable regardless of engine-internal extras.
+    ``book_mode`` is ``paper`` (idle → cash) or ``live`` (idle → a SATA position).
     """
     trimmed = [
         {k: a.get(k) for k in ("key", "action", "decision", "target",
@@ -57,6 +59,7 @@ def build_payload(*, as_of: str, profile: str, weights: dict[str, float],
                                                         .isoformat(timespec="seconds"),
         "as_of": as_of,
         "profile": profile,
+        "book_mode": book_mode,
         "weights": {k: float(v) for k, v in weights.items()},
         "cash_weight": float(cash_weight),
         "exec_price": {k: float(v) for k, v in exec_price.items()},
