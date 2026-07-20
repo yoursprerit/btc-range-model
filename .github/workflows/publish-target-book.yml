@@ -59,7 +59,10 @@ jobs:
           # Set this repo/environment secret to HMAC-sign the artifact so the
           # executor can verify authenticity. Unset → an unsigned book (a warning).
           OVERALL_BOOK_SECRET: ${{ secrets.OVERALL_BOOK_SECRET }}
-        run: python scripts/publish_target_book.py --profile Aggressive
+        # No --profile flag: the script follows the app's DEFAULT_PROFILE
+        # (overall_core.DEFAULT_PROFILE), so the published book always matches
+        # the profile the Overall app defaults to.
+        run: python scripts/publish_target_book.py
 
       - name: Commit & push the artifact (this branch only)
         run: |
