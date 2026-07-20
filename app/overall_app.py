@@ -821,7 +821,7 @@ with tab_live:
     # equity curve at the chosen date and reads P&L / performance / risk off
     # the slice — so drawdown, Sharpe etc. are measured from the entry point,
     # not from back-test inception.  Follows the risk profile selected above
-    # (Growth by default) and the fundamental-overlay toggle.
+    # (Balanced by default) and the fundamental-overlay toggle.
     st.markdown("### 📈 Overall strategy P&L — from your start date")
     st.caption(f"P&L, performance and risk of the **combined optimal-blend "
                f"strategy** measured from the start date below, under the risk "
@@ -1074,6 +1074,83 @@ with tab_live:
                            "Per-sleeve returns exclude that SATA yield (it "
                            "accrues at the blend level), so the sleeves won't "
                            "sum to the blend P&L.")
+
+        # ── trade log — the individual trades behind the counts above ──────
+        _tl = ov.trade_log_since(results, opt["optimal"]["weights"], _start_sel)
+        _n_open_tl = sum(1 for t in _tl if t["open"])
+        with st.expander(
+                f"📜 Trade log since {_sm['start'].strftime('%b %d, %Y')} — "
+                f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
+                f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (tap to expand)"):
+            st.caption("Every round-trip across the sleeves the optimal blend "
+                       "holds (weight > 0) that was open at any point since the "
+                       "start date — including trades entered before it — plus "
+                       "any **currently-open position** (highlighted; its return "
+                       "is unrealised, marked to the latest price). Newest "
+                       "first. **≈ $ on blend** scales each trade's return by "
+                       "the sleeve's blend weight and the 💼 portfolio value — "
+                       "an approximation that ignores compounding.")
+            if not _tl:
+                st.info("No sleeve the blend holds traded in this window.")
+            else:
+                tlh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                       "<th style='padding:6px 10px'>Instrument</th>"
+                       "<th>Status</th>"
+                       "<th style='text-align:right'>Entry</th>"
+                       "<th style='text-align:right'>Entry px</th>"
+                       "<th style='text-align:right'>Exit</th>"
+                       "<th style='text-align:right'>Exit / last px</th>"
+                       "<th style='text-align:right'>Days</th>"
+                       "<th style='text-align:right'>Return</th>"
+                       "<th style='text-align:right'>≈ $ on blend</th>"
+                       "<th style='padding-left:10px'>Exit reason</th></tr>")
+
+                def _tl_px(v):
+                    return "—" if v is None else (f"${v:,.2f}" if v < 1000
+                                                  else f"${v:,.0f}")
+
+                def _tl_dt(v):
+                    return "—" if v is None else pd.Timestamp(v).strftime("%b %d, %Y")
+
+                tlr = []
+                for t in _tl:
+                    _ret = t["ret"]
+                    _rc = "#94a3b8" if _ret is None else (C_BUY if _ret >= 0 else C_EXIT)
+                    _bg = "background:#fffbeb;" if t["open"] else ""
+                    _status = ((f"<span style='background:{C_HOLD}22;color:{C_HOLD};"
+                                f"font-weight:700;font-size:10px;padding:1px 6px;"
+                                f"border-radius:6px'>OPEN</span>") if t["open"]
+                               else "<span style='color:#94a3b8;font-size:11px'>closed</span>")
+                    _imp = None if _ret is None else _ret * t["weight"] * portfolio_value
+                    _imp_s = ("—" if _imp is None else
+                              f"<span style='color:{C_BUY if _imp >= 0 else C_EXIT}'>"
+                              f"${_imp:+,.0f}</span>")
+                    _reason = ("<span style='color:#94a3b8;font-size:11px'>— still open</span>"
+                               if t["open"] else t["reason"])
+                    _unreal = ("<div style='font-size:10px;color:#94a3b8;"
+                               "font-weight:400'>unrealised</div>" if t["open"] else "")
+                    tlr.append(
+                        f"<tr style='border-bottom:1px solid #eef2f7;{_bg}'>"
+                        f"<td style='padding:6px 10px;font-weight:700'>"
+                        f"{t['emoji']} {t['key']}{_kind_badge(t['kind'])}"
+                        f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
+                        f" wt {t['weight']*100:.1f}%</span></td>"
+                        f"<td>{_status}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"{_tl_dt(t['entry_date'])}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"{_tl_px(t['entry_px'])}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"{_tl_dt(t['exit_date'])}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"{_tl_px(t['exit_px'])}</td>"
+                        f"<td style='text-align:right'>{'—' if t['days'] is None else t['days']}</td>"
+                        f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
+                        f"{_pct(_ret * 100 if _ret is not None else None)}{_unreal}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_imp_s}</td>"
+                        f"<td style='padding-left:10px;font-size:11px;color:#64748b'>{_reason}</td></tr>")
+                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                            f"{tlh}{''.join(tlr)}</table>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1361,8 +1438,8 @@ optimiser objective and a drawdown budget:
 
 | Profile | Caps (core / β / 2×) | Objective |
 |---|---|---|
-| **Balanced** | 30% / 18% / 10% | Hold Sharpe near its max — best risk-adjusted blend |
-| **Growth** (default) | 30% / 25% / 18% | Maximise return inside a **−22%** drawdown budget |
+| **Balanced** (default) | 30% / 18% / 10% | Hold Sharpe near its max — best risk-adjusted blend |
+| **Growth** | 30% / 25% / 18% | Maximise return inside a **−22%** drawdown budget |
 | **Aggressive** | 35% / 40% / 35% | Maximise return inside a **−38%** budget — heavy β / 2× |
 
 β / 2× exposure rises Balanced → Aggressive: more return, deeper drawdowns,
