@@ -1,34 +1,34 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-20T16:36:37+00:00",
+ "generated_at_utc": "2026-07-20T17:02:51+00:00",
  "as_of": "2026-07-20",
- "profile": "Aggressive",
+ "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
-  "SOXX": 0.35,
-  "SOXL": 0.35,
-  "REMX": 0.08339774899320311
+  "SOXX": 0.3,
+  "SOXL": 0.1,
+  "REMX": 0.3
  },
- "cash_weight": 0.21660225100679698,
+ "cash_weight": 0.30000000000000004,
  "exec_price": {
-  "SOXX": 533.285,
-  "SOXL": 143.94,
-  "REMX": 70.41
+  "SOXX": 530.64,
+  "SOXL": 141.83,
+  "REMX": 70.275
  },
  "actions": [
   {
    "key": "SOXL",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.35,
+   "target": 0.1,
    "in_pos": true,
-   "priority": 0.6032869318057418
+   "priority": 0.6032297539079265
   },
   {
    "key": "SOXX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.35,
+   "target": 0.3,
    "in_pos": true,
    "priority": 0.5666666666666667
   },
@@ -36,9 +36,9 @@
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.08339774899320311,
+   "target": 0.3,
    "in_pos": true,
-   "priority": 0.08190476190476188
+   "priority": 0.07999999999999999
   },
   {
    "key": "BTC",
@@ -155,6 +155,6 @@
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "08f078a0e0a9580b3fb5afde24955ff76caae729a5252d510d6d96130f9a63d8"
+  "value": "447896f1e38dddd27f4c9d8c58cc3b97d80572fd9ef54edf5f0ffbe7387e0dbf"
  }
 }
