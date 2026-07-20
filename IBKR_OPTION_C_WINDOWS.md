@@ -285,10 +285,15 @@ Get-Content C:\btc-range-model\logs\ibkr_executor.log -Tail 40
 
 ## 8. Daily operating picture
 
-1. **Publisher** (cloud) emits a fresh signed `target_book.json` each trading day.
+1. **Publisher** (cloud) emits a fresh signed `target_book.json` **every day** —
+   weekends and holidays included, since Bitcoin keeps trading and the signals
+   keep moving while the US market is closed.
 2. **Laptop** wakes ~09:45 ET → `git pull` → executor verifies + trades paper.
-3. Guards keep it safe: weekend/holiday skip, stale-book refusal, paper-account
-   check, HMAC verification, and the no-trade band suppressing tiny churn.
+   The executor only ever trades on US market days: its weekend/holiday guard
+   makes any Saturday/holiday fire a safe no-op.
+3. Guards keep it safe: weekend/holiday skip (executor side), stale-book
+   refusal, paper-account check, HMAC verification, and the no-trade band
+   suppressing tiny churn.
 4. Review `logs\ibkr_executor.log` and the IBKR paper account periodically.
 
 ---

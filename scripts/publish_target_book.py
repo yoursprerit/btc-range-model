@@ -25,8 +25,6 @@ import os
 import sys
 from pathlib import Path
 
-import pandas as pd
-
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "app"))
 sys.path.insert(0, str(_REPO / "scripts"))
@@ -34,7 +32,6 @@ sys.path.insert(0, str(_REPO))
 
 import overall_core as oc                         # noqa: E402
 import target_book as tb                          # noqa: E402
-from ibkr_common import is_trading_day             # noqa: E402  (shared weekend/holiday guard)
 from ibkr_rebalance import compute_target_book     # noqa: E402  (reuse the exact app path)
 
 DEFAULT_OUT = _REPO / "data" / "overall" / "target_book.json"
@@ -54,22 +51,16 @@ def main() -> int:
                     help="also print the paper artifact to stdout")
     ap.add_argument("--no-sign", action="store_true",
                     help="do not sign even if OVERALL_BOOK_SECRET is set")
-    ap.add_argument("--force", action="store_true",
-                    help="publish even on a weekend / US market holiday")
     args = ap.parse_args()
 
-    # Don't publish when the US market is closed: no new daily bar has formed, so
-    # a holiday/weekend run would only re-emit the last trading day's book with a
-    # fresh timestamp. Uses the SAME weekend + US-holiday calendar the executor
-    # trusts (ibkr_common.is_trading_day), so publisher and executor never
-    # disagree about what's a trading day.
-    today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
-    ok, why = is_trading_day(today)
-    if not ok and not args.force:
-        print(f"Skipping publish: {why} (US market closed; use --force to override). "
-              "No book written.")
-        return 0
-
+    # The book is published EVERY day, weekends and US market holidays included:
+    # Bitcoin trades continuously, so BTC-driven signals (and the resulting
+    # target weights) keep moving while the US equity market is closed. The
+    # weekend/holiday guard lives solely on the EXECUTOR side
+    # (ibkr_execute_book.py / ibkr_rebalance.py via ibkr_common.is_trading_day),
+    # so orders are still only ever placed on US market days — but when the
+    # executor wakes up on the next trading morning it acts on a book computed
+    # from the freshest data, not one frozen at the prior week's close.
     secret = None if args.no_sign else os.environ.get("OVERALL_BOOK_SECRET")
 
     print(f"Computing target book (live universe run, ~30–90s) — profile {args.profile}…",

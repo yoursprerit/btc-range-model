@@ -29,8 +29,10 @@ DEFAULT_PORT = 4002
 PAPER_ACCT_PREFIX = "DU"          # IBKR paper account ids start with DU
 STALE_BAR_DAYS = 4                # abort if the freshest signal bar is older than this
 
-# US equity-market full-day closures (NYSE/Nasdaq).  Extend as needed; the cron
-# wrapper / workflow already fire only on weekdays — this is the holiday backstop.
+# US equity-market full-day closures (NYSE/Nasdaq).  Extend as needed.  The
+# publisher workflow runs EVERY day (BTC trades on weekends/holidays too), so
+# this weekend+holiday guard on the EXECUTOR side is what keeps order placement
+# restricted to US market days.
 US_MARKET_HOLIDAYS = {
     "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
     "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
