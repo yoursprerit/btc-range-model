@@ -550,268 +550,268 @@ with tab_live:
     st.markdown("---")
 
     # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
-    st.markdown("### 🎯 Today's action plan")
-    st.caption("What to do now, ranked: **close** exits first, then **open** / "
-               "**hold**, ordered by entry priority. β = higher-beta sibling · "
-               "2× = leveraged (traded off the parent signal). The **priority** "
-               "score (0–1) blends live momentum, macro sentiment, the strategy's "
-               "back-tested win-rate and its risk-adjusted edge — it decides which "
-               "signals get funded and how much. Held/opened risk assets total "
-               "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
-               "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
-               "the live price — they still **hold/open today** but **exit on the "
-               "next bar** (either the last close already crossed the trend, or the "
-               "live price has since slipped below it). **Price (Close of Last Bar)** "
-               "is the official close of the last completed daily bar the signals run "
-               "on; **Live Price** is the current spot quote (coloured green/red vs "
-               "that close). **Unreal. P&L** is measured "
-               "against each position's real cost basis — the official close on its "
-               "entry bar. **Target % / $ (Last bar)** is the committed allocation "
-               "from the last-close signals; **Target % / $ (Live)** re-runs it "
-               "against the current live price, dropping any position exiting next "
-               "bar and reallocating to the survivors and SATA (differences are "
-               "coloured green/red).")
-    _pv_cols = st.columns([1, 2])
-    with _pv_cols[0]:
-        portfolio_value = st.number_input(
-            "💼 Portfolio value ($)", min_value=0.0, value=100000.0, step=1000.0,
-            format="%.0f", key="overall_portfolio_value",
-            help="Target $ per instrument = target % × this value.")
-    hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
-           "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
-           "<th>Live signal</th><th style='text-align:center'>Priority</th>"
-           "<th style='text-align:right'>Price (Close of Last Bar)</th>"
-           "<th style='text-align:right'>Live Price</th>"
-           "<th style='text-align:right'>Chg %</th>"
-           "<th style='text-align:right'>Unreal. P&amp;L</th>"
-           "<th style='text-align:right'>Target % (Last bar)</th>"
-           "<th style='text-align:right'>Target $ (Last bar)</th>"
-           "<th style='text-align:right'>Target % (Live)</th>"
-           "<th style='text-align:right'>Target $ (Live)</th></tr>")
-    rows = []
-    for a in gate["actions"]:
-        ac = _ACTION_COL[a["action"]]
-        tgt = a["target"]                                    # last-bar (committed)
-        # live-adjusted target, further reduced by the user's include/exclude
-        # selection (an excluded position shows 0 here, its weight in SATA).
-        tgt_live = _adj_target.get(a["key"], 0.0)
-        tgt_s = f"{tgt*100:.1f}%" if tgt > 0.0005 else "—"
-        pnl = _pct(a["upnl"]) if a["in_pos"] else "—"
-        pnl_col = (C_BUY if (a["upnl"] or 0) >= 0 else C_EXIT) if a["in_pos"] else "#94a3b8"
-        _r = by_key[a["key"]]
-        off = "" if a["kind"] == "core" else f" · off {a['parent']} signal"
-        if _r["mode"] in ("ma", "dual_ma", "ma_vol") and _r.get("ma_val"):
-            dist = (_r["last_close"] / _r["ma_val"] - 1) * 100
-            sub = f"{a['parent']} close {dist:+.1f}% vs {_r.get('engine_label', 'trend')}{off}"
-        else:
-            sub = f"{a['parent']} alert: {a['alert']}{off}"
-        if a["priority"] is not None:
-            p = a["priority"]; pcolor = C_BUY if p >= 0.6 else C_WATCH if p >= 0.4 else C_FLAT
-            prio_cell = (f"<span style='font-weight:700;color:{pcolor}'>{p:.2f}</span>"
-                         f"<div style='height:5px;background:#e2e8f0;border-radius:3px;margin-top:2px'>"
-                         f"<div style='height:5px;width:{p*100:.0f}%;background:{pcolor};border-radius:3px'></div></div>")
-        else:
-            prio_cell = "<span style='color:#cbd5e1'>—</span>"
-        def _tgt_bar(t):
+    with st.expander("🎯 **Today's action plan**", expanded=True):
+        st.caption("What to do now, ranked: **close** exits first, then **open** / "
+                   "**hold**, ordered by entry priority. β = higher-beta sibling · "
+                   "2× = leveraged (traded off the parent signal). The **priority** "
+                   "score (0–1) blends live momentum, macro sentiment, the strategy's "
+                   "back-tested win-rate and its risk-adjusted edge — it decides which "
+                   "signals get funded and how much. Held/opened risk assets total "
+                   "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
+                   "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
+                   "the live price — they still **hold/open today** but **exit on the "
+                   "next bar** (either the last close already crossed the trend, or the "
+                   "live price has since slipped below it). **Price (Close of Last Bar)** "
+                   "is the official close of the last completed daily bar the signals run "
+                   "on; **Live Price** is the current spot quote (coloured green/red vs "
+                   "that close). **Unreal. P&L** is measured "
+                   "against each position's real cost basis — the official close on its "
+                   "entry bar. **Target % / $ (Last bar)** is the committed allocation "
+                   "from the last-close signals; **Target % / $ (Live)** re-runs it "
+                   "against the current live price, dropping any position exiting next "
+                   "bar and reallocating to the survivors and SATA (differences are "
+                   "coloured green/red).")
+        _pv_cols = st.columns([1, 2])
+        with _pv_cols[0]:
+            portfolio_value = st.number_input(
+                "💼 Portfolio value ($)", min_value=0.0, value=100000.0, step=1000.0,
+                format="%.0f", key="overall_portfolio_value",
+                help="Target $ per instrument = target % × this value.")
+        hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+               "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
+               "<th>Live signal</th><th style='text-align:center'>Priority</th>"
+               "<th style='text-align:right'>Price (Close of Last Bar)</th>"
+               "<th style='text-align:right'>Live Price</th>"
+               "<th style='text-align:right'>Chg %</th>"
+               "<th style='text-align:right'>Unreal. P&amp;L</th>"
+               "<th style='text-align:right'>Target % (Last bar)</th>"
+               "<th style='text-align:right'>Target $ (Last bar)</th>"
+               "<th style='text-align:right'>Target % (Live)</th>"
+               "<th style='text-align:right'>Target $ (Live)</th></tr>")
+        rows = []
+        for a in gate["actions"]:
+            ac = _ACTION_COL[a["action"]]
+            tgt = a["target"]                                    # last-bar (committed)
+            # live-adjusted target, further reduced by the user's include/exclude
+            # selection (an excluded position shows 0 here, its weight in SATA).
+            tgt_live = _adj_target.get(a["key"], 0.0)
+            tgt_s = f"{tgt*100:.1f}%" if tgt > 0.0005 else "—"
+            pnl = _pct(a["upnl"]) if a["in_pos"] else "—"
+            pnl_col = (C_BUY if (a["upnl"] or 0) >= 0 else C_EXIT) if a["in_pos"] else "#94a3b8"
+            _r = by_key[a["key"]]
+            off = "" if a["kind"] == "core" else f" · off {a['parent']} signal"
+            if _r["mode"] in ("ma", "dual_ma", "ma_vol") and _r.get("ma_val"):
+                dist = (_r["last_close"] / _r["ma_val"] - 1) * 100
+                sub = f"{a['parent']} close {dist:+.1f}% vs {_r.get('engine_label', 'trend')}{off}"
+            else:
+                sub = f"{a['parent']} alert: {a['alert']}{off}"
+            if a["priority"] is not None:
+                p = a["priority"]; pcolor = C_BUY if p >= 0.6 else C_WATCH if p >= 0.4 else C_FLAT
+                prio_cell = (f"<span style='font-weight:700;color:{pcolor}'>{p:.2f}</span>"
+                             f"<div style='height:5px;background:#e2e8f0;border-radius:3px;margin-top:2px'>"
+                             f"<div style='height:5px;width:{p*100:.0f}%;background:{pcolor};border-radius:3px'></div></div>")
+            else:
+                prio_cell = "<span style='color:#cbd5e1'>—</span>"
+            def _tgt_bar(t):
+                return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
+                        f"margin-top:3px'><div style='height:7px;width:{min(t*100,100):.0f}%;"
+                        f"background:{_r['accent']}'></div></div>" if t > 0.0005 else "")
+            bar = _tgt_bar(tgt)
+            amt_s = f"${tgt * portfolio_value:,.0f}" if tgt > 0.0005 else "—"
+            # live-adjusted target (accounts for positions exiting next bar on live px)
+            tgt_live_s = f"{tgt_live*100:.1f}%" if tgt_live > 0.0005 else "—"
+            bar_live = _tgt_bar(tgt_live)
+            amt_live_s = f"${tgt_live * portfolio_value:,.0f}" if tgt_live > 0.0005 else "—"
+            # highlight a live target that has diverged from the last-bar target
+            _live_moved = abs(tgt_live - tgt) > 0.005
+            _live_col = (C_EXIT if tgt_live < tgt else C_BUY) if _live_moved else "inherit"
+            # live spot price (falls back to the last-bar close when no live quote);
+            # coloured green/red vs the last-bar close to show the intraday move.
+            _live_px = a.get("live_price")
+            if _live_px is None:
+                _live_px = a["last_close"]
+            _live_px_s = f"${_live_px:,.2f}"
+            _live_px_col = (C_BUY if _live_px > a["last_close"]
+                            else C_EXIT if _live_px < a["last_close"] else "inherit")
+            # today's price change (%) — live day-change from the spot overlay
+            _dchg = _r.get("dchg")
+            if _dchg is None or (isinstance(_dchg, float) and np.isnan(_dchg)):
+                chg_s, chg_col = "—", "#94a3b8"
+            else:
+                chg_s = f"{_dchg:+.2f}%"
+                chg_col = C_BUY if _dchg >= 0 else C_EXIT
+            # cost basis = the real close on the entry bar
+            _cb = _r["pos"].get("entry_px")
+            cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
+                      if a["in_pos"] and _cb else "")
+            # a hold/entry whose trend has broken drops out on the NEXT bar — flag the
+            # whole row red so it's clear the position is about to be closed out. This
+            # covers two cases: the committed last-close exit (exits_next_bar), and the
+            # live-price exit — a row that still holds/opens today but whose live price
+            # has fallen below the trend filter (in _live_exits, incl. fresh entries).
+            _committed_exit = bool(a.get("exits_next_bar"))
+            _live_exit = a["key"] in _live_exits
+            exit_next = _committed_exit or _live_exit
+            row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
+                         "box-shadow:inset 3px 0 0 #dc2626" if exit_next
+                         else "border-bottom:1px solid #eef2f7")
+            if not exit_next:
+                warn = ""
+            elif _committed_exit:                      # last close already below trend
+                warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
+                        "⚠️ exits next bar</div>")
+            else:                                      # live-driven (hold or fresh entry)
+                warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
+                        "⚠️ live px below trend — exits next bar</div>")
+            rows.append(
+                f"<tr style='{row_style}'>"
+                f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}{warn}</td>"
+                f"<td style='font-weight:700'>{a['emoji']} {a['key']}{_kind_badge(a['kind'])}"
+                f"<div style='font-size:11px;color:#64748b;font-weight:400'>{a['name']}</div></td>"
+                f"<td style='font-size:12px;color:{_TONE_COL.get(a['tone'], C_FLAT)}'>{a['decision']}"
+                f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
+                f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
+                f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
+                f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{_live_px_col}'>{_live_px_s}</td>"
+                f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{chg_col}'>{chg_s}</td>"
+                f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"
+                f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td>"
+                f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td>"
+                f"<td style='text-align:right;font-weight:700;color:{_live_col}'>{tgt_live_s}{bar_live}</td>"
+                f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:{_live_col}'>{amt_live_s}</td></tr>")
+        # SATA row — the idle-cash park absorbing whatever risk assets can't hold
+        si = gate["sata_info"]; sata_pct = gate["sata"]; sata_live = gate_live["sata"]
+
+        def _sata_bar(t):
             return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
                     f"margin-top:3px'><div style='height:7px;width:{min(t*100,100):.0f}%;"
-                    f"background:{_r['accent']}'></div></div>" if t > 0.0005 else "")
-        bar = _tgt_bar(tgt)
-        amt_s = f"${tgt * portfolio_value:,.0f}" if tgt > 0.0005 else "—"
-        # live-adjusted target (accounts for positions exiting next bar on live px)
-        tgt_live_s = f"{tgt_live*100:.1f}%" if tgt_live > 0.0005 else "—"
-        bar_live = _tgt_bar(tgt_live)
-        amt_live_s = f"${tgt_live * portfolio_value:,.0f}" if tgt_live > 0.0005 else "—"
-        # highlight a live target that has diverged from the last-bar target
-        _live_moved = abs(tgt_live - tgt) > 0.005
-        _live_col = (C_EXIT if tgt_live < tgt else C_BUY) if _live_moved else "inherit"
-        # live spot price (falls back to the last-bar close when no live quote);
-        # coloured green/red vs the last-bar close to show the intraday move.
-        _live_px = a.get("live_price")
-        if _live_px is None:
-            _live_px = a["last_close"]
-        _live_px_s = f"${_live_px:,.2f}"
-        _live_px_col = (C_BUY if _live_px > a["last_close"]
-                        else C_EXIT if _live_px < a["last_close"] else "inherit")
-        # today's price change (%) — live day-change from the spot overlay
-        _dchg = _r.get("dchg")
-        if _dchg is None or (isinstance(_dchg, float) and np.isnan(_dchg)):
-            chg_s, chg_col = "—", "#94a3b8"
+                    f"background:#334155'></div></div>" if t > 0.0005 else "")
+        sbar = _sata_bar(sata_pct); sbar_live = _sata_bar(sata_live)
+        _sata_col = (C_BUY if sata_live > sata_pct else C_EXIT) if abs(sata_live - sata_pct) > 0.005 else "inherit"
+        # live SATA quote — price, day-change, and P&L vs the $100 par cost basis
+        _sa_px = _sata.get("price"); _sa_dc = _sata.get("dchg"); _sa_pnl = _sata.get("upnl")
+        sa_px_s = f"${_sa_px:,.2f}" if _sa_px else f"${si['par']:,.0f}"
+        if _sa_dc is None:
+            sa_dc_s, sa_dc_col = "—", "#94a3b8"
         else:
-            chg_s = f"{_dchg:+.2f}%"
-            chg_col = C_BUY if _dchg >= 0 else C_EXIT
-        # cost basis = the real close on the entry bar
-        _cb = _r["pos"].get("entry_px")
-        cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
-                  if a["in_pos"] and _cb else "")
-        # a hold/entry whose trend has broken drops out on the NEXT bar — flag the
-        # whole row red so it's clear the position is about to be closed out. This
-        # covers two cases: the committed last-close exit (exits_next_bar), and the
-        # live-price exit — a row that still holds/opens today but whose live price
-        # has fallen below the trend filter (in _live_exits, incl. fresh entries).
-        _committed_exit = bool(a.get("exits_next_bar"))
-        _live_exit = a["key"] in _live_exits
-        exit_next = _committed_exit or _live_exit
-        row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
-                     "box-shadow:inset 3px 0 0 #dc2626" if exit_next
-                     else "border-bottom:1px solid #eef2f7")
-        if not exit_next:
-            warn = ""
-        elif _committed_exit:                      # last close already below trend
-            warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
-                    "⚠️ exits next bar</div>")
-        else:                                      # live-driven (hold or fresh entry)
-            warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
-                    "⚠️ live px below trend — exits next bar</div>")
+            sa_dc_s, sa_dc_col = f"{_sa_dc:+.2f}%", (C_BUY if _sa_dc >= 0 else C_EXIT)
+        if _sa_pnl is None:
+            sa_pnl_s, sa_pnl_col = "—", "#94a3b8"
+        else:
+            sa_pnl_s, sa_pnl_col = f"{_sa_pnl:+.2f}%", (C_BUY if _sa_pnl >= 0 else C_EXIT)
+        sa_pnl_sub = "<div style='font-size:10px;color:#94a3b8'>@ $100.00 par</div>"
         rows.append(
-            f"<tr style='{row_style}'>"
-            f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}{warn}</td>"
-            f"<td style='font-weight:700'>{a['emoji']} {a['key']}{_kind_badge(a['kind'])}"
-            f"<div style='font-size:11px;color:#64748b;font-weight:400'>{a['name']}</div></td>"
-            f"<td style='font-size:12px;color:{_TONE_COL.get(a['tone'], C_FLAT)}'>{a['decision']}"
-            f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
-            f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
-            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
-            f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{_live_px_col}'>{_live_px_s}</td>"
-            f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{chg_col}'>{chg_s}</td>"
-            f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"
-            f"<td style='text-align:right;font-weight:700'>{tgt_s}{bar}</td>"
-            f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td>"
-            f"<td style='text-align:right;font-weight:700;color:{_live_col}'>{tgt_live_s}{bar_live}</td>"
-            f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:{_live_col}'>{amt_live_s}</td></tr>")
-    # SATA row — the idle-cash park absorbing whatever risk assets can't hold
-    si = gate["sata_info"]; sata_pct = gate["sata"]; sata_live = gate_live["sata"]
+            f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+            f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
+            f"<td style='font-weight:700'>💵 SATA"
+            f"<div style='font-size:11px;color:#64748b;font-weight:400'>{si['name']}</div></td>"
+            f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
+            f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par · +{si['annual_rate']*100:.0f}%/yr coupon</div></td>"
+            f"<td style='text-align:center;color:#cbd5e1'>—</td>"
+            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${si['par']:,.2f}</td>"
+            f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums'>{sa_px_s}</td>"
+            f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{sa_dc_col}'>{sa_dc_s}</td>"
+            f"<td style='text-align:right;font-weight:600;color:{sa_pnl_col}'>{sa_pnl_s}{sa_pnl_sub}</td>"
+            f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
+            f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
+            f"${sata_pct*portfolio_value:,.0f}</td>"
+            f"<td style='text-align:right;font-weight:800;color:{_sata_col}'>{sata_live*100:.1f}%{sbar_live}</td>"
+            f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_sata_col}'>"
+            f"${sata_live*portfolio_value:,.0f}</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
+                    unsafe_allow_html=True)
+        if gate["n_active"] == 0:
+            st.warning("**No open positions today** — no instrument is signalling long, "
+                       "so the entire book is parked in **SATA** earning its idle-cash "
+                       "yield until a signal fires.")
 
-    def _sata_bar(t):
-        return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
-                f"margin-top:3px'><div style='height:7px;width:{min(t*100,100):.0f}%;"
-                f"background:#334155'></div></div>" if t > 0.0005 else "")
-    sbar = _sata_bar(sata_pct); sbar_live = _sata_bar(sata_live)
-    _sata_col = (C_BUY if sata_live > sata_pct else C_EXIT) if abs(sata_live - sata_pct) > 0.005 else "inherit"
-    # live SATA quote — price, day-change, and P&L vs the $100 par cost basis
-    _sa_px = _sata.get("price"); _sa_dc = _sata.get("dchg"); _sa_pnl = _sata.get("upnl")
-    sa_px_s = f"${_sa_px:,.2f}" if _sa_px else f"${si['par']:,.0f}"
-    if _sa_dc is None:
-        sa_dc_s, sa_dc_col = "—", "#94a3b8"
-    else:
-        sa_dc_s, sa_dc_col = f"{_sa_dc:+.2f}%", (C_BUY if _sa_dc >= 0 else C_EXIT)
-    if _sa_pnl is None:
-        sa_pnl_s, sa_pnl_col = "—", "#94a3b8"
-    else:
-        sa_pnl_s, sa_pnl_col = f"{_sa_pnl:+.2f}%", (C_BUY if _sa_pnl >= 0 else C_EXIT)
-    sa_pnl_sub = "<div style='font-size:10px;color:#94a3b8'>@ $100.00 par</div>"
-    rows.append(
-        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
-        f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
-        f"<td style='font-weight:700'>💵 SATA"
-        f"<div style='font-size:11px;color:#64748b;font-weight:400'>{si['name']}</div></td>"
-        f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
-        f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par · +{si['annual_rate']*100:.0f}%/yr coupon</div></td>"
-        f"<td style='text-align:center;color:#cbd5e1'>—</td>"
-        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${si['par']:,.2f}</td>"
-        f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums'>{sa_px_s}</td>"
-        f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{sa_dc_col}'>{sa_dc_s}</td>"
-        f"<td style='text-align:right;font-weight:600;color:{sa_pnl_col}'>{sa_pnl_s}{sa_pnl_sub}</td>"
-        f"<td style='text-align:right;font-weight:800'>{sata_pct*100:.1f}%{sbar}</td>"
-        f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
-        f"${sata_pct*portfolio_value:,.0f}</td>"
-        f"<td style='text-align:right;font-weight:800;color:{_sata_col}'>{sata_live*100:.1f}%{sbar_live}</td>"
-        f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_sata_col}'>"
-        f"${sata_live*portfolio_value:,.0f}</td></tr>")
-    st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
-                unsafe_allow_html=True)
-    if gate["n_active"] == 0:
-        st.warning("**No open positions today** — no instrument is signalling long, "
-                   "so the entire book is parked in **SATA** earning its idle-cash "
-                   "yield until a signal fires.")
-
-    closes = [a for a in gate["actions"] if a["action"] == "CLOSE"]
-    opens = [a for a in gate["actions"] if a["action"] == "OPEN"]
-    cc = st.columns(2)
-    with cc[0]:
-        if closes:
-            st.error("**Close now:** " + ", ".join(
-                f"{a['key']} ({_pct(a['upnl'])})" for a in closes))
-        else:
-            st.success("**No exits triggered today** — nothing to close.")
-    with cc[1]:
-        if opens:
-            st.success("**Open now:** " + ", ".join(
-                f"{a['key']} → {a['target']*100:.0f}%" for a in opens))
-        else:
-            st.info("**No fresh entries today** — no flat instrument is signalling a buy.")
+        closes = [a for a in gate["actions"] if a["action"] == "CLOSE"]
+        opens = [a for a in gate["actions"] if a["action"] == "OPEN"]
+        cc = st.columns(2)
+        with cc[0]:
+            if closes:
+                st.error("**Close now:** " + ", ".join(
+                    f"{a['key']} ({_pct(a['upnl'])})" for a in closes))
+            else:
+                st.success("**No exits triggered today** — nothing to close.")
+        with cc[1]:
+            if opens:
+                st.success("**Open now:** " + ", ".join(
+                    f"{a['key']} → {a['target']*100:.0f}%" for a in opens))
+            else:
+                st.info("**No fresh entries today** — no flat instrument is signalling a buy.")
 
     st.markdown("---")
 
     # ── 3. PER-SIGNAL LIVE CARDS (grouped by parent) ────────────────────
-    st.markdown("### 🛰️ Live signal & positions — by app")
-    st.caption("Each app fires one signal; its 1× primary and higher-beta / "
-               "leveraged siblings are all traded off it. Green = long/buy, "
-               "red = exit, amber = watch, grey = stand aside.")
-    for pk, grp in parents:
-        head = grp[0]
-        dec = head["decision"]; col = _TONE_COL.get(dec["tone"], C_FLAT)
-        sent = head["sentiment"]
-        sent_s = f"{sent:.0f}/100" if sent == sent else "—"
-        eng = ("CT-Divergence" if head["mode"] == "ct-divergence"
-               else head.get("engine_label")
-               or (f"MA{head['ma_window']}" if head["mode"] == "ma" else "Divergence"))
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 4px 0'>"
-            f"<span style='font-size:16px;font-weight:800'>{head['emoji']} {pk}</span>"
-            f"{_pill(dec['ico'] + ' ' + dec['label'], col)}"
-            f"<span style='font-size:11px;color:#94a3b8'>{eng} · "
-            f"{'🐂 bull' if head['bull_regime'] else '🐻 bear'} regime · sentiment {sent_s}</span></div>",
-            unsafe_allow_html=True)
-        cards = st.columns(max(3, len(grp)))
-        for i, res in enumerate(grp):
-            pos = res["pos"]
-            with cards[i % max(3, len(grp))]:
-                body = [
-                    f"<div style='border:1px solid #e2e8f0;border-left:5px solid {res['accent']};"
-                    f"border-radius:9px;padding:9px 11px;margin-bottom:8px;background:#fff'>",
-                    f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-                    f"<span style='font-weight:800;font-size:14px'>{res['key']}"
-                    f"{_kind_badge(res['kind'])}</span>"
-                    f"<span style='font-size:12px;color:#64748b'>${res['last_close']:,.2f} "
-                    f"<b style='color:{C_BUY if res['dchg']>=0 else C_EXIT}'>{res['dchg']:+.1f}%</b></span></div>",
-                    f"<div style='font-size:10px;color:#94a3b8;margin-bottom:4px'>{res['name']}</div>",
-                ]
-                if pos["in_pos"] and pos["entry_px"]:
-                    pcol = C_BUY if (pos["upnl"] or 0) >= 0 else C_EXIT
-                    # Per-asset exit: leveraged / no-stop sleeves (e.g. SOXL 3× and
-                    # WGMI) trade the SAME signal with NO fixed stop, so there is no
-                    # stop price to show — say "signal exit · no fixed stop" instead
-                    # of rendering a misleading "$0.00" (or crashing on a None
-                    # stop_px, which the old unconditional format did).
-                    _stop = res.get("stop") or 1.0
-                    if _stop < 0.999 and pos.get("stop_px"):
-                        exit_txt = (f"stop ${pos['stop_px']:,.2f} "
-                                    f"<span style='color:#94a3b8'>({_pct(pos.get('dist_stop'))})</span>")
+    with st.expander("🛰️ **Live signal & positions — by app**", expanded=True):
+        st.caption("Each app fires one signal; its 1× primary and higher-beta / "
+                   "leveraged siblings are all traded off it. Green = long/buy, "
+                   "red = exit, amber = watch, grey = stand aside.")
+        for pk, grp in parents:
+            head = grp[0]
+            dec = head["decision"]; col = _TONE_COL.get(dec["tone"], C_FLAT)
+            sent = head["sentiment"]
+            sent_s = f"{sent:.0f}/100" if sent == sent else "—"
+            eng = ("CT-Divergence" if head["mode"] == "ct-divergence"
+                   else head.get("engine_label")
+                   or (f"MA{head['ma_window']}" if head["mode"] == "ma" else "Divergence"))
+            st.markdown(
+                f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 4px 0'>"
+                f"<span style='font-size:16px;font-weight:800'>{head['emoji']} {pk}</span>"
+                f"{_pill(dec['ico'] + ' ' + dec['label'], col)}"
+                f"<span style='font-size:11px;color:#94a3b8'>{eng} · "
+                f"{'🐂 bull' if head['bull_regime'] else '🐻 bear'} regime · sentiment {sent_s}</span></div>",
+                unsafe_allow_html=True)
+            cards = st.columns(max(3, len(grp)))
+            for i, res in enumerate(grp):
+                pos = res["pos"]
+                with cards[i % max(3, len(grp))]:
+                    body = [
+                        f"<div style='border:1px solid #e2e8f0;border-left:5px solid {res['accent']};"
+                        f"border-radius:9px;padding:9px 11px;margin-bottom:8px;background:#fff'>",
+                        f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span style='font-weight:800;font-size:14px'>{res['key']}"
+                        f"{_kind_badge(res['kind'])}</span>"
+                        f"<span style='font-size:12px;color:#64748b'>${res['last_close']:,.2f} "
+                        f"<b style='color:{C_BUY if res['dchg']>=0 else C_EXIT}'>{res['dchg']:+.1f}%</b></span></div>",
+                        f"<div style='font-size:10px;color:#94a3b8;margin-bottom:4px'>{res['name']}</div>",
+                    ]
+                    if pos["in_pos"] and pos["entry_px"]:
+                        pcol = C_BUY if (pos["upnl"] or 0) >= 0 else C_EXIT
+                        # Per-asset exit: leveraged / no-stop sleeves (e.g. SOXL 3× and
+                        # WGMI) trade the SAME signal with NO fixed stop, so there is no
+                        # stop price to show — say "signal exit · no fixed stop" instead
+                        # of rendering a misleading "$0.00" (or crashing on a None
+                        # stop_px, which the old unconditional format did).
+                        _stop = res.get("stop") or 1.0
+                        if _stop < 0.999 and pos.get("stop_px"):
+                            exit_txt = (f"stop ${pos['stop_px']:,.2f} "
+                                        f"<span style='color:#94a3b8'>({_pct(pos.get('dist_stop'))})</span>")
+                        else:
+                            exit_txt = "<span style='color:#94a3b8'>signal exit · no fixed stop</span>"
+                        body.append(
+                            f"<div style='font-size:11.5px;line-height:1.5'>"
+                            f"📍 <b>LONG</b> {pd.Timestamp(pos['entry_date']).strftime('%b %d')} "
+                            f"@ ${float(pos['entry_px']):,.2f} · {pos['days']}d<br>"
+                            f"P&amp;L <b style='color:{pcol}'>{_pct(pos['upnl'])}</b> · "
+                            f"{exit_txt}</div>")
+                    elif res["last_trade"]:
+                        lt = res["last_trade"]; r_ = lt["ret"] * 100
+                        rc = C_BUY if r_ >= 0 else C_EXIT
+                        body.append(
+                            f"<div style='font-size:11.5px;line-height:1.45;color:#475569'>"
+                            f"⚪ FLAT · last {r_:+.1f}% "
+                            f"<span style='color:{rc}'></span>"
+                            f"({pd.Timestamp(lt['exit_date']).strftime('%b %d')}, {lt.get('reason','—')})</div>")
                     else:
-                        exit_txt = "<span style='color:#94a3b8'>signal exit · no fixed stop</span>"
-                    body.append(
-                        f"<div style='font-size:11.5px;line-height:1.5'>"
-                        f"📍 <b>LONG</b> {pd.Timestamp(pos['entry_date']).strftime('%b %d')} "
-                        f"@ ${float(pos['entry_px']):,.2f} · {pos['days']}d<br>"
-                        f"P&amp;L <b style='color:{pcol}'>{_pct(pos['upnl'])}</b> · "
-                        f"{exit_txt}</div>")
-                elif res["last_trade"]:
-                    lt = res["last_trade"]; r_ = lt["ret"] * 100
-                    rc = C_BUY if r_ >= 0 else C_EXIT
-                    body.append(
-                        f"<div style='font-size:11.5px;line-height:1.45;color:#475569'>"
-                        f"⚪ FLAT · last {r_:+.1f}% "
-                        f"<span style='color:{rc}'></span>"
-                        f"({pd.Timestamp(lt['exit_date']).strftime('%b %d')}, {lt.get('reason','—')})</div>")
-                else:
-                    body.append("<div style='font-size:11.5px;color:#475569'>⚪ FLAT · no position</div>")
-                body.append("</div>")
-                st.markdown("".join(body), unsafe_allow_html=True)
+                        body.append("<div style='font-size:11.5px;color:#475569'>⚪ FLAT · no position</div>")
+                    body.append("</div>")
+                    st.markdown("".join(body), unsafe_allow_html=True)
 
-    st.info("Unified **daily** reads. For the canonical hourly Pure-Regime view of "
-            "BTC (BTC/MSTR/MSTU) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
-            "**🥇 Gold** app in the sidebar.")
+        st.info("Unified **daily** reads. For the canonical hourly Pure-Regime view of "
+                "BTC (BTC/MSTR/MSTU) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
+                "**🥇 Gold** app in the sidebar.")
 
     st.markdown("---")
 
@@ -822,394 +822,398 @@ with tab_live:
     # the slice — so drawdown, Sharpe etc. are measured from the entry point,
     # not from back-test inception.  Follows the risk profile selected above
     # (Balanced by default) and the fundamental-overlay toggle.
-    st.markdown("### 📈 Overall strategy P&L — from your start date")
-    st.caption(f"P&L, performance and risk of the **combined optimal-blend "
-               f"strategy** measured from the start date below, under the risk "
-               f"profile selected above (currently **`{_profile}`**"
-               f"{' · 🔭 fundamental overlay ON' if _use_fund else ''}). "
-               "Change the profile or the date and every figure recomputes. "
-               "Dollar figures scale the 💼 portfolio value entered above.")
-    _curve_all = _PF["curves"]["Optimal blend"]
-    _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
-    _default_start = pd.Timestamp("2026-03-01").date()
-    pnl_cols = st.columns([1, 3])
-    with pnl_cols[0]:
-        _start_sel = st.date_input(
-            "📅 Start date", value=min(max(_default_start, _d0), _d1),
-            min_value=_d0, max_value=_d1, key="overall_pnl_start",
-            help="First strategy bar on/after this date becomes the cost-basis "
-                 "anchor (weekends/holidays roll forward). Defaults to "
-                 "March 1, 2026.")
-    _sm = ov.slice_metrics(_curve_all, _start_sel)
-    if _sm is None:
-        st.warning("Not enough strategy history on/after that date — pick an "
-                   f"earlier start (data runs {_d0} → {_d1}).")
-    else:
-        _pnl_d = _sm["total_ret"] * portfolio_value
-        _end_v = portfolio_value * (1 + _sm["total_ret"])
-        with pnl_cols[1]:
-            st.markdown(
-                f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
-                f"Measured <b>{_sm['start'].strftime('%b %d, %Y')} → "
-                f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
-                f"days · profile <code>{_profile}</code></div>",
-                unsafe_allow_html=True)
-        pm = st.columns(4)
-        pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
-                     delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
-                     delta_color="normal" if _pnl_d >= 0 else "inverse")
-        pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
-                     delta=f"CAGR {_sm['cagr']*100:+.1f}%")
-        pm[2].metric("Max drawdown since start", f"{_sm['mdd']*100:.1f}%",
-                     help="Deepest peak-to-trough fall measured from the chosen "
-                          "start date, not from back-test inception.")
-        pm[3].metric("Sharpe (ann.)", f"{_sm['sharpe']:.2f}",
-                     delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
-        # per-asset since-start reads (also feed the blend-level trade stats)
-        _pa = ov.per_asset_slice_metrics(results, _start_sel)
-        _ots = ov.overall_trade_stats(_pa, opt["optimal"]["weights"])
-        pm2 = st.columns(6)
-        pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
-        pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
-        pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
-        pm2[3].metric("Trading days", f"{_sm['days']}")
-        pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
-                      delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
-                      delta_color="off",
-                      help="Round-trip trades across every sleeve the optimal "
-                           "blend holds (weight > 0) that were open at any point "
-                           "since the start date — including trades entered "
-                           "before it — plus currently-open positions.")
-        pm2[5].metric("Win rate",
-                      "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
-                      delta=f"{_ots['wins']}/{_ots['n_trades']} won" if _ots["n_trades"] else None,
-                      delta_color="off",
-                      help="Winning trades out of all counted trades: closed "
-                           "trades on their realised return, open positions on "
-                           "their current unrealised P&L.")
+    with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=True):
+        st.caption(f"P&L, performance and risk of the **combined optimal-blend "
+                   f"strategy** measured from the start date below, under the risk "
+                   f"profile selected above (currently **`{_profile}`**"
+                   f"{' · 🔭 fundamental overlay ON' if _use_fund else ''}). "
+                   "Change the profile or the date and every figure recomputes. "
+                   "Dollar figures scale the 💼 portfolio value entered above.")
+        _curve_all = _PF["curves"]["Optimal blend"]
+        _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
+        _default_start = pd.Timestamp("2026-03-01").date()
+        pnl_cols = st.columns([1, 3])
+        with pnl_cols[0]:
+            _start_sel = st.date_input(
+                "📅 Start date", value=min(max(_default_start, _d0), _d1),
+                min_value=_d0, max_value=_d1, key="overall_pnl_start",
+                help="First strategy bar on/after this date becomes the cost-basis "
+                     "anchor (weekends/holidays roll forward). Defaults to "
+                     "March 1, 2026.")
+        _sm = ov.slice_metrics(_curve_all, _start_sel)
+        if _sm is None:
+            st.warning("Not enough strategy history on/after that date — pick an "
+                       f"earlier start (data runs {_d0} → {_d1}).")
+        else:
+            _pnl_d = _sm["total_ret"] * portfolio_value
+            _end_v = portfolio_value * (1 + _sm["total_ret"])
+            with pnl_cols[1]:
+                st.markdown(
+                    f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
+                    f"Measured <b>{_sm['start'].strftime('%b %d, %Y')} → "
+                    f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
+                    f"days · profile <code>{_profile}</code></div>",
+                    unsafe_allow_html=True)
+            pm = st.columns(4)
+            pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
+                         delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
+                         delta_color="normal" if _pnl_d >= 0 else "inverse")
+            pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
+                         delta=f"CAGR {_sm['cagr']*100:+.1f}%")
+            pm[2].metric("Max drawdown since start", f"{_sm['mdd']*100:.1f}%",
+                         help="Deepest peak-to-trough fall measured from the chosen "
+                              "start date, not from back-test inception.")
+            pm[3].metric("Sharpe (ann.)", f"{_sm['sharpe']:.2f}",
+                         delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
+            # per-asset since-start reads (also feed the blend-level trade stats)
+            _pa = ov.per_asset_slice_metrics(results, _start_sel)
+            _ots = ov.overall_trade_stats(_pa, opt["optimal"]["weights"])
+            pm2 = st.columns(6)
+            pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
+            pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
+            pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
+            pm2[3].metric("Trading days", f"{_sm['days']}")
+            pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
+                          delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
+                          delta_color="off",
+                          help="Round-trip trades across every sleeve the optimal "
+                               "blend holds (weight > 0) that were open at any point "
+                               "since the start date — including trades entered "
+                               "before it — plus currently-open positions.")
+            pm2[5].metric("Win rate",
+                          "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
+                          delta=f"{_ots['wins']}/{_ots['n_trades']} won" if _ots["n_trades"] else None,
+                          delta_color="off",
+                          help="Winning trades out of all counted trades: closed "
+                               "trades on their realised return, open positions on "
+                               "their current unrealised P&L.")
 
-        # same-window benchmark comparison — is the strategy earning its keep?
-        _bench_rows = []
-        for _nm, _cv in _PF["curves"].items():
-            _bm_sm = ov.slice_metrics(_cv, _start_sel)
-            if _bm_sm:
-                _bench_rows.append((_nm, _bm_sm))
-        if len(_bench_rows) > 1:
-            bh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
-                  "<th style='padding:6px 10px'>Strategy (same window)</th>"
-                  "<th style='text-align:right'>P&amp;L</th>"
-                  "<th style='text-align:right'>$ on portfolio</th>"
-                  "<th style='text-align:right'>Max DD</th>"
-                  "<th style='text-align:right'>Sharpe</th></tr>")
-            br = []
-            for _nm, _m in _bench_rows:
-                _hi = "background:#eff6ff;font-weight:700;" if _nm == "Optimal blend" else ""
-                _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
-                br.append(
-                    f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
-                    f"<td style='padding:6px 10px'>{_nm}"
-                    f"{' ◄ this strategy' if _nm == 'Optimal blend' else ''}</td>"
-                    f"<td style='text-align:right;color:{_pc};font-weight:600'>"
-                    f"{_m['total_ret']*100:+.1f}%</td>"
-                    f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
-                    f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
-                    f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
-                    f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
-            st.markdown(f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table>",
-                        unsafe_allow_html=True)
+            # same-window benchmark comparison — is the strategy earning its keep?
+            _bench_rows = []
+            for _nm, _cv in _PF["curves"].items():
+                _bm_sm = ov.slice_metrics(_cv, _start_sel)
+                if _bm_sm:
+                    _bench_rows.append((_nm, _bm_sm))
+            if len(_bench_rows) > 1:
+                bh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                      "<th style='padding:6px 10px'>Strategy (same window)</th>"
+                      "<th style='text-align:right'>P&amp;L</th>"
+                      "<th style='text-align:right'>$ on portfolio</th>"
+                      "<th style='text-align:right'>Max DD</th>"
+                      "<th style='text-align:right'>Sharpe</th></tr>")
+                br = []
+                for _nm, _m in _bench_rows:
+                    _hi = "background:#eff6ff;font-weight:700;" if _nm == "Optimal blend" else ""
+                    _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
+                    br.append(
+                        f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
+                        f"<td style='padding:6px 10px'>{_nm}"
+                        f"{' ◄ this strategy' if _nm == 'Optimal blend' else ''}</td>"
+                        f"<td style='text-align:right;color:{_pc};font-weight:600'>"
+                        f"{_m['total_ret']*100:+.1f}%</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
+                        f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
+                        f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
+                st.markdown(f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table>",
+                            unsafe_allow_html=True)
 
-        # equity curve re-based to the portfolio value at the chosen start
-        _fig_pnl = go.Figure()
-        _pnl_styles = {"Optimal blend": ("#111827", 3),
-                       "Equal-weight strategies": ("#0ea5e9", 1.5),
-                       "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
-        for _nm, _cv in _PF["curves"].items():
-            _sub = _cv.loc[pd.Timestamp(_start_sel):]
-            if len(_sub) < 2:
-                continue
-            _c, _w = _pnl_styles.get(_nm, ("#888", 1.5))
-            _fig_pnl.add_trace(go.Scatter(
-                x=_sub.index, y=(_sub / _sub.iloc[0]).to_numpy() * portfolio_value,
-                name=_nm, line=dict(color=_c, width=_w)))
-        _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
-                           line_color="#cbd5e1",
-                           annotation_text="break-even", annotation_font_size=10)
-        _fig_pnl.update_layout(
-            height=340, margin=dict(t=30, b=10, l=10, r=10),
-            yaxis_title="Portfolio value ($)", hovermode="x unified",
-            legend=dict(orientation="h", y=1.1),
-            title=dict(text=f"Growth of ${portfolio_value:,.0f} since "
-                            f"{_sm['start'].strftime('%b %d, %Y')} — `{_profile}` profile",
-                       font_size=13))
-        st.plotly_chart(_fig_pnl, use_container_width=True)
-        st.caption("⚠️ Simulated performance of the optimal blend under the "
-                   "selected risk profile (idle capital earning SATA), assuming "
-                   "entry at the close of the anchor bar — the blend weights are "
-                   "fit on the full history (in-sample). Not investment advice.")
+            # equity curve re-based to the portfolio value at the chosen start
+            _fig_pnl = go.Figure()
+            _pnl_styles = {"Optimal blend": ("#111827", 3),
+                           "Equal-weight strategies": ("#0ea5e9", 1.5),
+                           "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
+            for _nm, _cv in _PF["curves"].items():
+                _sub = _cv.loc[pd.Timestamp(_start_sel):]
+                if len(_sub) < 2:
+                    continue
+                _c, _w = _pnl_styles.get(_nm, ("#888", 1.5))
+                _fig_pnl.add_trace(go.Scatter(
+                    x=_sub.index, y=(_sub / _sub.iloc[0]).to_numpy() * portfolio_value,
+                    name=_nm, line=dict(color=_c, width=_w)))
+            _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
+                               line_color="#cbd5e1",
+                               annotation_text="break-even", annotation_font_size=10)
+            _fig_pnl.update_layout(
+                height=340, margin=dict(t=30, b=10, l=10, r=10),
+                yaxis_title="Portfolio value ($)", hovermode="x unified",
+                legend=dict(orientation="h", y=1.1),
+                title=dict(text=f"Growth of ${portfolio_value:,.0f} since "
+                                f"{_sm['start'].strftime('%b %d, %Y')} — `{_profile}` profile",
+                           font_size=13))
+            st.plotly_chart(_fig_pnl, use_container_width=True)
+            st.caption("⚠️ Simulated performance of the optimal blend under the "
+                       "selected risk profile (idle capital earning SATA), assuming "
+                       "entry at the close of the anchor bar — the blend weights are "
+                       "fit on the full history (in-sample). Not investment advice.")
 
-        # ── per-asset breakdown — opt-in via expander so the page stays clean ──
-        # (_pa computed above, alongside the blend-level trade stats)
-        with st.expander(f"🔬 Per-asset breakdown since "
+            # ── per-asset breakdown — opt-in via toggle so the page stays clean
+            # (a nested st.expander is not allowed inside the section expander)
+            # (_pa computed above, alongside the blend-level trade stats)
+            if st.toggle(f"🔬 Per-asset breakdown since "
                          f"{_sm['start'].strftime('%b %d, %Y')} — every sleeve's "
-                         "return & risk (tap to expand)"):
-            st.caption("Each instrument's **own signal-driven strategy** vs "
-                       "simply buying & holding it, both measured from the same "
-                       "start date. **In mkt** = share of days the sleeve was "
-                       "actually long (it earns SATA when flat inside the blend); "
-                       "**Opt. wt** = its weight in the active profile's optimal "
-                       "blend. Sleeves whose data begins after the start date "
-                       "are measured from their own first bar (noted inline).")
-            if not _pa:
-                st.info("No instrument has enough history after that date.")
-            else:
-                # quick visual: strategy vs buy & hold return per sleeve
-                _pa_sorted = sorted(_pa, key=lambda x: x["strat"]["total_ret"])
-                fig_pa = go.Figure()
-                fig_pa.add_trace(go.Bar(
-                    y=[p["key"] for p in _pa_sorted],
-                    x=[p["strat"]["total_ret"] * 100 for p in _pa_sorted],
-                    name="Strategy", orientation="h",
-                    marker_color=[p["accent"] for p in _pa_sorted],
-                    text=[f"{p['strat']['total_ret']*100:+.1f}%" for p in _pa_sorted],
-                    textposition="outside", cliponaxis=False))
-                fig_pa.add_trace(go.Bar(
-                    y=[p["key"] for p in _pa_sorted],
-                    x=[(p["bh"]["total_ret"] * 100 if p["bh"] else 0) for p in _pa_sorted],
-                    name="Buy & Hold", orientation="h", marker_color="#cbd5e1"))
-                fig_pa.update_layout(
-                    barmode="group", height=max(300, 26 * len(_pa_sorted) + 80),
-                    margin=dict(t=30, b=10, l=10, r=40),
-                    xaxis_title="return since start (%)",
-                    legend=dict(orientation="h", y=1.06),
-                    title=dict(text="Return by sleeve — strategy vs buy & hold",
-                               font_size=13))
-                fig_pa.add_vline(x=0, line_color="#94a3b8", line_width=1)
-                st.plotly_chart(fig_pa, use_container_width=True)
+                         "return & risk (toggle to show)",
+                         key="overall_pa_breakdown"):
+                st.caption("Each instrument's **own signal-driven strategy** vs "
+                           "simply buying & holding it, both measured from the same "
+                           "start date. **In mkt** = share of days the sleeve was "
+                           "actually long (it earns SATA when flat inside the blend); "
+                           "**Opt. wt** = its weight in the active profile's optimal "
+                           "blend. Sleeves whose data begins after the start date "
+                           "are measured from their own first bar (noted inline).")
+                if not _pa:
+                    st.info("No instrument has enough history after that date.")
+                else:
+                    # quick visual: strategy vs buy & hold return per sleeve
+                    _pa_sorted = sorted(_pa, key=lambda x: x["strat"]["total_ret"])
+                    fig_pa = go.Figure()
+                    fig_pa.add_trace(go.Bar(
+                        y=[p["key"] for p in _pa_sorted],
+                        x=[p["strat"]["total_ret"] * 100 for p in _pa_sorted],
+                        name="Strategy", orientation="h",
+                        marker_color=[p["accent"] for p in _pa_sorted],
+                        text=[f"{p['strat']['total_ret']*100:+.1f}%" for p in _pa_sorted],
+                        textposition="outside", cliponaxis=False))
+                    fig_pa.add_trace(go.Bar(
+                        y=[p["key"] for p in _pa_sorted],
+                        x=[(p["bh"]["total_ret"] * 100 if p["bh"] else 0) for p in _pa_sorted],
+                        name="Buy & Hold", orientation="h", marker_color="#cbd5e1"))
+                    fig_pa.update_layout(
+                        barmode="group", height=max(300, 26 * len(_pa_sorted) + 80),
+                        margin=dict(t=30, b=10, l=10, r=40),
+                        xaxis_title="return since start (%)",
+                        legend=dict(orientation="h", y=1.06),
+                        title=dict(text="Return by sleeve — strategy vs buy & hold",
+                                   font_size=13))
+                    fig_pa.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                    st.plotly_chart(fig_pa, use_container_width=True)
 
-                # detail table, grouped by parent signal like the rest of the app
-                pah = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
-                       "<th style='padding:6px 10px'>Instrument</th>"
-                       "<th style='text-align:right'>Strat P&amp;L</th>"
-                       "<th style='text-align:right'>Buy&amp;Hold</th>"
-                       "<th style='text-align:right'>Max DD</th>"
-                       "<th style='text-align:right'>Sharpe</th>"
-                       "<th style='text-align:right'>Trades</th>"
-                       "<th style='text-align:right'>Win rate</th>"
-                       "<th style='text-align:right'>Win days</th>"
-                       "<th style='text-align:right'>In mkt</th>"
-                       "<th style='text-align:right'>Opt. wt</th></tr>")
-                par = []
-                _wts = opt["optimal"]["weights"]
-                _pa_by_key = {p["key"]: p for p in _pa}
-                for pk, grp in parents:
-                    for res in grp:
-                        p = _pa_by_key.get(res["key"])
-                        if not p:
-                            continue
-                        sm_a, bh_a = p["strat"], p["bh"]
-                        beat = bh_a is None or sm_a["total_ret"] >= bh_a["total_ret"]
-                        _rc = C_BUY if sm_a["total_ret"] >= 0 else C_EXIT
-                        _late = (f"<div style='font-size:10px;color:#94a3b8'>since "
-                                 f"{sm_a['start'].strftime('%b %d, %Y')}</div>"
-                                 if sm_a["start"] > _sm["start"] else "")
-                        _tr = p["trades"]
-                        _tr_s = (f"{_tr['n_trades']}"
-                                 + (f" <span style='color:{C_HOLD};font-size:10px'>"
-                                    f"({_tr['n_open']} open)</span>"
-                                    if _tr["n_open"] else ""))
-                        _wr_s = ("—" if _tr["win_rate"] is None
-                                 else f"{_tr['win_rate']*100:.0f}%"
-                                      f" <span style='color:#94a3b8;font-size:10px'>"
-                                      f"({_tr['wins']}/{_tr['n_trades']})</span>")
+                    # detail table, grouped by parent signal like the rest of the app
+                    pah = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                           "<th style='padding:6px 10px'>Instrument</th>"
+                           "<th style='text-align:right'>Strat P&amp;L</th>"
+                           "<th style='text-align:right'>Buy&amp;Hold</th>"
+                           "<th style='text-align:right'>Max DD</th>"
+                           "<th style='text-align:right'>Sharpe</th>"
+                           "<th style='text-align:right'>Trades</th>"
+                           "<th style='text-align:right'>Win rate</th>"
+                           "<th style='text-align:right'>Win days</th>"
+                           "<th style='text-align:right'>In mkt</th>"
+                           "<th style='text-align:right'>Opt. wt</th></tr>")
+                    par = []
+                    _wts = opt["optimal"]["weights"]
+                    _pa_by_key = {p["key"]: p for p in _pa}
+                    for pk, grp in parents:
+                        for res in grp:
+                            p = _pa_by_key.get(res["key"])
+                            if not p:
+                                continue
+                            sm_a, bh_a = p["strat"], p["bh"]
+                            beat = bh_a is None or sm_a["total_ret"] >= bh_a["total_ret"]
+                            _rc = C_BUY if sm_a["total_ret"] >= 0 else C_EXIT
+                            _late = (f"<div style='font-size:10px;color:#94a3b8'>since "
+                                     f"{sm_a['start'].strftime('%b %d, %Y')}</div>"
+                                     if sm_a["start"] > _sm["start"] else "")
+                            _tr = p["trades"]
+                            _tr_s = (f"{_tr['n_trades']}"
+                                     + (f" <span style='color:{C_HOLD};font-size:10px'>"
+                                        f"({_tr['n_open']} open)</span>"
+                                        if _tr["n_open"] else ""))
+                            _wr_s = ("—" if _tr["win_rate"] is None
+                                     else f"{_tr['win_rate']*100:.0f}%"
+                                          f" <span style='color:#94a3b8;font-size:10px'>"
+                                          f"({_tr['wins']}/{_tr['n_trades']})</span>")
+                            par.append(
+                                f"<tr style='border-bottom:1px solid #eef2f7'>"
+                                f"<td style='padding:6px 10px;font-weight:700'>"
+                                f"{p['emoji']} {p['key']}{_kind_badge(p['kind'])}"
+                                f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
+                                f" {p['name']}</span>{_late}</td>"
+                                f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
+                                f"{sm_a['total_ret']*100:+.1f}%"
+                                f"{' 🏆' if beat and bh_a is not None else ''}</td>"
+                                f"<td style='text-align:right;color:#64748b'>"
+                                f"{_pct(bh_a['total_ret']*100) if bh_a else '—'}</td>"
+                                f"<td style='text-align:right;color:{C_EXIT}'>{sm_a['mdd']*100:.1f}%</td>"
+                                f"<td style='text-align:right'>{sm_a['sharpe']:.2f}</td>"
+                                f"<td style='text-align:right;font-weight:600'>{_tr_s}</td>"
+                                f"<td style='text-align:right;font-weight:600'>{_wr_s}</td>"
+                                f"<td style='text-align:right'>{sm_a['win_days']*100:.0f}%</td>"
+                                f"<td style='text-align:right'>{p['in_market']*100:.0f}%</td>"
+                                f"<td style='text-align:right;font-weight:700'>"
+                                f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
+                    # SATA — the idle-cash sleeve every flat day drains into
+                    _sata_m = ov.sata_slice_metrics(_curve_all.index, _start_sel)
+                    if _sata_m:
                         par.append(
-                            f"<tr style='border-bottom:1px solid #eef2f7'>"
-                            f"<td style='padding:6px 10px;font-weight:700'>"
-                            f"{p['emoji']} {p['key']}{_kind_badge(p['kind'])}"
-                            f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
-                            f" {p['name']}</span>{_late}</td>"
-                            f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
-                            f"{sm_a['total_ret']*100:+.1f}%"
-                            f"{' 🏆' if beat and bh_a is not None else ''}</td>"
+                            f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+                            f"<td style='padding:6px 10px;font-weight:700'>💵 SATA"
+                            f"<span style='font-size:11px;color:#64748b;font-weight:400'>"
+                            f" {ov.SATA['name']}</span></td>"
+                            f"<td style='text-align:right;font-weight:700;color:{C_BUY}'>"
+                            f"{_sata_m['total_ret']*100:+.1f}%</td>"
                             f"<td style='text-align:right;color:#64748b'>"
-                            f"{_pct(bh_a['total_ret']*100) if bh_a else '—'}</td>"
-                            f"<td style='text-align:right;color:{C_EXIT}'>{sm_a['mdd']*100:.1f}%</td>"
-                            f"<td style='text-align:right'>{sm_a['sharpe']:.2f}</td>"
-                            f"<td style='text-align:right;font-weight:600'>{_tr_s}</td>"
-                            f"<td style='text-align:right;font-weight:600'>{_wr_s}</td>"
-                            f"<td style='text-align:right'>{sm_a['win_days']*100:.0f}%</td>"
-                            f"<td style='text-align:right'>{p['in_market']*100:.0f}%</td>"
-                            f"<td style='text-align:right;font-weight:700'>"
-                            f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
-                # SATA — the idle-cash sleeve every flat day drains into
-                _sata_m = ov.sata_slice_metrics(_curve_all.index, _start_sel)
-                if _sata_m:
-                    par.append(
-                        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
-                        f"<td style='padding:6px 10px;font-weight:700'>💵 SATA"
-                        f"<span style='font-size:11px;color:#64748b;font-weight:400'>"
-                        f" {ov.SATA['name']}</span></td>"
-                        f"<td style='text-align:right;font-weight:700;color:{C_BUY}'>"
-                        f"{_sata_m['total_ret']*100:+.1f}%</td>"
-                        f"<td style='text-align:right;color:#64748b'>"
-                        f"{_sata_m['total_ret']*100:+.1f}%</td>"
-                        f"<td style='text-align:right;color:#64748b'>0.0%</td>"
-                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
-                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
-                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
-                        f"<td style='text-align:right'>100%</td>"
-                        f"<td style='text-align:right'>100%</td>"
-                        f"<td style='text-align:right;color:#94a3b8'>idle bal.</td></tr>")
-                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                            f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
-                st.caption("🏆 = the sleeve's strategy beat buying & holding it "
-                           "over this window. **Trades** counts round-trips open "
-                           "at any point since the start date (open positions "
-                           "included); **Win rate** judges closed trades on their "
-                           "realised return and the open one on its current "
-                           "unrealised P&L, while **Win days** is the share of "
-                           "positive daily returns. **SATA** is the idle-cash "
-                           "park: a steady ~13%/yr daily yield on a flat $100 "
-                           "par — no drawdown, no trades, its weight is simply "
-                           "whatever the risk sleeves leave undeployed each day. "
-                           "Per-sleeve returns exclude that SATA yield (it "
-                           "accrues at the blend level), so the sleeves won't "
-                           "sum to the blend P&L.")
+                            f"{_sata_m['total_ret']*100:+.1f}%</td>"
+                            f"<td style='text-align:right;color:#64748b'>0.0%</td>"
+                            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                            f"<td style='text-align:right'>100%</td>"
+                            f"<td style='text-align:right'>100%</td>"
+                            f"<td style='text-align:right;color:#94a3b8'>idle bal.</td></tr>")
+                    st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
+                    st.caption("🏆 = the sleeve's strategy beat buying & holding it "
+                               "over this window. **Trades** counts round-trips open "
+                               "at any point since the start date (open positions "
+                               "included); **Win rate** judges closed trades on their "
+                               "realised return and the open one on its current "
+                               "unrealised P&L, while **Win days** is the share of "
+                               "positive daily returns. **SATA** is the idle-cash "
+                               "park: a steady ~13%/yr daily yield on a flat $100 "
+                               "par — no drawdown, no trades, its weight is simply "
+                               "whatever the risk sleeves leave undeployed each day. "
+                               "Per-sleeve returns exclude that SATA yield (it "
+                               "accrues at the blend level), so the sleeves won't "
+                               "sum to the blend P&L.")
 
-        # ── trade log — the individual trades behind the counts above ──────
-        _tl = ov.trade_log_since(results, opt["optimal"]["weights"], _start_sel)
-        _n_open_tl = sum(1 for t in _tl if t["open"])
-        with st.expander(
-                f"📜 Trade log since {_sm['start'].strftime('%b %d, %Y')} — "
-                f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
-                f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (tap to expand)"):
-            st.caption("Every round-trip across the sleeves the optimal blend "
-                       "holds (weight > 0) that was open at any point since the "
-                       "start date — including trades entered before it — plus "
-                       "any **currently-open position** (highlighted; its return "
-                       "is unrealised, marked to the latest price). Newest "
-                       "first. **≈ $ on blend** scales each trade's return by "
-                       "the sleeve's blend weight and the 💼 portfolio value — "
-                       "an approximation that ignores compounding.")
-            if not _tl:
-                st.info("No sleeve the blend holds traded in this window.")
-            else:
-                tlh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
-                       "<th style='padding:6px 10px'>Instrument</th>"
-                       "<th>Status</th>"
-                       "<th style='text-align:right'>Entry</th>"
-                       "<th style='text-align:right'>Entry px</th>"
-                       "<th style='text-align:right'>Exit</th>"
-                       "<th style='text-align:right'>Exit / last px</th>"
-                       "<th style='text-align:right'>Days</th>"
-                       "<th style='text-align:right'>Return</th>"
-                       "<th style='text-align:right'>≈ $ on blend</th>"
-                       "<th style='padding-left:10px'>Exit reason</th></tr>")
+            # ── trade log — the individual trades behind the counts above ──────
+            _tl = ov.trade_log_since(results, opt["optimal"]["weights"], _start_sel)
+            _n_open_tl = sum(1 for t in _tl if t["open"])
+            if st.toggle(
+                    f"📜 Trade log since {_sm['start'].strftime('%b %d, %Y')} — "
+                    f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
+                    f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (toggle to show)",
+                    key="overall_trade_log"):
+                st.caption("Every round-trip across the sleeves the optimal blend "
+                           "holds (weight > 0) that was open at any point since the "
+                           "start date — including trades entered before it — plus "
+                           "any **currently-open position** (highlighted; its return "
+                           "is unrealised, marked to the latest price). Newest "
+                           "first. **≈ $ on blend** scales each trade's return by "
+                           "the sleeve's blend weight and the 💼 portfolio value — "
+                           "an approximation that ignores compounding.")
+                if not _tl:
+                    st.info("No sleeve the blend holds traded in this window.")
+                else:
+                    tlh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                           "<th style='padding:6px 10px'>Instrument</th>"
+                           "<th>Status</th>"
+                           "<th style='text-align:right'>Entry</th>"
+                           "<th style='text-align:right'>Entry px</th>"
+                           "<th style='text-align:right'>Exit</th>"
+                           "<th style='text-align:right'>Exit / last px</th>"
+                           "<th style='text-align:right'>Days</th>"
+                           "<th style='text-align:right'>Return</th>"
+                           "<th style='text-align:right'>≈ $ on blend</th>"
+                           "<th style='padding-left:10px'>Exit reason</th></tr>")
 
-                def _tl_px(v):
-                    return "—" if v is None else (f"${v:,.2f}" if v < 1000
-                                                  else f"${v:,.0f}")
+                    def _tl_px(v):
+                        return "—" if v is None else (f"${v:,.2f}" if v < 1000
+                                                      else f"${v:,.0f}")
 
-                def _tl_dt(v):
-                    return "—" if v is None else pd.Timestamp(v).strftime("%b %d, %Y")
+                    def _tl_dt(v):
+                        return "—" if v is None else pd.Timestamp(v).strftime("%b %d, %Y")
 
-                tlr = []
-                for t in _tl:
-                    _ret = t["ret"]
-                    _rc = "#94a3b8" if _ret is None else (C_BUY if _ret >= 0 else C_EXIT)
-                    _bg = "background:#fffbeb;" if t["open"] else ""
-                    _status = ((f"<span style='background:{C_HOLD}22;color:{C_HOLD};"
-                                f"font-weight:700;font-size:10px;padding:1px 6px;"
-                                f"border-radius:6px'>OPEN</span>") if t["open"]
-                               else "<span style='color:#94a3b8;font-size:11px'>closed</span>")
-                    _imp = None if _ret is None else _ret * t["weight"] * portfolio_value
-                    _imp_s = ("—" if _imp is None else
-                              f"<span style='color:{C_BUY if _imp >= 0 else C_EXIT}'>"
-                              f"${_imp:+,.0f}</span>")
-                    _reason = ("<span style='color:#94a3b8;font-size:11px'>— still open</span>"
-                               if t["open"] else t["reason"])
-                    _unreal = ("<div style='font-size:10px;color:#94a3b8;"
-                               "font-weight:400'>unrealised</div>" if t["open"] else "")
-                    tlr.append(
-                        f"<tr style='border-bottom:1px solid #eef2f7;{_bg}'>"
-                        f"<td style='padding:6px 10px;font-weight:700'>"
-                        f"{t['emoji']} {t['key']}{_kind_badge(t['kind'])}"
-                        f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
-                        f" wt {t['weight']*100:.1f}%</span></td>"
-                        f"<td>{_status}</td>"
-                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
-                        f"{_tl_dt(t['entry_date'])}</td>"
-                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
-                        f"{_tl_px(t['entry_px'])}</td>"
-                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
-                        f"{_tl_dt(t['exit_date'])}</td>"
-                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
-                        f"{_tl_px(t['exit_px'])}</td>"
-                        f"<td style='text-align:right'>{'—' if t['days'] is None else t['days']}</td>"
-                        f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
-                        f"{_pct(_ret * 100 if _ret is not None else None)}{_unreal}</td>"
-                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_imp_s}</td>"
-                        f"<td style='padding-left:10px;font-size:11px;color:#64748b'>{_reason}</td></tr>")
-                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                            f"{tlh}{''.join(tlr)}</table>", unsafe_allow_html=True)
+                    tlr = []
+                    for t in _tl:
+                        _ret = t["ret"]
+                        _rc = "#94a3b8" if _ret is None else (C_BUY if _ret >= 0 else C_EXIT)
+                        _bg = "background:#fffbeb;" if t["open"] else ""
+                        _status = ((f"<span style='background:{C_HOLD}22;color:{C_HOLD};"
+                                    f"font-weight:700;font-size:10px;padding:1px 6px;"
+                                    f"border-radius:6px'>OPEN</span>") if t["open"]
+                                   else "<span style='color:#94a3b8;font-size:11px'>closed</span>")
+                        _imp = None if _ret is None else _ret * t["weight"] * portfolio_value
+                        _imp_s = ("—" if _imp is None else
+                                  f"<span style='color:{C_BUY if _imp >= 0 else C_EXIT}'>"
+                                  f"${_imp:+,.0f}</span>")
+                        _reason = ("<span style='color:#94a3b8;font-size:11px'>— still open</span>"
+                                   if t["open"] else t["reason"])
+                        _unreal = ("<div style='font-size:10px;color:#94a3b8;"
+                                   "font-weight:400'>unrealised</div>" if t["open"] else "")
+                        tlr.append(
+                            f"<tr style='border-bottom:1px solid #eef2f7;{_bg}'>"
+                            f"<td style='padding:6px 10px;font-weight:700'>"
+                            f"{t['emoji']} {t['key']}{_kind_badge(t['kind'])}"
+                            f"<span style='font-size:11px;color:#94a3b8;font-weight:400'>"
+                            f" wt {t['weight']*100:.1f}%</span></td>"
+                            f"<td>{_status}</td>"
+                            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                            f"{_tl_dt(t['entry_date'])}</td>"
+                            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                            f"{_tl_px(t['entry_px'])}</td>"
+                            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                            f"{_tl_dt(t['exit_date'])}</td>"
+                            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                            f"{_tl_px(t['exit_px'])}</td>"
+                            f"<td style='text-align:right'>{'—' if t['days'] is None else t['days']}</td>"
+                            f"<td style='text-align:right;font-weight:700;color:{_rc}'>"
+                            f"{_pct(_ret * 100 if _ret is not None else None)}{_unreal}</td>"
+                            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_imp_s}</td>"
+                            f"<td style='padding-left:10px;font-size:11px;color:#64748b'>{_reason}</td></tr>")
+                    st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{tlh}{''.join(tlr)}</table>", unsafe_allow_html=True)
 
-        # ── capital traded by asset — where the strategy put the money ─────
-        with st.expander(
-                f"🥧 Capital traded by asset since "
-                f"{_sm['start'].strftime('%b %d, %Y')} — % of total deployed "
-                "capital (tap to expand)"):
-            st.caption("Each round-trip in the trade log above (open positions "
-                       "included) deploys its sleeve's blend weight of the 💼 "
-                       "portfolio value at entry. Summing those entry notionals "
-                       "per instrument shows **where the strategy actually put "
-                       "capital to work** since the start date. The percentage "
-                       "shares are independent of the portfolio value entered — "
-                       "only the dollar figures scale with it.")
-            if not _tl:
-                st.info("No sleeve the blend holds traded in this window — "
-                        "nothing was deployed.")
-            else:
-                _cap, _cnt, _tl_meta = {}, {}, {}
-                for t in _tl:
-                    _cap[t["key"]] = _cap.get(t["key"], 0.0) + t["weight"] * portfolio_value
-                    _cnt[t["key"]] = _cnt.get(t["key"], 0) + 1
-                    _tl_meta[t["key"]] = t
-                _ck = sorted(_cap, key=_cap.get, reverse=True)
-                _cap_tot = sum(_cap.values())
-                # fold sleeves under 2.5% of the total into one "Other" slice so
-                # the pie stays readable — their split lives in the Other hover
-                _big = [k for k in _ck if _cap[k] / _cap_tot >= 0.025]
-                _small = [k for k in _ck if k not in _big]
-                if len(_small) == 1:          # folding a single sleeve saves nothing
-                    _big, _small = _ck, []
-                _lbls = [f"{_tl_meta[k]['emoji']} {k}" for k in _big]
-                _vals = [_cap[k] for k in _big]
-                _cols = [_tl_meta[k]["accent"] for k in _big]
-                _hov = [f"{_cnt[k]} trade{'s' if _cnt[k] != 1 else ''} · blend wt "
-                        f"{_tl_meta[k]['weight']*100:.1f}%" for k in _big]
-                if _small:
-                    _lbls.append(f"Other ({len(_small)} sleeves)")
-                    _vals.append(sum(_cap[k] for k in _small))
-                    _cols.append("#94a3b8")
-                    _hov.append("<br>".join(
-                        f"{_tl_meta[k]['emoji']} {k}: {_cap[k]/_cap_tot*100:.1f}%"
-                        f" · {_cnt[k]} trade{'s' if _cnt[k] != 1 else ''}"
-                        for k in _small))
-                fig_cap = go.Figure(go.Pie(
-                    labels=_lbls, values=_vals,
-                    customdata=[[h] for h in _hov],
-                    marker=dict(colors=_cols, line=dict(color="#ffffff", width=2)),
-                    hole=0.45, sort=False, direction="clockwise",
-                    textinfo="label+percent",
-                    hovertemplate="%{label}: <b>%{percent}</b> of deployed "
-                                  "capital · ≈ $%{value:,.0f}<br>"
-                                  "%{customdata[0]}<extra></extra>"))
-                fig_cap.update_layout(
-                    height=430, margin=dict(t=40, b=10, l=10, r=10),
-                    title=dict(text=f"Share of deployed capital per instrument — "
-                                    f"total ≈ ${_cap_tot:,.0f} across {len(_tl)} "
-                                    f"trade{'s' if len(_tl) != 1 else ''}",
-                               font_size=13))
-                st.plotly_chart(fig_cap, use_container_width=True)
+            # ── capital traded by asset — where the strategy put the money ─────
+            if st.toggle(
+                    f"🥧 Capital traded by asset since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — % of total deployed "
+                    "capital (toggle to show)",
+                    key="overall_capital_by_asset"):
+                st.caption("Each round-trip in the trade log above (open positions "
+                           "included) deploys its sleeve's blend weight of the 💼 "
+                           "portfolio value at entry. Summing those entry notionals "
+                           "per instrument shows **where the strategy actually put "
+                           "capital to work** since the start date. The percentage "
+                           "shares are independent of the portfolio value entered — "
+                           "only the dollar figures scale with it.")
+                if not _tl:
+                    st.info("No sleeve the blend holds traded in this window — "
+                            "nothing was deployed.")
+                else:
+                    _cap, _cnt, _tl_meta = {}, {}, {}
+                    for t in _tl:
+                        _cap[t["key"]] = _cap.get(t["key"], 0.0) + t["weight"] * portfolio_value
+                        _cnt[t["key"]] = _cnt.get(t["key"], 0) + 1
+                        _tl_meta[t["key"]] = t
+                    _ck = sorted(_cap, key=_cap.get, reverse=True)
+                    _cap_tot = sum(_cap.values())
+                    # fold sleeves under 2.5% of the total into one "Other" slice so
+                    # the pie stays readable — their split lives in the Other hover
+                    _big = [k for k in _ck if _cap[k] / _cap_tot >= 0.025]
+                    _small = [k for k in _ck if k not in _big]
+                    if len(_small) == 1:          # folding a single sleeve saves nothing
+                        _big, _small = _ck, []
+                    _lbls = [f"{_tl_meta[k]['emoji']} {k}" for k in _big]
+                    _vals = [_cap[k] for k in _big]
+                    _cols = [_tl_meta[k]["accent"] for k in _big]
+                    _hov = [f"{_cnt[k]} trade{'s' if _cnt[k] != 1 else ''} · blend wt "
+                            f"{_tl_meta[k]['weight']*100:.1f}%" for k in _big]
+                    if _small:
+                        _lbls.append(f"Other ({len(_small)} sleeves)")
+                        _vals.append(sum(_cap[k] for k in _small))
+                        _cols.append("#94a3b8")
+                        _hov.append("<br>".join(
+                            f"{_tl_meta[k]['emoji']} {k}: {_cap[k]/_cap_tot*100:.1f}%"
+                            f" · {_cnt[k]} trade{'s' if _cnt[k] != 1 else ''}"
+                            for k in _small))
+                    fig_cap = go.Figure(go.Pie(
+                        labels=_lbls, values=_vals,
+                        customdata=[[h] for h in _hov],
+                        marker=dict(colors=_cols, line=dict(color="#ffffff", width=2)),
+                        hole=0.45, sort=False, direction="clockwise",
+                        textinfo="label+percent",
+                        hovertemplate="%{label}: <b>%{percent}</b> of deployed "
+                                      "capital · ≈ $%{value:,.0f}<br>"
+                                      "%{customdata[0]}<extra></extra>"))
+                    fig_cap.update_layout(
+                        height=430, margin=dict(t=40, b=10, l=10, r=10),
+                        title=dict(text=f"Share of deployed capital per instrument — "
+                                        f"total ≈ ${_cap_tot:,.0f} across {len(_tl)} "
+                                        f"trade{'s' if len(_tl) != 1 else ''}",
+                                   font_size=13))
+                    st.plotly_chart(fig_cap, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════
