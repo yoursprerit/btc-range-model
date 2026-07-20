@@ -1215,21 +1215,20 @@ with tab_live:
                                    font_size=13))
                     st.plotly_chart(fig_cap, use_container_width=True)
 
-            # ── P&L share by asset — where the profits actually came from ─────
+            # ── P&L by asset — where the profits actually came from ──────────
             if st.toggle(
-                    f"🍩 P&L share by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — % of total P&L "
-                    "earned per instrument (toggle to show)",
+                    f"📊 P&L by asset since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — how much each "
+                    "instrument earned or lost (toggle to show)",
                     key="overall_pnl_share_by_asset"):
                 st.caption("Each trade's **≈ $ on blend** impact (return × blend "
                            "weight × 💼 portfolio value, open positions marked to "
                            "the latest price) summed per instrument shows **which "
                            "sleeves actually earned the P&L** since the start "
-                           "date. The donut splits the total profit across the "
-                           "**net-winning sleeves**; a net-losing sleeve can't be "
-                           "drawn as a slice, so losses are listed below and "
-                           "netted in the title. Like the trade log, this "
-                           "excludes the blend-level SATA yield on idle capital.")
+                           "date — green bars are net winners, red bars net "
+                           "losers, and each bar is labelled with its share of "
+                           "the net total. Like the trade log, this excludes the "
+                           "blend-level SATA yield on idle capital.")
                 if not _tl:
                     st.info("No sleeve the blend holds traded in this window — "
                             "no P&L to attribute.")
@@ -1243,61 +1242,40 @@ with tab_live:
                         _pcnt[t["key"]] = _pcnt.get(t["key"], 0) + 1
                         _pmeta[t["key"]] = t
                     _net_tot = sum(_pnl_by.values())
-                    _winners = {k: v for k, v in _pnl_by.items() if v > 0}
-                    _losers = {k: v for k, v in _pnl_by.items() if v < 0}
-                    if not _winners:
-                        st.info("No sleeve has a net profit over this window — "
-                                "there are no earnings to split into a donut.")
-                    else:
-                        _win_tot = sum(_winners.values())
-                        _wk = sorted(_winners, key=_winners.get, reverse=True)
-                        # fold sleeves under 2.5% of the profits into one "Other"
-                        # slice so the donut stays readable — same as the capital pie
-                        _big = [k for k in _wk if _winners[k] / _win_tot >= 0.025]
-                        _small = [k for k in _wk if k not in _big]
-                        if len(_small) == 1:          # folding a single sleeve saves nothing
-                            _big, _small = _wk, []
-                        _lbls = [f"{_pmeta[k]['emoji']} {k}" for k in _big]
-                        _vals = [_winners[k] for k in _big]
-                        _cols = [_pmeta[k]["accent"] for k in _big]
-                        _hov = [f"{_pcnt[k]} trade{'s' if _pcnt[k] != 1 else ''} · blend wt "
-                                f"{_pmeta[k]['weight']*100:.1f}%" for k in _big]
-                        if _small:
-                            _lbls.append(f"Other ({len(_small)} sleeves)")
-                            _vals.append(sum(_winners[k] for k in _small))
-                            _cols.append("#94a3b8")
-                            _hov.append("<br>".join(
-                                f"{_pmeta[k]['emoji']} {k}: "
-                                f"{_winners[k]/_win_tot*100:.1f}% · ${_winners[k]:+,.0f}"
-                                for k in _small))
-                        _loss_tot = sum(_losers.values())
-                        fig_pnl_share = go.Figure(go.Pie(
-                            labels=_lbls, values=_vals,
-                            customdata=[[h] for h in _hov],
-                            marker=dict(colors=_cols, line=dict(color="#ffffff", width=2)),
-                            hole=0.45, sort=False, direction="clockwise",
-                            textinfo="label+percent",
-                            hovertemplate="%{label}: <b>%{percent}</b> of profits "
-                                          "earned · ≈ $%{value:+,.0f}<br>"
-                                          "%{customdata[0]}<extra></extra>"))
-                        fig_pnl_share.update_layout(
-                            height=430, margin=dict(t=40, b=10, l=10, r=10),
-                            title=dict(text=f"Share of P&L earned per instrument — "
-                                            f"≈ ${_win_tot:+,.0f} profits"
-                                            + (f" · ${_loss_tot:+,.0f} losses"
-                                               if _losers else "")
-                                            + f" · net ≈ ${_net_tot:+,.0f}",
-                                       font_size=13))
-                        st.plotly_chart(fig_pnl_share, use_container_width=True)
-                    if _losers:
-                        st.markdown(
-                            "<div style='font-size:12px;color:#64748b'>"
-                            "Net-losing sleeves (excluded from the donut): "
-                            + " · ".join(
-                                f"{_pmeta[k]['emoji']} <b>{k}</b> "
-                                f"<span style='color:{C_EXIT}'>${_losers[k]:+,.0f}</span>"
-                                for k in sorted(_losers, key=_losers.get))
-                            + "</div>", unsafe_allow_html=True)
+                    _win_tot = sum(v for v in _pnl_by.values() if v > 0)
+                    _loss_tot = sum(v for v in _pnl_by.values() if v < 0)
+                    # biggest earner on top, biggest loser at the bottom
+                    _pk_sorted = sorted(_pnl_by, key=_pnl_by.get)
+                    # share of the net total only reads sensibly when it's positive
+                    _txt = [f"${_pnl_by[k]:+,.0f}"
+                            + (f" · {_pnl_by[k]/_net_tot*100:+.0f}% of net"
+                               if _net_tot > 0 else "")
+                            for k in _pk_sorted]
+                    fig_pnl_by = go.Figure(go.Bar(
+                        y=[f"{_pmeta[k]['emoji']} {k}" for k in _pk_sorted],
+                        x=[_pnl_by[k] for k in _pk_sorted],
+                        orientation="h",
+                        marker_color=[C_BUY if _pnl_by[k] >= 0 else C_EXIT
+                                      for k in _pk_sorted],
+                        text=_txt, textposition="outside", cliponaxis=False,
+                        customdata=[[f"{_pcnt[k]} trade"
+                                     f"{'s' if _pcnt[k] != 1 else ''} · blend wt "
+                                     f"{_pmeta[k]['weight']*100:.1f}%"]
+                                    for k in _pk_sorted],
+                        hovertemplate="%{y}: <b>$%{x:+,.0f}</b><br>"
+                                      "%{customdata[0]}<extra></extra>"))
+                    fig_pnl_by.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                    fig_pnl_by.update_layout(
+                        height=max(300, 26 * len(_pk_sorted) + 80),
+                        margin=dict(t=40, b=10, l=10, r=90),
+                        xaxis_title="≈ $ P&L on blend since start",
+                        title=dict(text=f"P&L earned per instrument — "
+                                        f"≈ ${_win_tot:+,.0f} profits"
+                                        + (f" · ${_loss_tot:+,.0f} losses"
+                                           if _loss_tot < 0 else "")
+                                        + f" · net ≈ ${_net_tot:+,.0f}",
+                                   font_size=13))
+                    st.plotly_chart(fig_pnl_by, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════
