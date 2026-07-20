@@ -799,6 +799,49 @@ def sata_slice_metrics(index: pd.Index, start) -> dict | None:
                 vol=0.0, win_days=1.0, best_day=SATA_DAILY, worst_day=SATA_DAILY)
 
 
+def pnl_attribution_since(returns: pd.DataFrame, weights, start,
+                          pos: pd.DataFrame | None = None,
+                          sata_daily: float = 0.0) -> dict | None:
+    """Exact per-sleeve attribution of the blend's P&L since ``start``.
+
+    Re-runs the same daily maths as ``_combine`` on the slice from the anchor
+    bar, but keeps each sleeve's term separate and scales every day's return
+    by the blend's compounded value at the previous close.  Because the day's
+    dollar P&L is exactly ``V_prev × (Σ_k ew_k·r_k + sata·idle)``, the per-key
+    dollars plus the SATA term sum *exactly* (to float precision) to the
+    blend's re-based total return since the anchor — i.e. the same number
+    ``slice_metrics`` reports for the blend curve.  All figures are per $1
+    invested at the anchor close (the anchor bar itself is the cost basis, so
+    its return is not counted).  Returns ``None`` with <2 bars since ``start``.
+    """
+    sub = returns.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return None
+    w = np.asarray(weights, float)
+    avail = sub.notna().to_numpy()
+    wt = avail * w
+    denom = wt.sum(axis=1, keepdims=True)
+    zero = denom[:, 0] == 0
+    denom[denom == 0] = np.nan
+    ew = np.nan_to_num(wt / denom)               # deployed weights, sum→1
+    contrib = ew * np.nan_to_num(sub.to_numpy()) # per-sleeve daily return term
+    sata_term = np.zeros(len(sub))
+    if pos is not None and sata_daily:
+        P = np.nan_to_num(pos.reindex(sub.index).to_numpy())
+        idle = (ew * (1.0 - P) * avail).sum(axis=1)
+        sata_term = sata_daily * idle
+        sata_term[zero] = sata_daily             # fully-cash day → all in SATA
+    contrib[0, :] = 0.0                          # anchor bar = cost basis
+    sata_term[0] = 0.0
+    port = contrib.sum(axis=1) + sata_term
+    v_prev = np.concatenate([[1.0], np.cumprod(1.0 + port)[:-1]])
+    dollars = (contrib * v_prev[:, None]).sum(axis=0)
+    return dict(per_key={c: float(v) for c, v in zip(sub.columns, dollars)},
+                sata=float((sata_term * v_prev).sum()),
+                total=float(np.prod(1.0 + port) - 1.0),
+                start=sub.index[0], end=sub.index[-1])
+
+
 def _metrics_batch(returns: pd.DataFrame, cand: np.ndarray,
                    pos: pd.DataFrame | None = None, sata_daily: float = 0.0,
                    chunk: int | None = None):
