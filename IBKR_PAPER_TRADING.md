@@ -219,6 +219,14 @@ cron fires **every day** (12:30 UTC), weekends and US market holidays included �
 Bitcoin trades continuously, so the book is refreshed daily; only the *executor*
 skips non-trading days.
 
+You can also publish **on demand from the app**: the 📋 Target Book page has a
+**🚀 Publish new target book** button that dispatches the same GitHub Action via
+`workflow_dispatch`, so a fresh signed book is computed and committed without
+leaving the UI. It needs a `GITHUB_TOKEN` in Streamlit secrets (or env) — a
+fine-grained PAT with **Actions: read & write** on this repo. Optional secrets:
+`GITHUB_REPO` (`owner/repo`, auto-detected otherwise) and `GITHUB_PUBLISH_REF`
+(branch to run/commit on, default `main`).
+
 > **Scheduling caveat:** GitHub runs `on: schedule` **only from the repository's
 > default branch**. While this workflow lives only on the feature branch, trigger
 > it **manually** (Actions tab → *Run workflow* → pick the branch) or via the

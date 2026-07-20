@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -64,16 +65,115 @@ with st.sidebar:
                "executor trades. See IBKR_PAPER_TRADING.md for the full flow._")
 
 
+def _conf(*keys: str) -> str | None:
+    """First non-empty value for any of *keys* from Streamlit secrets or the
+    environment (secrets win, checked in the order given)."""
+    for k in keys:
+        try:
+            s = st.secrets.get(k)
+            if s:
+                return str(s)
+        except Exception:
+            pass
+    for k in keys:
+        v = os.environ.get(k)
+        if v:
+            return v
+    return None
+
+
 def _secret() -> str | None:
     """Shared HMAC secret, from Streamlit secrets or the environment (either may
     be absent — then the book is shown but not cryptographically verified)."""
+    return _conf("OVERALL_BOOK_SECRET")
+
+
+# ── publish button (dispatches the GitHub publish workflow) ───────────────────
+PUBLISH_WORKFLOW = "publish-target-book.yml"
+_FALLBACK_REPO = "yoursprerit/btc-range-model"
+
+
+def _github_repo() -> str:
+    """owner/repo to dispatch against: GITHUB_REPO secret/env if set, else the
+    origin remote of this checkout, else the canonical repo."""
+    conf = _conf("GITHUB_REPO")
+    if conf:
+        return conf
     try:
-        s = st.secrets.get("OVERALL_BOOK_SECRET")
-        if s:
-            return str(s)
+        text = (_REPO_ROOT / ".git" / "config").read_text()
+        m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?\s*$",
+                      text, re.MULTILINE)
+        if m:
+            return m.group(1)
     except Exception:
         pass
-    return os.environ.get("OVERALL_BOOK_SECRET")
+    return _FALLBACK_REPO
+
+
+def trigger_publish_workflow(repo: str, ref: str, token: str) -> tuple[bool, str]:
+    """POST a workflow_dispatch for the publish Action. Returns (ok, message).
+
+    The Action runs the full engine on fresh data, HMAC-signs the books and
+    commits target_book(_live).json back to *ref* — i.e. exactly what the daily
+    scheduled publish does, just on demand.
+    """
+    import requests
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{PUBLISH_WORKFLOW}/dispatches"
+    try:
+        r = requests.post(
+            url, json={"ref": ref}, timeout=15,
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28"})
+    except Exception as e:
+        return False, f"Could not reach the GitHub API: {e}"
+    if r.status_code == 204:
+        return True, (f"Publish workflow dispatched on `{repo}@{ref}`. The engine "
+                      "run takes ~5–15 min; the fresh signed book is then committed "
+                      "to the branch and appears here after the app reloads it.")
+    detail = ""
+    try:
+        msg = r.json().get("message")
+        if msg:
+            detail = f" — {msg}"
+    except Exception:
+        pass
+    hint = {401: " (token invalid/expired?)",
+            403: " (token lacks the `actions: write` / workflow scope?)",
+            404: " (repo, workflow file or ref not found — or the token cannot see the repo)",
+            422: f" (ref `{ref}` has no {PUBLISH_WORKFLOW}?)"}.get(r.status_code, "")
+    return False, f"GitHub API returned {r.status_code}{hint}{detail}"
+
+
+def _render_publish_button() -> None:
+    repo = _github_repo()
+    ref = _conf("GITHUB_PUBLISH_REF") or "main"
+    token = _conf("GITHUB_TOKEN", "GH_TOKEN")
+    actions_url = f"https://github.com/{repo}/actions/workflows/{PUBLISH_WORKFLOW}"
+    cols = st.columns([1, 2])
+    clicked = cols[0].button(
+        "🚀 Publish new target book", type="primary", use_container_width=True,
+        disabled=not token,
+        help="Runs the **Publish target book (IBKR Option C)** GitHub Action now: "
+             "the engine recomputes today's allocation from the freshest data, "
+             "signs it, and commits the new target_book(_live).json to "
+             f"`{repo}@{ref}` — same path as the daily scheduled publish.")
+    if not token:
+        cols[1].caption(
+            "_Add a `GITHUB_TOKEN` (fine-grained PAT with **Actions: write** on "
+            f"this repo) to Streamlit secrets to enable this button — or run the "
+            f"[workflow manually]({actions_url})._")
+        return
+    if clicked:
+        with st.spinner("Dispatching the publish workflow…"):
+            ok, msg = trigger_publish_workflow(repo, ref, token)
+        if ok:
+            st.success(msg)
+            st.caption(f"_Watch progress on the [Actions page]({actions_url})._")
+        else:
+            st.error(f"Dispatch failed: {msg}")
+            st.caption(f"_Fallback: run the [workflow manually]({actions_url}) or "
+                       "`python scripts/publish_target_book.py` locally._")
 
 
 # ── reallocation helpers (UI-free, unit-tested) ───────────────────────────────
@@ -320,6 +420,8 @@ _src = st.radio("Book source", ["📦 Published artifact", "🔬 Live preview"],
                      "uses (unsigned unless a secret is configured).")
 
 if _src.startswith("📦"):
+    _render_publish_button()
+    st.markdown("")
     # Paper / Live account selector — Live appears once a live book is published.
     _avail = [("Paper", BOOK_PATH)] + (
         [("Live", BOOK_PATH_LIVE)] if BOOK_PATH_LIVE.exists() else [])
