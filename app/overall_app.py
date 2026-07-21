@@ -48,7 +48,11 @@ import plotly.graph_objects as go
 
 import overall_core as ov
 import ticker_config
+import freshness as fr
 import inspect as _inspect
+
+if not hasattr(fr, "audit_universe"):          # self-heal a stale module cache
+    fr = importlib.reload(fr)
 
 
 def _stale_core(mod) -> bool:
@@ -93,11 +97,12 @@ _AUTOREFRESH_SECS = 45                # re-run cadence so the live price column 
 
 # ── app registry (shared with the router / other apps) ────────────────────
 _ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
-             + ["TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {
     "OVERALL": "🧭  Overall Trading",
     "BTC": "₿  Bitcoin (BTC)",
     "GLDM": "🥇  Gold (GLDM)",
+    "DAILYAUDIT": "🕵️  Daily Audit",
     "TARGETBOOK": "📋  Target Book (IBKR)",
     "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
 }
@@ -302,6 +307,53 @@ if _missing:
         f"figures: {_lines}. Press **Refresh now**; if it persists, the app's "
         f"data/model files may be unavailable in this environment.")
 
+# ── SIGNAL-FRESHNESS AUDIT — validate every app's bar BEFORE trusting it ─────
+# Each signal app's newest completed bar is compared against the freshest bar
+# its asset class can possibly have right now (BTC: the last 12:00-UTC / 7am-CT
+# bar close; equities: the last 4:00 PM ET market close).  If anything is stale
+# the cached universe is thrown away ONCE and recomputed from live data — the
+# "proper data/signal refresh" step — and only if the recompute is STILL stale
+# does the cockpit raise the flashing stale-signals alert below.
+_AUDIT = fr.audit_universe(results, parent_order=ov.PARENT_KEYS)
+if not _AUDIT["passed"]:
+    _retry_flag = f"overall_audit_retry::{_bucket()}"
+    if not st.session_state.get(_retry_flag):
+        st.session_state[_retry_flag] = True
+        get_results.clear()
+        get_all_profiles.clear()
+        st.rerun()                      # recompute the whole universe fresh
+if not _AUDIT["passed"]:
+    _stale_rows = [r for r in _AUDIT["rows"] if not r["fresh"]]
+    _items = "".join(
+        f"<li><b>{r['app']}</b> — instruments {', '.join(r['instruments'])}: "
+        f"signals stuck on the <b>{r['actual_close']}</b> bar; expected the "
+        f"<b>{r['expected_close']}</b> bar ({r['age_days']}d behind).</li>"
+        for r in _stale_rows)
+    st.markdown(
+        "<style>@keyframes ovstaleflash{0%,100%{opacity:1}50%{opacity:.45}}"
+        ".ov-stale-alert{animation:ovstaleflash 1.1s ease-in-out infinite;"
+        "background:#dc2626;color:#fff;border:3px solid #7f1d1d;border-radius:12px;"
+        "padding:16px 20px;margin:10px 0;font-size:17px;font-weight:800}"
+        ".ov-stale-alert ul{margin:8px 0 0 18px;font-size:14px;font-weight:600}"
+        "</style>"
+        f"<div class='ov-stale-alert'>🚨 STALE SIGNALS — audit FAILED for "
+        f"{len(_stale_rows)} of {len(_AUDIT['rows'])} signal apps "
+        f"({', '.join(_AUDIT['stale_apps'])}). A forced data refresh did not "
+        f"bring them current, so the combined strategy below is using "
+        f"out-of-date signals for the flagged assets — treat their "
+        f"recommendations with caution.<ul>{_items}</ul></div>",
+        unsafe_allow_html=True)
+
+# what the Daily Audit tab reports for the Overall view — recorded every render
+fr.record_refresh("OVERALL", kind="overall",
+                  as_of=str(pd.Timestamp(as_of).date()),
+                  signals_generated_at_utc=str(pd.Timestamp(_PF["computed_at"])),
+                  audit_passed=bool(_AUDIT["passed"]),
+                  stale_apps=_AUDIT["stale_apps"],
+                  audit_rows=_AUDIT["rows"],
+                  profile=_profile,
+                  n_instruments=len(results))
+
 # ── live spot prices — overlay onto the display (not the signals/back-test) ──
 # Signals run on completed daily bars (some cached, so a few days stale for
 # BTC/MSTR/MSTU); the action-plan price and open-position P&L must show the
@@ -372,6 +424,33 @@ with tab_live:
                 unsafe_allow_html=True)
     st.caption(f"🕒 Signals last updated **{signals_updated.strftime('%b %d, %Y at %I:%M:%S %p %Z')}** — "
                f"auto-recomputed every ~30 min, or press **Refresh now** in the sidebar.")
+
+    # per-asset-class signal closes + the audit verdict, matching 🕵️ Daily Audit
+    _btc_row = next((r for r in _AUDIT["rows"] if r["asset_class"] == "crypto"), None)
+    _eq_row = next((r for r in _AUDIT["rows"] if r["asset_class"] == "us_equity"), None)
+    _aud_ico = "✅ audit PASSED — all signals fresh" if _AUDIT["passed"] else \
+               f"🚨 audit FAILED — stale: {', '.join(_AUDIT['stale_apps'])}"
+    st.caption(
+        ("₿ Bitcoin signals from the close of "
+         f"**{_btc_row['actual_close']}**" if _btc_row else "") +
+        (" · " if _btc_row and _eq_row else "") +
+        ("📈 Equity-app signals from the close of "
+         f"**{_eq_row['actual_close']}**" if _eq_row else "") +
+        f" · {_aud_ico} (checked {_AUDIT['checked_at_ct']})")
+    with st.expander("🕵️ Signal-freshness audit — per-app closing bars", expanded=not _AUDIT["passed"]):
+        _adf = pd.DataFrame([
+            dict(App=r["app"],
+                 Instruments=", ".join(r["instruments"]),
+                 **{"Signals from close of": r["actual_close"],
+                    "Freshest possible close": r["expected_close"],
+                    "Status": "✅ Fresh" if r["fresh"] else f"🚨 STALE ({r['age_days']}d behind)"})
+            for r in _AUDIT["rows"]])
+        st.dataframe(_adf, use_container_width=True, hide_index=True)
+        st.caption("The same audit gates the scheduled ≈7:15 AM CT publish: the "
+                   "Overall strategy recomputes only after every app's signals "
+                   "pass this check, then the Target Book is published "
+                   "immediately. See the 🕵️ **Daily Audit** app for the full "
+                   "trail.")
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
     pcomp = {r["name"]: r for r in get_profile_comparison(_bucket(), _use_fund)}

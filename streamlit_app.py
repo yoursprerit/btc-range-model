@@ -38,9 +38,10 @@ sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
-             + ["TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)",
+           "DAILYAUDIT": "🕵️  Daily Audit",
            "TARGETBOOK": "📋  Target Book (IBKR)",
            "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():
@@ -125,6 +126,9 @@ def _run_choice():
     if _choice == "OVERALL":
         # The combined cross-asset cockpit renders its own full selector.
         _exec_app(_APP_DIR / "overall_app.py")
+    elif _choice == "DAILYAUDIT":
+        # Freshness trail: per-app signal closes, Overall update, book publish.
+        _exec_app(_APP_DIR / "daily_audit_app.py")
     elif _choice == "TARGETBOOK":
         # Friendly viewer for the published signed IBKR target book.
         _exec_app(_APP_DIR / "target_book_app.py")

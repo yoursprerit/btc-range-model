@@ -9,9 +9,12 @@ name: Refresh backtest dataset
 
 on:
   schedule:
-    # Daily at 13:15 UTC — just after the 12:00-UTC (7am-CT) daily bar closes,
-    # so the newest completed bar is available. GitHub cron is best-effort.
-    - cron: "15 13 * * *"
+    # Daily at 12:03 UTC — minutes after the 12:00-UTC (7am-CT summer) daily
+    # bar closes, so the newest completed BTC bar lands in the versioned CSV
+    # BEFORE the ≈7:15-AM-CT "Publish target book" run audits signal freshness.
+    # GitHub cron is best-effort; the publish workflow also re-pulls
+    # synchronously itself, so a late fire here cannot make the publish stale.
+    - cron: "3 12 * * *"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 # Allow the built-in token to push the refreshed data back to the branch.

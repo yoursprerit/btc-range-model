@@ -265,3 +265,50 @@ blends of the strategies. Numbers and the full walk-forward are in
 | Universe composition changes | [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
 | Per-signal strategy specs | [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) · [`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md) · [`TICKER_APPS_README.md`](TICKER_APPS_README.md) |
 | Live execution on IBKR | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) |
+| Signal-freshness source of truth (closes, audit, refresh log) | `app/freshness.py` |
+| 🕵️ Daily Audit tab | `app/daily_audit_app.py` |
+| Scheduled ≈7:15-AM-CT publish (audit-gated) | `.github/workflows/publish-target-book.yml` · `scripts/publish_target_book.py` |
+
+---
+
+## 11. Daily refresh cycle & signal-freshness audit
+
+Every app except Bitcoin generates its signals upon the **US market close
+(4:00 PM ET)**. Bitcoin's daily bar is anchored at **12:00 UTC** (7:00 AM CT in
+summer / 6:00 AM CT in winter) — its predictions and signals update then.
+
+The daily cycle:
+
+1. **12:00 UTC** — the Bitcoin bar closes; minutes later the
+   *Refresh backtest dataset* workflow pulls the fresh BTC feature CSV.
+2. **≈7:15 AM US Central** — the *Publish target book* workflow runs the full
+   Overall engine. Both DST variants are scheduled (12:15 & 13:15 UTC) with an
+   `America/Chicago` guard so it always fires at the 7-o'clock Central hour
+   (with an 8–9 AM CT same-day retry slot if the first fire was delayed or its
+   audit failed).
+3. **Audit before anything else** — every signal app's newest bar is validated
+   against the freshest close its asset class can possibly have
+   (`freshness.audit_universe`). A failed audit forces one full data refresh +
+   re-run. If anything is *still* stale the target book is **withheld** (never
+   published from stale signals — the executor keeps the previous verified
+   book, and its own freshness guard skips trading if that book ages out);
+   the failure opens/updates a tracking issue.
+4. **On a passing audit** the Overall strategy is computed from the *same
+   audited results* and the Target Book is **published immediately**
+   (`data/overall/target_book*.json`, HMAC-signed, with the audit verdict
+   stamped into the payload), alongside the audit trail
+   (`data/overall/daily_audit.json`).
+
+In the UI:
+
+- every individual app shows, in its header, **the closing date/time its
+  signals are generated from** and **when the page data was last refreshed**;
+- the 🧭 Overall app runs the same audit on every render — a stale result
+  auto-forces one cache-busting recompute, and if still stale it raises a
+  **flashing STALE-SIGNALS alert** naming the affected assets;
+- the 🕵️ **Daily Audit** tab summarises all of it: per-app signal closes and
+  last generation, the Overall view's last update + audit verdict, and when
+  the Target Book was generated & published.
+
+All timestamps come from one shared module (`app/freshness.py`), so the times
+shown in the apps always match the Daily Audit tab.

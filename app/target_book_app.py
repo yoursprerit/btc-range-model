@@ -51,9 +51,10 @@ except Exception:
 
 # ── sidebar Application selector (same widget/key as every other app) ─────────
 _ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
-             + ["TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading", "BTC": "₿  Bitcoin (BTC)",
-               "GLDM": "🥇  Gold (GLDM)", "TARGETBOOK": "📋  Target Book (IBKR)",
+               "GLDM": "🥇  Gold (GLDM)", "DAILYAUDIT": "🕵️  Daily Audit",
+               "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():
     _APP_LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
@@ -439,6 +440,23 @@ if _src.startswith("📦"):
     if _path.exists():
         try:
             payload = tb.loads(_path.read_text())
+            # freshness caption + 🕵️ Daily Audit bookkeeping (shared helpers so
+            # the publish time shown here matches the Daily Audit tab)
+            try:
+                import freshness as _fr
+                st.caption(
+                    f"📋 Target Book generated & published "
+                    f"**{_fr.fmt_ct(payload.get('generated_at_utc'))}** from the "
+                    f"**{payload.get('as_of', '—')}** signal bar · 🔄 page data "
+                    f"refreshed **{_fr.fmt_ct(_fr.now_utc(), seconds=True)}**")
+                _fr.record_refresh("TARGETBOOK", kind="targetbook",
+                                   app_label="📋 Target Book (IBKR)",
+                                   as_of=str(payload.get("as_of", "")),
+                                   generated_at_utc=str(payload.get("generated_at_utc", "")),
+                                   book_mode=str(payload.get("book_mode", "paper")),
+                                   profile=str(payload.get("profile", "")))
+            except Exception:
+                pass
             _render_book(payload, source=f"`{_path.relative_to(_REPO_ROOT)}`")
         except Exception as e:
             st.error(f"Could not read the published book: {e}")

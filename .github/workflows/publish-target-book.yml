@@ -1,30 +1,38 @@
 name: Publish target book (IBKR Option C)
 
-# Option C, publisher side. Runs the Overall engine and commits the live-adjusted
-# target-book artifact (data/overall/target_book.json) back to THIS branch, so a
-# local executor next to IB Gateway can `git pull` (or fetch the raw URL) and
-# rebalance an IBKR paper account without running the model itself.
+# Option C, publisher side. Recomputes the OVERALL strategy on a schedule,
+# AUDITS every signal app's freshness, and (only on a passing audit) commits the
+# live-adjusted target-book artifacts (data/overall/target_book*.json) plus the
+# audit trail (data/overall/daily_audit.json) back to THIS branch, so a local
+# executor next to IB Gateway can `git pull` (or fetch the raw URL) and
+# rebalance an IBKR account without running the model itself.
 #
-# NOTE: `on: schedule` fires only from the repo's DEFAULT branch — which this
-# file is now on, so the daily cron below is live. workflow_dispatch also stays,
-# for manual runs / first tests.
+# SCHEDULE — ≈7:15 AM US Central every day: 15 minutes after the Bitcoin daily
+# bar closes (12:00 UTC = 7:00 AM CDT), so the Overall strategy sees BTC's
+# fresh bar AND every equity app's prior 4:00-PM-ET close. Runs EVERY day —
+# Bitcoin trades (and BTC-driven signals move) on weekends and US market
+# holidays too; the weekend/holiday guard lives ONLY on the executor side.
+# GitHub cron is UTC-only (no DST), so BOTH DST variants are scheduled and a
+# guard step keeps whichever fires at the right Central wall-clock hour:
+#   * 12:15 UTC = 7:15 AM CDT (summer) — the winter fire (6:15 AM CST) is skipped
+#   * 13:15 UTC = 7:15 AM CST (winter) — the summer fire (8:15 AM CDT) acts as a
+#     same-day RETRY slot: it runs only if today's book was not published yet
+#     (e.g. the first fire was delayed, or its audit failed and data caught up).
+# Both slots stay BEFORE the laptop executor's 09:45-ET run in BOTH DST regimes
+# (09:45 EDT = 13:45 UTC, 09:45 EST = 14:45 UTC), so the executor's `git pull`
+# always gets a fresh book. A late fire is safe: the executor's freshness guard
+# just skips rather than trading stale.
+#
+# NOTE: `on: schedule` fires only from the repo's DEFAULT branch. workflow_dispatch
+# also stays, for manual runs / first tests (it bypasses the schedule guard).
 
 on:
   workflow_dispatch: {}   # manual run (Actions tab → Run workflow)
   schedule:
-    # 12:30 UTC EVERY day — Bitcoin trades (and BTC-driven signals move) on
-    # weekends and US market holidays too, so a fresh book is published daily.
-    # The weekend/holiday guard lives ONLY on the executor side
-    # (ibkr_execute_book.py / ibkr_rebalance.py), which still trades exclusively
-    # on US market days. The time is after the prior US daily bar has closed,
-    # and BEFORE the laptop executor's 09:45-ET run in BOTH DST regimes (09:45
-    # EDT = 13:45 UTC, 09:45 EST = 14:45 UTC), so the executor's `git pull`
-    # always gets a fresh book. GitHub cron is UTC-only (no DST) and
-    # best-effort — a late fire is safe: the executor's freshness guard just
-    # skips rather than trading stale.
-    - cron: "30 12 * * *"
+    - cron: "15 12 * * *"   # 7:15 AM CDT (summer); winter fire is guarded off
+    - cron: "15 13 * * *"   # 7:15 AM CST (winter); 8:15 AM CDT retry slot in summer
 
-# contents: write to push the artifact back to the branch; issues: write so a
+# contents: write to push the artifacts back to the branch; issues: write so a
 # failed run can open / update a tracking issue (see the "Report failure" step).
 permissions:
   contents: write
@@ -37,24 +45,88 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout (this branch)
         uses: actions/checkout@v4
 
+      - name: 7:15 AM Central schedule guard
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual dispatch — always runs."
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          H="$(TZ=America/Chicago date +%H)"
+          TODAY_CT="$(TZ=America/Chicago date +%F)"
+          # Was today's book already published? (jq is preinstalled on runners.)
+          PUBLISHED="false"
+          if [ -f data/overall/daily_audit.json ]; then
+            GEN_UTC="$(jq -r '.generated_at_utc // empty' data/overall/daily_audit.json || true)"
+            OK="$(jq -r '.target_book.published // false' data/overall/daily_audit.json || echo false)"
+            if [ -n "$GEN_UTC" ]; then
+              GEN_CT="$(TZ=America/Chicago date -d "$GEN_UTC" +%F || true)"
+              [ "$GEN_CT" = "$TODAY_CT" ] && [ "$OK" = "true" ] && PUBLISHED="true"
+            fi
+          fi
+          if [ "$PUBLISHED" = "true" ]; then
+            echo "Today's ($TODAY_CT CT) book is already published — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Primary slot: the 7-o'clock CT hour. Late-fire/retry window: 8–9 CT.
+          case "$H" in
+            07) echo "7 AM Central — primary publish slot."
+                echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            08|09) echo "Retry/late-fire window ($H CT), book not published yet — running."
+                   echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Central hour is $H — this is the other DST cron; skipping."
+               echo "run=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Set up Python
+        if: steps.guard.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"          # the app's pinned interpreter (loads the model)
 
       - name: Install engine dependencies
+        if: steps.guard.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           # The publisher runs the full universe (model inference), so it needs the
           # app's tested stack — NOT the broker layer (ib_async is executor-only).
           pip install -r requirements.txt
 
-      - name: Publish target book
+      - name: Refresh BTC feature data (synchronous, guarded)
+        if: steps.guard.outputs.run == 'true'
+        # The BTC/MSTR/MSTU sleeve reads data/backtest/raw_features_daily.csv.
+        # Pull it fresh RIGHT NOW (the BTC bar closed at 12:00 UTC, minutes ago)
+        # so the freshness audit sees today's completed bar. The validation
+        # guard restores the committed CSV on any regression, so a failed pull
+        # can never poison the engine run — worst case the audit (correctly)
+        # flags BTC stale and the publish is withheld.
+        run: |
+          set +e
+          python scripts/pull_backtest_data.py
+          echo "pull exit: $? (soft QC warnings tolerated — the validator decides)"
+          set -e
+          if python scripts/validate_refreshed_data.py; then
+            echo "Refreshed dataset validated."
+          else
+            echo "Refreshed dataset REGRESSED — restoring the committed version."
+            git checkout -- data/backtest/ || true
+          fi
+
+      - name: Publish target book (audited)
+        if: steps.guard.outputs.run == 'true'
+        id: publish
+        # Never publishes from stale signals: publish_target_book.py audits every
+        # app's freshness first, retries once after a refresh, and exits 2
+        # (writing the audit trail but NO book) if anything is still stale.
+        # continue-on-error lets the commit step push that audit trail; the job
+        # is then failed loudly by the "Fail if publish failed" step below.
+        continue-on-error: true
         env:
           # Set this repo/environment secret to HMAC-sign the artifact so the
           # executor can verify authenticity. Unset → an unsigned book (a warning).
@@ -64,7 +136,8 @@ jobs:
         # the profile the Overall app defaults to.
         run: python scripts/publish_target_book.py
 
-      - name: Commit & push the artifact (this branch only)
+      - name: Commit & push the artifacts (this branch only)
+        if: steps.guard.outputs.run == 'true'
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
@@ -73,18 +146,36 @@ jobs:
           # compares tracked files only, so on the first-ever publish (an
           # untracked file) it would report "no change" and skip the commit — the
           # run goes green but nothing lands. `git add` + `git diff --cached`
-          # detects a brand-new file too.
-          git add data/overall/target_book.json data/overall/target_book_live.json
-          if git diff --cached --quiet -- data/overall/target_book.json data/overall/target_book_live.json; then
-            echo "No change to the target books — nothing to commit."
+          # detects a brand-new file too. The audit trail + refreshed BTC data
+          # are committed EVEN when the audit failed and no book was written, so
+          # the 🕵️ Daily Audit tab shows the stale-run record.
+          git add data/overall/target_book.json data/overall/target_book_live.json \
+                  data/overall/daily_audit.json data/backtest/ || true
+          if git diff --cached --quiet; then
+            echo "No changes — nothing to commit."
             exit 0
           fi
-          ASOF="$(python -c "import json; print(json.load(open('data/overall/target_book.json'))['as_of'])")"
+          if [ -f data/overall/daily_audit.json ]; then
+            ASOF="$(jq -r '.overall.as_of // "unknown"' data/overall/daily_audit.json)"
+            OK="$(jq -r '.audit.passed' data/overall/daily_audit.json)"
+          else
+            ASOF="unknown"; OK="unknown"
+          fi
           git commit \
-            -m "chore(ibkr): publish target books paper+live (as-of ${ASOF})" \
+            -m "chore(ibkr): daily 7:15am-CT publish (as-of ${ASOF}, audit passed=${OK})" \
             -m "Automated via .github/workflows/publish-target-book.yml"
-          # Push back to the branch this workflow was dispatched from.
+          # Tolerate a concurrent push (e.g. the data-refresh workflow) by
+          # rebasing before pushing back to the branch this ran from.
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Fail if publish failed or was refused (stale signals)
+        if: steps.guard.outputs.run == 'true' && steps.publish.outcome != 'success'
+        run: |
+          echo "Publish step outcome: ${{ steps.publish.outcome }}."
+          echo "Either the engine errored, or the signal-freshness audit failed and"
+          echo "the book was withheld (see data/overall/daily_audit.json)."
+          exit 1
 
       # Make a broken publish loud: on any failure above, open a tracking issue
       # (or comment on the existing open one, so daily failures don't spam new
@@ -105,8 +196,11 @@ jobs:
               `- Trigger: \`${context.eventName}\``,
               `- Time: ${when}`,
               ``,
-              `The IBKR executor's freshness guard will skip trading rather than act on a stale book, `,
-              `so no bad orders result — but today's book was not published. Check the run log above.`,
+              `If the signal-freshness audit failed, the book was intentionally WITHHELD `,
+              `(stale signals are never published) — see data/overall/daily_audit.json and `,
+              `the 🕵️ Daily Audit tab. The IBKR executor's freshness guard will skip trading `,
+              `rather than act on a stale book, so no bad orders result — but today's book `,
+              `was not published. Check the run log above.`,
             ].join('\n');
             // find an existing open failure issue to avoid one-per-day spam
             const existing = await github.rest.issues.listForRepo({
