@@ -69,6 +69,14 @@ btg = backtest_gldm
 st.set_page_config(page_title="GLDM Gold Forecaster", page_icon="🥇",
                    layout="wide", initial_sidebar_state="expanded")
 
+# Streamlit's default st.metric value font (~2.25rem) clips long values —
+# e.g. the "95% CI band" $lo–$hi range in a 5-column row — so shrink it
+# enough that the full value is always visible.
+st.markdown("""
+<style>
+div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+</style>""", unsafe_allow_html=True)
+
 ASSET_LABELS = {"GDX": "GDX · Gold Miners", "UGL": "UGL · 2× Gold",
                 "NUGT": "NUGT · 2× Gold Miners"}
 
