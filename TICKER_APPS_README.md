@@ -20,7 +20,7 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 |---|---|---|---|
 | 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | Dual-MA 25/100 crossover |
 | ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 |
-| 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Divergence Pure-Regime |
+| 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Crash-shield quasi-B&H |
 | 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Dual-MA 50/200 golden cross |
 | ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 50-day SMA + volatility filter |
 
@@ -91,21 +91,25 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 
 > **2026-07 causal-H/L revision.** The daily H/L model behind the divergence
 > strategies previously leaked the target bar into its features; it is now
-> causal and the XLE thresholds were re-tuned on the honest error
-> (U1 +0.80 / D2 −0.60 / V 2.1, no D1 exit, uniform −8 % stop). The XLE row
-> changed materially; trend rows only drifted with the data refresh.
+> causal. On the honest error the energy divergence kept only +23 % of a
+> +207 % B&H, and no train-selected trend filter came close either — energy's
+> OOS edge is simply being long. XLE therefore now trades a **crash-shield
+> quasi-buy-&-hold**: long by default, exit only while the close sits >30 %
+> below its rolling 52-week high (a crash, not a correction), re-enter above
+> the 50-day SMA. Trend rows only drifted with the data refresh.
 
 | App | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
 | SOXX | Dual-MA 25/100, −5 % stop | **+425 %** | +340 % | **−27 %** | −46 % | **1.18 / 0.91** |
 | GRID | MACD 10/20/9, −5 % stop | **+134 %** | +124 % | **−16 %** | −30 % | **1.19 / 0.79** |
-| XLE | Divergence (U1 .80 / D2 −.60, causal) | +23 % | +207 % | **−15 %** | −27 % | 0.45 / 0.90 |
+| XLE | Crash-shield quasi-B&H (30 % / SMA50) | +198 % | +207 % | −27 % | −27 % | 0.89 / 0.90 |
 | REMX | Dual-MA 50/200, −5 % stop | **+98 %** | +5 % | **−36 %** | −74 % | **0.56 / 0.23** |
 | WGMI | MA-50 + vol-filter (k 0.95, no stop) | **+376 %** | +223 % | **−32 %** | −63 % | **1.80 / 0.97** |
 
-(OIH, traded off the XLE signal: +27 % at −24 % MDD vs Buy-&-Hold +145 % / −46 %;
-ERX: +45 % at −28 % vs +533 % / −47 %. Under the causal signal the energy
-divergence is a drawdown-limiter, not a return engine.)
+(OIH, traded off the XLE crash-shield signal: +138 % at −46 % MDD vs Buy-&-Hold
++145 % / −46 %; ERX: +499 % at −47 % vs +533 % / −47 % — ~95 % upside capture at
+the same drawdown, and the shield is what makes them holdable full-cycle:
+ERX +60 % vs −61 % B&H since 2015.)
 (WGMI listed Feb-2022, so its OOS window is 2024→now with an ~11-month training window.)
 
 ### Full-cycle test — the entire history including a real bear (the 🌍 tab)
@@ -120,8 +124,8 @@ recovered from:
 
 | App | Full window | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) | Beats B&H on |
 |---|---|---|---|---|---|---|---|
-| XLE | 2015→now | +39 % | +93 % | **−20 %** | −70 % | 0.35 / 0.36 | DD |
-| **OIH** | 2015→now | **+60 %** | −28 % | **−30 %** | −90 % | **0.37 / 0.14** | return · DD · Sharpe |
+| **XLE** | 2015→now | **+118 %** | +93 % | **−49 %** | −70 % | **0.43 / 0.36** | return · DD · Sharpe |
+| **OIH** | 2015→now | **−19 %** | −28 % | **−79 %** | −90 % | 0.12 / 0.14 | return · DD |
 | **REMX** | 2015→now | **+414 %** | +81 % | **−36 %** | −75 % | **0.75 / 0.34** | return · DD · Sharpe |
 | GRID | 2015→now | +286 % | +432 % | **−19 %** | −41 % | **1.07 / 0.86** | DD · Sharpe |
 | WGMI | 2022→now | +282 % | +603 % | **−32 %** | −63 % | **1.32 / 1.10** | DD · Sharpe |
@@ -146,8 +150,9 @@ leverage or shorting, both excluded here.
 ## XLE vs OIH — which signal should drive OIH?
 
 The brief asks whether OIH (VanEck Oil Services, the high-beta energy sibling) is
-better traded on **XLE's** signals or on its **own** standalone signals. Both were
-back-tested (2021 → now):
+better traded on **XLE's** signals or on its **own** standalone signals. The
+original comparison (run on the pre-2026-07 divergence engine) chose the XLE
+parent signal:
 
 | OIH driven by… | Full return | Max drawdown | Sharpe | 2021–22 energy drawdown |
 |---|---|---|---|---|
@@ -155,8 +160,10 @@ back-tested (2021 → now):
 | OIH's own signal | +23 % | −23 % | 0.29 | +13 % |
 
 **Trade OIH on the XLE signal.** XLE is a broader, less-noisy read of the energy
-tape, so its divergence signal steers the thin, higher-beta OIH better than OIH's
+tape, so its signal steers the thin, higher-beta OIH better than OIH's
 own — higher return, better Sharpe, and it wins the drawdown period decisively.
+(The parent-signal principle carries over unchanged to the current crash-shield
+engine: OIH exits only when *XLE* — the sector — is in a >30 % crash.)
 This is the same rationale by which the Gold app trades GDX/UGL off the cleaner
 gold signal. The XLE app therefore trades **both XLE and OIH off the XLE signal**
 (one Backtesting tab each).

@@ -1813,7 +1813,7 @@ are summarised per app (all decided on **completed daily closes**):
 | 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.15% with ≥2 high-breaks) confirmed inside per-asset regime gates (GLDM 50 / UGL 40 / GDX 100-day) | D2 momentum-fade (err_hi < −0.10%) or D3 exhaustion; GLDM/GDX −3% stop, UGL signal-only, NUGT −5% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
 | ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
-| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.80% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.60%) or D3 exhaustion; uniform −8% stop (2026-07 causal retune) |
+| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |
 | 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
 | ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
 | ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.30% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.18%) or D3 exhaustion; −10% stop |

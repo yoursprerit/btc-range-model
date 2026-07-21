@@ -36,7 +36,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 |---|---|---|
 | ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` | CT-model Divergence · BTC & MSTR signal-exit-only, MSTU −6% |
 | 🥇 **Gold (GLDM)** | GLDM `core` · GDX `beta` · UGL `lev` · NUGT `lev` | Divergence Pure-Regime · GLDM/GDX −3%, UGL signal-only, NUGT −5% |
-| 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Energy Divergence Pure-Regime · uniform −8% stop (2026-07 causal retune) |
+| 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
 | ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
 | 🧲 **REMX** | REMX `core` | Dual-MA 50/200 golden cross, −5% |
@@ -145,6 +145,12 @@ the user dials the return-vs-risk trade-off on the Live tab:
 
 Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdown
 deepens faster than the return — which is exactly the knob these profiles expose.
+
+Committed artifact (2026-07-21, all sleeves on the causal-model retunes and the
+XLE crash-shield; OOS 2021→now): **Balanced +713 % / −14.1 % MDD / Sharpe 2.59 ·
+Growth +1,878 % / −22.7 % / 1.71 · Aggressive +2,317 % / −29.8 % / 1.53** vs the
+equal-weight buy-&-hold benchmark +229 % / −35.4 % / 0.74. Reproduce with
+`python scripts/build_overall.py`.
 
 ### Fundamental overlay (optional)
 

@@ -169,11 +169,17 @@ def trend_long_array(cfg, gcl):
     """Boolean long-at-close signal for the config's trend mode, computed on the
     PRIMARY close array ``gcl`` (decision at each close → executed next bar).
 
-      ma       long while close > N-day SMA
-      dual_ma  long while the fast SMA is above the slow SMA
-      macd     long while the MACD histogram (fast, slow, signal) > 0
-      ma_vol   long while close > N-day SMA AND realised vol is below k · its
-               rolling median (skip the high-volatility regime)
+      ma        long while close > N-day SMA
+      dual_ma   long while the fast SMA is above the slow SMA
+      macd      long while the MACD histogram (fast, slow, signal) > 0
+      ma_vol    long while close > N-day SMA AND realised vol is below k · its
+                rolling median (skip the high-volatility regime)
+      crash_dd  LONG BY DEFAULT (quasi buy & hold); exit only while the close
+                sits more than ``dd_exit_pct`` below its rolling 52-week high
+                (a crash, not a correction), re-enter once the close recovers
+                above the ``dd_reentry_ma``-day SMA.  A stateful hysteresis
+                loop — the disaster gate for assets whose OOS edge IS being
+                long (see the XLE 2026-07 causal retune).
     """
     m = cfg.strategy_mode
     if m == "dual_ma":
@@ -186,6 +192,21 @@ def trend_long_array(cfg, gcl):
         med = v.rolling(cfg.vol_med_win).median()
         above = gcl > _rolling_mean(gcl, cfg.ma_window)
         return (above & (v < cfg.vol_k * med).to_numpy())
+    if m == "crash_dd":
+        c = pd.Series(gcl)
+        hi52 = c.rolling(252, min_periods=60).max().to_numpy()
+        rema = _rolling_mean(gcl, cfg.dd_reentry_ma)
+        exit_c = np.nan_to_num(gcl < (1 - cfg.dd_exit_pct) * hi52)
+        reenter = np.nan_to_num(gcl > rema)
+        sig = np.ones(len(gcl), bool)
+        on = True
+        for i in range(len(gcl)):
+            if on and exit_c[i]:
+                on = False
+            elif (not on) and reenter[i]:
+                on = True
+            sig[i] = on
+        return sig
     return gcl > _rolling_mean(gcl, cfg.ma_window)          # "ma"
 
 

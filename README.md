@@ -191,13 +191,18 @@ drawdown — the harder tests are **Sharpe** and whether it can beat B&H on
 > bar's own features into its "forecast"; it is now causal and all divergence
 > thresholds were re-tuned on the honest error (`GLDM_TRADING_STRATEGY.md`).
 > Divergence rows below changed materially as a result; trend rows (dual-MA /
-> MACD / ma_vol) only drifted with the data refresh.
+> MACD / ma_vol) only drifted with the data refresh. XLE subsequently moved to
+> a **crash-shield quasi-buy-&-hold** (long by default; exit only >30 % below
+> the 52-week high; re-enter above the 50-day SMA): on the honest signal no
+> fitted overlay could keep up with the energy bull, and the shield matches
+> B&H out-of-sample while beating it on return, drawdown and Sharpe over the
+> full 2015→now cycle.
 
 | Signal | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---:|---:|---:|---:|---:|
 | SOXX | Dual-MA 25/100, −5 % stop | **+425 %** | +340 % | **−27 %** | −46 % | **1.18 / 0.91** |
 | GRID | MACD 10/20/9, −5 % stop | **+134 %** | +124 % | **−16 %** | −30 % | **1.19 / 0.79** |
-| XLE | Energy divergence | +23 % | +207 % | **−15 %** | −27 % | 0.45 / 0.90 |
+| XLE | Crash-shield quasi-B&H (30 % / SMA50) | +198 % | +207 % | −27 % | −27 % | 0.89 / 0.90 |
 | REMX | Dual-MA 50/200 golden cross | **+98 %** | +5 % | **−36 %** | −74 % | **0.56 / 0.23** |
 | WGMI | MA-50 + vol-filter | **+376 %** | +223 % | **−32 %** | −63 % | **1.80 / 0.97** |
 | PBW | Clean-energy divergence | **+148 %** | −67 % | **−30 %** | −90 % | **0.97 / −0.23** |
@@ -222,8 +227,10 @@ sleeves; MSTR/MSTU are traded off the **BTC parent** trend. Stops are the curren
 Buy & hold is flat-to-catastrophic over this window (MSTU's 2× decay ≈ total
 wipeout); the strategy stays long in the bull, steps aside in the bear, and even
 posts *positive* bear-market returns on MSTR/MSTU. The **Overall** portfolio
-blends every sleeve above into one book — the Aggressive profile roughly doubles
-Balanced's return by loading the leveraged sleeves within its drawdown budget.
+blends every sleeve above into one book — with the 2026-07 revised sleeves the
+combined OOS 2021→now backtest lands at **Balanced +713 % (−14 % MDD, Sharpe
+2.59) · Growth +1,878 % (−23 %, 1.71) · Aggressive +2,317 % (−30 %, 1.53)**,
+the higher profiles loading the leveraged sleeves within their drawdown budgets.
 
 > **Which numbers are these?** The current live **2026-07e** stop config (MSTR
 > stop-free, MSTU −6 %). An earlier snapshot with a flat −3 % stop on both
