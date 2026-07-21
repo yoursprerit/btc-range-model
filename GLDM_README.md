@@ -82,20 +82,22 @@ V-reversal); exit on D2 (< −0.10%) / D3 exhaustion or the per-asset fixed stop
 pre-fix model leaked the target bar into its features, so the old ±0.08 scale
 and headline results were artifacts.)
 
-The signal comes from **GLDM (gold)** but is executed in its leveraged / high-beta
-proxies — the 1× GLDM position is **not traded**, exactly as the BTC app trades
-**MSTR** and **MSTU** rather than spot BTC:
+The signal comes from **GLDM (gold)** and is executed across the whole gold
+stack — the 1× GLDM position is **traded as the core low-beta sleeve** alongside
+the higher-octane proxies:
 
+- **GLDM** — SPDR Gold MiniShares 1× (core sleeve, best risk-adjusted), −3% stop
 - **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**), −3% stop
 - **UGL** — ProShares Ultra Gold, 2× gold (**~MSTU analog**), signal-only exits
 - **NUGT** — Direxion Daily Gold Miners 2×, −5% stop
 
 Out-of-sample (2021→now) it beats buy-&-hold on drawdown and Sharpe for every
-traded asset, and on raw return for GDX and NUGT: **GDX +103%** (B&H +92%; MDD
+traded asset, and on raw return for GDX and NUGT: **GLDM +58%** (B&H +108%; MDD
+−10% vs −26%, Sharpe 0.99 vs 0.83), **GDX +103%** (B&H +92%; MDD
 −22% vs −46%, Sharpe 0.85 vs 0.51), **UGL +119%** (B&H +151%; MDD −19% vs −50%,
 Sharpe 0.90 vs 0.64), **NUGT +276%** (B&H +41%; MDD −38% vs −74%, Sharpe 0.90
 vs 0.45) — and it stayed net-positive through the 2021–2022 gold correction
-while buy-&-hold fell 23–56%.
+while buy-&-hold fell 7–56%.
 
 Full methodology, parameter choice and per-period results:
 **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.

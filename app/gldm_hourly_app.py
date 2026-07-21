@@ -7,13 +7,13 @@ Historical Replay tab, and per-asset Backtesting tabs.
 Gold-specific logic lives in app/gldm_core.py; models in models/gldm/*.joblib
 (trained by src/gldm/train_gldm.py).  This module never touches the BTC app.
 
-The traded universe mirrors BTC → MSTR / MSTU: the 1x GLDM position only
-supplies the signal and forecasts, while the strategy trades
+The traded universe spans the whole gold stack off ONE GLDM-derived signal
+(the gold-scaled Divergence Pure-Regime system):
 
+    GLDM = SPDR Gold MiniShares 1x  (signal source AND core low-beta sleeve)
     GDX  = VanEck Gold Miners ETF   (high-beta gold — ~MSTR analog)
     UGL  = ProShares Ultra Gold 2x  (leveraged gold — ~MSTU analog)
-
-with ONE strategy — the gold-scaled Divergence Pure-Regime system.
+    NUGT = Direxion Gold Miners 2x  (leveraged miners)
 
 Tabs
   🔴 Live              current forecast + trend-signature alert + strategy + positions
@@ -81,7 +81,7 @@ div[data-testid="stMetricValue"] { font-size: 1.4rem; }
 
 ASSET_LABELS = {"GDX": "GDX · Gold Miners", "UGL": "UGL · 2× Gold",
                 "NUGT": "NUGT · 2× Gold Miners",
-                "GLDM": "GLDM · 1× Gold (signal source)"}
+                "GLDM": "GLDM · 1× Gold (core)"}
 _BT_TAB_EMOJI = {"GDX": "📊", "UGL": "📈", "NUGT": "⛏️", "GLDM": "🥇"}
 
 # ════════════════════════════════════════════════════════════════════════
@@ -479,15 +479,16 @@ def render_strategy_card():
   <div style='font-size:15px; font-weight:800; color:#7a5901; margin-bottom:12px;
        letter-spacing:0.3px;'>
     🥇 {gc.STRATEGY_NAME} &nbsp;—&nbsp;
-    <span style='color:#b8860b;'>GLDM signals · GDX, UGL &amp; NUGT execution</span>
+    <span style='color:#b8860b;'>GLDM signals · GLDM, GDX, UGL &amp; NUGT execution</span>
   </div>
   <div style='background:#fdf0d5; border-radius:8px; padding:10px 14px; margin-bottom:12px;
        font-size:12.5px; color:#5c4400; font-weight:600;'>
     🔁 <b>Core idea:</b> Gold trends smoothly with shallow dips, so the same divergence
     signatures (U1 / D2 / D3 / V-reversal) that read <b>GLDM's</b> predicted-vs-actual
-    highs/lows are used as the signal engine, then executed in gold's higher-octane
-    proxies — <b>GDX</b> (miners, ~MSTR analog) and <b>UGL</b> (2× gold, ~MSTU analog).
-    The 1× GLDM position itself is not traded.
+    highs/lows are used as the signal engine, then executed across the whole gold
+    stack — <b>GLDM</b> itself (1×, the core low-beta sleeve and best
+    risk-adjusted expression of the signal), <b>GDX</b> (miners, ~MSTR analog),
+    <b>UGL</b> (2× gold, ~MSTU analog) and <b>NUGT</b> (2× miners).
   </div>
   <div style='background:#fdf0d5; border:1px solid #b8860b; border-radius:7px;
        padding:8px 13px; margin-bottom:12px; font-size:12px; color:#5c4400;'>
@@ -1378,13 +1379,12 @@ def render_backtest_dashboard(asset):
                 "Gold Signal-Driven Backtesting")
     render_strategy_card()
     if asset == "GLDM":
-        st.info("ℹ️ **GLDM is the signal source, not a traded sleeve.** The strategy "
-                "derives its divergence signal from GLDM and executes in GDX / UGL / "
-                "NUGT (the way the BTC app trades MSTR & MSTU off the BTC signal). "
-                "This tab backtests the same signal applied to the 1× GLDM itself "
-                f"(with the −{gc.stop_for('GLDM')*100:.0f}% stop) as the reference "
-                "sleeve — historically the best risk-adjusted but lowest-return way "
-                "to trade the signal.")
+        st.info("ℹ️ **GLDM is both the signal source and the core traded sleeve.** "
+                "The divergence signal is derived from GLDM and executed across the "
+                "whole gold stack — GLDM itself (1×, with the "
+                f"−{gc.stop_for('GLDM')*100:.0f}% stop) plus the higher-beta "
+                "GDX / UGL / NUGT. The 1× sleeve is historically the best "
+                "risk-adjusted (though lowest raw-return) expression of the signal.")
     st.caption("All trades are out-of-sample: the GLDM daily H/L signal model is fit once "
                "on the pre-2021 window and predicts every later bar, so all four periods "
                "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
@@ -1515,11 +1515,10 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     st.markdown("#### Strategy conditions (live)")
     render_conditions_box(sigs)
     st.markdown("#### Current positions")
-    p1, p2, p3 = st.columns(3)
+    pcols = st.columns(len(gc.TRADEABLE_ASSETS))
     end = None if is_live else as_of_date
-    position_panel("GDX", p1, end=end)
-    position_panel("UGL", p2, end=end)
-    position_panel("NUGT", p3, end=end)
+    for _asset, _pc in zip(gc.TRADEABLE_ASSETS, pcols):
+        position_panel(_asset, _pc, end=end)
 
     # ── model forecast charts (hourly + Daily H/L + 7d & 14d close cones) ──
     st.markdown("---")
@@ -1608,16 +1607,16 @@ Clean Breakout below the MA *or* a recent V-reversal). Exit on D2
 stop. The divergence error is regime-centered (60-bar rolling median, identical
 to the backtest) so the signal self-calibrates to gold's volatility. The daily
 H/L model is **causal** (features through the prior close predict the next bar
-— fixed & re-tuned 2026-07). Signals come from **GLDM**; execution is in
-**GDX** (miners), **UGL** (2× gold) and **NUGT** (2× gold miners) — the 1×
-GLDM position is not traded, mirroring how the BTC app trades MSTR / MSTU rather
-than spot BTC.
+— fixed & re-tuned 2026-07). Signals come from **GLDM**; execution spans the
+whole gold stack — **GLDM** itself (1×, the core low-beta sleeve), **GDX**
+(miners), **UGL** (2× gold) and **NUGT** (2× gold miners).
 
 **Out-of-sample results (2021→now, causal signal)** — beats buy & hold on
 drawdown **and** Sharpe for every sleeve, and on raw return for GDX & NUGT:
 
 | Asset | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|
+| GLDM | +58% | +108% | **−10%** | −26% | **0.99 / 0.83** |
 | GDX | **+103%** | +92% | **−22%** | −46% | **0.85 / 0.51** |
 | UGL | +119% | +151% | **−19%** | −50% | **0.90 / 0.64** |
 | NUGT | **+276%** | +41% | **−38%** | −74% | **0.90 / 0.45** |

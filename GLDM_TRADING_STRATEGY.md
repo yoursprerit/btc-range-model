@@ -69,10 +69,12 @@ Regime **or** a washed-out Clean Breakout below the MA **or** a recent
 V-reversal. Exit on **D2** (< **−0.10%**) / **D3** exhaustion, or the per-asset
 fixed stop.
 
-The signal is derived from **GLDM** (gold) and executed in its
-leveraged / high-beta proxies — the 1× GLDM position is **not traded**, exactly
-as the BTC app trades MSTR / MSTU rather than spot BTC:
+The signal is derived from **GLDM** (gold) and executed across the whole gold
+stack — the 1× GLDM position is **traded as the core low-beta sleeve** alongside
+its leveraged / high-beta proxies:
 
+- **GLDM** — SPDR Gold MiniShares 1× (**core sleeve**, best risk-adjusted
+  expression of the signal), −3% stop
 - **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**), −3% stop
 - **UGL** — ProShares Ultra Gold, 2× daily gold (**~MSTU analog**), signal-only
   (the stop sweep shows a −8% stop never fires; tighter stops only whipsaw a 2×)
@@ -110,22 +112,22 @@ optimisation spike.
 ## 6. Results (OOS 2021-01-01 → 2026-07-21)
 
 **Chosen strategy — Divergence Pure-Regime, `U1 +0.15% / D2 −0.10% / V 1.0`,
-per-asset stops (GDX −3%, UGL signal-only, NUGT −5%), traded on GDX, UGL &
-NUGT:**
+per-asset stops (GLDM/GDX −3%, UGL signal-only, NUGT −5%), traded on GLDM,
+GDX, UGL & NUGT:**
 
 | Asset | Strategy return | B&H return | Strategy MDD | B&H MDD | Strategy Sharpe | B&H Sharpe | Trades | Win% |
 |---|---|---|---|---|---|---|---|---|
+| **GLDM** (1× core) | +57.9% | +108.1% | **−9.6%** | −26.3% | **0.99** | 0.83 | 95 | 53% |
 | **GDX** (miners) | **+102.8%** | +92.3% | **−21.8%** | −46.5% | **0.85** | 0.51 | 98 | 49% |
 | **UGL** (2× gold) | +118.9% | +151.0% | **−19.3%** | −50.0% | **0.90** | 0.64 | 95 | 52% |
 | **NUGT** (2× miners) | **+276.1%** | +40.8% | **−38.3%** | −73.8% | **0.90** | 0.45 | 100 | 50% |
-
-*(The 1× GLDM signal source, for reference: +57.9%, MDD −9.6%, Sharpe 0.99 —
-best risk-adjusted, but not traded.)*
 
 ### Sub-period breakdown (shown per-asset in the app's Backtesting tabs)
 
 | Asset | Period | Strategy | Buy & Hold | Strat MDD | B&H MDD |
 |---|---|---|---|---|---|
+| GLDM | Chop 2021–2022 | **+9.8%** | −6.5% | −6.4% | −20.9% |
+| GLDM | Bull 2023→now | +42.5% | +120.7% | −9.6% | −26.3% |
 | GDX | Chop 2021–2022 | **+12.4%** | −25.6% | −13.4% | −46.5% |
 | GDX | Bull 2023→now | +74.3% | +149.7% | −21.8% | −38.9% |
 | UGL | Chop 2021–2022 | **+16.9%** | −22.6% | −12.8% | −40.2% |
@@ -147,10 +149,10 @@ D2_ERRHI_MAX     = -0.10     # D2 exit threshold
 D1_ERRLO_MIN     =  0.15
 V_ERRLO_MIN      =  1.00
 FIXED_STOP       =  0.03     # GLDM/GDX stop; UGL signal-only, NUGT −5%
-TRADEABLE_ASSETS = ["GDX", "UGL", "NUGT"]   # GLDM (1x) supplies the signal only
+TRADEABLE_ASSETS = ["GLDM", "GDX", "UGL", "NUGT"]   # GLDM (1x) = core traded sleeve
 ```
 
-The strategy is fixed (single strategy, single parameter set); the **GDX**,
-**UGL** and **NUGT** Backtesting tabs show the full/chop/bull breakdown, equity
+The strategy is fixed (single strategy, single parameter set); the **GLDM**,
+**GDX**, **UGL** and **NUGT** Backtesting tabs show the full/chop/bull breakdown, equity
 & drawdown curves and the complete trade log, and the **Live** / **Historical
 replay** tabs show the live signal and open position for each asset.

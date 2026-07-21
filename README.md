@@ -207,6 +207,7 @@ drawdown — the harder tests are **Sharpe** and whether it can beat B&H on
 | WGMI | MA-50 + vol-filter | **+376 %** | +223 % | **−32 %** | −63 % | **1.80 / 0.97** |
 | PBW | Clean-energy divergence | **+148 %** | −67 % | **−30 %** | −90 % | **0.97 / −0.23** |
 | ARTY | AI/Tech divergence | **+148 %** | +73 % | **−27 %** | −56 % | **1.11 / 0.48** |
+| Gold (GLDM 1× core) | Divergence Pure-Regime | +58 % | +108 % | **−10 %** | −26 % | **0.99 / 0.83** |
 | Gold (GDX β) | Divergence Pure-Regime | **+103 %** | +92 % | **−22 %** | −46 % | **0.85 / 0.51** |
 | Gold (UGL 2×) | Divergence Pure-Regime | +119 % | +151 % | **−19 %** | −50 % | **0.90 / 0.64** |
 | Gold (NUGT 2×) | Divergence Pure-Regime | **+276 %** | +41 % | **−38 %** | −74 % | **0.90 / 0.45** |
@@ -229,7 +230,7 @@ wipeout); the strategy stays long in the bull, steps aside in the bear, and even
 posts *positive* bear-market returns on MSTR/MSTU. The **Overall** portfolio
 blends every sleeve above into one book — with the 2026-07 revised sleeves the
 combined OOS 2021→now backtest lands at **Balanced +713 % (−14 % MDD, Sharpe
-2.59) · Growth +1,878 % (−23 %, 1.71) · Aggressive +2,317 % (−30 %, 1.53)**,
+2.59) · Growth +1,880 % (−23 %, 1.71) · Aggressive +2,320 % (−30 %, 1.54)**,
 the higher profiles loading the leveraged sleeves within their drawdown budgets.
 
 > **Which numbers are these?** The current live **2026-07e** stop config (MSTR

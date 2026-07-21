@@ -1,18 +1,18 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-07-21T19:20:50+00:00",
- "generated_at_ct": "Jul 21, 2026 at 2:20:50 PM CDT",
+ "generated_at_utc": "2026-07-21T19:45:05+00:00",
+ "generated_at_ct": "Jul 21, 2026 at 2:45:05 PM CDT",
  "scheduled_publish": "\u22487:15 AM US Central (15 min after the Bitcoin bar close)",
  "overall": {
   "as_of": "2026-07-21",
   "profile": "Balanced",
   "n_instruments": 17,
   "n_apps": 9,
-  "computed_at_utc": "2026-07-21T19:20:50+00:00"
+  "computed_at_utc": "2026-07-21T19:45:05+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-07-21T19:20:44+00:00",
-  "checked_at_ct": "Jul 21, 2026 at 2:20:44 PM CDT",
+  "checked_at_utc": "2026-07-21T19:45:00+00:00",
+  "checked_at_ct": "Jul 21, 2026 at 2:45:00 PM CDT",
   "passed": true,
   "stale_apps": [],
   "stale_assets": [],
@@ -147,7 +147,7 @@
  "target_book": {
   "published": true,
   "skip_reason": null,
-  "generated_at_utc": "2026-07-21T19:20:50+00:00",
+  "generated_at_utc": "2026-07-21T19:45:04+00:00",
   "as_of": "2026-07-21",
   "profile": "Balanced",
   "signed": false

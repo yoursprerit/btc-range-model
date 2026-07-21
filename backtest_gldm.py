@@ -515,7 +515,7 @@ def main():
 
     print(f"\n=== PRIMARY (traded): {gc.STRATEGY_NAME} "
           f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} per-asset stops: "
-          f"GLDM/GDX −3%, UGL signal-only, NUGT −5%) — traded on GDX & UGL ===")
+          f"GLDM/GDX −3%, UGL signal-only, NUGT −5%) — traded on GLDM, GDX, UGL & NUGT ===")
     for asset in ("GLDM", "UGL", "GDX", "NUGT"):
         res = run_asset(preds, sig, asset, strategy="divergence",
                         stop_pct=gc.stop_for(asset), U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)

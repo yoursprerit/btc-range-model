@@ -90,7 +90,8 @@ MACRO_SYMS = {
 # MSTU rather than spot):
 #     GDX  = VanEck Gold Miners ETF   (high-beta gold — the ~MSTR analog)
 #     UGL  = ProShares Ultra Gold 2x  (leveraged gold — the ~MSTU analog)
-# The 1x GLDM position is NOT traded (it only supplies the signal + forecasts).
+# GLDM (1x) both supplies the signal AND is traded as the core low-beta sleeve
+# (best risk-adjusted expression of the signal: OOS Sharpe ~0.99 at ~-10% MDD).
 #
 # BTC uses U1/D2 divergence thresholds of ±1.3% of close because a BTC day
 # routinely ranges 3-4%.  The GLDM daily H/L model is CAUSAL (features through
@@ -107,7 +108,7 @@ D2_ERRHI_MAX = -0.10   # D2 exit:   3d-avg centered err_hi < −0.10%
 D1_ERRLO_MIN =  0.15   # D1 exit:   3d-avg centered err_lo > +0.15%  (AND lo_breaks_3d ≥ 2)
 V_ERRLO_MIN  =  1.00   # V-reversal capitulation: single-bar low undershoot > 1.00%
 FIXED_STOP   =  0.03   # shared fixed stop (−3%) for both traded assets
-TRADEABLE_ASSETS = ["GDX", "UGL", "NUGT"]   # GLDM (1x) supplies the signal only
+TRADEABLE_ASSETS = ["GLDM", "GDX", "UGL", "NUGT"]   # GLDM (1x) = core traded sleeve
 
 # ── REFERENCE trend variant — price-vs-MA filter (not traded) ────────────
 # The backtest (backtest_gldm.py, OOS 2021→now) keeps a simple "long above the
