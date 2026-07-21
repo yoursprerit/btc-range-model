@@ -60,7 +60,7 @@ history, untouched during fitting).
 | # | Model | Type | Target | OOS result |
 |---|---|---|---|---|
 | 1 | Hourly next-close | Ridge on log-returns | next-hour close + 95% CI | MAPE 0.39%, dir-acc ~49%, CI ±0.88% |
-| 2 | Daily High/Low | Ridge ratio-to-prior-close (calibrated) | next-day H & L | MAPE ~0.15% each |
+| 2 | Daily High/Low | Ridge ratio-to-prior-close (calibrated, causal) | next-day H & L | MAPE ~0.97% (H) / ~1.09% (L) |
 | 3 | 7-day close cone | Ridge + empirical quantile bands | 7-trading-day close | central path + P5–P95 band |
 | 4 | 14-day close cone | Ridge + empirical quantile bands | 14-trading-day close | central path + P5–P95 band |
 | 5 | 3-class day type | Logistic (balanced) | Trend-Up / Chop / Trend-Down | directional gauge |
@@ -75,21 +75,27 @@ CI*, not a directional bet. The real edge lives in the **trend regime** and
 ## The strategy (short version)
 
 **One strategy — the gold-scaled BTC-style Divergence Pure-Regime system.** Enter
-when U1 bullish divergence (regime-centered `err_hi` > +0.08%) confirms inside the
-Pure-Regime gate (Bull Regime *or* washed-out Clean Breakout *or* V-reversal);
-exit on D2 (< −0.10%) / D3 exhaustion or a fixed −3% stop.
+when U1 bullish divergence (regime-centered `err_hi` 3-day avg > +0.15%) confirms
+inside the Pure-Regime gate (Bull Regime *or* washed-out Clean Breakout *or*
+V-reversal); exit on D2 (< −0.10%) / D3 exhaustion or the per-asset fixed stop.
+(Thresholds re-tuned 2026-07 after the daily H/L model was made causal — the
+pre-fix model leaked the target bar into its features, so the old ±0.08 scale
+and headline results were artifacts.)
 
 The signal comes from **GLDM (gold)** but is executed in its leveraged / high-beta
 proxies — the 1× GLDM position is **not traded**, exactly as the BTC app trades
 **MSTR** and **MSTU** rather than spot BTC:
 
-- **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**)
-- **UGL** — ProShares Ultra Gold, 2× gold (**~MSTU analog**)
+- **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**), −3% stop
+- **UGL** — ProShares Ultra Gold, 2× gold (**~MSTU analog**), signal-only exits
+- **NUGT** — Direxion Daily Gold Miners 2×, −5% stop
 
-Out-of-sample (2021→now) it beats buy-&-hold on **both return and drawdown** for
-both assets: **GDX +270%** (MDD −16% vs −47%, Sharpe 1.40) and **UGL +207%**
-(MDD −18% vs −49%, Sharpe 1.29) — and it stayed net-positive through the
-2021–2022 gold correction while buy-&-hold fell ~25%.
+Out-of-sample (2021→now) it beats buy-&-hold on drawdown and Sharpe for every
+traded asset, and on raw return for GDX and NUGT: **GDX +103%** (B&H +92%; MDD
+−22% vs −46%, Sharpe 0.85 vs 0.51), **UGL +119%** (B&H +151%; MDD −19% vs −50%,
+Sharpe 0.90 vs 0.64), **NUGT +276%** (B&H +41%; MDD −38% vs −74%, Sharpe 0.90
+vs 0.45) — and it stayed net-positive through the 2021–2022 gold correction
+while buy-&-hold fell 23–56%.
 
 Full methodology, parameter choice and per-period results:
 **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.

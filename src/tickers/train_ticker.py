@@ -101,7 +101,9 @@ def train_daily_hl(cfg, daily, out_path):
     prev_c = close.shift(1)
     y_hi = (high / prev_c - 1.0); y_lo = (low / prev_c - 1.0)
     feat_cols = _clean_features(feat)
-    data = feat[feat_cols].copy()
+    # CAUSAL alignment: pair feat(D−1) with bar D's high/low so training matches
+    # inference (latest features → NEXT bar's H/L). See train_gldm.train_daily_hl.
+    data = feat[feat_cols].shift(1).copy()
     data["y_hi"] = y_hi; data["y_lo"] = y_lo; data["close_asof"] = prev_c
     data = data.replace([np.inf, -np.inf], np.nan).dropna()
     _, test_start = _temporal_split(data.index)

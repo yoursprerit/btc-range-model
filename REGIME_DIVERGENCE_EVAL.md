@@ -1,5 +1,8 @@
 # Regime-Divergence vs MA-Filter — evaluation for SOXX · VEGN · GRID · REMX · WGMI
 
+> **⚠️ Historical memo — pre-dates the 2026-07 causal H/L fix.** The daily High/Low model behind every *divergence*-engine number in this memo was later found to pair the target bar's own features with its target (look-ahead). Divergence-based figures here reflect that leaky signal and are kept only as a historical record; the re-tuned honest configs and results live in `GLDM_TRADING_STRATEGY.md`, `app/ticker_config.py` and the per-app `backtest_results.json`. Trend-engine (MA/dual-MA/MACD/ma_vol) figures are unaffected by the fix (they use closes only), though they drift with data refreshes.
+
+
 **Question.** For the five apps that currently run an **MA trend-filter** strategy
 (SOXX, VEGN, GRID, REMX, WGMI), would switching to an **optimally-tuned
 regime-divergence** strategy — with the divergence thresholds chosen using

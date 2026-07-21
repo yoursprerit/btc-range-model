@@ -316,7 +316,10 @@ def predict_day_type(daily_df):
 
 
 def signatures_asof(target_date):
-    sub = completed_all[completed_all["target_date"] <= pd.Timestamp(target_date)].tail(45)
+    # tail(150), not 45: the 60-bar median centering + 30-bar capitulation
+    # normaliser need ≥90 bars of history for the newest bar's signals to
+    # reproduce backtest_ticker.precompute_signals exactly.
+    sub = completed_all[completed_all["target_date"] <= pd.Timestamp(target_date)].tail(150)
     return tc.compute_trend_signatures(cfg, sub)
 
 

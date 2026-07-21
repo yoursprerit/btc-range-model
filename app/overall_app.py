@@ -1810,14 +1810,14 @@ are summarised per app (all decided on **completed daily closes**):
 | App / signal | Traded instruments | Engine | Entry criteria | Exit criteria |
 |---|---|---|---|---|
 | ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC & MSTR signal-only, MSTU −6% stop + 5-bar V-reversal re-entry |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime | U1 divergence (err_hi > +8% with ≥2 high-breaks) confirmed inside per-asset regime gates (GLDM 50 / UGL 40 / GDX 100-day) | D2 momentum-fade (err_hi < −10%) or D3 exhaustion; GLDM/GDX −3% stop, UGL signal-only, NUGT −5% |
+| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.15% with ≥2 high-breaks) confirmed inside per-asset regime gates (GLDM 50 / UGL 40 / GDX 100-day) | D2 momentum-fade (err_hi < −0.10%) or D3 exhaustion; GLDM/GDX −3% stop, UGL signal-only, NUGT −5% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
 | ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
-| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime | U1 divergence (err_hi > +16% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −10%) or D1 downtrend (≥2 low-breaks); XLE/OIH −8% stop, ERX signal-only |
+| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.80% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.60%) or D3 exhaustion; uniform −8% stop (2026-07 causal retune) |
 | 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
 | ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
-| ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi > +12% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −8%) or D3 exhaustion; −10% stop |
-| 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi > +5% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −18%) or D1 downtrend; −5% stop |
+| ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.30% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.18%) or D3 exhaustion; −10% stop |
+| 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.24% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.48%) or D3 exhaustion; signal-only (no fixed stop) |
 
 *Shorthand:* **U1** = bullish divergence (the model's predicted daily high
 overshoots while price breaks its recent highs) · **D1** = downtrend pressure

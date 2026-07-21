@@ -123,7 +123,12 @@ def train_daily_hl(daily: pd.DataFrame):
     y_hi = (high / prev_c - 1.0)
     y_lo = (low / prev_c - 1.0)
     feat_cols = _clean_features(feat)
-    data = feat[feat_cols].copy()
+    # CAUSAL alignment: shift features one bar forward so the row for bar D
+    # pairs feat(D−1) — info through the as-of close — with bar D's high/low.
+    # This matches inference (predict_next_daily_hl applies the model to the
+    # latest completed bar's features to forecast the NEXT bar). Unshifted,
+    # the target bar's own range/return leak into the features.
+    data = feat[feat_cols].shift(1).copy()
     data["y_hi"] = y_hi
     data["y_lo"] = y_lo
     data["close_asof"] = prev_c

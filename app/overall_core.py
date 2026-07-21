@@ -496,7 +496,9 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
     ref_ma = float(daily["px_close"].tail(50).mean())
     mom = (last_close / ref_ma - 1) if ref_ma else 0.0
     completed = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
-    sigs = tc.compute_trend_signatures(cfg, completed.tail(45)) if len(completed) >= 3 else None
+    # tail(150), not 45: the 60-bar median centering needs ≥90 bars of history
+    # for the newest bar's signals to match bt.precompute_signals.
+    sigs = tc.compute_trend_signatures(cfg, completed.tail(150)) if len(completed) >= 3 else None
     alert = (sigs or {}).get("alert_level", "NEUTRAL")
     bull = bool((sigs or {}).get("bull_regime",
                                  ma_val is not None and last_close > (ma_val or 0)))

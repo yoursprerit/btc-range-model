@@ -1,5 +1,8 @@
 # Should the other leveraged siblings go stop-less? (MSTU · UGL · NUGT · ERX)
 
+> **⚠️ Historical memo — pre-dates the 2026-07 causal H/L fix.** The daily High/Low model behind every *divergence*-engine number in this memo was later found to pair the target bar's own features with its target (look-ahead). Divergence-based figures here reflect that leaky signal and are kept only as a historical record; the re-tuned honest configs and results live in `GLDM_TRADING_STRATEGY.md`, `app/ticker_config.py` and the per-app `backtest_results.json`. Trend-engine (MA/dual-MA/MACD/ma_vol) figures are unaffected by the fix (they use closes only), though they drift with data refreshes.
+
+
 **Question.** SOXL (3× semis) trades stop-less because a tight 1× stop whipsaws a
 leveraged ETF. The book has four other leveraged siblings, each trading its
 parent's tuned stop. Does the same SOXL logic apply — should any go stop-less?

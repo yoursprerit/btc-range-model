@@ -257,8 +257,15 @@ def predict_day_type(daily_df):
 
 
 def signatures_asof(target_date):
-    """Trend signatures using only completed bars up to (and including) target_date."""
-    sub = completed_all[completed_all["target_date"] <= pd.Timestamp(target_date)].tail(45)
+    """Trend signatures using only completed bars up to (and including) target_date.
+
+    tail(150): the signal math regime-centers each error with a 60-bar rolling
+    median, and the capitulation score averages the last 30 centered errors —
+    so the newest bar needs ≥90 bars of history (and the on-chart D1/D2 marker
+    history more) for the live values to reproduce the backtest exactly.  45
+    bars was too few: the median fell back to a short expanding window and the
+    displayed signals drifted from the tuned strategy."""
+    sub = completed_all[completed_all["target_date"] <= pd.Timestamp(target_date)].tail(150)
     return gc.compute_trend_signatures(sub)
 
 

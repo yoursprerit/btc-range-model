@@ -186,15 +186,25 @@ drawdown — the harder tests are **Sharpe** and whether it can beat B&H on
 
 **ETF & Gold — out-of-sample 2021 → now, strategy vs Buy & Hold.**
 
+> **2026-07 causal-H/L revision.** The daily High/Low model behind every
+> *divergence* strategy (Gold, XLE, PBW, ARTY) previously leaked the target
+> bar's own features into its "forecast"; it is now causal and all divergence
+> thresholds were re-tuned on the honest error (`GLDM_TRADING_STRATEGY.md`).
+> Divergence rows below changed materially as a result; trend rows (dual-MA /
+> MACD / ma_vol) only drifted with the data refresh.
+
 | Signal | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---:|---:|---:|---:|---:|
-| SOXX | Dual-MA 25/100, −5 % stop | **+452 %** | +362 % | **−27 %** | −46 % | **1.23 / 0.94** |
-| GRID | MACD 10/20/9, −5 % stop | **+134 %** | +132 % | **−16 %** | −30 % | **1.20 / 0.83** |
-| XLE | Energy divergence | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
-| REMX | Dual-MA 50/200 golden cross | **+135 %** | +24 % | **−27 %** | −74 % | **0.68 / 0.30** |
-| WGMI | MA-50 + vol-filter | **+376 %** | +223 % | **−32 %** | −63 % | **1.81 / 0.98** |
-| Gold (GDX β) | Divergence Pure-Regime | **+270 %** | — | **−16 %** | −47 % | **1.40** |
-| Gold (UGL 2×) | Divergence Pure-Regime | **+207 %** | — | **−18 %** | −49 % | **1.29** |
+| SOXX | Dual-MA 25/100, −5 % stop | **+425 %** | +340 % | **−27 %** | −46 % | **1.18 / 0.91** |
+| GRID | MACD 10/20/9, −5 % stop | **+134 %** | +124 % | **−16 %** | −30 % | **1.19 / 0.79** |
+| XLE | Energy divergence | +23 % | +207 % | **−15 %** | −27 % | 0.45 / 0.90 |
+| REMX | Dual-MA 50/200 golden cross | **+98 %** | +5 % | **−36 %** | −74 % | **0.56 / 0.23** |
+| WGMI | MA-50 + vol-filter | **+376 %** | +223 % | **−32 %** | −63 % | **1.80 / 0.97** |
+| PBW | Clean-energy divergence | **+148 %** | −67 % | **−30 %** | −90 % | **0.97 / −0.23** |
+| ARTY | AI/Tech divergence | **+148 %** | +73 % | **−27 %** | −56 % | **1.11 / 0.48** |
+| Gold (GDX β) | Divergence Pure-Regime | **+103 %** | +92 % | **−22 %** | −46 % | **0.85 / 0.51** |
+| Gold (UGL 2×) | Divergence Pure-Regime | +119 % | +151 % | **−19 %** | −50 % | **0.90 / 0.64** |
+| Gold (NUGT 2×) | Divergence Pure-Regime | **+276 %** | +41 % | **−38 %** | −74 % | **0.90 / 0.45** |
 
 **BTC · MSTR · MSTU — deployed CT-divergence (ML) engine, full 2024-03 → 2026-07
 round-trip (~2.4 yr, one bull→bear).** The Bitcoin signal drives all three
