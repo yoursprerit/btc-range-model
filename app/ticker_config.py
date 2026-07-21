@@ -355,40 +355,31 @@ CONFIGS["XLE"] = TickerConfig(
                   "erx_close": "ERX · 2× Energy"},
     strategy_mode="divergence", strategy_name="Energy Divergence Pure-Regime",
     ma_window=80, fixed_stop=0.08,
-    # ERX (2× energy) trades the SAME XLE divergence signal but with NO fixed stop:
-    # the XLE −8% stop only clips a few fills and never fires in the energy bear
-    # (the D2/D1 divergence exits get out first), so on the 2× it costs return and
-    # Sharpe for zero drawdown or win-rate benefit.  Signal-only exits lift ERX to
-    # ~+311% / Sharpe 1.40 at the same −17.5% MDD / 67% win-rate (see
-    # LEV_SIBLINGS_STOP_EVAL.md).  XLE and OIH keep the tuned −8% stop.
-    stop_by_asset={"erx_close": 1.0},
-    u1_errhi_min=0.16, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
-    use_d1_exit=True,
+    # 2026-07 causal-H/L retune (backtest_ticker.py XLE --sweep): all three
+    # energy assets converge on the SAME config — U1 +0.80 / D2 −0.60 / V 2.1,
+    # no D1 exit, uniform −8% stop (the sweep also picks −8% for ERX, so the
+    # leak-era stop-less ERX override is retired).
+    u1_errhi_min=0.80, d2_errhi_max=-0.60, d1_errlo_min=0.26, v_errlo_min=2.1,
+    use_d1_exit=False,
     hl_band_pct=0.014,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.010, day_down_thresh=-0.010,
-    results_note=("OOS 2021→now on XLE: +105% with a max drawdown of just −9% "
-                  "(vs Buy&Hold +180% / −27%), Sharpe 1.37 vs 0.84. The "
-                  "divergence system (with a D1 downtrend exit) trades the "
-                  "crude-driven swings and stays out of the deep energy "
-                  "drawdowns. The same XLE signal drives the higher-beta OIH "
-                  "sibling to +70% at −19% MDD (see the OIH tab)."),
-    eval_note=("**Trade OIH on the XLE signal, not on OIH's own.** Back-tested "
-               "both ways (2021→now): OIH driven by the XLE divergence signal "
-               "returns **+36%** (Sharpe 0.43) and wins the 2021–22 energy "
-               "drawdown decisively (+65% vs +13%); OIH driven by "
-               "its *own* signal returns only +23% (Sharpe 0.29). XLE is a "
-               "broader, less-noisy read of the energy tape, so its signal steers "
-               "the thin, higher-beta OIH better than OIH's own — the same reason "
-               "the Gold app trades GDX/UGL off the cleaner gold signal. "
-               "**ERX (2× energy) is added off the same XLE signal, traded "
-               "stop-less** (a 1× −8% stop only clips fills on a 2× ETF and never "
-               "fires in the energy bear): the divergence rule holds it only "
-               "through the crude up-swings and stands aside in the crashes where "
-               "2× decay bites, so the ERX sleeve returns ~+311% at just a ~−17.5% "
-               "max drawdown (Sharpe ~1.40) OOS — and in the Overall blend it "
-               "lifts return AND Sharpe AND trims drawdown (a rare win-win). See "
-               "LEV_SIBLINGS_STOP_EVAL.md."),
+    results_note=("OOS 2021→now on XLE (causal signal, 2026-07 retune): +23% at "
+                  "a −15% max drawdown vs Buy&Hold +207% / −27%. On the honest "
+                  "forecast error the energy divergence system is a pure "
+                  "risk-limiter: it roughly halves drawdown across XLE/OIH/ERX "
+                  "but captures only a small slice of the energy bull, and its "
+                  "Sharpe (0.45) now trails Buy&Hold's (0.90). It remains the "
+                  "sweep's pick only because every MA config breaches the "
+                  "drawdown ceiling in some sub-period. The pre-fix headline "
+                  "(+105% / Sharpe 1.37) was an artifact of the leaky H/L model."),
+    eval_note=("**Sibling execution (OIH / ERX).** Both trade the XLE-parent "
+               "divergence signal with the same −8% stop. Under the causal "
+               "signal the sleeves are drawdown-limiters, not return engines: "
+               "OIH +27% at −24% MDD (B&H +145% / −46%) and ERX +45% at −28% "
+               "(B&H +533% / −47%) OOS 2021→now. The earlier stop-less-ERX "
+               "analysis (~+311% / Sharpe 1.40) was based on the pre-fix leaky "
+               "signal — see the note atop LEV_SIBLINGS_STOP_EVAL.md."),
 )
 
 
@@ -528,18 +519,19 @@ CONFIGS["PBW"] = TickerConfig(
     asset_labels={"px_close": "PBW · Clean Energy"},
     strategy_mode="divergence", strategy_name="Clean-Energy Divergence Pure-Regime",
     ma_window=50, fixed_stop=0.10,
-    u1_errhi_min=0.12, d2_errhi_max=-0.08, d1_errlo_min=0.10, v_errlo_min=0.50,
+    # 2026-07 causal-H/L retune (backtest_ticker.py PBW --sweep).
+    u1_errhi_min=0.30, d2_errhi_max=-0.18, d1_errlo_min=0.38, v_errlo_min=2.1,
     use_d1_exit=False,
     hl_band_pct=0.014,
     fetch_start="2010-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.012, day_down_thresh=-0.012,
-    results_note=("OOS 2021→now: the U1/D2 divergence system returns +61% at a "
-                  "−39% max drawdown (Sharpe 0.54) while buy-&-hold is DOWN −64% "
-                  "at a −90% drawdown. On this boom-bust clean-energy basket a "
-                  "trend filter barely clears water (+10%); the divergence "
-                  "Pure-Regime — which stands aside through the multi-year bust "
-                  "and re-enters on confirmed momentum — is by far the better "
-                  "way to trade it, so it is the tuned strategy here."),
+    results_note=("OOS 2021→now (causal signal, 2026-07 retune): the U1/D2 "
+                  "divergence system returns +148% at a −30% max drawdown "
+                  "(Sharpe 0.97) while buy-&-hold is DOWN −67% at a −90% "
+                  "drawdown. On this boom-bust clean-energy basket the "
+                  "divergence Pure-Regime — which stands aside through the "
+                  "multi-year bust and re-enters on confirmed momentum — "
+                  "remains decisively the better way to trade it."),
 )
 
 
@@ -572,9 +564,11 @@ CONFIGS["ARTY"] = TickerConfig(
     traded_assets=[("ARTY", "px_close")],
     asset_labels={"px_close": "ARTY · AI & Tech"},
     strategy_mode="divergence", strategy_name="AI/Tech Divergence Pure-Regime",
-    ma_window=50, fixed_stop=0.05,
-    u1_errhi_min=0.05, d2_errhi_max=-0.18, d1_errlo_min=0.10, v_errlo_min=0.50,
-    use_d1_exit=True,
+    # 2026-07 causal-H/L retune (backtest_ticker.py ARTY --sweep): the sweep
+    # picks signal-only exits (no fixed stop) and drops the D1 exit.
+    ma_window=50, fixed_stop=1.0,
+    u1_errhi_min=0.24, d2_errhi_max=-0.48, d1_errlo_min=0.32, v_errlo_min=1.2,
+    use_d1_exit=False,
     hl_band_pct=0.012,
     fetch_start="2018-06-28", oos_start="2021-01-01",
     periods=[
@@ -585,12 +579,12 @@ CONFIGS["ARTY"] = TickerConfig(
         ("🔬 Most-recent OOS (2025 → now)", "2025-01-01", None),
     ],
     day_up_thresh=0.010, day_down_thresh=-0.010,
-    results_note=("OOS 2021→now: the U1/D2 divergence system (with a D1 "
-                  "downtrend exit and a −5% stop) returns +108% at just a −17% "
-                  "max drawdown (Sharpe 0.99) vs buy-&-hold +82% at −56% "
-                  "(Sharpe 0.52) — it beats the market on return AND roughly "
-                  "thirds the drawdown. A trend filter only manages +79% at "
-                  "−33%, so the divergence Pure-Regime is the tuned strategy."),
+    results_note=("OOS 2021→now (causal signal, 2026-07 retune): the U1/D2 "
+                  "divergence system (signal-only exits, no fixed stop) returns "
+                  "+148% at a −27% max drawdown (Sharpe 1.11) vs buy-&-hold "
+                  "+73% at −56% (Sharpe 0.48) — it beats the market on return "
+                  "AND roughly halves the drawdown, so the divergence "
+                  "Pure-Regime remains the tuned strategy."),
 )
 
 

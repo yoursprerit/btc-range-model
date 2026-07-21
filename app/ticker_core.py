@@ -362,9 +362,14 @@ def compute_trend_signatures(cfg: TickerConfig, completed: pd.DataFrame) -> dict
     err_hi = (ah - phi) / c * 100
     err_lo = (plo - al) / c * 100
 
+    # Regime-adaptive centering — MUST match backtest_ticker.precompute_signals
+    # exactly (60-bar rolling median, min_periods=20): the tuned U1/D2/D1
+    # thresholds assume this centering, so a different window here would fire
+    # the live signals on different bars than the backtest. Callers must supply
+    # enough completed bars (~150) for the tail bars to carry full medians.
     def _center(x):
         s = pd.Series(x)
-        med = s.rolling(30, min_periods=8).median()
+        med = s.rolling(60, min_periods=20).median()
         med = med.fillna(s.expanding(min_periods=1).median())
         return (s - med).to_numpy()
     err_hi = _center(err_hi)

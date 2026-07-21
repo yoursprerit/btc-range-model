@@ -1,5 +1,8 @@
 # Overall Strategy — Out-of-Sample Walk-Forward Evaluation
 
+> **⚠️ Historical memo — pre-dates the 2026-07 causal H/L fix and retune.** The gold and divergence-ETF sleeves feeding these blends were driven by a daily H/L model later found to leak the target bar into its features. The combined-portfolio numbers here are kept as a historical record; the regenerated artifact (`data/overall/overall_results.json`, rebuilt via `scripts/build_overall.py`) reflects the causal models and re-tuned thresholds.
+
+
 **Document type:** Read-only robustness audit of the **Overall Trading** cross-asset
 strategy. **No strategy, config, weights, or model were changed** — this only measures
 how the *currently-implemented* Overall strategy compares to a genuinely

@@ -57,7 +57,13 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     frac = feat.isna().mean()
     feat_cols = [c for c in feat.columns if frac[c] <= 0.35]
 
-    df = feat[feat_cols].copy()
+    # CAUSAL alignment (matches the BTC app): predictions for bar D use only
+    # features known at the close of bar D−1 — shift the feature matrix one bar
+    # forward before pairing with bar D's high/low target. Unshifted, the row's
+    # own range/return/gap features let the ridge reconstruct the target
+    # (look-ahead), which both inflated the H/L accuracy and put the divergence
+    # err_hi/err_lo signals on an artificially small scale.
+    df = feat[feat_cols].shift(1).copy()
     df["y_hi"] = y_hi; df["y_lo"] = y_lo
     df["close_asof"] = prev_c
     df["actual_high"] = high; df["actual_low"] = low
@@ -90,7 +96,7 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
 
 
 # ── vectorised signal precompute ──────────────────────────────────────────
-def precompute_signals(cfg: TickerConfig, preds: pd.DataFrame):
+def precompute_signals(cfg: TickerConfig, preds: pd.DataFrame, v_thresh: float | None = None):
     c = preds["close_asof"].to_numpy(float)
     phi = preds["pred_high"].to_numpy(float)
     plo = preds["pred_low"].to_numpy(float)
@@ -135,7 +141,7 @@ def precompute_signals(cfg: TickerConfig, preds: pd.DataFrame):
         nrm = max(abs(dn_norm[j]), 0.01)
         dns = ((-ehma3[j] / nrm) * 0.30 + (lb3[j] / 3.0) * 0.30 +
                (elma3[j] / max(abs(elma3[j]), 0.1)) * 0.20 + float(lo_break[j]) * 0.20)
-        v_rev[j] = (dns > 0.8) and (err_lo[j] > cfg.v_errlo_min)
+        v_rev[j] = (dns > 0.8) and (err_lo[j] > (cfg.v_errlo_min if v_thresh is None else v_thresh))
     v_recent = np.array([bool(np.any(v_rev[max(0, i - 2):i + 1])) for i in range(n)])
 
     return dict(err_hi=err_hi, err_lo=err_lo, ehma3=ehma3, elma3=elma3,
@@ -396,7 +402,9 @@ def _run_spec(cfg, preds, sig, price_col, spec, oos_start=None, end=None):
         return simulate_regime(cfg, preds, sig, price_col, ma_window=spec["ma_window"],
                                stop_pct=spec["stop"], oos_start=oos_start, end=end)
     return simulate(cfg, preds, sig, price_col, stop_pct=spec["stop"],
-                    U1=spec["U1"], D2=spec["D2"], oos_start=oos_start, end=end)
+                    U1=spec["U1"], D2=spec["D2"], D1=spec.get("D1"),
+                    use_d1_exit=spec.get("d1x", False),
+                    oos_start=oos_start, end=end)
 
 
 def _score_spec(cfg, preds, sig, price_col, spec):
@@ -430,20 +438,48 @@ def _score_spec(cfg, preds, sig, price_col, spec):
     return spec
 
 
+def divergence_scale(cfg, preds, sig):
+    """Error-scale anchors for the divergence threshold grids, measured on the
+    CAUSAL signal itself (OOS window): std of the 3-bar centered err_hi/err_lo
+    averages and of the raw centered err_lo.  The old fixed ±0.05..0.18 grid
+    belonged to the pre-fix look-ahead error (≈6× smaller) and would fire on
+    noise against the honest forecast error."""
+    oos = (preds["target_date"] >= pd.Timestamp(cfg.oos_start)).to_numpy()
+    s3_hi = float(np.std(np.asarray(sig["ehma3"])[oos]))
+    s3_lo = float(np.std(np.asarray(sig["elma3"])[oos]))
+    s_lo = float(np.std(np.asarray(sig["err_lo"])[oos]))
+    return dict(s3_hi=s3_hi, s3_lo=s3_lo, s_lo=s_lo)
+
+
 def sweep_asset(cfg, preds, sig, price_col):
     """Search MA and divergence configs; pick the one that best satisfies the
     multi-period objective (beat B&H in loss periods, MDD ≤ B&H everywhere,
-    retain upside) and maximises full-period return, tie-broken by Sharpe."""
+    retain upside) and maximises full-period return, tie-broken by Sharpe.
+
+    Divergence grids are scaled to the signal's own OOS error std (see
+    divergence_scale) so the same sweep works on any asset's volatility; the
+    V-reversal threshold is swept via per-V signal recomputes."""
+    sc = divergence_scale(cfg, preds, sig)
+    u1_grid = sorted({round(k * sc["s3_hi"], 2) for k in (0.25, 0.35, 0.5, 0.75, 1.0)})
+    d2_grid = sorted({round(-k * sc["s3_hi"], 2) for k in (0.15, 0.25, 0.35, 0.5, 0.75)})
+    d1_val = round(0.3 * sc["s3_lo"], 2)
+    v_grid = sorted({round(k * sc["s_lo"], 1) for k in (0.75, 1.0, 1.5)})
+    sig_by_v = {v: precompute_signals(cfg, preds, v_thresh=v) for v in v_grid}
+
     cands = []
     for ma_w in (20, 30, 40, 50, 60, 80, 100, 120, 150, 200):
         for stop in (cfg.fixed_stop, 1.0):
             cands.append(dict(mode="ma", ma_window=ma_w, stop=stop))
-    for U1 in (0.05, 0.08, 0.12):
-        for D2 in (-0.08, -0.12, -0.18):
-            for stop in (cfg.fixed_stop, 1.0):
-                cands.append(dict(mode="divergence", U1=U1, D2=D2, stop=stop))
+    for U1 in u1_grid:
+        for D2 in d2_grid:
+            for V in v_grid:
+                for d1x in (False, True):
+                    for stop in (cfg.fixed_stop, 1.0):
+                        cands.append(dict(mode="divergence", U1=U1, D2=D2,
+                                          D1=d1_val, V=V, d1x=d1x, stop=stop))
     for spec in cands:
-        _score_spec(cfg, preds, sig, price_col, spec)
+        spec_sig = sig_by_v.get(spec.get("V"), sig)
+        _score_spec(cfg, preds, spec_sig, price_col, spec)
 
     tiers = [
         [x for x in cands if x["beats_loss"] and x["mdd_ok"] and x["participate"]],
@@ -500,7 +536,8 @@ def main():
             b = sweep_asset(cfg, preds, sig, col)
             chosen[lbl] = b
             spec = (f"MA={b['ma_window']} stop={b['stop']*100:.0f}%" if b["mode"] == "ma"
-                    else f"U1={b['U1']} D2={b['D2']} stop={b['stop']*100:.0f}%")
+                    else f"U1={b['U1']} D2={b['D2']} D1={b.get('D1')} V={b.get('V')} "
+                         f"d1x={b.get('d1x')} stop={b['stop']*100:.0f}%")
             print(f"  {lbl:5s} {b['mode']:11s} {spec:26s} "
                   f"ret={b['total_ret']*100:+8.1f}% MDD={b['mdd']*100:6.1f}% "
                   f"Sharpe={b['sharpe']:.2f} trades={b['trades']} | "

@@ -89,15 +89,23 @@ once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
 
 **Out-of-sample results (2021→now window vs Buy-&-Hold):**
 
+> **2026-07 causal-H/L revision.** The daily H/L model behind the divergence
+> strategies previously leaked the target bar into its features; it is now
+> causal and the XLE thresholds were re-tuned on the honest error
+> (U1 +0.80 / D2 −0.60 / V 2.1, no D1 exit, uniform −8 % stop). The XLE row
+> changed materially; trend rows only drifted with the data refresh.
+
 | App | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
-| SOXX | Dual-MA 25/100, −5 % stop | **+452 %** | +362 % | **−27 %** | −46 % | **1.23 / 0.94** |
-| GRID | MACD 10/20/9, −5 % stop | **+134 %** | +132 % | **−16 %** | −30 % | **1.20 / 0.83** |
-| XLE | Divergence (U1 .16 / D2 −.10 / D1-exit) | +105 % | +180 % | **−9 %** | −27 % | **1.37 / 0.84** |
-| REMX | Dual-MA 50/200, −5 % stop | **+135 %** | +24 % | **−27 %** | −74 % | **0.68 / 0.30** |
-| WGMI | MA-50 + vol-filter (k 0.95, no stop) | **+376 %** | +223 % | **−32 %** | −63 % | **1.81 / 0.98** |
+| SOXX | Dual-MA 25/100, −5 % stop | **+425 %** | +340 % | **−27 %** | −46 % | **1.18 / 0.91** |
+| GRID | MACD 10/20/9, −5 % stop | **+134 %** | +124 % | **−16 %** | −30 % | **1.19 / 0.79** |
+| XLE | Divergence (U1 .80 / D2 −.60, causal) | +23 % | +207 % | **−15 %** | −27 % | 0.45 / 0.90 |
+| REMX | Dual-MA 50/200, −5 % stop | **+98 %** | +5 % | **−36 %** | −74 % | **0.56 / 0.23** |
+| WGMI | MA-50 + vol-filter (k 0.95, no stop) | **+376 %** | +223 % | **−32 %** | −63 % | **1.80 / 0.97** |
 
-(OIH, traded off the XLE signal: **+70 %** at **−19 %** MDD vs Buy-&-Hold +130 % / −46 %.)
+(OIH, traded off the XLE signal: +27 % at −24 % MDD vs Buy-&-Hold +145 % / −46 %;
+ERX: +45 % at −28 % vs +533 % / −47 %. Under the causal signal the energy
+divergence is a drawdown-limiter, not a return engine.)
 (WGMI listed Feb-2022, so its OOS window is 2024→now with an ~11-month training window.)
 
 ### Full-cycle test — the entire history including a real bear (the 🌍 tab)
@@ -112,12 +120,12 @@ recovered from:
 
 | App | Full window | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) | Beats B&H on |
 |---|---|---|---|---|---|---|---|
-| **XLE** | 2016→now | **+165 %** | +76 % | **−17 %** | −70 % | **0.95 / 0.33** | return · DD · Sharpe |
-| **OIH** | 2016→now | **+119 %** | −32 % | **−23 %** | −90 % | **0.59 / 0.12** | return · DD · Sharpe |
-| **REMX** | 2015→now | **+510 %** | +112 % | **−27 %** | −75 % | **0.82 / 0.38** | return · DD · Sharpe |
-| GRID | 2015→now | +270 % | +452 % | **−21 %** | −41 % | **1.04 / 0.88** | DD · Sharpe |
-| WGMI | 2022→now | +282 % | +536 % | **−32 %** | −63 % | **1.32 / 1.08** | DD · Sharpe |
-| SOXX | 2015→now | +1161 % | +1842 % | **−35 %** | −46 % | **1.05 / 1.01** | DD · Sharpe |
+| XLE | 2015→now | +39 % | +93 % | **−20 %** | −70 % | 0.35 / 0.36 | DD |
+| **OIH** | 2015→now | **+60 %** | −28 % | **−30 %** | −90 % | **0.37 / 0.14** | return · DD · Sharpe |
+| **REMX** | 2015→now | **+414 %** | +81 % | **−36 %** | −75 % | **0.75 / 0.34** | return · DD · Sharpe |
+| GRID | 2015→now | +286 % | +432 % | **−19 %** | −41 % | **1.07 / 0.86** | DD · Sharpe |
+| WGMI | 2022→now | +282 % | +603 % | **−32 %** | −63 % | **1.32 / 1.10** | DD · Sharpe |
+| SOXX | 2015→now | +1108 % | +1769 % | **−35 %** | −46 % | **1.03 / 0.99** | DD · Sharpe |
 
 **Read this honestly.** Over a full bull+bear cycle the strategy beats
 buy-&-hold *outright — return, drawdown and Sharpe* — on the **commodity-equity

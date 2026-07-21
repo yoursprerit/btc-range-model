@@ -93,26 +93,27 @@ MACRO_SYMS = {
 # The 1x GLDM position is NOT traded (it only supplies the signal + forecasts).
 #
 # BTC uses U1/D2 divergence thresholds of ±1.3% of close because a BTC day
-# routinely ranges 3-4%.  The GLDM divergence error is regime-centered (rolling
-# median) with a std of only ~0.17%, so the thresholds are an order of magnitude
-# smaller.  The single chosen config below sits on a robust plateau of the joint
-# GDX+UGL frontier sweep and BEATS buy & hold on BOTH return AND drawdown for
-# both assets (GDX +270%/-16% MDD/Sharpe 1.40, UGL +207%/-18% MDD/Sharpe 1.29;
-# B&H +104%/-47% and +161%/-49%).  See GLDM_TRADING_STRATEGY.md.
+# routinely ranges 3-4%.  The GLDM daily H/L model is CAUSAL (features through
+# the prior close predict the next bar — see backtest_gldm.build_predictions),
+# so its regime-centered divergence error has a genuine forecast scale: 3-bar
+# err_hi std ≈ 0.55% OOS.  The config below is the tier-1 pick of the joint
+# GDX+UGL frontier sweep (backtest_gldm.py --sweep): it beats buy & hold on
+# BOTH return AND drawdown for GDX (+110%/−22% MDD/Sharpe 0.90 vs B&H
+# +104%/−46%/0.54) and beats B&H on drawdown and Sharpe for UGL (+124%/−19%/
+# 0.93 vs +161%/−49%/0.67).  See GLDM_TRADING_STRATEGY.md.
 STRATEGY_NAME = "Divergence Pure-Regime"
-U1_ERRHI_MIN =  0.08   # U1 entry:  3d-avg centered err_hi > +0.08%  (AND hi_breaks_3d ≥ 2)
+U1_ERRHI_MIN =  0.15   # U1 entry:  3d-avg centered err_hi > +0.15%  (AND hi_breaks_3d ≥ 2)
 D2_ERRHI_MAX = -0.10   # D2 exit:   3d-avg centered err_hi < −0.10%
-D1_ERRLO_MIN =  0.10   # D1 exit:   3d-avg centered err_lo > +0.10%  (AND lo_breaks_3d ≥ 2)
-V_ERRLO_MIN  =  0.50   # V-reversal capitulation: single-bar low undershoot > 0.50%
+D1_ERRLO_MIN =  0.15   # D1 exit:   3d-avg centered err_lo > +0.15%  (AND lo_breaks_3d ≥ 2)
+V_ERRLO_MIN  =  1.00   # V-reversal capitulation: single-bar low undershoot > 1.00%
 FIXED_STOP   =  0.03   # shared fixed stop (−3%) for both traded assets
 TRADEABLE_ASSETS = ["GDX", "UGL", "NUGT"]   # GLDM (1x) supplies the signal only
 
-# ── PRIMARY GOLD STRATEGY — price-vs-MA trend filter ─────────────────────
-# The backtest (backtest_gldm.py, OOS 2021-2026) shows gold's persistent
-# uptrends and shallow dips reward a simple "long above the N-day SMA" filter
-# far more than BTC's aggressive divergence-exit complex: it captures ~95%+ of
-# buy & hold's return while roughly HALVING max drawdown and beating its
-# Sharpe on GLDM, UGL and GDX.  These per-asset MA windows / stops are the
+# ── REFERENCE trend variant — price-vs-MA filter (not traded) ────────────
+# The backtest (backtest_gldm.py, OOS 2021→now) keeps a simple "long above the
+# N-day SMA" filter as a labelled reference: it captures ~85-99% of buy &
+# hold's return at roughly half the max drawdown with a better Sharpe on
+# GLDM, UGL and GDX.  These per-asset MA windows / stops are the
 # Sharpe-optimal configs from the frontier sweep (MDD ≤ buy & hold):
 MA_WINDOW = 50                                   # default trend-filter window
 MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
@@ -120,12 +121,13 @@ MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
 # Fixed stop per traded asset.  GLDM (1×) and GDX (high-beta miners) keep the
 # tuned −3% stop.  The leveraged siblings are looser, because a tight 1× stop
 # whipsaws a leveraged ETF (the SOXL lesson — see LEV_SIBLINGS_STOP_EVAL.md):
-#   • UGL  (2× gold)        → NO fixed stop (signal-only exits): the −3% stop cost
-#                             return + Sharpe + win-rate for ~zero drawdown benefit
-#                             (+247% / 1.37 / 67% win  vs  −3%: +211% / 1.30 / 61%).
-#   • NUGT (2× gold miners) → wider −5% stop (NOT stop-less): −5% is the sweet
-#                             spot, beating both the old −3% and stop-less on
-#                             return, Sharpe AND drawdown (+1183% / 1.48 / −28%).
+#   • UGL  (2× gold)        → NO fixed stop (signal-only exits): under the causal
+#                             signal the stop sweep shows a −8% stop never fires
+#                             (identical +119% / 0.90 Sharpe to stop-less), and
+#                             tighter stops only whipsaw the 2× fund.
+#   • NUGT (2× gold miners) → wider −5% stop (NOT stop-less): the sweet spot in
+#                             the stop sweep (+276% / 0.90 Sharpe / −38% MDD vs
+#                             B&H +41% / −74%).
 STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": FIXED_STOP, "UGL": 1.0, "NUGT": 0.05}
 
 

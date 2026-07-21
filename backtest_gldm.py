@@ -58,7 +58,12 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
     frac = feat.isna().mean()
     feat_cols = [c for c in feat.columns if frac[c] <= 0.35]
 
-    df = feat[feat_cols].copy()
+    # CAUSAL alignment (matches the BTC app): the prediction for bar D must use
+    # only information available at the close of bar D−1, so the feature matrix
+    # is shifted one bar forward before pairing with bar D's high/low target.
+    # (Unshifted, the row's own range/return/gap features let the ridge
+    # reconstruct the target at R²≈0.95 — a look-ahead, not a forecast.)
+    df = feat[feat_cols].shift(1).copy()
     df["y_hi"] = y_hi; df["y_lo"] = y_lo
     df["close_asof"] = prev_c
     df["actual_high"] = high; df["actual_low"] = low
@@ -96,7 +101,7 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
 
 
 # ── vectorised signal precompute (consistent with gldm_core) ──────────────
-def precompute_signals(preds: pd.DataFrame):
+def precompute_signals(preds: pd.DataFrame, v_thresh: float | None = None):
     c = preds["close_asof"].to_numpy(float)
     phi = preds["pred_high"].to_numpy(float)
     plo = preds["pred_low"].to_numpy(float)
@@ -148,7 +153,7 @@ def precompute_signals(preds: pd.DataFrame):
         nrm = max(abs(dn_norm[j]), 0.01)
         dns = ((-ehma3[j] / nrm) * 0.30 + (lb3[j] / 3.0) * 0.30 +
                (elma3[j] / max(abs(elma3[j]), 0.1)) * 0.20 + float(lo_break[j]) * 0.20)
-        v_rev[j] = (dns > 0.8) and (err_lo[j] > gc.V_ERRLO_MIN)
+        v_rev[j] = (dns > 0.8) and (err_lo[j] > (gc.V_ERRLO_MIN if v_thresh is None else v_thresh))
     v_recent = np.array([bool(np.any(v_rev[max(0, i - 2):i + 1])) for i in range(n)])
 
     # MA50 trend-filter regime on the GLDM own close (primary gold strategy).
@@ -354,6 +359,93 @@ def sweep_ma(preds, sig, asset):
     return best
 
 
+def sweep_divergence(preds, assets=("GDX", "UGL"), extra_assets=("NUGT",)):
+    """Joint frontier sweep of the divergence thresholds (U1 / D2 / D1 / V) —
+    the thresholds the traded strategy actually uses.  Grids are scaled to the
+    CAUSAL divergence error (3-bar centered err_hi std ≈ 0.55%; the old ±0.08
+    grid belonged to the pre-fix leaky error, std ≈ 0.10%).
+
+    Objective (mirrors the original tuning claim): prefer configs that beat
+    buy & hold on BOTH return AND max-drawdown for BOTH joint assets, then
+    fall back tier-by-tier; rank by average Sharpe.  Returns the ranked list
+    (best first) with per-asset metrics attached.
+    """
+    U1_GRID = (0.10, 0.15, 0.20, 0.30, 0.45, 0.60)
+    D2_GRID = (-0.10, -0.15, -0.20, -0.30, -0.45, -0.60)
+    D1_GRID = (0.15, 0.30, 0.45)
+    V_GRID  = (1.0, 1.5, 2.0)
+
+    def _cols(a):
+        return "gldm_close" if a == "GLDM" else f"{a.lower()}_close"
+
+    bh = {}
+    for a in assets:
+        r = simulate(preds, precompute_signals(preds), _cols(a), gc.stop_for(a),
+                     0.10, -0.10, 0.10)
+        bh[a] = _metrics(r["bh"], r["dates"])
+
+    results = []
+    for V in V_GRID:
+        sigv = precompute_signals(preds, v_thresh=V)
+        for U1 in U1_GRID:
+            for D2 in D2_GRID:
+                for D1 in D1_GRID:
+                    per = {}
+                    ok = True
+                    for a in assets:
+                        r = simulate(preds, sigv, _cols(a), gc.stop_for(a), U1, D2, D1)
+                        m = _metrics(r["strat"], r["dates"])
+                        tr = r["trades"]
+                        per[a] = dict(m, trades=int(len(tr)),
+                                      win=float((tr > 0).mean() * 100) if len(tr) else 0.0)
+                        if len(tr) < 5:      # degenerate: effectively never trades
+                            ok = False
+                    if not ok:
+                        continue
+                    beats_ret = all(per[a]["total_ret"] >= bh[a]["total_ret"] - 1e-9 for a in assets)
+                    beats_mdd = all(per[a]["mdd"] >= bh[a]["mdd"] - 1e-9 for a in assets)
+                    partic = all(per[a]["total_ret"] >= 0.7 * bh[a]["total_ret"] for a in assets)
+                    tier = (0 if (beats_ret and beats_mdd) else
+                            1 if (beats_mdd and partic) else
+                            2 if beats_mdd else 3)
+                    avg_sharpe = float(np.mean([per[a]["sharpe"] for a in assets]))
+                    results.append(dict(U1=U1, D2=D2, D1=D1, V=V, tier=tier,
+                                        avg_sharpe=avg_sharpe, per=per))
+    results.sort(key=lambda x: (x["tier"], -x["avg_sharpe"]))
+    best = results[0]
+    # attach the extra (non-joint) assets' metrics under the chosen config
+    sigv = precompute_signals(preds, v_thresh=best["V"])
+    for a in extra_assets:
+        if _cols(a) in preds:
+            r = simulate(preds, sigv, _cols(a), gc.stop_for(a),
+                         best["U1"], best["D2"], best["D1"])
+            m = _metrics(r["strat"], r["dates"])
+            tr = r["trades"]
+            best["per"][a] = dict(m, trades=int(len(tr)),
+                                  win=float((tr > 0).mean() * 100) if len(tr) else 0.0)
+    return results, bh
+
+
+def sweep_stops(preds, U1, D2, D1, V, assets=("GLDM", "GDX", "UGL", "NUGT")):
+    """Per-asset fixed-stop mini-sweep under the chosen thresholds (Sharpe-ranked,
+    reported for transparency; the committed stops live in gc.STOP_BY_ASSET)."""
+    sigv = precompute_signals(preds, v_thresh=V)
+    out = {}
+    for a in assets:
+        col = "gldm_close" if a == "GLDM" else f"{a.lower()}_close"
+        if col not in preds:
+            continue
+        rows = []
+        for stop in (0.02, 0.03, 0.05, 0.08, 1.0):
+            r = simulate(preds, sigv, col, stop, U1, D2, D1)
+            m = _metrics(r["strat"], r["dates"])
+            rows.append(dict(stop=stop, **m, trades=int(len(r["trades"])),
+                             win=float((r["trades"] > 0).mean() * 100) if len(r["trades"]) else 0.0))
+        rows.sort(key=lambda x: -x["sharpe"])
+        out[a] = rows
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cached", action="store_true")
@@ -372,7 +464,29 @@ def main():
           f"({(preds['target_date'] >= pd.Timestamp(OOS_START)).sum()} bars)")
 
     if args.sweep:
-        print("\n=== MA-window frontier sweep (best Sharpe, MDD ≤ Buy&Hold) ===")
+        print("\n=== DIVERGENCE threshold frontier sweep (U1/D2/D1/V, joint GDX+UGL) ===")
+        div_ranked, div_bh = sweep_divergence(preds)
+        for a, m in div_bh.items():
+            print(f"  B&H {a:5s} ret={m['total_ret']*100:+8.1f}%  MDD={m['mdd']*100:6.1f}%  "
+                  f"Sharpe={m['sharpe']:.2f}")
+        for x in div_ranked[:10]:
+            per = "  ".join(f"{a}: ret={p['total_ret']*100:+7.1f}% MDD={p['mdd']*100:5.1f}% "
+                            f"Sh={p['sharpe']:.2f} tr={p['trades']} win={p['win']:.0f}%"
+                            for a, p in x["per"].items())
+            print(f"  tier{x['tier']} U1={x['U1']:+.2f} D2={x['D2']:+.2f} D1={x['D1']:+.2f} "
+                  f"V={x['V']:.1f}  avgSh={x['avg_sharpe']:.2f} | {per}")
+        best = div_ranked[0]
+        print(f"\n  CHOSEN: U1={best['U1']:+.2f} D2={best['D2']:+.2f} "
+              f"D1={best['D1']:+.2f} V={best['V']:.1f}")
+        print("\n=== per-asset stop mini-sweep under chosen thresholds ===")
+        stops = sweep_stops(preds, best["U1"], best["D2"], best["D1"], best["V"])
+        for a, rows in stops.items():
+            r0 = rows[0]
+            stop_lbl = "none" if r0["stop"] >= 0.999 else "-%.0f%%" % (r0["stop"] * 100)
+            print(f"  {a:5s} best stop={stop_lbl}  "
+                  f"ret={r0['total_ret']*100:+.1f}% MDD={r0['mdd']*100:.1f}% Sharpe={r0['sharpe']:.2f}")
+
+        print("\n=== MA-window frontier sweep (reference variant) ===")
         chosen = {}
         for asset in ("GLDM", "UGL", "GDX"):
             b = sweep_ma(preds, sig, asset)
@@ -381,7 +495,14 @@ def main():
                   f"ret={b['ret']*100:+.1f}% CAGR={b['cagr']*100:+.1f}% MDD={b['mdd']*100:.1f}% "
                   f"Sharpe={b['sharpe']:.2f} entries={b['trades']} | "
                   f"B&H ret={b['bh_ret']*100:+.1f}% MDD={b['bh_mdd']*100:.1f}% Sharpe={b['bh_sharpe']:.2f}")
-        (gc.GLDM_DATA_DIR / "sweep_results.json").write_text(json.dumps(chosen, indent=2, default=str))
+        sweep_out = {"divergence": {"chosen": {k: best[k] for k in ("U1", "D2", "D1", "V", "tier", "avg_sharpe")},
+                                    "chosen_per_asset": best["per"],
+                                    "buy_hold": div_bh,
+                                    "top10": [{k: x[k] for k in ("U1", "D2", "D1", "V", "tier", "avg_sharpe")}
+                                              for x in div_ranked[:10]],
+                                    "stop_sweep": stops},
+                     "ma_reference": chosen}
+        (gc.GLDM_DATA_DIR / "sweep_results.json").write_text(json.dumps(sweep_out, indent=2, default=str))
 
     # The "assets" block is the strategy the Gold app / Overall sleeve actually
     # trade (see gldm_core.STRATEGY_NAME + STOP_BY_ASSET); the MA50 trend
