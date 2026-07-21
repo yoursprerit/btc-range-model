@@ -1130,13 +1130,16 @@ def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
         fig.add_trace(go.Scatter(x=[nx, nx], y=[hl["pred_low"], hl["pred_high"]],
                                  mode="markers", marker=dict(symbol="diamond", size=12, color="#b8860b"),
                                  name="Next-bar forecast"))
-    # ── strategy trend line: the 20-day SMA the Divergence Pure-Regime gate is
-    #    decided against (rolling series aligned to the visible daily bars). ──
-    sma20 = d_df["gldm_close"].sort_index().rolling(20, min_periods=1).mean()
-    ys20 = [float(sma20.asof(d)) for d in x]
-    fig.add_trace(go.Scatter(x=x, y=ys20, mode="lines",
-                             line=dict(color="#2563eb", width=1.7, dash="dash"),
-                             name="20-day SMA"))
+    # ── strategy trend line (Miners app only): the 20-day SMA the Divergence
+    #    Pure-Regime gate is decided against. The Gold Trend app keeps its
+    #    forecast plots SMA-free — the dual-MA legs live on the dedicated
+    #    regime chart instead. ──
+    if IS_MINERS:
+        sma20 = d_df["gldm_close"].sort_index().rolling(20, min_periods=1).mean()
+        ys20 = [float(sma20.asof(d)) for d in x]
+        fig.add_trace(go.Scatter(x=x, y=ys20, mode="lines",
+                                 line=dict(color="#2563eb", width=1.7, dash="dash"),
+                                 name="20-day SMA"))
     _add_clean_breakout_markers(fig, sub, sigs)
     fig.update_layout(height=340, margin=dict(l=0, r=10, t=44, b=0),
                       title=dict(text="📈 Daily H/L — predictions vs actuals · 🔻 D1/D2 mark the "
@@ -1428,18 +1431,11 @@ def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None, sig
         _hl_overlay = hl
         _ma_lines = [(20, _ma20, "#2563eb")] if _ma20 == _ma20 else None
     else:
-        # Gold Trend app: overlay the traded signal instead — the 25- and
-        # 100-day SMAs of the dual-MA cross (no daily H/L, no 20-day gate).
-        _c = d_df["gldm_close"].dropna()
+        # Gold Trend app: keep the hourly forecast chart clean — no daily H/L
+        # overlay and no SMA lines (the dual-MA legs live on the dedicated
+        # regime chart, so duplicating them here only cluttered the forecast).
         _hl_overlay = None
-        _ma_lines = []
-        if len(_c) >= gc.DUAL_MA_FAST:
-            _ma_lines.append((gc.DUAL_MA_FAST, float(_c.tail(gc.DUAL_MA_FAST).mean()),
-                              "#2563eb", "dual-MA fast leg"))
-        if len(_c) >= gc.DUAL_MA_SLOW:
-            _ma_lines.append((gc.DUAL_MA_SLOW, float(_c.tail(gc.DUAL_MA_SLOW).mean()),
-                              "#7c3aed", "dual-MA slow leg"))
-        _ma_lines = _ma_lines or None
+        _ma_lines = None
     fhr = _hourly_forecast_fig(as_of_date, is_live, hl=_hl_overlay, ma_lines=_ma_lines)
     if fhr:
         st.plotly_chart(fhr, use_container_width=True, key=f"{key_prefix}_hr")
