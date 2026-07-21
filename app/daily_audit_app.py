@@ -103,6 +103,18 @@ def _status(fresh: bool | None, age: int = 0) -> str:
     return "✅ Fresh" if fresh else f"🚨 STALE ({age}d behind)"
 
 
+def _stat(col, label: str, value) -> None:
+    """Compact stat card — like ``st.metric`` but with a value font sized for
+    full CT timestamps (st.metric's ~2.25rem value clips them to the date)."""
+    col.markdown(
+        "<div style='border:1px solid rgba(128,128,128,.28);border-radius:10px;"
+        "padding:9px 13px;margin-bottom:6px'>"
+        f"<div style='font-size:12px;opacity:.65;font-weight:600'>{label}</div>"
+        f"<div style='font-size:15.5px;font-weight:700;margin-top:2px;"
+        f"line-height:1.35'>{value}</div></div>",
+        unsafe_allow_html=True)
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 1 · Individual app signals — closing bar & last generation
 # ════════════════════════════════════════════════════════════════════════════
@@ -146,11 +158,11 @@ if not _ov:
     st.info("The 🧭 Overall Trading app hasn't rendered in this deployment yet — "
             "open it once and its update time + audit verdict will appear here.")
 else:
-    c = st.columns(4)
-    c[0].metric("Signals as-of (newest bar)", _ov.get("as_of", "—"))
-    c[1].metric("Overall view last updated", _ov.get("recorded_at_ct", "—"))
-    c[2].metric("Risk profile", _ov.get("profile", "—"))
-    c[3].metric("Instruments", str(_ov.get("n_instruments", "—")))
+    c = st.columns([1.1, 1.6, 0.8, 0.7])
+    _stat(c[0], "Signals as-of (newest bar)", _ov.get("as_of", "—"))
+    _stat(c[1], "Overall view last updated", _ov.get("recorded_at_ct", "—"))
+    _stat(c[2], "Risk profile", _ov.get("profile", "—"))
+    _stat(c[3], "Instruments", str(_ov.get("n_instruments", "—")))
     if _ov.get("audit_passed"):
         st.success("✅ The Overall strategy's signal-freshness audit **PASSED** on "
                    "its last run — every app's signals were on their freshest bar.")
@@ -184,12 +196,12 @@ else:
     aud = _da.get("audit") or {}
     ovr = _da.get("overall") or {}
     tbk = _da.get("target_book") or {}
-    c = st.columns(4)
-    c[0].metric("Overall computed", fr.fmt_ct(_da.get("generated_at_utc")))
-    c[1].metric("Signals as-of", ovr.get("as_of", "—"))
-    c[2].metric("Audit", "✅ PASSED" if aud.get("passed") else "🚨 FAILED")
-    c[3].metric("Target book published",
-                fr.fmt_ct(tbk.get("generated_at_utc")) if tbk.get("published") else "⛔ withheld")
+    c = st.columns([1.5, 0.9, 0.7, 1.5])
+    _stat(c[0], "Overall computed", fr.fmt_ct(_da.get("generated_at_utc")))
+    _stat(c[1], "Signals as-of", ovr.get("as_of", "—"))
+    _stat(c[2], "Audit", "✅ PASSED" if aud.get("passed") else "🚨 FAILED")
+    _stat(c[3], "Target book published",
+          fr.fmt_ct(tbk.get("generated_at_utc")) if tbk.get("published") else "⛔ withheld")
     if not aud.get("passed"):
         st.error("🚨 The scheduled run's audit **FAILED** — stale: "
                  f"**{', '.join(aud.get('stale_apps') or [])}**. "
