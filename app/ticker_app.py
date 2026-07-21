@@ -51,10 +51,11 @@ if not hasattr(backtest_ticker, "run_strategy"):
 tc = ticker_core
 bt = backtest_ticker
 
-_ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+_ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
              + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading",
-               "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)",
+               "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
+               "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
                "DAILYAUDIT": "🕵️  Daily Audit",
                "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}

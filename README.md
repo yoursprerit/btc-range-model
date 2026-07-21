@@ -11,7 +11,7 @@ the sidebar radio) and, optionally, a headless daily **IBKR rebalancer**.
 > **Origin.** This repo began as a Bitcoin range forecaster (hence the
 > `btc-range-model` name and the deep BTC model stack in
 > **[`BTC_README.md`](BTC_README.md)**). It has since grown into a full
-> multi-asset platform — nine signal apps, a combined portfolio cockpit, and a
+> multi-asset platform — ten signal apps, a combined portfolio cockpit, and a
 > live IBKR execution path.
 
 ```bash
@@ -33,7 +33,8 @@ model and backtest machinery.
 |---|---|---|
 | 🧭 **Overall Trading** | `app/overall_app.py` | The combined cross-asset **decision cockpit** — fuses every signal, position and backtest into one portfolio and answers *"where should capital go today?"* |
 | ₿ **Bitcoin (BTC)** | `app/btc_hourly_app.py` | Four-model BTC forecaster (hourly close, daily H/L, 7-day cone, day-type) + the BTC divergence strategy (BTC · MSTR · MSTU). See **[`BTC_README.md`](BTC_README.md)**. |
-| 🥇 **Gold (GLDM)** | `app/gldm_hourly_app.py` | Gold forecaster + gold-scaled divergence strategy (GLDM · GDX · UGL · NUGT). See **[`GLDM_README.md`](GLDM_README.md)**. |
+| 🥇 **Gold Trend (GLDM)** | `app/gldm_hourly_app.py` | Gold forecaster + dual-MA 25/100 strategy (GLDM · UGL). See **[`GLDM_README.md`](GLDM_README.md)**. |
+| ⛏️ **Gold Miners (GDXM)** | `app/gldm_hourly_app.py` | Gold-miners divergence strategy off the GLDM signal (GDX · NUGT) — same file, second app mode. |
 | 🖥️ **SOXX** · ⚡ **GRID** · 🛢️ **XLE** · 🧲 **REMX** · ⛏️ **WGMI** · ☀️ **PBW** · 🤖 **ARTY** | `app/ticker_app.py` | Seven config-driven ETF apps — one engine, one `TickerConfig` per asset. See **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**. |
 | 📋 **Target Book (IBKR)** | `app/target_book_app.py` | Human-readable viewer for the signed target-allocation artifact the rebalancer trades. |
 | ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target. |
@@ -45,7 +46,8 @@ would trade a view through proxies:
 | Signal | 1× primary | Higher-beta / leveraged siblings |
 |---|---|---|
 | BTC | BTC | MSTR (proxy) · MSTU (2×) |
-| Gold | GLDM | GDX (miners) · UGL (2×) · NUGT (2× miners) |
+| Gold Trend | GLDM | UGL (2×) |
+| Gold Miners (GLDM signal) | GDX | NUGT (2× miners) |
 | Energy | XLE | OIH (oil services) · ERX (2×) |
 | Semis | SOXX | SOXL (3×) |
 | Grid · Rare-earth · Miners · Clean-energy · AI/Tech | GRID · REMX · WGMI · PBW · ARTY | — |
@@ -88,7 +90,7 @@ flowchart LR
     R["streamlit_app.py<br/>(sidebar router)"]
     R --> OV["🧭 Overall Trading<br/>overall_app.py + overall_core.py"]
     R --> BT["₿ Bitcoin<br/>btc_hourly_app.py"]
-    R --> GL["🥇 Gold<br/>gldm_hourly_app.py"]
+    R --> GL["🥇⛏️ Gold Trend + Miners<br/>gldm_hourly_app.py × 2"]
     R --> TK["ETF apps<br/>ticker_app.py × 7"]
     R --> TB["📋 Target Book"]
     R --> EB["✅ Executed Book"]
@@ -108,17 +110,20 @@ Two engines cover the whole universe; the strategy and its thresholds are
 **tuned per asset** (never assumed) by a frontier sweep, and validated
 out-of-sample over multiple periods **and** the full bull+bear cycle.
 
-- **Divergence Pure-Regime** (BTC, Gold, XLE, PBW, ARTY) — enter on a bullish
+- **Divergence Pure-Regime** (BTC, Gold Miners, PBW, ARTY) — enter on a bullish
   H/L-forecast divergence (U1) confirmed inside a trend-regime gate; exit on
   momentum-fade / exhaustion (D2/D3) or a fixed stop.
-- **Trend filters** (SOXX dual-MA 25/100 · GRID MACD 10/20/9 · REMX dual-MA
-  50/200 golden cross · WGMI 50-day SMA + volatility filter) — long only while
-  the trend holds, flat otherwise.
+- **Trend filters** (SOXX & Gold Trend dual-MA 25/100 · GRID MACD 10/20/9 ·
+  REMX dual-MA 50/200 golden cross · WGMI 50-day SMA + volatility filter) —
+  long only while the trend holds, flat otherwise.
+- **Crash-shield quasi-B&H** (XLE · OIH · ERX) — long by default; exit only
+  while the close sits >30 % below its 52-week high, re-enter above the
+  50-day SMA.
 
 **Common rules across every app:**
 
 - The signal is executed in **higher-beta / leveraged proxies**, not always the
-  1× underlying (BTC→MSTR/MSTU, Gold→GDX/UGL, XLE→OIH/ERX, SOXX→SOXL).
+  1× underlying (BTC→MSTR/MSTU, Gold→UGL & GDX/NUGT, XLE→OIH/ERX, SOXX→SOXL).
 - Strategies are **long/flat** — when flat, idle capital is parked in **SATA**
   (a ~13 %-yield preferred), not dead cash.
 - **Portfolio blend (Overall):** a Monte-Carlo optimiser searches long-only
@@ -138,7 +143,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 | Strategy | Signal(s) | Current strategy doc → additional |
 |---|---|---|
 | BTC Divergence Pure-Regime | BTC · MSTR · MSTU | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
-| Gold Divergence Pure-Regime | GLDM · GDX · UGL · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
+| Gold middle path (dual-MA + divergence) | GLDM · UGL & GDX · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
 | Semis Dual-MA 25/100 | SOXX · SOXL | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
 | Grid MACD 10/20/9 | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Energy Divergence Pure-Regime | XLE · OIH · ERX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) (ERX) |
@@ -229,8 +234,8 @@ Buy & hold is flat-to-catastrophic over this window (MSTU's 2× decay ≈ total
 wipeout); the strategy stays long in the bull, steps aside in the bear, and even
 posts *positive* bear-market returns on MSTR/MSTU. The **Overall** portfolio
 blends every sleeve above into one book — with the 2026-07 revised sleeves the
-combined OOS 2021→now backtest lands at **Balanced +824 % (−17 % MDD, Sharpe
-2.48) · Growth +1,910 % (−23 %, 1.72) · Aggressive +2,350 % (−31 %, 1.54)**,
+combined OOS 2021→now backtest lands at **Balanced +852 % (−13 % MDD, Sharpe
+2.48) · Growth +1,893 % (−23 %, 1.71) · Aggressive +2,387 % (−31 %, 1.54)**,
 the higher profiles loading the leveraged sleeves within their drawdown budgets.
 
 > **Which numbers are these?** The current live **2026-07e** stop config (MSTR

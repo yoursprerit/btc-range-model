@@ -130,45 +130,69 @@ BTC_CFG = TickerConfig(
                   "for signal consistency, not daily performance."),
 )
 
-# GLDM — Divergence Pure-Regime, the Gold app's ACTUAL strategy.
-# gldm_core trades one strategy: a BTC-style U1/D2/D3 bullish-divergence system
-# (U1=0.08, D2=−0.10, D1=0.10, −3% stop) confirmed inside a 50-day trend-regime
-# gate.  It reproduces daily far better than it does for BTC (gold trends
-# smoothly), so we run the divergence system here — not the MA50 comparison
-# variant.  Trades GLDM (1×) plus GDX (miners) and UGL (2× gold) off the signal.
+# GOLD — the middle-path split, surfaced as TWO parent apps (both driven by
+# the shared GLDM signal via gldm_engine; these configs are display metadata —
+# the dispatch in run_universe routes both to the real gold engine):
+#   🥇 GLDM (Gold Trend)  — GLDM (1×) & UGL (2×) on a dual-MA 25/100 crossover
+#   ⛏️ GDXM (Gold Miners) — GDX & NUGT on the Divergence Pure-Regime signal
 GLDM_CFG = TickerConfig(
-    key="GLDM", name="SPDR Gold MiniShares", emoji="🥇",
-    blurb=("Spot gold via GLDM drives the signal; the strategy trades GLDM and "
-           "its higher-beta siblings GDX (miners), UGL (2× gold) and NUGT "
-           "(2× gold miners) off it."),
+    key="GLDM", name="Gold Trend (SPDR Gold MiniShares)", emoji="🥇",
+    blurb=("Spot gold via GLDM drives the signal; the Gold Trend app trades "
+           "GLDM (1× core) and UGL (2× gold) on a SOXX-style dual-MA 25/100 "
+           "crossover of the gold close."),
     accent="#b8860b", accent_dark="#8b6508", accent_bg="#fffbeb", accent_bg2="#fef3c7",
     primary_symbol="GLDM",
     macro_syms={"gc": "GC=F", "slv": "SLV", "dxy": "DX-Y.NYB",
                 "tnx": "^TNX", "vix": "^VIX", "spx": "^GSPC"},
-    extra_syms={"gdx": "GDX", "ugl": "UGL", "nugt": "NUGT"},
+    extra_syms={"ugl": "UGL"},
     sentiment=[("gc_close", "mom", +1.0), ("dxy_close", "mom", -1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Gold macro sentiment",
-    traded_assets=[("GLDM", "px_close"), ("GDX", "gdx_close"), ("UGL", "ugl_close"),
-                   ("NUGT", "nugt_close")],
-    asset_labels={"px_close": "GLDM · Gold", "gdx_close": "GDX · Gold Miners",
-                  "ugl_close": "UGL · 2× Gold", "nugt_close": "NUGT · 2× Gold Miners"},
-    strategy_mode="divergence", strategy_name="Gold Divergence Pure-Regime",
-    ma_window=50, fixed_stop=0.03,
-    u1_errhi_min=0.08, d2_errhi_max=-0.10, d1_errlo_min=0.10, v_errlo_min=0.50,
-    use_d1_exit=False, hl_band_pct=0.008,
+    traded_assets=[("GLDM", "px_close"), ("UGL", "ugl_close")],
+    asset_labels={"px_close": "GLDM · Gold", "ugl_close": "UGL · 2× Gold"},
+    strategy_mode="dual_ma", strategy_name="Gold Dual-MA Trend",
+    ma_window=100, ma_fast=25, ma_slow=100, fixed_stop=0.03,
+    hl_band_pct=0.008,
     fetch_start="2018-06-26", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.006, day_down_thresh=-0.006,
-    results_note=("Divergence Pure-Regime — the Gold app's actual strategy: a U1 "
-                  "bullish-divergence entry confirmed inside a 50-day regime "
-                  "gate, D2/D3 exits, per-asset stops (GLDM/GDX −3%, but the "
-                  "leveraged siblings are looser — UGL signal-only, NUGT −5%). The "
-                  "same gold signal steers GDX and the 2× UGL. OOS 2021→now: GLDM "
-                  "+73% / −11% / Sharpe 1.29, GDX +156% / −19% / 1.12, UGL (now "
-                  "stop-less) +247% / −18% / 1.37. The same signal drives the 2× "
-                  "gold-miners NUGT sleeve — retuned to a −5% stop (vs −3%): "
-                  "+1183% / −28% / Sharpe 1.48 OOS, a leveraged win-win in the "
-                  "blend (see LEV_SIBLINGS_STOP_EVAL.md)."),
+    results_note=("Gold Trend — half of the gold middle path: GLDM (1×) and "
+                  "UGL (2×) ride a SOXX-style 25/100 dual-MA crossover on the "
+                  "GLDM close with −3% stops. OOS 2021→now: GLDM +137% / −19% / "
+                  "Sharpe 1.08, UGL +302% / −38% / 0.96 — beats both B&H and "
+                  "the divergence variant on return AND Sharpe for these two "
+                  "smooth-trending sleeves. The miners half (GDX/NUGT) trades "
+                  "the divergence signal under the ⛏️ Gold Miners app."),
+)
+
+GDXM_CFG = TickerConfig(
+    key="GDXM", name="Gold Miners (GDX & NUGT)", emoji="⛏️",
+    blurb=("The gold-miners half of the gold middle path: GDX and NUGT trade "
+           "the Divergence Pure-Regime signal derived from GLDM's causal daily "
+           "H/L model."),
+    accent="#8b6508", accent_dark="#6b4e06", accent_bg="#fffbeb", accent_bg2="#fef3c7",
+    primary_symbol="GDX",
+    macro_syms={"gc": "GC=F", "slv": "SLV", "dxy": "DX-Y.NYB",
+                "tnx": "^TNX", "vix": "^VIX", "spx": "^GSPC"},
+    extra_syms={"nugt": "NUGT"},
+    sentiment=[("gc_close", "mom", +1.0), ("dxy_close", "mom", -1.0),
+               ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
+    sentiment_label="Gold macro sentiment",
+    traded_assets=[("GDX", "px_close"), ("NUGT", "nugt_close")],
+    asset_labels={"px_close": "GDX · Gold Miners", "nugt_close": "NUGT · 2× Gold Miners"},
+    strategy_mode="divergence", strategy_name="Gold-Miners Divergence Pure-Regime",
+    ma_window=20, fixed_stop=0.03,
+    stop_by_asset={"nugt_close": 0.05},
+    u1_errhi_min=0.15, d2_errhi_max=-0.10, d1_errlo_min=0.15, v_errlo_min=1.00,
+    use_d1_exit=False, hl_band_pct=0.012,
+    fetch_start="2018-06-26", oos_start="2021-01-01", periods=_STD_PERIODS,
+    day_up_thresh=0.008, day_down_thresh=-0.008,
+    results_note=("Gold Miners — the divergence half of the gold middle path: "
+                  "GDX (−3%) and NUGT (−5%) trade the causal GLDM divergence "
+                  "signal (U1 +0.15 / D2 −0.10 / V 1.0). OOS 2021→now: GDX "
+                  "+103% / −22% / Sharpe 0.85, NUGT +276% / −38% / 0.90 — and "
+                  "the system stayed net positive (+12%/+11%) through the "
+                  "2021-22 chop, hedging the trend sleeves' dips. The smooth "
+                  "trenders (GLDM/UGL) ride the dual-MA under 🥇 Gold Trend."),
 )
 
 def overall_config(key: str) -> TickerConfig:
@@ -186,11 +210,13 @@ def overall_config(key: str) -> TickerConfig:
         return BTC_CFG
     if key == "GLDM":
         return GLDM_CFG
+    if key == "GDXM":
+        return GDXM_CFG
     return get_config(key)
 
 
 # Parent (signal-app) display order.
-PARENT_KEYS = ["BTC", "GLDM", "SOXX", "GRID", "XLE", "REMX", "WGMI",
+PARENT_KEYS = ["BTC", "GLDM", "GDXM", "SOXX", "GRID", "XLE", "REMX", "WGMI",
                "PBW", "ARTY"]
 
 
@@ -548,7 +574,10 @@ def run_universe() -> list[dict]:
                 return cfg.key, btc_ct_engine.run_btc_ct(), None
             if cfg.key == "GLDM":
                 import gldm_engine
-                return cfg.key, gldm_engine.run_gldm(), None
+                return cfg.key, gldm_engine.run_gldm_trend(), None
+            if cfg.key == "GDXM":
+                import gldm_engine
+                return cfg.key, gldm_engine.run_gldm_miners(), None
             return cfg.key, run_asset(cfg), None
         except Exception:
             return cfg.key, [], traceback.format_exc().strip().splitlines()[-1]
