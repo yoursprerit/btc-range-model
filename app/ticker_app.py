@@ -70,6 +70,14 @@ cfg = ticker_config.get_config(_active)
 st.set_page_config(page_title=f"{cfg.key} Forecaster", page_icon=cfg.emoji,
                    layout="wide", initial_sidebar_state="expanded")
 
+# Streamlit's default st.metric value font (~2.25rem) clips long values —
+# e.g. the "95% CI band" $lo–$hi range in a 5-column row — so shrink it
+# enough that the full value is always visible.
+st.markdown("""
+<style>
+div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+</style>""", unsafe_allow_html=True)
+
 # ── theme shorthands ──────────────────────────────────────────────────────
 ACC = cfg.accent; ACCD = cfg.accent_dark; ACCBG = cfg.accent_bg; ACCBG2 = cfg.accent_bg2
 IS_DIV = cfg.strategy_mode == "divergence"
