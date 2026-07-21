@@ -945,6 +945,22 @@ _HR_LOOKBACK_HOURS = 23   # rolling look-back window (hours). 23h actuals + ~1h
                           # forecast ≈ a 24h span, matching the BTC daily bar view.
 
 
+def _hourly_rangebreaks(x_vals):
+    """Rangebreaks that collapse x-axis spans with no bars (market closed:
+    overnight, weekends, holidays) so consecutive market-hours bars plot as a
+    continuous line instead of a flat overnight connector followed by a jump
+    at the next open.  Data-driven — a 24/7 asset has no gaps, so no breaks."""
+    idx = pd.DatetimeIndex(pd.to_datetime(np.atleast_1d(x_vals))).unique().sort_values()
+    if len(idx) < 3:
+        return []
+    step = pd.Series(idx).diff().median()
+    if pd.isna(step) or step <= pd.Timedelta(0):
+        return []
+    pad = step / 2
+    return [dict(bounds=[prev + pad, nxt - pad])
+            for prev, nxt in zip(idx[:-1], idx[1:]) if nxt - prev > step * 1.5]
+
+
 def _hourly_forecast_fig(as_of_date, is_live, hl=None, ma_lines=None):
     """Rolling next-hour GLDM close forecast — a faithful gold copy of the BTC
     hourly chart: the last 23 hours of bars with the actual close (black), the
@@ -973,6 +989,13 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None, ma_lines=None):
     look = valid[valid >= anchor - pd.Timedelta(hours=_HR_LOOKBACK_HOURS)]
     if len(look) < 3:                            # sparse data → keep a few bars
         look = valid[-8:]
+    # Outside market hours the feed just repeats the last traded price, so any
+    # bar whose close is unchanged from the previous bar is a stale off-hours
+    # row — drop it from the plotted window.
+    moved = close.loc[look].astype(float).diff().ne(0.0)
+    moved.iloc[0] = True
+    if moved.sum() >= 3:
+        look = look[moved.to_numpy()]
     sigma = float(M_HOURLY["sigma"])
     yhat = M_HOURLY["model"].predict(X.loc[look])
 
@@ -1093,7 +1116,9 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None, ma_lines=None):
                       yaxis_title="GLDM / USD", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
                       margin=dict(l=0, r=10, t=46, b=0),
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                      xaxis=dict(title="Time (US Central)", tickformat="%d-%b %H:%M", **_GRID),
+                      xaxis=dict(title="Time (US Central)", tickformat="%d-%b %H:%M",
+                                 rangebreaks=_hourly_rangebreaks(list(act_ct) + [next_ct]),
+                                 **_GRID),
                       yaxis=_GRID, **_PLOT_BG)
     return fig
 
