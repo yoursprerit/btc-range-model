@@ -146,6 +146,12 @@ the user dials the return-vs-risk trade-off on the Live tab:
 Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdown
 deepens faster than the return — which is exactly the knob these profiles expose.
 
+Committed artifact (2026-07-21, all sleeves on the causal-model retunes and the
+XLE crash-shield; OOS 2021→now): **Balanced +713 % / −14.1 % MDD / Sharpe 2.59 ·
+Growth +1,878 % / −22.7 % / 1.71 · Aggressive +2,317 % / −29.8 % / 1.53** vs the
+equal-weight buy-&-hold benchmark +229 % / −35.4 % / 0.74. Reproduce with
+`python scripts/build_overall.py`.
+
 ### Fundamental overlay (optional)
 
 With the overlay **on** (default), the quant-optimal blend is multiplied by a

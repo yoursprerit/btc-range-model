@@ -511,10 +511,11 @@ def render_strategy_card():
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
-    📈 <b>Out-of-sample 2021→now</b> (beats buy &amp; hold on return <i>and</i> drawdown):
-    GDX <b>+272%</b> · MDD −16% · Sharpe 1.41 &nbsp;|&nbsp;
-    UGL <i>(stop-less)</i> <b>+247%</b> · MDD −18% · Sharpe 1.37 &nbsp;|&nbsp;
-    NUGT <i>(−5%)</i> <b>+1183%</b> · MDD −28% · Sharpe 1.48
+    📈 <b>Out-of-sample 2021→now</b> (causal signal, 2026-07 retune — beats buy &amp; hold
+    on drawdown &amp; Sharpe on every sleeve, and on return for GDX &amp; NUGT):
+    GDX <b>+103%</b> · MDD −22% · Sharpe 0.85 &nbsp;|&nbsp;
+    UGL <i>(stop-less)</i> <b>+119%</b> · MDD −19% · Sharpe 0.90 &nbsp;|&nbsp;
+    NUGT <i>(−5%)</i> <b>+276%</b> · MDD −38% · Sharpe 0.90
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -1589,24 +1590,28 @@ bullish divergence (3-day centered `err_hi` > +{gc.U1_ERRHI_MIN:.2f}% with ≥2
 high-breaks) confirms inside the Pure-Regime gate (Bull Regime *or* a washed-out
 Clean Breakout below the MA *or* a recent V-reversal). Exit on D2
 (< {gc.D2_ERRHI_MAX:+.2f}%) / D3 exhaustion, or a fixed **−{gc.FIXED_STOP*100:.0f}%**
-stop. The divergence error is regime-centered (rolling median) so the signal
-self-calibrates to gold's low volatility. Signals come from **GLDM**; execution
-is in **GDX** (miners), **UGL** (2× gold) and **NUGT** (2× gold miners) — the 1×
+stop. The divergence error is regime-centered (60-bar rolling median, identical
+to the backtest) so the signal self-calibrates to gold's volatility. The daily
+H/L model is **causal** (features through the prior close predict the next bar
+— fixed & re-tuned 2026-07). Signals come from **GLDM**; execution is in
+**GDX** (miners), **UGL** (2× gold) and **NUGT** (2× gold miners) — the 1×
 GLDM position is not traded, mirroring how the BTC app trades MSTR / MSTU rather
 than spot BTC.
 
-**Out-of-sample results (2021→now)** — beats buy & hold on **both** return and
-drawdown for every sleeve:
+**Out-of-sample results (2021→now, causal signal)** — beats buy & hold on
+drawdown **and** Sharpe for every sleeve, and on raw return for GDX & NUGT:
 
-| Asset | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe |
+| Asset | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|
-| GDX | **+272%** | +97% | **−16%** | −47% | **1.41** |
-| UGL | **+211%** | +158% | **−18%** | −49% | **1.30** |
-| NUGT | **+634%** | +48% | **−28%** | −74% | **1.29** |
+| GDX | **+103%** | +92% | **−22%** | −46% | **0.85 / 0.51** |
+| UGL | +119% | +151% | **−19%** | −50% | **0.90 / 0.64** |
+| NUGT | **+276%** | +41% | **−38%** | −74% | **0.90 / 0.45** |
 
 **Honest framing.** Intraday gold direction is ~coin-flip (like BTC); the hourly
 model's value is a tight CI, not a directional bet. The edge is in the trend
-regime and risk control — quantified in the Backtesting tabs.
+regime and risk control — quantified in the Backtesting tabs. (Figures shown
+before 2026-07 — e.g. GDX +272% / Sharpe 1.41 — came from an H/L model that
+leaked the target bar into its features and are void.)
 """)
     st.markdown("#### Model freshness (`train_end`) — GLDM")
     for label, art in (("hourly close", M_HOURLY), ("daily H/L", M_HL),

@@ -227,8 +227,10 @@ sleeves; MSTR/MSTU are traded off the **BTC parent** trend. Stops are the curren
 Buy & hold is flat-to-catastrophic over this window (MSTU's 2× decay ≈ total
 wipeout); the strategy stays long in the bull, steps aside in the bear, and even
 posts *positive* bear-market returns on MSTR/MSTU. The **Overall** portfolio
-blends every sleeve above into one book — the Aggressive profile roughly doubles
-Balanced's return by loading the leveraged sleeves within its drawdown budget.
+blends every sleeve above into one book — with the 2026-07 revised sleeves the
+combined OOS 2021→now backtest lands at **Balanced +713 % (−14 % MDD, Sharpe
+2.59) · Growth +1,878 % (−23 %, 1.71) · Aggressive +2,317 % (−30 %, 1.53)**,
+the higher profiles loading the leveraged sleeves within their drawdown budgets.
 
 > **Which numbers are these?** The current live **2026-07e** stop config (MSTR
 > stop-free, MSTU −6 %). An earlier snapshot with a flat −3 % stop on both
