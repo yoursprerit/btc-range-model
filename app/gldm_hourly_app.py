@@ -305,13 +305,157 @@ def strategy_position(asset, end=None):
     return r
 
 
-def dual_ma_state():
+def dual_ma_state(d_df=None):
     """Live state of the GLDM 25/100 dual-MA that drives the GLDM & UGL
-    sleeves: fast/slow SMA levels and the long/flat signal on the newest bar."""
-    gcl = preds["gldm_close"].to_numpy(float)
+    sleeves — fast/slow SMA levels, the long/flat signal on the newest bar, the
+    gap between them and the slow SMA's slope (replay-safe: pass a truncated
+    ``d_df`` and everything is computed from that history only)."""
+    gcl = (d_df["gldm_close"] if d_df is not None else preds["gldm_close"]).to_numpy(float)
+    close = float(gcl[-1])
     f = float(np.mean(gcl[-gc.DUAL_MA_FAST:]))
     s = float(np.mean(gcl[-gc.DUAL_MA_SLOW:]))
-    return dict(fast=f, slow=s, long_now=f > s, gap=(f / s - 1) * 100)
+    s_prev = (float(np.mean(gcl[-(gc.DUAL_MA_SLOW + 5):-5]))
+              if len(gcl) >= gc.DUAL_MA_SLOW + 5 else s)
+    return dict(close=close, fast=f, slow=s, long_now=f > s,
+                gap=(f / s - 1) * 100, slow_rising=s > s_prev)
+
+
+def net_signal_trend(dm, pos=None):
+    """One resolved state for the Gold Trend app (dual-MA mode), reconciling
+    the instantaneous cross read with the strategy's actual executed position
+    (decisions at the close act on the NEXT bar, so a fresh cross shows as
+    'enters next bar', not a bare LONG)."""
+    long_now = dm["long_now"]
+    in_pos = bool(pos and pos.get("in_pos_now"))
+    desc = (f"{gc.DUAL_MA_FAST}d SMA ${dm['fast']:,.2f} "
+            f"{'>' if long_now else '<'} {gc.DUAL_MA_SLOW}d SMA ${dm['slow']:,.2f} "
+            f"({dm['gap']:+.2f}%)")
+    if in_pos and long_now:
+        return dict(state="HOLD", label="LONG — HOLDING", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason=f"Strategy is long; {desc} — hold.")
+    if in_pos and not long_now:
+        return dict(state="EXIT", label="EXIT NEXT BAR — MA CROSS-DOWN", ico="🔴",
+                    bg="#fef2f2", brd="#dc2626",
+                    reason=f"{desc}: the cross has flipped bearish — the strategy "
+                           "exits at the next close.")
+    if long_now:
+        return dict(state="ENTRY", label="ENTERS NEXT BAR — CROSS BULLISH", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason=f"Strategy is flat but {desc}: the cross is bullish — "
+                           "it goes long at the next close.")
+    return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜",
+                bg="#f8fafc", brd="#94a3b8",
+                reason=f"{desc}: the fast SMA is below the slow — stay in cash "
+                       "until the golden cross returns.")
+
+
+def render_trend_signatures(dm, end=None):
+    """SOXX-style signal block for the Gold Trend app: the net-decision banner
+    plus three cards — the dual-MA Trend Filter (the ONLY entry/exit signal),
+    the −3% Stop-Loss Guard, and the live position summary for both sleeves."""
+    r_gldm = strategy_position("GLDM", end=end)
+    r_ugl = strategy_position("UGL", end=end)
+    ns = net_signal_trend(dm, r_gldm)
+    st.markdown(
+        f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
+        border-radius:10px;padding:12px 16px;margin:8px 0;">
+        <span style="background:{ns['brd']};color:white;font-weight:700;font-size:14px;
+        padding:5px 14px;border-radius:20px;">{ns['ico']} {ns['label']}</span>
+        <span style="color:#334155;font-size:13px;margin-left:10px;">
+        GLDM close <b>${dm['close']:,.2f}</b> ·
+        {gc.DUAL_MA_FAST}d SMA <b>${dm['fast']:,.2f}</b> vs
+        {gc.DUAL_MA_SLOW}d SMA <b>${dm['slow']:,.2f}</b> ·
+        gap <b>{dm['gap']:+.2f}%</b></span>
+        <div style="color:#475569;font-size:12px;margin-top:6px;">{ns['reason']}</div>
+        </div>""", unsafe_allow_html=True)
+
+    gap = dm["gap"]; long_now = dm["long_now"]
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(_sig_card(
+        f"Trend Filter — dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} cross", "📈",
+        "#16a34a", long_now,
+        [(f"{gc.DUAL_MA_FAST}-day SMA", f"${dm['fast']:,.2f}",
+          f"> {gc.DUAL_MA_SLOW}-day SMA ${dm['slow']:,.2f}", long_now),
+         ("fast-vs-slow gap", f"{gap:+.2f}%", "> 0% to be long", gap > 0),
+         (f"{gc.DUAL_MA_SLOW}-day SMA slope", "rising" if dm["slow_rising"] else "falling",
+          "context only (not traded)", dm["slow_rising"])],
+        "The ONLY entry/exit signal this app trades: long GLDM & UGL while the "
+        f"{gc.DUAL_MA_FAST}-day SMA of the GLDM close sits above the "
+        f"{gc.DUAL_MA_SLOW}-day SMA (a golden cross), flat after the cross-down. "
+        "Decided at each close, executed the next bar."), unsafe_allow_html=True)
+
+    in_pos_any = bool((r_gldm and r_gldm.get("in_pos_now")) or (r_ugl and r_ugl.get("in_pos_now")))
+    if in_pos_any and r_gldm and r_gldm.get("in_pos_now") and r_gldm.get("entry_px"):
+        e_px = float(r_gldm["entry_px"]); stop_px = e_px * (1 - gc.stop_for("GLDM"))
+        cushion = (dm["close"] / stop_px - 1) * 100
+        c2.markdown(_sig_card(
+            "Stop-Loss Guard — −3% fixed stop (both sleeves)", "🛑", "#dc2626",
+            cushion < 3.0,
+            [("GLDM stop level", f"${stop_px:,.2f}", "hold above", dm["close"] > stop_px),
+             ("cushion to stop", f"{cushion:+.2f}%", "> 0%", cushion > 0)],
+            "Each sleeve carries a hard −3% stop from its own entry price, capping "
+            "the single-trade loss if price gaps down faster than the cross can "
+            "flip."), unsafe_allow_html=True)
+    else:
+        c2.markdown(_sig_card(
+            "Stop-Loss Guard — −3% fixed stop (both sleeves)", "🛑", "#94a3b8", False,
+            [("status", "inactive (flat)", "opens with a position", False)],
+            "Inactive while in cash. On entry each sleeve carries a hard −3% stop "
+            "from its own fill, protecting against a fast breakdown before the "
+            "cross can react."), unsafe_allow_html=True)
+
+    rows = []
+    for lbl, r in (("GLDM", r_gldm), ("UGL", r_ugl)):
+        if r and r.get("in_pos_now") and r.get("entry_px"):
+            e_dt = pd.Timestamp(r["entry_date"])
+            rows.append((f"{lbl} position", f"LONG since {e_dt.strftime('%b %d')}",
+                         f"entry ${float(r['entry_px']):,.2f}", True))
+        else:
+            rows.append((f"{lbl} position", "FLAT (in cash)", "—", False))
+    c3.markdown(_sig_card(
+        "Positions — both sleeves trade the ONE signal", "📍",
+        "#16a34a" if in_pos_any else "#94a3b8", in_pos_any, rows,
+        "GLDM (1× core) and UGL (2× gold) enter and exit together off the same "
+        "GLDM dual-MA cross; only their stops are tracked per sleeve."),
+        unsafe_allow_html=True)
+
+
+def render_dualma_chart(d_df, key_prefix="live"):
+    """Price + fast/slow SMA chart with the long-regime shaded — the visual of
+    the exact signal the Gold Trend app trades."""
+    c = d_df["gldm_close"].dropna()
+    if len(c) < gc.DUAL_MA_SLOW + 10:
+        return
+    fast = c.rolling(gc.DUAL_MA_FAST).mean()
+    slow = c.rolling(gc.DUAL_MA_SLOW).mean()
+    view = c.index >= (c.index.max() - pd.Timedelta(days=730))
+    cv, fv, sv = c[view], fast[view], slow[view]
+    long_r = (fast > slow)[view]
+    fig = go.Figure()
+    # shade the long-regime spans
+    in_span = False; x0 = None
+    idx = cv.index
+    for i, (d, on) in enumerate(zip(idx, long_r)):
+        if on and not in_span:
+            in_span, x0 = True, d
+        elif (not on or i == len(idx) - 1) and in_span:
+            fig.add_vrect(x0=x0, x1=d, fillcolor="#16a34a", opacity=0.07, line_width=0)
+            in_span = False
+    fig.add_trace(go.Scatter(x=idx, y=cv, name="GLDM close",
+                             line=dict(color="#b8860b", width=1.6)))
+    fig.add_trace(go.Scatter(x=idx, y=fv, name=f"{gc.DUAL_MA_FAST}-day SMA (fast)",
+                             line=dict(color="#2563eb", width=1.3)))
+    fig.add_trace(go.Scatter(x=idx, y=sv, name=f"{gc.DUAL_MA_SLOW}-day SMA (slow)",
+                             line=dict(color="#7c3aed", width=1.3, dash="dot")))
+    fig.update_layout(height=300, margin=dict(l=0, r=70, t=24, b=0),
+                      title=dict(text=(f"GLDM dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} "
+                                       "— green shading = long regime (the traded signal)"),
+                                 font=dict(size=13)),
+                      yaxis_title="$", legend=dict(orientation="h", yanchor="bottom",
+                                                   y=1.02, xanchor="right", x=1),
+                      xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID, **_PLOT_BG)
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_dualma_chart")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -605,25 +749,57 @@ def render_strategy_card():
 </div>""", unsafe_allow_html=True)
 
 
-def render_conditions_box(sigs):
+def render_conditions_box(sigs, d_df=None):
     """Dynamic checklist: every entry & exit condition with its live on/off
-    state, and the single resolved net decision."""
+    state, and the single resolved net decision (mode-aware: SOXX-style
+    LONG/EXIT boxes for the Gold Trend app, divergence checklist for Miners)."""
     ns = net_signal(sigs)
     if not IS_MINERS:
-        # ── Gold Trend app: the dual-MA cross IS the strategy condition ──
-        dm = dual_ma_state()
-        st.markdown(
-            f"<div style='background:{'#f0fdf4' if dm['long_now'] else '#fff7ed'};"
-            f"border:2px solid {'#86efac' if dm['long_now'] else '#fdba74'};"
-            f"border-radius:10px;padding:12px 16px;margin-bottom:8px;font-size:13.5px;"
-            f"color:#334155;'>📈 <b>Dual-MA signal (governs both sleeves):</b> "
-            f"{gc.DUAL_MA_FAST}-day SMA ${dm['fast']:,.2f} "
-            f"{'&gt;' if dm['long_now'] else '&lt;'} {gc.DUAL_MA_SLOW}-day SMA "
-            f"${dm['slow']:,.2f} ({dm['gap']:+.2f}%) → "
-            f"<b>{'🟢 LONG GLDM &amp; UGL' if dm['long_now'] else '⬜ FLAT — below trend'}</b>. "
-            f"Entries/exits execute at the next close; per-asset −3% stops guard "
-            f"open positions. The divergence signature conditions live in the "
-            f"sibling ⛏️ Gold Miners app.</div>", unsafe_allow_html=True)
+        # ── Gold Trend app: SOXX-style LONG / EXIT condition boxes — the
+        #    dual-MA cross is the ONE traded condition, the stop the guard ──
+        dm = dual_ma_state(d_df) if d_df is not None else dual_ma_state()
+        long_now = dm["long_now"]
+
+        def rowm(ok, name, detail):
+            ico = "✅" if ok else "○"
+            colr = "#15803d" if ok else "#94a3b8"
+            return (f"<tr><td style='padding:3px 8px 3px 0;font-size:14px;'>{ico}</td>"
+                    f"<td style='padding:3px 10px 3px 0;font-weight:700;color:{colr};"
+                    f"white-space:nowrap;'>{name}</td>"
+                    f"<td style='padding:3px 0;font-size:11.5px;color:#475569;'>{detail}</td></tr>")
+
+        entry_html = "<table style='border-collapse:collapse;'>" + rowm(
+            long_now, f"{gc.DUAL_MA_FAST}d SMA &gt; {gc.DUAL_MA_SLOW}d SMA",
+            f"${dm['fast']:,.2f} vs ${dm['slow']:,.2f} — gap {dm['gap']:+.2f}% "
+            f"(need &gt; 0%)") + "</table>"
+        exit_html = "<table style='border-collapse:collapse;'>" + rowm(
+            not long_now, f"{gc.DUAL_MA_FAST}d SMA &lt; {gc.DUAL_MA_SLOW}d SMA",
+            "cross-down → move both sleeves to cash at the next close") + rowm(
+            False, "Fixed stop −3% (per sleeve)",
+            "position-level — checked per open trade from each sleeve's own entry") + \
+            "</table>"
+        st.markdown(f"""
+<div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
+  <div style='flex:1; min-width:280px; background:#f0fdf4; border:1.5px solid #86efac;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#15803d; margin-bottom:6px;'>
+      📥 LONG conditions {'— ✅ IN TREND' if long_now else '— not met'}</div>
+    {entry_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>One condition, no
+      gates: hold GLDM &amp; UGL while the {gc.DUAL_MA_FAST}-day SMA of the GLDM
+      close is above the {gc.DUAL_MA_SLOW}-day SMA. <b>Decisions are made at the
+      daily close and execute on the next bar.</b></div>
+  </div>
+  <div style='flex:1; min-width:280px; background:#fef2f2; border:1.5px solid #fca5a5;
+       border-radius:10px; padding:10px 14px;'>
+    <div style='font-weight:700; color:#b91c1c; margin-bottom:6px;'>
+      📤 EXIT conditions {'— ⚠️ ACTIVE' if not long_now else '— clear'}</div>
+    {exit_html}
+    <div style='font-size:11px;color:#64748b;margin-top:6px;'>The divergence
+      signatures (U1/D2/D3/V) play <b>no part</b> in this app's trading — they
+      govern GDX &amp; NUGT in the sibling ⛏️ Gold Miners app.</div>
+  </div>
+</div>""", unsafe_allow_html=True)
         return
     if not sigs:
         st.info("Strategy conditions unavailable — need ≥ 3 completed bars.")
@@ -1606,6 +1782,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         d4c.metric("GLDM daily High (pred)", "—"); d5c.metric("GLDM daily Low (pred)", "—")
 
+    end = None if is_live else as_of_date
     if IS_MINERS:
         # ── trend-signature alert (the BTC-style card block) — the miners'
         #    trading signal, derived from the GLDM daily H/L model ──
@@ -1615,13 +1792,18 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         render_gldm_gate_signatures(sigs)
         st.markdown("### 🎯 Strategy — Divergence Pure-Regime (GDX & NUGT)")
     else:
+        # ── SOXX-style trend signal block: net banner + signature cards + the
+        #    dual-MA chart of the exact signal this app trades ──
+        st.markdown("### 🔔 Trend Signal  ·  _the GLDM dual-MA cross both sleeves trade_")
+        dm = dual_ma_state(d_df)
+        render_trend_signatures(dm, end=end)
+        render_dualma_chart(d_df, key_prefix=("live" if is_live else "hist"))
         st.markdown(f"### 🎯 Strategy — Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend (GLDM & UGL)")
     render_strategy_card()
     st.markdown("#### Strategy conditions (live)")
-    render_conditions_box(sigs)
+    render_conditions_box(sigs, d_df=d_df)
     st.markdown("#### Current positions")
     pcols = st.columns(len(APP_ASSETS))
-    end = None if is_live else as_of_date
     for _asset, _pc in zip(APP_ASSETS, pcols):
         position_panel(_asset, _pc, end=end)
 
