@@ -37,6 +37,7 @@ for _p in (str(_APP_DIR), str(_REPO_ROOT), str(_REPO_ROOT / "scripts")):
 import overall_core as ov                 # noqa: E402
 import ticker_config                       # noqa: E402
 import target_book as tb                   # noqa: E402
+import freshness as fr                     # noqa: E402
 import ibkr_symbols as sym                 # noqa: E402
 
 BOOK_PATH = _REPO_ROOT / "data" / "overall" / "target_book.json"
@@ -189,7 +190,7 @@ def build_adjusted_payload(payload: dict, adj_weights: dict, adj_cash: float) ->
     """Rebuild a target-book payload from the user's selection, preserving the
     book's identity (as-of, profile, generation time, paper/live mode) and the
     kept names' prices so freshness and downstream execution still work."""
-    return tb.build_payload(
+    adj = tb.build_payload(
         as_of=payload.get("as_of", ""), profile=payload.get("profile", ""),
         weights=adj_weights, cash_weight=adj_cash,
         exec_price={k: v for k, v in (payload.get("exec_price") or {}).items()
@@ -197,6 +198,9 @@ def build_adjusted_payload(payload: dict, adj_weights: dict, adj_cash: float) ->
         actions=payload.get("actions"),
         generated_at_utc=payload.get("generated_at_utc"),
         book_mode=payload.get("book_mode", "paper"))
+    if payload.get("signal_audit"):        # carry the audit verdict through
+        adj["signal_audit"] = dict(payload["signal_audit"])
+    return adj
 
 
 def _badge(text: str, color: str) -> str:
@@ -237,15 +241,45 @@ def _render_book(payload: dict, *, source: str) -> None:
     else:
         sig_color = "#dc2626"; sig_txt = "⛔ signature MISMATCH"
     val_color = "#16a34a" if ok_val else "#d97706"
+
+    # ── daily signal-freshness audit badge (like the signature badge) ─────────
+    # The publisher stamps the audit verdict INTO the signed book
+    # (``signal_audit``); older books lack the stamp, so fall back to the
+    # committed repo audit trail when it refers to THIS exact publish.
+    aud = payload.get("signal_audit")
+    aud_note = ""
+    if not aud:
+        _trail = fr.load_daily_audit() or {}
+        _tb_info = _trail.get("target_book") or {}
+        if (_tb_info.get("generated_at_utc")
+                and _tb_info.get("generated_at_utc") == payload.get("generated_at_utc")):
+            aud = _trail.get("audit") or {}
+            aud_note = " (repo audit trail)"
+    if not aud:
+        aud_color = "#64748b"; aud_txt = "🕵️ daily audit not stamped (pre-audit book)"
+    elif aud.get("passed"):
+        aud_color = "#16a34a"
+        aud_txt = f"🕵️ daily audit passed{aud_note}"
+    else:
+        aud_color = "#dc2626"
+        aud_txt = f"🚨 daily audit FAILED{aud_note}"
+
     st.markdown(
         _badge(acct_txt, acct_col) + "  " +
         _badge(sig_txt, sig_color) + "  " +
+        _badge(aud_txt, aud_color) + "  " +
         _badge(("🟢 " if ok_val else "🟡 ") + val_why, val_color) + "  " +
         _badge(f"generated {gen} UTC", "#0ea5e9"),
         unsafe_allow_html=True)
     if secret and not ok_sig:
         st.error(f"Signature check failed — {sig_why}. This book would be REFUSED "
                  "by the executor. Do not trade it.")
+    if aud and not aud.get("passed"):
+        _stale = ", ".join(aud.get("stale_apps") or []) or "unknown"
+        st.error(f"🚨 The daily signal-freshness audit FAILED when this book was "
+                 f"computed — stale signal apps: **{_stale}** "
+                 f"(checked {fr.fmt_ct(aud.get('checked_at_utc'))}). The executor "
+                 f"refuses audit-failed books. Do not trade it.")
     st.markdown("")
 
     if not risk_w and idle_base <= 1e-9:
@@ -395,12 +429,21 @@ def _downloads(payload: dict, adj_weights: dict, adj_cash: float,
 
 @st.cache_data(ttl=900, show_spinner="Running the engine for a live preview (~30–90s)…")
 def _live_payload(profile: str, bucket: str) -> dict:
-    """Compute a fresh book via the exact publisher path (reused, no drift)."""
+    """Compute a fresh book via the exact publisher path (reused, no drift):
+    run the universe once, AUDIT its signal freshness, then build the book from
+    the same audited results and stamp the verdict in — so the preview carries
+    the same 🕵️ daily-audit badge as a published book."""
     from ibkr_rebalance import compute_target_book
-    book = compute_target_book(profile)
-    return tb.build_payload(
+    results = ov.run_universe()
+    audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS)
+    book = compute_target_book(profile, results=results)
+    payload = tb.build_payload(
         as_of=book.as_of, profile=profile, weights=book.weights,
         cash_weight=book.cash_weight, exec_price=book.exec_price, actions=book.actions)
+    payload["signal_audit"] = dict(passed=bool(audit["passed"]),
+                                   checked_at_utc=audit["checked_at_utc"],
+                                   stale_apps=list(audit["stale_apps"]))
+    return payload
 
 
 def _bucket() -> str:
