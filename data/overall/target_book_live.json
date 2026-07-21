@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-20T17:02:51+00:00",
- "as_of": "2026-07-20",
+ "generated_at_utc": "2026-07-21T14:36:43+00:00",
+ "as_of": "2026-07-21",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
@@ -12,10 +12,10 @@
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "SOXX": 530.64,
-  "SOXL": 141.83,
-  "REMX": 70.275,
-  "SATA": 97.51
+  "SOXX": 547.29,
+  "SOXL": 154.34,
+  "REMX": 71.45,
+  "SATA": 98.145
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.6032297539079265
+   "priority": 0.6082431697780726
   },
   {
    "key": "SOXX",
@@ -32,7 +32,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.5666666666666667
+   "priority": 0.5714285714285714
   },
   {
    "key": "REMX",
@@ -40,7 +40,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.07999999999999999
+   "priority": 0.09142857142857141
   },
   {
    "key": "BTC",
@@ -149,7 +149,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D3 exhaustion)",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -157,6 +157,6 @@
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "672d36b835eb48c632ad9825c5f70f37346cf4b7e8c404129f925468d9a0f724"
+  "value": "6c3857395f68fcc8a7978a6b403a35abd0ca7285131a14644b03c2bfcd46ef3d"
  }
 }
