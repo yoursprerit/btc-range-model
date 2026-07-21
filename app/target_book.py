@@ -116,10 +116,18 @@ def validate(payload: dict, today: pd.Timestamp, *, max_bar_age_days: int = 4,
              max_gen_age_hours: float = 12.0) -> tuple[bool, str]:
     """(ok, reason) structural + freshness checks, independent of the broker.
 
-    Rejects a wrong schema, a stale signal bar (dead feed), or a book generated
-    too long ago (so a forgotten/queued artifact can't trade an old decision)."""
+    Rejects a wrong schema, a stale signal bar (dead feed), a book generated
+    too long ago (so a forgotten/queued artifact can't trade an old decision),
+    or a book whose publish-time **signal-freshness audit failed** (the
+    publisher normally withholds those; if one is produced anyway — e.g. via
+    ``--allow-stale`` — it must never be traded).  Books published before the
+    audit existed carry no ``signal_audit`` stamp and are accepted."""
     if payload.get("schema") != SCHEMA:
         return False, f"unexpected schema {payload.get('schema')!r} (want {SCHEMA})"
+    aud = payload.get("signal_audit")
+    if aud is not None and not aud.get("passed"):
+        stale = ", ".join(aud.get("stale_apps") or []) or "unknown"
+        return False, f"signal-freshness audit FAILED at publish (stale: {stale})"
     as_of = payload.get("as_of")
     if not as_of:
         return False, "no as_of in book"
