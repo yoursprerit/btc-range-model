@@ -1101,6 +1101,78 @@ def position_panel(label, col, col_container, end=None):
 # Shared plotly layout defaults (match the Gold/BTC look).
 _PLOT_BG = dict(plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff", hovermode="x unified")
 _GRID = dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False)
+
+
+def render_trend_regime_chart(d_df, key_prefix="live"):
+    """Price + strategy-line chart with the LONG regime shaded green — the same
+    visual the Gold Trend app carries for its dual-MA cross, generalised to
+    every trend mode.  The shading always comes from ``bt.trend_long_array``
+    (the engine's ACTUAL long condition — so for ma_vol it includes the vol
+    gate, for crash_dd the stateful shield), and the overlaid lines are the
+    mode's own reference levels:
+
+      dual_ma   fast + slow SMA (the cross being traded)
+      ma/ma_vol the N-day SMA (ma_vol shading also reflects the vol gate)
+      macd      the context SMA (shading = histogram > 0)
+      crash_dd  the re-entry SMA + the crash-exit level (52wk-high × (1−dd))
+    """
+    if not cfg.is_trend:
+        return
+    c = d_df["px_close"].dropna()
+    if len(c) < 60:
+        return
+    arr = bt.trend_long_array(cfg, c.to_numpy(float))
+    view = c.index >= (c.index.max() - pd.Timedelta(days=730))
+    cv = c[view]; idx = cv.index
+    long_v = pd.Series(arr, index=c.index)[view].astype(bool)
+
+    m = cfg.strategy_mode
+    lines = []          # (series, name, color, dash)
+    if m == "dual_ma":
+        lines = [(c.rolling(cfg.ma_fast).mean()[view],
+                  f"{cfg.ma_fast}-day SMA (fast)", "#2563eb", None),
+                 (c.rolling(cfg.ma_slow).mean()[view],
+                  f"{cfg.ma_slow}-day SMA (slow)", "#7c3aed", "dot")]
+        sub = f"dual-MA {cfg.ma_fast}/{cfg.ma_slow}"
+    elif m == "crash_dd":
+        hi52 = c.rolling(252, min_periods=60).max()
+        lines = [(c.rolling(cfg.dd_reentry_ma).mean()[view],
+                  f"{cfg.dd_reentry_ma}-day SMA (re-entry)", "#2563eb", None),
+                 ((hi52 * (1 - cfg.dd_exit_pct))[view],
+                  f"crash exit (−{cfg.dd_exit_pct*100:.0f}% off 52wk high)",
+                  "#dc2626", "dot")]
+        sub = f"crash-shield {int(cfg.dd_exit_pct*100)}%/SMA{cfg.dd_reentry_ma}"
+    elif m == "macd":
+        lines = [(c.rolling(cfg.ma_window).mean()[view],
+                  f"{cfg.ma_window}-day SMA (context)", "#2563eb", "dot")]
+        sub = f"MACD {cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal} (shading = histogram > 0)"
+    else:  # "ma" / "ma_vol"
+        lines = [(c.rolling(cfg.ma_window).mean()[view],
+                  f"{cfg.ma_window}-day SMA", "#2563eb", None)]
+        sub = (f"MA{cfg.ma_window} + vol filter (shading includes the vol gate)"
+               if m == "ma_vol" else f"MA{cfg.ma_window}")
+
+    fig = go.Figure()
+    in_span = False; x0 = None
+    for i, (d, on) in enumerate(zip(idx, long_v)):
+        if on and not in_span:
+            in_span, x0 = True, d
+        elif (not on or i == len(idx) - 1) and in_span:
+            fig.add_vrect(x0=x0, x1=d, fillcolor="#16a34a", opacity=0.07, line_width=0)
+            in_span = False
+    fig.add_trace(go.Scatter(x=idx, y=cv, name=f"{cfg.key} close",
+                             line=dict(color=cfg.accent, width=1.6)))
+    for s, name, col, dash in lines:
+        fig.add_trace(go.Scatter(x=idx, y=s, name=name,
+                                 line=dict(color=col, width=1.3, dash=dash)))
+    fig.update_layout(
+        height=300, margin=dict(l=0, r=70, t=24, b=0),
+        title=dict(text=(f"{cfg.key} {sub} — green shading = long regime "
+                         "(the traded signal)"), font=dict(size=13)),
+        yaxis_title="$", legend=dict(orientation="h", yanchor="bottom",
+                                     y=1.02, xanchor="right", x=1),
+        xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID, **_PLOT_BG)
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_trend_regime")
 _HL_BAND_PCT = cfg.hl_band_pct
 
 
@@ -1809,6 +1881,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {TUI['headline']} this app trades on_")
         render_ma_signatures(mst, primary_pos)
+        render_trend_regime_chart(d_df, key_prefix=("live" if is_live else "hist"))
         with st.expander("🔬 Divergence read (U1 / D2 / D3) — context only, not traded", expanded=False):
             st.caption(f"For parity with the Gold/BTC apps. {cfg.key} is traded by the "
                        f"{TUI['headline']} above, so these divergence "
