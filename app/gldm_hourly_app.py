@@ -1389,13 +1389,14 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None, ma_lines=None):
     #    20-day Bull-Regime SMA), so the live hourly price reads directly against
     #    the trend threshold.  Daily SMAs are ~flat across this window. ──
     if ma_lines:
-        for w, val, col in ma_lines:
+        for w, val, col, *lbl in ma_lines:
             if val != val:                            # NaN guard
                 continue
             above = last_close > val
+            tag = lbl[0] if lbl else "Bull-Regime gate"
             fig.add_hline(
                 y=val, line=dict(color=col, width=2, dash="dash"),
-                annotation_text=(f"{w}-day SMA ${val:,.2f} — Bull-Regime gate "
+                annotation_text=(f"{w}-day SMA ${val:,.2f} — {tag} "
                                  f"({'price above' if above else 'price below'})"),
                 annotation_position="bottom left",
                 annotation_font=dict(color=col, size=12),
@@ -1419,11 +1420,27 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None, ma_lines=None):
 def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None, sigs=None):
     """Hourly + Daily H/L + 7-day + 14-day forecast charts (Live & Replay)."""
     st.markdown("### 🔮 Model forecast charts (GLDM)")
-    hl = predict_next_daily_hl(d_df)   # overlaid on the hourly chart as H/L lines
-    # 20-day SMA (the strategy's Bull-Regime trend gate) overlaid on the hourly chart
-    _ma20 = float(d_df["gldm_close"].tail(20).mean()) if len(d_df) else float("nan")
-    _ma_lines = [(20, _ma20, "#2563eb")] if _ma20 == _ma20 else None
-    fhr = _hourly_forecast_fig(as_of_date, is_live, hl=hl, ma_lines=_ma_lines)
+    hl = predict_next_daily_hl(d_df)
+    if IS_MINERS:
+        # Miners app: the daily H/L overlay + the 20-day Bull-Regime gate are
+        # the divergence strategy's own reference levels.
+        _ma20 = float(d_df["gldm_close"].tail(20).mean()) if len(d_df) else float("nan")
+        _hl_overlay = hl
+        _ma_lines = [(20, _ma20, "#2563eb")] if _ma20 == _ma20 else None
+    else:
+        # Gold Trend app: overlay the traded signal instead — the 25- and
+        # 100-day SMAs of the dual-MA cross (no daily H/L, no 20-day gate).
+        _c = d_df["gldm_close"].dropna()
+        _hl_overlay = None
+        _ma_lines = []
+        if len(_c) >= gc.DUAL_MA_FAST:
+            _ma_lines.append((gc.DUAL_MA_FAST, float(_c.tail(gc.DUAL_MA_FAST).mean()),
+                              "#2563eb", "dual-MA fast leg"))
+        if len(_c) >= gc.DUAL_MA_SLOW:
+            _ma_lines.append((gc.DUAL_MA_SLOW, float(_c.tail(gc.DUAL_MA_SLOW).mean()),
+                              "#7c3aed", "dual-MA slow leg"))
+        _ma_lines = _ma_lines or None
+    fhr = _hourly_forecast_fig(as_of_date, is_live, hl=_hl_overlay, ma_lines=_ma_lines)
     if fhr:
         st.plotly_chart(fhr, use_container_width=True, key=f"{key_prefix}_hr")
     else:
@@ -1768,10 +1785,17 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         d1c.metric("GLDM next-hour (pred)", "— (replay)")
         d2c.metric("95% CI band", "—")
-    _ma = sigs.get("ma20_value") if sigs else None
-    d3c.metric("GLDM 20-day MA", f"${_ma:,.2f}" if _ma else "—",
-               (f"${last_px-_ma:+,.2f} vs close" if _ma else None),
-               delta_color="normal" if (_ma and last_px >= _ma) else "inverse")
+    if IS_MINERS:
+        _ma = sigs.get("ma20_value") if sigs else None
+        d3c.metric("GLDM 20-day MA (regime gate)", f"${_ma:,.2f}" if _ma else "—",
+                   (f"${last_px-_ma:+,.2f} vs close" if _ma else None),
+                   delta_color="normal" if (_ma and last_px >= _ma) else "inverse")
+    else:
+        _dm = dual_ma_state(d_df)
+        d3c.metric(f"Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}",
+                   f"${_dm['fast']:,.2f} / ${_dm['slow']:,.2f}",
+                   f"{_dm['gap']:+.2f}% gap — {'LONG' if _dm['long_now'] else 'FLAT'}",
+                   delta_color="normal" if _dm["long_now"] else "inverse")
     if hl:
         d4c.metric("GLDM daily High (pred)", f"${hl['pred_high']:,.2f}",
                    f"{(hl['pred_high']/hl['last_close']-1)*100:+.2f}% vs close")
