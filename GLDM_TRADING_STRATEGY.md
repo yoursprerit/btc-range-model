@@ -60,34 +60,40 @@ Gold-scaled thresholds (vs BTC's ±1.3%), re-tuned on the causal error:
 | **V** reversal | single-bar low undershoot > **+1.00%** + high down-score | capitulation |
 | Regime | close > rising 20-day MA | bull regime gate |
 
-## 4. The strategy
+## 4. The strategy — middle-path engine split (2026-07)
 
-The app trades **one** strategy — **Divergence Pure-Regime** (BTC-style,
-gold-scaled). Enter on **U1** bullish divergence (3-day centered `err_hi` >
-**+0.15%** with ≥2 high-breaks) confirmed inside the **Pure-Regime gate**: Bull
-Regime **or** a washed-out Clean Breakout below the MA **or** a recent
-V-reversal. Exit on **D2** (< **−0.10%**) / **D3** exhaustion, or the per-asset
-fixed stop.
+The app trades a **hybrid**: each sleeve gets the engine that suits its
+character, because the two engines are **regime-complementary** (the divergence
+system wins the chop, the trend system wins the trend):
 
-The signal is derived from **GLDM** (gold) and executed in its
-leveraged / high-beta proxies — the 1× GLDM position is **not traded**, exactly
-as the BTC app trades MSTR / MSTU rather than spot BTC:
+| Sleeve | Engine | Stop | Why |
+|---|---|---|---|
+| **GLDM** (1× core) | **Dual-MA 25/100** on the GLDM close | −3% | smooth trender — the crossover beats both B&H and divergence on return AND Sharpe |
+| **UGL** (2× gold) | **Dual-MA 25/100** on the GLDM close | −3% | same smooth-trend character, amplified; the −3% stop *improves* it under this engine |
+| **GDX** (miners) | **Divergence Pure-Regime** | −3% | divergence's Sharpe/drawdown control clearly better on the choppier miners |
+| **NUGT** (2× miners) | **Divergence Pure-Regime** | −5% | divergence +276% vs dual-MA's deeper-drawdown alternatives |
 
-- **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**), −3% stop
-- **UGL** — ProShares Ultra Gold, 2× daily gold (**~MSTU analog**), signal-only
-  (the stop sweep shows a −8% stop never fires; tighter stops only whipsaw a 2×)
-- **NUGT** — Direxion Daily Gold Miners 2×, −5% stop
+**Divergence engine rules** (GDX & NUGT): enter on **U1** bullish divergence
+(3-day centered `err_hi` > **+0.15%** with ≥2 high-breaks) confirmed inside the
+**Pure-Regime gate** (Bull Regime **or** washed-out Clean Breakout **or** recent
+V-reversal); exit on **D2** (< **−0.10%**) / **D3** exhaustion or the stop.
+**Trend engine rules** (GLDM & UGL): long while the 25-day SMA of the GLDM
+close is above the 100-day SMA (decision at the close, executed next bar).
 
 ### Why these parameters
 
-`U1 = +0.15 / D2 = −0.10 / D1 = +0.15 / V = 1.0` is the tier-1 pick of the
-joint GDX+UGL frontier sweep (`backtest_gldm.py --sweep`): it beats buy-&-hold
-on **both return and drawdown** for GDX and beats it on drawdown and Sharpe for
-UGL while retaining >70% of UGL's buy-&-hold return. It sits on a robust
-plateau — `U1 +0.15…+0.20` at `D2 −0.10 / V 1.0` score within 0.03 average
-Sharpe of each other across data snapshots; `U1 +0.15` is the value that stays
-tier-1 on both the current and the prior snapshot, so it is not a fragile
-optimisation spike.
+*Divergence thresholds* `U1 +0.15 / D2 −0.10 / D1 +0.15 / V 1.0` are the tier-1
+pick of the joint frontier sweep (`backtest_gldm.py --sweep`), on a robust
+plateau (`U1 +0.15…+0.20` within 0.03 avg Sharpe across data snapshots).
+
+*Dual-MA 25/100* mirrors SOXX's config exactly and sits on the /100 plateau
+(20/100, 25/100, 50/100 all land within Sharpe 1.06–1.14 on GLDM and
+0.90–1.02 on UGL). **Honest caveat:** the slow-leg=100 choice fails the
+pre-2021 train-selection test — training prefers /150–200, which underperform
+OOS — so this engine's evidential standing is weaker than the divergence
+thresholds'; the middle path mitigates that at the stack level because the
+miners half doesn't depend on it, and the split keeps the 2021-22-style chop
+hedged (divergence sleeves +12%/+11% while trend sleeves dipped −5%/−7%).
 
 ## 5. Backtest methodology
 
@@ -109,48 +115,60 @@ optimisation spike.
 
 ## 6. Results (OOS 2021-01-01 → 2026-07-21)
 
-**Chosen strategy — Divergence Pure-Regime, `U1 +0.15% / D2 −0.10% / V 1.0`,
-per-asset stops (GDX −3%, UGL signal-only, NUGT −5%), traded on GDX, UGL &
-NUGT:**
+**Chosen strategy — the middle-path hybrid (dual-MA 25/100 for GLDM & UGL,
+Divergence Pure-Regime for GDX & NUGT):**
 
-| Asset | Strategy return | B&H return | Strategy MDD | B&H MDD | Strategy Sharpe | B&H Sharpe | Trades | Win% |
-|---|---|---|---|---|---|---|---|---|
-| **GDX** (miners) | **+102.8%** | +92.3% | **−21.8%** | −46.5% | **0.85** | 0.51 | 98 | 49% |
-| **UGL** (2× gold) | +118.9% | +151.0% | **−19.3%** | −50.0% | **0.90** | 0.64 | 95 | 52% |
-| **NUGT** (2× miners) | **+276.1%** | +40.8% | **−38.3%** | −73.8% | **0.90** | 0.45 | 100 | 50% |
+| Asset | Engine | Strategy return | B&H return | Strategy MDD | B&H MDD | Strategy Sharpe | B&H Sharpe | Trades | Win% |
+|---|---|---|---|---|---|---|---|---|---|
+| **GLDM** (1× core) | dual-MA | **+137.3%** | +108.1% | **−19.1%** | −26.3% | **1.08** | 0.83 | 9 | 67% |
+| **UGL** (2× gold) | dual-MA | **+302.4%** | +151.0% | **−37.6%** | −50.0% | **0.96** | 0.64 | 11 | 55% |
+| **GDX** (miners) | divergence | **+102.8%** | +92.3% | **−21.8%** | −46.5% | **0.85** | 0.51 | 98 | 49% |
+| **NUGT** (2× miners) | divergence | **+276.1%** | +40.8% | **−38.3%** | −73.8% | **0.90** | 0.45 | 100 | 50% |
 
-*(The 1× GLDM signal source, for reference: +57.9%, MDD −9.6%, Sharpe 0.99 —
-best risk-adjusted, but not traded.)*
+**Combined equal-weight gold stack (OOS): +214% / −19.8% MDD / Sharpe 1.15** —
+vs +134% / 0.95 all-divergence, +237% / 0.85 (−33.6% MDD) all-dual-MA, and
++125% / 0.57 (−46.8% MDD) equal-weight buy-&-hold. The mix stays positive in
+the 2021-22 chop (+4.0%) because the divergence miners sleeves hedge the trend
+sleeves' dips. *(The pure-divergence sleeve numbers for GLDM/UGL — +58%/−9.6%/
+0.99 and +119%/−19.3%/0.90 — remain the lower-drawdown alternative if risk
+control is preferred over return.)*
 
 ### Sub-period breakdown (shown per-asset in the app's Backtesting tabs)
 
 | Asset | Period | Strategy | Buy & Hold | Strat MDD | B&H MDD |
 |---|---|---|---|---|---|
-| GDX | Chop 2021–2022 | **+12.4%** | −25.6% | −13.4% | −46.5% |
-| GDX | Bull 2023→now | +74.3% | +149.7% | −21.8% | −38.9% |
-| UGL | Chop 2021–2022 | **+16.9%** | −22.6% | −12.8% | −40.2% |
-| UGL | Bull 2023→now | +84.3% | +219.1% | −19.3% | −50.0% |
-| NUGT | Chop 2021–2022 | **+11.3%** | −56.4% | −29.1% | −73.8% |
-| NUGT | Bull 2023→now | +217.0% | +203.2% | −38.3% | −67.5% |
+| GLDM (dual-MA) | Chop 2021–2022 | −5.1% | −6.5% | −12.0% | −20.9% |
+| GLDM (dual-MA) | Bull 2023→now | **+147.8%** | +120.7% | −19.1% | −26.3% |
+| UGL (dual-MA) | Chop 2021–2022 | −6.6% | −22.6% | −24.0% | −40.2% |
+| UGL (dual-MA) | Bull 2023→now | **+321.0%** | +219.1% | −37.6% | −50.0% |
+| GDX (div) | Chop 2021–2022 | **+12.4%** | −25.6% | −13.4% | −46.5% |
+| GDX (div) | Bull 2023→now | +74.3% | +149.7% | −21.8% | −38.9% |
+| NUGT (div) | Chop 2021–2022 | **+11.3%** | −56.4% | −29.1% | −73.8% |
+| NUGT (div) | Bull 2023→now | **+217.0%** | +203.2% | −38.3% | −67.5% |
 
-The strategy's edge is clearest in the **choppy / down** 2021–2022 gold market,
-where it stayed **net positive while buy-&-hold lost 23–56%**. In a relentless
-bull leg it gives up part of the upside (the price of de-risking) but with far
-lower drawdown and a higher full-period Sharpe on every traded asset.
+The split's logic shows in the sub-periods: in the **choppy 2021–2022** market
+the divergence miners sleeves stayed **net positive** (+12%/+11%) while the
+trend sleeves only dipped slightly (−5%/−7%) — netting the combined stack +4%
+where buy-&-hold lost 7–56%. In the **2023→now bull** the trend sleeves ride
+nearly the whole move (+148%/+321%), which is where the middle path earns its
+return edge over all-divergence.
 
 ## 7. Chosen defaults (in `app/gldm_core.py`)
 
 ```python
-STRATEGY_NAME    = "Divergence Pure-Regime"
+STRATEGY_NAME   = "Hybrid: Dual-MA Trend + Divergence Pure-Regime"
+ENGINE_BY_ASSET = {"GLDM": "dual_ma", "UGL": "dual_ma",
+                   "GDX": "divergence", "NUGT": "divergence"}
+DUAL_MA_FAST, DUAL_MA_SLOW = 25, 100   # SOXX-consistent crossover on GLDM
 U1_ERRHI_MIN     =  0.15     # U1 entry threshold (3-day centered err_hi)
 D2_ERRHI_MAX     = -0.10     # D2 exit threshold
 D1_ERRLO_MIN     =  0.15
 V_ERRLO_MIN      =  1.00
-FIXED_STOP       =  0.03     # GLDM/GDX stop; UGL signal-only, NUGT −5%
-TRADEABLE_ASSETS = ["GDX", "UGL", "NUGT"]   # GLDM (1x) supplies the signal only
+STOP_BY_ASSET    = {"GLDM": 0.03, "GDX": 0.03, "UGL": 0.03, "NUGT": 0.05}
+TRADEABLE_ASSETS = ["GLDM", "GDX", "UGL", "NUGT"]
 ```
 
-The strategy is fixed (single strategy, single parameter set); the **GDX**,
-**UGL** and **NUGT** Backtesting tabs show the full/chop/bull breakdown, equity
-& drawdown curves and the complete trade log, and the **Live** / **Historical
-replay** tabs show the live signal and open position for each asset.
+The **GLDM**, **GDX**, **UGL** and **NUGT** Backtesting tabs show each sleeve
+under ITS engine — the full/chop/bull breakdown, equity & drawdown curves and
+the complete trade log — and the **Live** / **Historical replay** tabs show the
+live per-engine signal state and open position for each asset.

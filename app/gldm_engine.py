@@ -1,10 +1,11 @@
-"""GLDM / GDX / UGL via the Gold app's ACTUAL engine.
+"""GLDM / GDX / UGL / NUGT via the Gold app's ACTUAL engine.
 
-The Gold app (``app/gldm_hourly_app.py``) trades a Divergence Pure-Regime system
-through ``backtest_gldm`` + ``gldm_core`` with per-asset regime windows
-(GLDM 50 / UGL 40 / GDX 100) and −3% stops.  This module wraps those exact
-modules so the Overall app's gold sleeve matches the Gold app bar-for-bar
-(verified: reproduces the app's GDX +272% / UGL +211% / Sharpe ~1.3-1.4).
+The Gold app (``app/gldm_hourly_app.py``) trades the MIDDLE-PATH hybrid
+(``gc.ENGINE_BY_ASSET``): a dual-MA 25/100 crossover on the GLDM close for the
+smooth trenders GLDM & UGL (−3% stop) and the Divergence Pure-Regime for the
+miners GDX & NUGT (−3% / −5%).  This module wraps the exact same
+``backtest_gldm.run_asset_sim`` dispatch so the Overall app's gold sleeves
+match the Gold app bar-for-bar.
 """
 from __future__ import annotations
 
@@ -53,6 +54,17 @@ def _curve_metrics(equity: pd.Series) -> dict:
     vol = float(np.std(rets) * np.sqrt(_TRADING_DAYS))
     sharpe = float(np.mean(rets) / (np.std(rets) + 1e-12) * np.sqrt(_TRADING_DAYS))
     return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
+
+
+def _trend_decision(long_now: bool, in_pos: bool):
+    """Dual-MA sleeve decision (GLDM & UGL): long/flat off the 25/100 cross."""
+    if in_pos:
+        if long_now:
+            return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
+        return dict(state="EXIT", label="EXIT — MA CROSS-DOWN", ico="🔴", tone="exit")
+    if long_now:
+        return dict(state="ENTRY", label="ENTER — DUAL-MA CROSS-UP", ico="🟢", tone="buy")
+    return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
 
 
 def _decision(sigs, in_pos):
@@ -141,14 +153,16 @@ def run_gldm() -> list[dict]:
     ref = gcl[max(0, len(gcl) - 50):].mean()
     mom = (gcl[-1] / ref - 1) if ref else 0.0
 
+    dual_long_now = bool(bg.dual_ma_long_array(preds)[-1])
     out = []
     for key, meta in _META.items():
         col = meta["col"]
         if col not in preds.columns:
             continue
         stop = gc.STOP_BY_ASSET.get(key, gc.FIXED_STOP)
-        r = bg.simulate(preds, sig, col, stop, gc.U1_ERRHI_MIN, gc.D2_ERRHI_MAX,
-                        gc.D1_ERRLO_MIN, oos_start=OOS)
+        # middle-path dispatch: dual-MA 25/100 for GLDM & UGL, divergence for
+        # GDX & NUGT — the same bg.run_asset_sim path the Gold app trades.
+        r = bg.run_asset_sim(preds, sig, key, oos_start=OOS)
         dates = pd.to_datetime(pd.Series(r["dates"]))
         strat = np.asarray(r["strat"], float)
         eq = pd.Series(strat, index=dates)
@@ -158,7 +172,10 @@ def run_gldm() -> list[dict]:
         prev_px = float(daily[col].dropna().iloc[-2])
         dchg = (last_px / prev_px - 1) * 100 if prev_px else 0.0
         as_of = pd.Timestamp(dates.iloc[-1])
-        dec = _decision(sigs, bool(r.get("in_pos_now")))
+        if gc.engine_for(key) == "dual_ma":
+            dec = _trend_decision(dual_long_now, bool(r.get("in_pos_now")))
+        else:
+            dec = _decision(sigs, bool(r.get("in_pos_now")))
         m = _curve_metrics(eq)
         bhm = _curve_metrics(pd.Series(r["bh"], index=dates))
         wr = float((r["trades"] > 0).mean() * 100) if len(r["trades"]) else 0.0
@@ -185,7 +202,9 @@ def run_gldm() -> list[dict]:
             r=dict(bh=np.asarray(r["bh"], float), dates=list(dates), trades=r["trades"],
                    trade_log=r.get("trade_log"),   # dated closed trades — overall_core's
                    in_pos_now=bool(r.get("in_pos_now"))),  # since-start counter needs them
-            as_of=as_of, mode="divergence", ma_window=gc.MA_WINDOW_BY_ASSET.get(key, 50),
+            as_of=as_of, mode=gc.engine_for(key),
+            ma_window=(gc.DUAL_MA_SLOW if gc.engine_for(key) == "dual_ma"
+                       else gc.MA_WINDOW_BY_ASSET.get(key, 50)),
             stop=stop, engine="gldm",
         ))
     return out
