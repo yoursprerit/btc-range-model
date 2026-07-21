@@ -356,6 +356,12 @@ def ma_state(d_df):
     elif cfg.strategy_mode == "ma_vol":
         desc = (f"close ${close:,.2f} is {'above' if above else 'below/blocked-by-vol at'} the "
                 f"{cfg.ma_window}-day SMA ${ma:,.2f} (vol filter {'clear' if above else 'active'})")
+    elif cfg.strategy_mode == "crash_dd":
+        hi52 = float(pd.Series(c).rolling(252, min_periods=60).max().iloc[-1])
+        dd_now = close / hi52 - 1 if hi52 else 0.0
+        desc = (f"close ${close:,.2f} sits {dd_now*100:+.1f}% off the 52-week high "
+                f"${hi52:,.2f} (crash exit at −{cfg.dd_exit_pct*100:.0f}%) — "
+                f"{'shield clear, LONG by default' if above else 'crash shield active (flat), re-enter above the SMA'}")
     else:
         desc = f"close ${close:,.2f} is {'above' if above else 'below'} the {w}-day SMA ${ma:,.2f}"
     # ma_vol carries a second mandatory gate: realised vol below k × its median.

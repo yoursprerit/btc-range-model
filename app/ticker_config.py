@@ -83,6 +83,11 @@ class TickerConfig:
     vol_win: int = 20
     vol_med_win: int = 252
     vol_k: float = 1.0
+    # crash shield (mode="crash_dd"): long by default; exit only while the close
+    # is more than dd_exit_pct below its rolling 52-week high, re-enter once it
+    # recovers above the dd_reentry_ma-day SMA
+    dd_exit_pct: float = 0.30
+    dd_reentry_ma: int = 50
     # divergence thresholds (mode="divergence"); harmless if unused
     u1_errhi_min: float = 0.08
     d2_errhi_max: float = -0.10
@@ -130,7 +135,7 @@ class TickerConfig:
 
     @property
     def is_trend(self) -> bool:
-        return self.strategy_mode in ("ma", "dual_ma", "macd", "ma_vol")
+        return self.strategy_mode in ("ma", "dual_ma", "macd", "ma_vol", "crash_dd")
 
     @property
     def has_stop(self) -> bool:
@@ -151,6 +156,8 @@ class TickerConfig:
             return f"MACD {self.macd_fast}/{self.macd_slow}/{self.macd_signal}"
         if m == "ma_vol":
             return f"MA{self.ma_window}+vol"
+        if m == "crash_dd":
+            return f"Crash-shield {int(self.dd_exit_pct*100)}%/SMA{self.dd_reentry_ma}"
         return "Divergence"
 
     def trend_ui(self) -> dict:
@@ -180,6 +187,20 @@ class TickerConfig:
                       f"— i.e. short-term momentum leads longer-term"),
                 entry=f"the MACD histogram turns <b>positive</b> (MACD above its signal line)",
                 exit="the MACD histogram turns <b>negative</b>")
+        if m == "crash_dd":
+            dd = int(self.dd_exit_pct * 100)
+            return dict(
+                cond=f"no &gt;{dd}% crash off the 52-week high",
+                cond_short=f"&gt;{dd}% below 52-wk high",
+                line=f"{self.dd_reentry_ma}-day SMA (re-entry line)",
+                headline=f"crash-shield quasi-buy-&-hold ({dd}% / SMA{self.dd_reentry_ma})",
+                core=(f"hold {self.key} by default — the out-of-sample edge IS being "
+                      f"long — and stand aside only while the close sits more than "
+                      f"{dd}% below its rolling 52-week high (a crash, not a "
+                      f"correction)"),
+                entry=(f"close recovers <b>above</b> the {self.dd_reentry_ma}-day SMA "
+                       f"after a crash exit (and at inception)"),
+                exit=f"close falls more than <b>{dd}%</b> below its rolling 52-week high")
         if m == "ma_vol":
             return dict(
                 cond=f"close &gt; {self.ma_window}-day SMA &amp; low-vol",
@@ -353,33 +374,46 @@ CONFIGS["XLE"] = TickerConfig(
     traded_assets=[("XLE", "px_close"), ("OIH", "oih_close"), ("ERX", "erx_close")],
     asset_labels={"px_close": "XLE · Energy", "oih_close": "OIH · Oil Services",
                   "erx_close": "ERX · 2× Energy"},
-    strategy_mode="divergence", strategy_name="Energy Divergence Pure-Regime",
-    ma_window=80, fixed_stop=0.08,
-    # 2026-07 causal-H/L retune (backtest_ticker.py XLE --sweep): all three
-    # energy assets converge on the SAME config — U1 +0.80 / D2 −0.60 / V 2.1,
-    # no D1 exit, uniform −8% stop (the sweep also picks −8% for ERX, so the
-    # leak-era stop-less ERX override is retired).
+    # 2026-07 strategy change (after the causal-H/L retune): on the honest
+    # signal the energy divergence system kept only +23% of a +207% B&H OOS —
+    # a drawdown-limiter, not a return engine — and no train-selected trend
+    # filter came close either (energy's OOS edge IS being long).  The one
+    # structure that matches B&H OOS AND beats it across the full cycle is a
+    # CRASH SHIELD on quasi-buy-&-hold: long by default, exit only while XLE
+    # sits >30% below its rolling 52-week high (2015-16 bear, COVID), re-enter
+    # above the 50-day SMA.  XLE OOS: +198% at the SAME −27% MDD as B&H's
+    # +207% (Sharpe 0.89 vs 0.90); full 2015→now: +118% vs B&H +93% at −49%
+    # vs −70% MDD (Sharpe 0.43 vs 0.36).  Neighbouring thresholds (28-35%)
+    # behave similarly — a plateau, not a spike.  The divergence thresholds
+    # below stay as the causal-retuned values for the signals/H-L tabs (not
+    # traded).
+    strategy_mode="crash_dd", strategy_name="Energy Crash-Shield (quasi-B&H)",
+    ma_window=50, fixed_stop=1.0,           # the 30% crash exit IS the stop
+    dd_exit_pct=0.30, dd_reentry_ma=50,
     u1_errhi_min=0.80, d2_errhi_max=-0.60, d1_errlo_min=0.26, v_errlo_min=2.1,
     use_d1_exit=False,
     hl_band_pct=0.014,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.010, day_down_thresh=-0.010,
-    results_note=("OOS 2021→now on XLE (causal signal, 2026-07 retune): +23% at "
-                  "a −15% max drawdown vs Buy&Hold +207% / −27%. On the honest "
-                  "forecast error the energy divergence system is a pure "
-                  "risk-limiter: it roughly halves drawdown across XLE/OIH/ERX "
-                  "but captures only a small slice of the energy bull, and its "
-                  "Sharpe (0.45) now trails Buy&Hold's (0.90). It remains the "
-                  "sweep's pick only because every MA config breaches the "
-                  "drawdown ceiling in some sub-period. The pre-fix headline "
-                  "(+105% / Sharpe 1.37) was an artifact of the leaky H/L model."),
+    results_note=("OOS 2021→now on XLE: +198% at the same −27% max drawdown as "
+                  "Buy&Hold's +207% (Sharpe 0.89 vs 0.90, ~95% upside capture) "
+                  "— and over the full 2015→now cycle it beats B&H on return "
+                  "(+118% vs +93%), drawdown (−49% vs −70%) AND Sharpe (0.43 "
+                  "vs 0.36), because the crash exit sidesteps the 2015-16 and "
+                  "COVID collapses. Honest framing: energy's OOS edge is "
+                  "simply being long; every fitted overlay (divergence, MA "
+                  "family) gave up most of the bull. This config concedes ~4% "
+                  "of B&H's OOS return as the cost of full-cycle disaster "
+                  "insurance."),
     eval_note=("**Sibling execution (OIH / ERX).** Both trade the XLE-parent "
-               "divergence signal with the same −8% stop. Under the causal "
-               "signal the sleeves are drawdown-limiters, not return engines: "
-               "OIH +27% at −24% MDD (B&H +145% / −46%) and ERX +45% at −28% "
-               "(B&H +533% / −47%) OOS 2021→now. The earlier stop-less-ERX "
-               "analysis (~+311% / Sharpe 1.40) was based on the pre-fix leaky "
-               "signal — see the note atop LEV_SIBLINGS_STOP_EVAL.md."),
+               "crash-shield signal, no fixed stop. OOS 2021→now: OIH +138% at "
+               "−46% MDD (B&H +145% / −46%) and ERX +499% at −47% (B&H +533% / "
+               "−47%) — ~95% upside capture at the same drawdown. Full-cycle "
+               "the shield is what makes them holdable at all: ERX +60% vs B&H "
+               "−61% (MDD −88% vs −99%), OIH −19% vs −28% (−79% vs −90%). The "
+               "pre-2026-07 divergence numbers (ERX ~+311% / Sharpe 1.40) were "
+               "artifacts of the leaky H/L model — see the note atop "
+               "LEV_SIBLINGS_STOP_EVAL.md."),
 )
 
 

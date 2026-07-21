@@ -36,7 +36,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 |---|---|---|
 | ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` | CT-model Divergence · BTC & MSTR signal-exit-only, MSTU −6% |
 | 🥇 **Gold (GLDM)** | GLDM `core` · GDX `beta` · UGL `lev` · NUGT `lev` | Divergence Pure-Regime · GLDM/GDX −3%, UGL signal-only, NUGT −5% |
-| 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Energy Divergence Pure-Regime · uniform −8% stop (2026-07 causal retune) |
+| 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
 | ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
 | 🧲 **REMX** | REMX `core` | Dual-MA 50/200 golden cross, −5% |
