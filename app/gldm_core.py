@@ -477,13 +477,18 @@ def compute_trend_signatures(completed: pd.DataFrame) -> dict | None:
 
     err_hi = (ah - phi) / c * 100          # +ve = high ran hotter than predicted
     err_lo = (plo - al) / c * 100          # +ve = low undershot prediction
-    # Regime-adaptive centering (see backtest_gldm.precompute_signals): the
-    # ridge H/L band is structurally asymmetric and drifts, so subtract each
-    # error's rolling median before thresholding. Breaks are defined off the
-    # centered error so the whole signal system is self-consistent (~50% base).
+    # Regime-adaptive centering — MUST match backtest_gldm.precompute_signals
+    # exactly (60-bar rolling median, min_periods=20): the ridge H/L band is
+    # structurally asymmetric and drifts, so subtract each error's rolling
+    # median before thresholding. Breaks are defined off the centered error so
+    # the whole signal system is self-consistent (~50% base). The U1/D2/D1
+    # thresholds were tuned in the backtest against THIS centering; a different
+    # window here would fire the live signals on different bars than the
+    # strategy was tuned on. Callers must supply enough completed-bar history
+    # for the tail bars to carry a full 60-bar median (see signatures_asof).
     def _center(x):
         s = pd.Series(x)
-        med = s.rolling(30, min_periods=8).median()
+        med = s.rolling(60, min_periods=20).median()
         med = med.fillna(s.expanding(min_periods=1).median())
         return (s - med).to_numpy()
     err_hi = _center(err_hi)

@@ -127,7 +127,10 @@ def run_gldm() -> list[dict]:
         preds["nugt_close"] = daily["nugt_close"].reindex(preds.index)
     sig = bg.precompute_signals(preds)
     completed = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
-    sigs = gc.compute_trend_signatures(completed.tail(45)) if len(completed) >= 3 else None
+    # tail(150), not 45: the 60-bar median centering + 30-bar capitulation
+    # normaliser need ≥90 bars of history for the newest bar's signals to
+    # match bg.precompute_signals (which the position simulation below uses).
+    sigs = gc.compute_trend_signatures(completed.tail(150)) if len(completed) >= 3 else None
     bull_now = bool((sigs or {}).get("bull_regime", False))
     try:
         s = gc.macro_sentiment(daily) if hasattr(gc, "macro_sentiment") else None
