@@ -1,6 +1,6 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-21T19:45:04+00:00",
+ "generated_at_utc": "2026-07-21T20:32:44+00:00",
  "as_of": "2026-07-21",
  "profile": "Balanced",
  "book_mode": "live",
@@ -8,20 +8,20 @@
   "SOXX": 0.3,
   "SOXL": 0.1,
   "XLE": 0.3,
-  "OIH": 0.14698000328547983,
+  "OIH": 0.07376378761529909,
   "ERX": 0.1,
-  "REMX": 0.013812486917907743,
-  "SATA": 0.03920750979661258
+  "REMX": 0.02489111321283611,
+  "SATA": 0.10134509917186485
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "SOXX": 552.33,
-  "SOXL": 158.321,
-  "XLE": 58.405,
-  "OIH": 383.695,
-  "ERX": 91.395,
-  "REMX": 71.92,
-  "SATA": 97.98
+  "SOXX": 552.69,
+  "SOXL": 158.54,
+  "XLE": 58.5,
+  "OIH": 383.49,
+  "ERX": 91.86,
+  "REMX": 71.95,
+  "SATA": 98.29
  },
  "actions": [
   {
@@ -30,7 +30,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.8447040848142225
+   "priority": 0.8449445367620928
   },
   {
    "key": "ERX",
@@ -38,15 +38,15 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8433378364362033
+   "priority": 0.8437799377884925
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.14698000328547983,
+   "target": 0.07376378761529909,
    "in_pos": true,
-   "priority": 0.7632916146694475
+   "priority": 0.7631675012521634
   },
   {
    "key": "SOXL",
@@ -54,7 +54,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.5423325132931935
+   "priority": 0.5415014697325714
   },
   {
    "key": "SOXX",
@@ -62,34 +62,18 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.5063441735448821
+   "priority": 0.5054965303166543
   },
   {
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.013812486917907743,
+   "target": 0.02489111321283611,
    "in_pos": true,
    "priority": 0.09142857142857141
   },
   {
-   "key": "GLDM",
-   "action": "WATCH",
-   "decision": "WATCH \u2014 U1 (GATE PENDING)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
-  },
-  {
    "key": "GDX",
-   "action": "WATCH",
-   "decision": "WATCH \u2014 U1 (GATE PENDING)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
-  },
-  {
-   "key": "UGL",
    "action": "WATCH",
    "decision": "WATCH \u2014 U1 (GATE PENDING)",
    "target": 0.0,
@@ -129,6 +113,22 @@
    "priority": null
   },
   {
+   "key": "GLDM",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null
+  },
+  {
+   "key": "UGL",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null
+  },
+  {
    "key": "GRID",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 BELOW TREND",
@@ -163,7 +163,7 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-21T19:45:00+00:00",
+  "checked_at_utc": "2026-07-21T20:32:38+00:00",
   "stale_apps": []
  }
 }

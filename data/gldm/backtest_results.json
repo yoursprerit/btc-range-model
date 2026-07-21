@@ -1,14 +1,15 @@
 {
   "oos_start": "2021-01-01",
   "oos_end": "2026-07-21",
-  "primary_strategy": "Divergence Pure-Regime (U1 +0.15 / D2 -0.10, per-asset stops: GLDM/GDX -3%, UGL signal-only, NUGT -5%)",
+  "primary_strategy": "Hybrid: Dual-MA Trend + Divergence Pure-Regime (GLDM/UGL: dual-MA 25/100 -3%; GDX/NUGT: divergence U1 +0.15 / D2 -0.10, GDX -3% / NUGT -5%)",
   "assets": {
     "GLDM": {
+      "engine": "dual_ma",
       "strategy": {
-        "total_ret": 0.5788328362760018,
-        "cagr": 0.08590451725196457,
-        "mdd": -0.09556056608544339,
-        "sharpe": 0.9908118234427057
+        "total_ret": 1.3725859702416745,
+        "cagr": 0.16872507447251683,
+        "mdd": -0.19143950037146584,
+        "sharpe": 1.0803180094683966
       },
       "buy_hold": {
         "total_ret": 1.080836703376559,
@@ -16,15 +17,16 @@
         "mdd": -0.2627142109607328,
         "sharpe": 0.8290391106023908
       },
-      "n_trades": 95,
-      "win_rate": 52.63157894736842
+      "n_trades": 9,
+      "win_rate": 66.66666666666666
     },
     "UGL": {
+      "engine": "dual_ma",
       "strategy": {
-        "total_ret": 1.1887580203451997,
-        "cagr": 0.15183935028644635,
-        "mdd": -0.19326066476810433,
-        "sharpe": 0.8965724648149794
+        "total_ret": 3.023753739302137,
+        "cagr": 0.2856165973668632,
+        "mdd": -0.3756132052144001,
+        "sharpe": 0.9633713619699308
       },
       "buy_hold": {
         "total_ret": 1.5103039581878837,
@@ -32,10 +34,11 @@
         "mdd": -0.500233595621608,
         "sharpe": 0.6431482239093349
       },
-      "n_trades": 95,
-      "win_rate": 51.578947368421055
+      "n_trades": 11,
+      "win_rate": 54.54545454545454
     },
     "GDX": {
+      "engine": "divergence",
       "strategy": {
         "total_ret": 1.0282747607644422,
         "cagr": 0.13611931183892945,
@@ -52,6 +55,7 @@
       "win_rate": 48.97959183673469
     },
     "NUGT": {
+      "engine": "divergence",
       "strategy": {
         "total_ret": 2.7613477159709396,
         "cagr": 0.270065705752786,

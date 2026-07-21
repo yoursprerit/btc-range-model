@@ -208,6 +208,79 @@ def simulate_regime(preds, sig, price_col, ma_window=50, stop_pct=1.0,
                 trades=np.array(trades))
 
 
+def dual_ma_long_array(preds, fast: int | None = None, slow: int | None = None):
+    """SOXX-style crossover on the GLDM parent close: long while the fast SMA
+    sits above the slow SMA (decision at each close → executed next bar)."""
+    fast = gc.DUAL_MA_FAST if fast is None else fast
+    slow = gc.DUAL_MA_SLOW if slow is None else slow
+    gcl = preds["gldm_close"].to_numpy(float)
+    n = len(gcl)
+    f = np.array([np.mean(gcl[max(0, i - fast + 1):i + 1]) for i in range(n)])
+    s = np.array([np.mean(gcl[max(0, i - slow + 1):i + 1]) for i in range(n)])
+    return f > s
+
+
+def simulate_dual(preds, price_col, stop_pct, oos_start=OOS_START, end=None,
+                  fast: int | None = None, slow: int | None = None):
+    """Middle-path trend engine for the smooth gold trenders (GLDM, UGL):
+    long into bar i+1 while the GLDM 25/100 dual-MA is bullish at bar i's
+    close, exit on the cross-down or the fixed stop.  Returns the same schema
+    as ``simulate`` (equity curves, pos series, dated trade log)."""
+    long_at_close = dual_ma_long_array(preds, fast, slow)
+    price = preds[price_col].to_numpy(float)
+    dates = preds["target_date"].to_numpy()
+    n = len(price)
+    i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
+    i1 = n if end is None else int(np.searchsorted(
+        dates, np.datetime64(pd.Timestamp(end)), side="right"))
+
+    in_pos = False
+    entry_px = np.nan; entry_date = None
+    eq = 1.0
+    strat_eq = []; bh_eq = []; used_dates = []; pos_series = []
+    trades = []; trade_log = []
+    bh0 = price[i0]
+    for i in range(i0, i1):
+        if in_pos:
+            eq *= price[i] / price[i - 1]
+        strat_eq.append(eq); bh_eq.append(price[i] / bh0); used_dates.append(dates[i])
+        want_long = bool(long_at_close[i - 1])
+        if in_pos:
+            stop_hit = price[i] <= entry_px * (1 - stop_pct)
+            if (not want_long) or stop_hit:
+                ret = price[i] / entry_px - 1
+                reason = ("stop −%.0f%%" % (stop_pct * 100) if stop_hit
+                          else "MA cross-down")
+                trades.append(ret)
+                trade_log.append(dict(entry_date=entry_date, exit_date=dates[i],
+                                      entry_px=float(entry_px), exit_px=float(price[i]),
+                                      ret=float(ret), reason=reason))
+                in_pos = False; entry_px = np.nan; entry_date = None
+        elif want_long:
+            in_pos = True; entry_px = price[i]; entry_date = dates[i]
+        pos_series.append(1 if in_pos else 0)
+
+    return dict(dates=used_dates, strat=np.array(strat_eq), bh=np.array(bh_eq),
+                pos=np.array(pos_series), trades=np.array(trades),
+                trade_log=trade_log, in_pos_now=in_pos,
+                entry_px=(float(entry_px) if in_pos else None),
+                entry_date=entry_date)
+
+
+def run_asset_sim(preds, sig, asset, oos_start=OOS_START, end=None):
+    """Middle-path dispatcher — run ``asset`` through ITS engine
+    (gc.engine_for): dual-MA 25/100 for GLDM & UGL, Divergence Pure-Regime
+    for GDX & NUGT.  Single entry point for the app, the gold engine and the
+    backtest main, so every consumer stays bar-for-bar consistent."""
+    col = "gldm_close" if asset == "GLDM" else f"{asset.lower()}_close"
+    if gc.engine_for(asset) == "dual_ma":
+        return simulate_dual(preds, col, gc.stop_for(asset),
+                             oos_start=oos_start, end=end)
+    return simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
+                    gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN,
+                    oos_start=oos_start, end=end)
+
+
 def _clean_flags(sig, i, U1, D2, D1):
     """clean_10d: no D1/D2 in the 7 bars before i."""
     s = max(0, i - 7)
@@ -505,24 +578,32 @@ def main():
         (gc.GLDM_DATA_DIR / "sweep_results.json").write_text(json.dumps(sweep_out, indent=2, default=str))
 
     # The "assets" block is the strategy the Gold app / Overall sleeve actually
-    # trade (see gldm_core.STRATEGY_NAME + STOP_BY_ASSET); the MA50 trend
+    # trade — the MIDDLE-PATH engine split (gc.ENGINE_BY_ASSET): dual-MA 25/100
+    # for GLDM & UGL, Divergence Pure-Regime for GDX & NUGT.  The MA50 trend
     # filter is kept as a labelled reference variant only.
     out = {"oos_start": OOS_START, "oos_end": str(preds["target_date"].iloc[-1].date()),
            "primary_strategy": f"{gc.STRATEGY_NAME} "
-                               f"(U1 {gc.U1_ERRHI_MIN:+.2f} / D2 {gc.D2_ERRHI_MAX:+.2f}, "
-                               "per-asset stops: GLDM/GDX -3%, UGL signal-only, NUGT -5%)",
+                               f"(GLDM/UGL: dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} -3%; "
+                               f"GDX/NUGT: divergence U1 {gc.U1_ERRHI_MIN:+.2f} / "
+                               f"D2 {gc.D2_ERRHI_MAX:+.2f}, GDX -3% / NUGT -5%)",
            "assets": {}}
 
-    print(f"\n=== PRIMARY (traded): {gc.STRATEGY_NAME} "
-          f"(U1={gc.U1_ERRHI_MIN:+.2f} D2={gc.D2_ERRHI_MAX:+.2f} per-asset stops: "
-          f"GLDM/GDX −3%, UGL signal-only, NUGT −5%) — traded on GLDM, GDX, UGL & NUGT ===")
+    print(f"\n=== PRIMARY (traded): {gc.STRATEGY_NAME} — per-asset engines "
+          f"(GLDM/UGL dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} −3%; "
+          f"GDX divergence −3%; NUGT divergence −5%) ===")
     for asset in ("GLDM", "UGL", "GDX", "NUGT"):
-        res = run_asset(preds, sig, asset, strategy="divergence",
-                        stop_pct=gc.stop_for(asset), U1=gc.U1_ERRHI_MIN, D2=gc.D2_ERRHI_MAX)
-        if res is None:
+        col = "gldm_close" if asset == "GLDM" else f"{asset.lower()}_close"
+        if col not in preds:
             continue
+        r = run_asset_sim(preds, sig, asset)
+        sm = _metrics(r["strat"], r["dates"]); bm = _metrics(r["bh"], r["dates"])
+        tr = r["trades"]
+        res = dict(asset=f"{asset} ({gc.engine_for(asset)})", strat=sm, bh=bm,
+                   n_trades=int(len(tr)),
+                   win_rate=float((tr > 0).mean() * 100) if len(tr) else 0.0)
         print_asset(res)
-        out["assets"][asset] = dict(strategy=res["strat"], buy_hold=res["bh"],
+        out["assets"][asset] = dict(engine=gc.engine_for(asset),
+                                    strategy=sm, buy_hold=bm,
                                     n_trades=res["n_trades"], win_rate=res["win_rate"])
 
     print("\n=== REFERENCE (not traded): MA50 trend filter — Strategy vs Buy&Hold ===")

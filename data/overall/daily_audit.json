@@ -1,18 +1,18 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-07-21T19:45:05+00:00",
- "generated_at_ct": "Jul 21, 2026 at 2:45:05 PM CDT",
+ "generated_at_utc": "2026-07-21T20:32:44+00:00",
+ "generated_at_ct": "Jul 21, 2026 at 3:32:44 PM CDT",
  "scheduled_publish": "\u22487:15 AM US Central (15 min after the Bitcoin bar close)",
  "overall": {
   "as_of": "2026-07-21",
   "profile": "Balanced",
   "n_instruments": 17,
   "n_apps": 9,
-  "computed_at_utc": "2026-07-21T19:45:05+00:00"
+  "computed_at_utc": "2026-07-21T20:32:44+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-07-21T19:45:00+00:00",
-  "checked_at_ct": "Jul 21, 2026 at 2:45:00 PM CDT",
+  "checked_at_utc": "2026-07-21T20:32:38+00:00",
+  "checked_at_ct": "Jul 21, 2026 at 3:32:38 PM CDT",
   "passed": true,
   "stale_apps": [],
   "stale_assets": [],
@@ -42,9 +42,9 @@
      "NUGT"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -56,9 +56,9 @@
      "SOXL"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -69,9 +69,9 @@
      "GRID"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -84,9 +84,9 @@
      "ERX"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -97,9 +97,9 @@
      "REMX"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -110,9 +110,9 @@
      "WGMI"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -123,9 +123,9 @@
      "PBW"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    },
@@ -136,9 +136,9 @@
      "ARTY"
     ],
     "actual_asof": "2026-07-21",
-    "expected_asof": "2026-07-20",
-    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close) \u2014 bar still in progress",
-    "expected_close": "Jul 20, 2026, 4:00 PM EDT (US market close)",
+    "expected_asof": "2026-07-21",
+    "actual_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Jul 21, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0
    }
@@ -147,7 +147,7 @@
  "target_book": {
   "published": true,
   "skip_reason": null,
-  "generated_at_utc": "2026-07-21T19:45:04+00:00",
+  "generated_at_utc": "2026-07-21T20:32:44+00:00",
   "as_of": "2026-07-21",
   "profile": "Balanced",
   "signed": false

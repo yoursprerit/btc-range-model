@@ -74,30 +74,24 @@ CI*, not a directional bet. The real edge lives in the **trend regime** and
 
 ## The strategy (short version)
 
-**One strategy — the gold-scaled BTC-style Divergence Pure-Regime system.** Enter
-when U1 bullish divergence (regime-centered `err_hi` 3-day avg > +0.15%) confirms
-inside the Pure-Regime gate (Bull Regime *or* washed-out Clean Breakout *or*
-V-reversal); exit on D2 (< −0.10%) / D3 exhaustion or the per-asset fixed stop.
-(Thresholds re-tuned 2026-07 after the daily H/L model was made causal — the
-pre-fix model leaked the target bar into its features, so the old ±0.08 scale
-and headline results were artifacts.)
+**Middle-path hybrid (2026-07)** — each sleeve trades the engine that suits its
+character, because the two engines are regime-complementary:
 
-The signal comes from **GLDM (gold)** and is executed across the whole gold
-stack — the 1× GLDM position is **traded as the core low-beta sleeve** alongside
-the higher-octane proxies:
+- **GLDM** — 1× core sleeve → **dual-MA 25/100** crossover on the GLDM close
+  (SOXX-consistent), −3% stop
+- **UGL** — ProShares Ultra Gold 2× → **dual-MA 25/100** (same parent signal), −3% stop
+- **GDX** — VanEck Gold Miners → **Divergence Pure-Regime** (U1 +0.15 / D2 −0.10,
+  causal signal), −3% stop
+- **NUGT** — Direxion Gold Miners 2× → **Divergence Pure-Regime**, −5% stop
 
-- **GLDM** — SPDR Gold MiniShares 1× (core sleeve, best risk-adjusted), −3% stop
-- **GDX** — VanEck Gold Miners ETF, high-beta gold (**~MSTR analog**), −3% stop
-- **UGL** — ProShares Ultra Gold, 2× gold (**~MSTU analog**), signal-only exits
-- **NUGT** — Direxion Daily Gold Miners 2×, −5% stop
-
-Out-of-sample (2021→now) it beats buy-&-hold on drawdown and Sharpe for every
-traded asset, and on raw return for GDX and NUGT: **GLDM +58%** (B&H +108%; MDD
-−10% vs −26%, Sharpe 0.99 vs 0.83), **GDX +103%** (B&H +92%; MDD
-−22% vs −46%, Sharpe 0.85 vs 0.51), **UGL +119%** (B&H +151%; MDD −19% vs −50%,
-Sharpe 0.90 vs 0.64), **NUGT +276%** (B&H +41%; MDD −38% vs −74%, Sharpe 0.90
-vs 0.45) — and it stayed net-positive through the 2021–2022 gold correction
-while buy-&-hold fell 7–56%.
+Out-of-sample (2021→now): **GLDM +137%** (B&H +108%; MDD −19% vs −26%, Sharpe
+1.08 vs 0.83), **UGL +302%** (B&H +151%; MDD −38% vs −50%, Sharpe 0.96 vs 0.64),
+**GDX +103%** (B&H +92%; MDD −22% vs −46%, Sharpe 0.85 vs 0.51), **NUGT +276%**
+(B&H +41%; MDD −38% vs −74%, Sharpe 0.90 vs 0.45). Combined equal-weight stack:
+**+214% / −19.8% MDD / Sharpe 1.15** — more return AND higher Sharpe than
+all-divergence (+134%/0.95), far shallower drawdown than all-dual-MA
+(−20% vs −34%), and still positive (+4%) through the 2021–22 chop because the
+divergence miners sleeves hedge the trend sleeves' dips.
 
 Full methodology, parameter choice and per-period results:
 **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.

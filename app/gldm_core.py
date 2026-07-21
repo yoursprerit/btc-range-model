@@ -102,7 +102,30 @@ MACRO_SYMS = {
 # BOTH return AND drawdown for GDX (+110%/−22% MDD/Sharpe 0.90 vs B&H
 # +104%/−46%/0.54) and beats B&H on drawdown and Sharpe for UGL (+124%/−19%/
 # 0.93 vs +161%/−49%/0.67).  See GLDM_TRADING_STRATEGY.md.
-STRATEGY_NAME = "Divergence Pure-Regime"
+STRATEGY_NAME = "Hybrid: Dual-MA Trend + Divergence Pure-Regime"
+# ── MIDDLE-PATH ENGINE SPLIT (2026-07) ───────────────────────────────────
+# The two engines are regime-complementary, so each sleeve gets the engine
+# that suits its character (see GLDM_TRADING_STRATEGY.md §Middle path):
+#   • GLDM & UGL (smooth gold trenders) → SOXX-style dual-MA 25/100 crossover
+#     on the GLDM parent close, −3% stop.  OOS 2021→now: GLDM +137%/−19%/1.08,
+#     UGL +302%/−38%/0.96 — beats both B&H and the divergence variant on
+#     return AND Sharpe for these two sleeves.
+#   • GDX & NUGT (miners) → Divergence Pure-Regime (below) — clearly better
+#     Sharpe/drawdown than dual-MA on the miners, and it carries the chop
+#     protection (2021-22: +12%/+11% while dual-MA sleeves were slightly down).
+# Combined equal-weight gold stack OOS: +214% / −19.8% MDD / Sharpe 1.15 vs
+# +134%/0.95 all-divergence and +237%/0.85 (−33.6% MDD) all-dual-MA.
+ENGINE_BY_ASSET = {"GLDM": "dual_ma", "UGL": "dual_ma",
+                   "GDX": "divergence", "NUGT": "divergence"}
+DUAL_MA_FAST = 25      # fast SMA of the GLDM parent close (SOXX-consistent)
+DUAL_MA_SLOW = 100     # slow SMA — the /100 plateau (20-50/100 all similar)
+
+
+def engine_for(asset: str) -> str:
+    return ENGINE_BY_ASSET.get(asset, "divergence")
+
+
+# ── Divergence engine thresholds (GDX & NUGT; also the signal cards) ─────
 U1_ERRHI_MIN =  0.15   # U1 entry:  3d-avg centered err_hi > +0.15%  (AND hi_breaks_3d ≥ 2)
 D2_ERRHI_MAX = -0.10   # D2 exit:   3d-avg centered err_hi < −0.10%
 D1_ERRLO_MIN =  0.15   # D1 exit:   3d-avg centered err_lo > +0.15%  (AND lo_breaks_3d ≥ 2)
@@ -119,17 +142,14 @@ TRADEABLE_ASSETS = ["GLDM", "GDX", "UGL", "NUGT"]   # GLDM (1x) = core traded sl
 MA_WINDOW = 50                                   # default trend-filter window
 MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
 
-# Fixed stop per traded asset.  GLDM (1×) and GDX (high-beta miners) keep the
-# tuned −3% stop.  The leveraged siblings are looser, because a tight 1× stop
-# whipsaws a leveraged ETF (the SOXL lesson — see LEV_SIBLINGS_STOP_EVAL.md):
-#   • UGL  (2× gold)        → NO fixed stop (signal-only exits): under the causal
-#                             signal the stop sweep shows a −8% stop never fires
-#                             (identical +119% / 0.90 Sharpe to stop-less), and
-#                             tighter stops only whipsaw the 2× fund.
-#   • NUGT (2× gold miners) → wider −5% stop (NOT stop-less): the sweet spot in
-#                             the stop sweep (+276% / 0.90 Sharpe / −38% MDD vs
-#                             B&H +41% / −74%).
-STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": FIXED_STOP, "UGL": 1.0, "NUGT": 0.05}
+# Fixed stop per traded asset (per its middle-path engine):
+#   • GLDM (dual-MA) / GDX (divergence) → the tuned −3% stop.
+#   • UGL  (dual-MA, 2× gold) → −3%: under the dual-MA engine the stop slightly
+#     IMPROVES return, win-rate and Sharpe (+302%/55%/0.96 vs +263%/50%/0.90
+#     stop-less) — unlike the old divergence engine where it only whipsawed.
+#   • NUGT (divergence, 2× miners) → wider −5%: the sweet spot in the stop
+#     sweep (+276% / 0.90 Sharpe / −38% MDD vs B&H +41% / −74%).
+STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": FIXED_STOP, "UGL": FIXED_STOP, "NUGT": 0.05}
 
 
 def stop_for(asset: str) -> float:

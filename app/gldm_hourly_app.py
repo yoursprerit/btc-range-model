@@ -83,6 +83,8 @@ ASSET_LABELS = {"GDX": "GDX · Gold Miners", "UGL": "UGL · 2× Gold",
                 "NUGT": "NUGT · 2× Gold Miners",
                 "GLDM": "GLDM · 1× Gold (core)"}
 _BT_TAB_EMOJI = {"GDX": "📊", "UGL": "📈", "NUGT": "⛏️", "GLDM": "🥇"}
+_ENGINE_LABEL = {"dual_ma": f"Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend",
+                 "divergence": "Divergence Pure-Regime"}
 
 # ════════════════════════════════════════════════════════════════════════
 # Sidebar — application selector (shared with the BTC app) + controls
@@ -106,9 +108,11 @@ st.title("🥇 GLDM — Gold forecast & trend strategy")
 st.caption(
     "SPDR Gold MiniShares (GLDM) tracks spot gold. Models: ridge on log-returns "
     "(hourly close), ridge H/L bands & close cones, logistic day-type — driven by "
-    "gold's real macro factors (USD index, 10-year yields, silver, VIX). The "
-    f"**{gc.STRATEGY_NAME}** strategy trades **GDX** (miners) and **UGL** (2× gold) "
-    "off the gold signal — the way the BTC app trades MSTR & MSTU."
+    "gold's real macro factors (USD index, 10-year yields, silver, VIX). "
+    f"**{gc.STRATEGY_NAME}**: the smooth trenders **GLDM & UGL** trade a "
+    f"SOXX-style dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} crossover on the "
+    "gold close, while the miners **GDX & NUGT** trade the Divergence "
+    "Pure-Regime signal — each sleeve gets the engine that suits its character."
 )
 
 
@@ -274,16 +278,25 @@ def signatures_asof(target_date):
 
 
 def strategy_position(asset, end=None):
-    """Run the chosen strategy for `asset` up to `end`; return current state,
+    """Run `asset` through ITS middle-path engine (gc.engine_for: dual-MA for
+    GLDM/UGL, divergence for GDX/NUGT) up to `end`; return current state,
     metrics, equity curve, drawdown and trade log."""
     col = f"{asset.lower()}_close"
     if col not in preds:
         return None
-    r = btg.simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
-                     gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, end=end)
+    r = btg.run_asset_sim(preds, sig, asset, end=end)
     r["metrics"] = btg._metrics(r["strat"], r["dates"])
     r["bh_metrics"] = btg._metrics(r["bh"], r["dates"])
     return r
+
+
+def dual_ma_state():
+    """Live state of the GLDM 25/100 dual-MA that drives the GLDM & UGL
+    sleeves: fast/slow SMA levels and the long/flat signal on the newest bar."""
+    gcl = preds["gldm_close"].to_numpy(float)
+    f = float(np.mean(gcl[-gc.DUAL_MA_FAST:]))
+    s = float(np.mean(gcl[-gc.DUAL_MA_SLOW:]))
+    return dict(fast=f, slow=s, long_now=f > s, gap=(f / s - 1) * 100)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -483,12 +496,15 @@ def render_strategy_card():
   </div>
   <div style='background:#fdf0d5; border-radius:8px; padding:10px 14px; margin-bottom:12px;
        font-size:12.5px; color:#5c4400; font-weight:600;'>
-    🔁 <b>Core idea:</b> Gold trends smoothly with shallow dips, so the same divergence
-    signatures (U1 / D2 / D3 / V-reversal) that read <b>GLDM's</b> predicted-vs-actual
-    highs/lows are used as the signal engine, then executed across the whole gold
-    stack — <b>GLDM</b> itself (1×, the core low-beta sleeve and best
-    risk-adjusted expression of the signal), <b>GDX</b> (miners, ~MSTR analog),
-    <b>UGL</b> (2× gold, ~MSTU analog) and <b>NUGT</b> (2× miners).
+    🔁 <b>Middle-path engine split — each sleeve gets the engine that suits its
+    character:</b><br>
+    📈 <b>GLDM &amp; UGL</b> (smooth gold trenders) ride a SOXX-style
+    <b>dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}</b> crossover on the GLDM close
+    (−3% stop) — long while the fast SMA is above the slow.<br>
+    ⛏️ <b>GDX &amp; NUGT</b> (miners) trade the <b>Divergence Pure-Regime</b>
+    signatures (U1 / D2 / D3 / V-reversal below) that read GLDM's
+    predicted-vs-actual highs/lows — better Sharpe &amp; drawdown control on the
+    miners, and the chop protection (2021-22: +12%/+11% while trend sleeves dipped).
   </div>
   <div style='background:#fdf0d5; border:1px solid #b8860b; border-radius:7px;
        padding:8px 13px; margin-bottom:12px; font-size:12px; color:#5c4400;'>
@@ -516,11 +532,13 @@ def render_strategy_card():
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
-    📈 <b>Out-of-sample 2021→now</b> (causal signal, 2026-07 retune — beats buy &amp; hold
-    on drawdown &amp; Sharpe on every sleeve, and on return for GDX &amp; NUGT):
-    GDX <b>+103%</b> · MDD −22% · Sharpe 0.85 &nbsp;|&nbsp;
-    UGL <i>(stop-less)</i> <b>+119%</b> · MDD −19% · Sharpe 0.90 &nbsp;|&nbsp;
-    NUGT <i>(−5%)</i> <b>+276%</b> · MDD −38% · Sharpe 0.90
+    📈 <b>Out-of-sample 2021→now</b> (middle path, 2026-07):
+    GLDM <i>(dual-MA)</i> <b>+137%</b> · MDD −19% · Sharpe 1.08 &nbsp;|&nbsp;
+    UGL <i>(dual-MA)</i> <b>+302%</b> · MDD −38% · Sharpe 0.96 &nbsp;|&nbsp;
+    GDX <i>(div)</i> <b>+103%</b> · MDD −22% · Sharpe 0.85 &nbsp;|&nbsp;
+    NUGT <i>(div)</i> <b>+276%</b> · MDD −38% · Sharpe 0.90.
+    Combined equal-weight stack: <b>+214%</b> · MDD −20% · Sharpe <b>1.15</b>
+    (vs all-divergence +134%/0.95, all-dual-MA +237%/0.85 at −34% MDD).
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -532,6 +550,19 @@ def render_conditions_box(sigs):
     if not sigs:
         st.info("Strategy conditions unavailable — need ≥ 3 completed bars.")
         return
+    # ── dual-MA engine status (governs the GLDM & UGL sleeves) ────────────
+    dm = dual_ma_state()
+    st.markdown(
+        f"<div style='background:{'#f0fdf4' if dm['long_now'] else '#fff7ed'};"
+        f"border:1.5px solid {'#86efac' if dm['long_now'] else '#fdba74'};"
+        f"border-radius:8px;padding:8px 14px;margin-bottom:8px;font-size:12.5px;"
+        f"color:#334155;'>📈 <b>Dual-MA engine (GLDM &amp; UGL sleeves):</b> "
+        f"{gc.DUAL_MA_FAST}-day SMA ${dm['fast']:,.2f} "
+        f"{'&gt;' if dm['long_now'] else '&lt;'} {gc.DUAL_MA_SLOW}-day SMA "
+        f"${dm['slow']:,.2f} ({dm['gap']:+.2f}%) → "
+        f"<b>{'LONG' if dm['long_now'] else 'FLAT'}</b>. "
+        f"The divergence conditions below govern the <b>GDX &amp; NUGT</b> miners "
+        f"sleeves.</div>", unsafe_allow_html=True)
 
     def row(active, name, detail):
         ico = "✅" if active else "○"
@@ -1321,8 +1352,7 @@ def _metrics_table_html(asset):
                    ("Win Rate", "wr", None), ("Trades", "n", None)]
     per = []
     for lbl, s, e in _PERIODS:
-        r = btg.simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
-                         gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
+        r = btg.run_asset_sim(preds, sig, asset, oos_start=s, end=e)
         sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
         wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
         per.append((lbl, sm, bm, wr, len(r["trades"])))
@@ -1378,13 +1408,17 @@ def render_backtest_dashboard(asset):
     st.markdown(f"## {_BT_TAB_EMOJI.get(asset, '📊')} {ASSET_LABELS[asset]} — "
                 "Gold Signal-Driven Backtesting")
     render_strategy_card()
+    eng = gc.engine_for(asset)
+    st.caption(f"⚙️ Engine for this sleeve: **{_ENGINE_LABEL[eng]}** "
+               f"(stop {'—' if gc.stop_for(asset) >= 0.999 else f'−{gc.stop_for(asset)*100:.0f}%'}) "
+               "— middle-path split: dual-MA for the smooth trenders GLDM & UGL, "
+               "divergence for the miners GDX & NUGT.")
     if asset == "GLDM":
         st.info("ℹ️ **GLDM is both the signal source and the core traded sleeve.** "
-                "The divergence signal is derived from GLDM and executed across the "
-                "whole gold stack — GLDM itself (1×, with the "
-                f"−{gc.stop_for('GLDM')*100:.0f}% stop) plus the higher-beta "
-                "GDX / UGL / NUGT. The 1× sleeve is historically the best "
-                "risk-adjusted (though lowest raw-return) expression of the signal.")
+                "Its own sleeve trades the dual-MA "
+                f"{gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} trend engine with a "
+                f"−{gc.stop_for('GLDM')*100:.0f}% stop, while its predicted-vs-actual "
+                "H/L divergences drive the GDX / NUGT miners sleeves.")
     st.caption("All trades are out-of-sample: the GLDM daily H/L signal model is fit once "
                "on the pre-2021 window and predicts every later bar, so all four periods "
                "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
@@ -1396,8 +1430,7 @@ def render_backtest_dashboard(asset):
     period_tabs = st.tabs([lbl for lbl, _, _ in _PERIODS])
     for (lbl, s, e), tb in zip(_PERIODS, period_tabs):
         with tb:
-            r = btg.simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
-                             gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN, oos_start=s, end=e)
+            r = btg.run_asset_sim(preds, sig, asset, oos_start=s, end=e)
             if len(r["strat"]) < 2:
                 st.info("Not enough bars in this window.")
                 continue
@@ -1409,7 +1442,7 @@ def render_backtest_dashboard(asset):
                       delta_color="inverse")
             k4.metric("Sharpe", f"{sm['sharpe']:.2f}", f"vs B&H {bm['sharpe']:.2f}")
 
-            st.plotly_chart(_equity_fig(r, asset, f"{gc.STRATEGY_NAME} ({asset}) vs Buy & Hold — {lbl}"),
+            st.plotly_chart(_equity_fig(r, asset, f"{_ENGINE_LABEL[gc.engine_for(asset)]} ({asset}) vs Buy & Hold — {lbl}"),
                             use_container_width=True, key=f"{asset}_{s}_{e}_eq")
             dts = pd.to_datetime(r["dates"])
             figd = go.Figure()
@@ -1599,27 +1632,31 @@ Fear & Greed index.
 daily High/Low (calibrated ridge bands), 7-day & 14-day close cones, and a
 3-class day-type classifier.
 
-**Strategy — {gc.STRATEGY_NAME} (one strategy, two assets).** Entry when U1
+**Strategy — {gc.STRATEGY_NAME} (middle-path engine split).** The two engines
+are regime-complementary, so each sleeve trades the one that suits it:
+**GLDM & UGL** (smooth gold trenders) ride a SOXX-style **dual-MA
+{gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}** crossover on the GLDM close (−3% stop);
+**GDX & NUGT** (miners) trade the **Divergence Pure-Regime** — entry when U1
 bullish divergence (3-day centered `err_hi` > +{gc.U1_ERRHI_MIN:.2f}% with ≥2
-high-breaks) confirms inside the Pure-Regime gate (Bull Regime *or* a washed-out
-Clean Breakout below the MA *or* a recent V-reversal). Exit on D2
-(< {gc.D2_ERRHI_MAX:+.2f}%) / D3 exhaustion, or a fixed **−{gc.FIXED_STOP*100:.0f}%**
-stop. The divergence error is regime-centered (60-bar rolling median, identical
-to the backtest) so the signal self-calibrates to gold's volatility. The daily
-H/L model is **causal** (features through the prior close predict the next bar
-— fixed & re-tuned 2026-07). Signals come from **GLDM**; execution spans the
-whole gold stack — **GLDM** itself (1×, the core low-beta sleeve), **GDX**
-(miners), **UGL** (2× gold) and **NUGT** (2× gold miners).
+high-breaks) confirms inside the Pure-Regime gate, exit on D2
+(< {gc.D2_ERRHI_MAX:+.2f}%) / D3 exhaustion or the per-asset stop. The
+divergence error is regime-centered (60-bar rolling median, identical to the
+backtest), and the daily H/L model is **causal** (features through the prior
+close predict the next bar — fixed & re-tuned 2026-07).
 
-**Out-of-sample results (2021→now, causal signal)** — beats buy & hold on
-drawdown **and** Sharpe for every sleeve, and on raw return for GDX & NUGT:
+**Out-of-sample results (2021→now, middle path):**
 
-| Asset | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe (S / B&H) |
-|---|---|---|---|---|---|
-| GLDM | +58% | +108% | **−10%** | −26% | **0.99 / 0.83** |
-| GDX | **+103%** | +92% | **−22%** | −46% | **0.85 / 0.51** |
-| UGL | +119% | +151% | **−19%** | −50% | **0.90 / 0.64** |
-| NUGT | **+276%** | +41% | **−38%** | −74% | **0.90 / 0.45** |
+| Asset | Engine | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe (S / B&H) |
+|---|---|---|---|---|---|---|
+| GLDM | dual-MA | **+137%** | +108% | **−19%** | −26% | **1.08 / 0.83** |
+| UGL | dual-MA | **+302%** | +151% | **−38%** | −50% | **0.96 / 0.64** |
+| GDX | divergence | **+103%** | +92% | **−22%** | −46% | **0.85 / 0.51** |
+| NUGT | divergence | **+276%** | +41% | **−38%** | −74% | **0.90 / 0.45** |
+
+Combined equal-weight gold stack: **+214% / −19.8% MDD / Sharpe 1.15** — vs
++134%/0.95 all-divergence and +237%/0.85 (−33.6% MDD) all-dual-MA. The mix
+stays positive in the 2021-22 chop (+4%) because the divergence miners sleeves
+hedge the trend sleeves' dips.
 
 **Honest framing.** Intraday gold direction is ~coin-flip (like BTC); the hourly
 model's value is a tight CI, not a directional bet. The edge is in the trend
