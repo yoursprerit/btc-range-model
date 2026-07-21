@@ -2476,6 +2476,26 @@ latest_t_global = F_filled.index[valid_mask][-1]
 live_spot, live_spot_ts = fetch_live_spot()
 mstr_price, mstr_chg, mstu_price, mstu_chg, strc_price, strc_chg, sata_price, sata_chg = fetch_equity_prices()
 
+# ── signal-freshness caption + 🕵️ Daily Audit bookkeeping ──────────────────
+# Shared helpers (app/freshness.py) so the closing date/time shown here always
+# matches the Daily Audit tab: BTC daily signal bars close at 12:00 UTC
+# (7:00 AM CT in summer / 6:00 AM CT in winter); the engines' as_of is the bar
+# START date, so the latest completed bar is derived from the newest hourly data.
+try:
+    import freshness as _fr
+    _sig_asof = _fr.expected_crypto_asof(pd.Timestamp(latest_t_global)
+                                         + pd.Timedelta(hours=1))
+    st.caption(_fr.signal_close_caption(
+        "crypto", _sig_asof,
+        extra=("📡 hourly data through "
+               f"**{pd.Timestamp(latest_t_global).strftime('%Y-%m-%d %H:%M')} UTC**")))
+    _fr.record_refresh("BTC", kind="crypto", app_label="₿ Bitcoin (BTC)",
+                       as_of=str(_sig_asof.date()),
+                       close_label=_fr.close_label("crypto", _sig_asof),
+                       data_through_utc=str(pd.Timestamp(latest_t_global)))
+except Exception:
+    pass
+
 
 # ════════════════════════════════════════════════════════════════════════
 # Trend Signature Alert System

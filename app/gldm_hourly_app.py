@@ -162,6 +162,20 @@ _daily_key = f"{daily.index.max()}::{len(daily)}"
 preds, sig = get_predictions(_daily_key)
 completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
 
+# ── signal-freshness caption + 🕵️ Daily Audit bookkeeping ──────────────────
+# Shared helpers (app/freshness.py) so the closing date/time shown here always
+# matches the Daily Audit tab: GLDM signals are generated upon the US market
+# close (4:00 PM ET) of the newest daily bar.
+try:
+    import freshness as _fr
+    _sig_asof = pd.Timestamp(daily.index.max())
+    st.caption(_fr.signal_close_caption("us_equity", _sig_asof))
+    _fr.record_refresh("GLDM", kind="us_equity", app_label="🥇 Gold (GLDM)",
+                       as_of=str(_sig_asof.date()),
+                       close_label=_fr.close_label("us_equity", _sig_asof))
+except Exception:
+    pass
+
 
 # ════════════════════════════════════════════════════════════════════════
 # Inference helpers

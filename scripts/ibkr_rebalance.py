@@ -74,7 +74,7 @@ class TargetBook:
     actions: list[dict]              # the gate's per-asset action rows (for logging)
 
 
-def compute_target_book(profile: str = None) -> TargetBook:
+def compute_target_book(profile: str = None, results: list | None = None) -> TargetBook:
     """Run the full engine and return today's live-adjusted target weights.
 
     Mirrors ``app/overall_app.py``'s live path exactly: optimise for the chosen
@@ -82,12 +82,18 @@ def compute_target_book(profile: str = None) -> TargetBook:
     then gate the allocation with the live-exit override
     (``include_entries=True``) so a name whose live price has already broken its
     trend is dropped before we trade it.
+
+    ``results`` — an already-computed ``oc.run_universe()`` output may be passed
+    in (the publisher runs the universe once, audits its freshness, and only
+    then builds the book from the SAME audited results — no second run that
+    could silently differ from what was audited).
     """
     profile = profile or oc.DEFAULT_PROFILE
     prof = oc.RISK_PROFILES.get(profile) or oc.RISK_PROFILES[oc.DEFAULT_PROFILE]
     caps = oc.caps_for(profile)
 
-    results = oc.run_universe()
+    if results is None:
+        results = oc.run_universe()
     if not results:
         raise RuntimeError("run_universe() returned no instruments — check data feeds")
 

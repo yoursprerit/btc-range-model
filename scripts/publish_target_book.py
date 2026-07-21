@@ -21,8 +21,10 @@ unsigned (a warning is printed).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import time
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -30,13 +32,42 @@ sys.path.insert(0, str(_REPO / "app"))
 sys.path.insert(0, str(_REPO / "scripts"))
 sys.path.insert(0, str(_REPO))
 
+import pandas as pd                               # noqa: E402
 import overall_core as oc                         # noqa: E402
 import target_book as tb                          # noqa: E402
+import freshness as fr                            # noqa: E402
 from ibkr_rebalance import compute_target_book     # noqa: E402  (reuse the exact app path)
 
 DEFAULT_OUT = _REPO / "data" / "overall" / "target_book.json"
 DEFAULT_OUT_LIVE = _REPO / "data" / "overall" / "target_book_live.json"
+DEFAULT_AUDIT_OUT = _REPO / "data" / "overall" / "daily_audit.json"
 SATA_KEY = "SATA"
+AUDIT_SCHEMA = "overall-daily-audit/v1"
+AUDIT_RETRY_WAIT_S = 90          # let a detached BTC feature re-pull land, then retry
+
+
+def _write_audit(path: Path, *, audit: dict, results: list, profile: str,
+                 book_published: bool, book_info: dict | None,
+                 skip_reason: str | None) -> None:
+    """Persist the scheduled-run audit trail the 🕵️ Daily Audit tab reads."""
+    now = fr.now_utc()
+    as_of = max((str(pd.Timestamp(r["as_of"]).date()) for r in results), default="")
+    payload = dict(
+        schema=AUDIT_SCHEMA,
+        generated_at_utc=now.isoformat(timespec="seconds"),
+        generated_at_ct=fr.fmt_ct(now, seconds=True),
+        scheduled_publish=fr.SCHEDULED_PUBLISH_CT,
+        overall=dict(as_of=as_of, profile=profile,
+                     n_instruments=len(results),
+                     n_apps=len({r.get("parent") for r in results}),
+                     computed_at_utc=now.isoformat(timespec="seconds")),
+        audit=audit,
+        target_book=dict(published=bool(book_published),
+                         skip_reason=skip_reason, **(book_info or {})),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1, default=str))
+    print(f"Wrote audit trail {path}")
 
 
 def main() -> int:
@@ -51,6 +82,12 @@ def main() -> int:
                     help="also print the paper artifact to stdout")
     ap.add_argument("--no-sign", action="store_true",
                     help="do not sign even if OVERALL_BOOK_SECRET is set")
+    ap.add_argument("--audit-out", default=str(DEFAULT_AUDIT_OUT),
+                    help=f"audit-trail output path (default {DEFAULT_AUDIT_OUT})")
+    ap.add_argument("--allow-stale", action="store_true",
+                    help="publish the book even when the signal-freshness audit "
+                         "fails (default: REFUSE — stale signals are never "
+                         "published to the target book)")
     args = ap.parse_args()
 
     # The book is published EVERY day, weekends and US market holidays included:
@@ -63,9 +100,48 @@ def main() -> int:
     # from the freshest data, not one frozen at the prior week's close.
     secret = None if args.no_sign else os.environ.get("OVERALL_BOOK_SECRET")
 
-    print(f"Computing target book (live universe run, ~30–90s) — profile {args.profile}…",
-          flush=True)
-    book = compute_target_book(args.profile)
+    # ── 1. Run the universe ONCE, then AUDIT its signal freshness ────────────
+    # The Overall strategy must only be computed from every app's freshest bar:
+    # equities from the prior 4:00 PM ET close, Bitcoin from the 12:00-UTC
+    # (7:00 AM CT) bar that closed just before this scheduled run.  A failed
+    # audit gets ONE full re-run (the BTC engine kicks off a background feature
+    # re-pull on the first pass; the wait lets it land) — the "proper data /
+    # signal refresh" step.  Still stale ⇒ the book is NOT published (unless
+    # --allow-stale): stale signals never reach the target book.
+    print(f"Running the Overall universe (live fetch, ~30–90s) — profile "
+          f"{args.profile}…", flush=True)
+    results = oc.run_universe()
+    if not results:
+        raise RuntimeError("run_universe() returned no instruments — check data feeds")
+    audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS)
+    if not audit["passed"]:
+        print(f"Signal-freshness audit FAILED (stale: {audit['stale_apps']}) — "
+              f"forcing a data refresh and re-running once in "
+              f"{AUDIT_RETRY_WAIT_S}s…", flush=True)
+        time.sleep(AUDIT_RETRY_WAIT_S)
+        results = oc.run_universe() or results
+        audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS)
+    for row in audit["rows"]:
+        mark = "✅ fresh" if row["fresh"] else f"🚨 STALE ({row['age_days']}d behind)"
+        print(f"  audit {row['app']:5s} as-of {row['actual_asof']} "
+              f"(expected ≥ {row['expected_asof']})  {mark}")
+
+    if not audit["passed"] and not args.allow_stale:
+        print(f"\nAUDIT FAILED — stale signal apps: {audit['stale_apps']}. "
+              "REFUSING to publish a target book from stale signals "
+              "(the executor keeps trading the previous verified book; its own "
+              "freshness guard skips if that book is too old). "
+              "Run with --allow-stale to override.", file=sys.stderr)
+        _write_audit(Path(args.audit_out), audit=audit, results=results,
+                     profile=args.profile, book_published=False, book_info=None,
+                     skip_reason=f"signal-freshness audit failed: "
+                                 f"stale {audit['stale_apps']}")
+        return 2
+
+    # ── 2. Audit passed → compute the book from the SAME audited results ─────
+    print(f"\nAudit {'PASSED' if audit['passed'] else 'overridden (--allow-stale)'}"
+          " — computing target book…", flush=True)
+    book = compute_target_book(args.profile, results=results)
 
     if not secret:
         print("WARNING: OVERALL_BOOK_SECRET not set — writing UNSIGNED books. "
@@ -95,10 +171,25 @@ def main() -> int:
         cash_weight=0.0, exec_price=live_exec, actions=book.actions,
         book_mode="live", generated_at_utc=paper["generated_at_utc"])
 
+    # Stamp the audit verdict INTO both books (covered by the HMAC signature),
+    # so any consumer can see the signals were verified fresh at publish time.
+    _audit_stamp = dict(passed=bool(audit["passed"]),
+                        checked_at_utc=audit["checked_at_utc"],
+                        stale_apps=list(audit["stale_apps"]))
+    paper["signal_audit"] = _audit_stamp
+    live["signal_audit"] = dict(_audit_stamp)
+
     outdir = Path(args.out).parent
     outdir.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(tb.dumps(paper, secret))
     Path(args.live_out).write_text(tb.dumps(live, secret))
+
+    _write_audit(Path(args.audit_out), audit=audit, results=results,
+                 profile=args.profile, book_published=True,
+                 book_info=dict(generated_at_utc=paper["generated_at_utc"],
+                                as_of=book.as_of, profile=args.profile,
+                                signed=bool(secret)),
+                 skip_reason=None)
 
     print(f"\nTarget books (as-of {book.as_of}, profile {args.profile}):")
     print("  PAPER (idle → cash):")

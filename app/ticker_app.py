@@ -52,9 +52,10 @@ tc = ticker_core
 bt = backtest_ticker
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
-             + ["TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading",
                "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)",
+               "DAILYAUDIT": "🕵️  Daily Audit",
                "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():
@@ -165,6 +166,21 @@ if daily is None or daily.empty:
 _daily_key = f"{daily.index.max()}::{len(daily)}"
 preds, sig = get_predictions(cfg.key, _daily_key)
 completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
+
+# ── signal-freshness caption + 🕵️ Daily Audit bookkeeping ──────────────────
+# Shared helpers (app/freshness.py) so the closing date/time shown here always
+# matches the Daily Audit tab: these signals are generated upon the US market
+# close (4:00 PM ET) of the newest daily bar.
+try:
+    import freshness as _fr
+    _sig_asof = pd.Timestamp(daily.index.max())
+    st.caption(_fr.signal_close_caption("us_equity", _sig_asof))
+    _fr.record_refresh(cfg.key, kind="us_equity",
+                       app_label=f"{cfg.emoji} {cfg.key}",
+                       as_of=str(_sig_asof.date()),
+                       close_label=_fr.close_label("us_equity", _sig_asof))
+except Exception:
+    pass
 
 TRADED = cfg.traded_assets                      # [(label, col), ...]
 PRIMARY_LABEL = TRADED[0][0]
