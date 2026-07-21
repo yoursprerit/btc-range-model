@@ -96,12 +96,12 @@ _AUTOREFRESH_SECS = 45                # re-run cadence so the live price column 
 
 
 # ── app registry (shared with the router / other apps) ────────────────────
-_ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+_ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
              + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {
     "OVERALL": "🧭  Overall Trading",
     "BTC": "₿  Bitcoin (BTC)",
-    "GLDM": "🥇  Gold (GLDM)",
+    "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
     "DAILYAUDIT": "🕵️  Daily Audit",
     "TARGETBOOK": "📋  Target Book (IBKR)",
     "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
@@ -1810,7 +1810,8 @@ are summarised per app (all decided on **completed daily closes**):
 | App / signal | Traded instruments | Engine | Entry criteria | Exit criteria |
 |---|---|---|---|---|
 | ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC & MSTR signal-only, MSTU −6% stop + 5-bar V-reversal re-entry |
-| 🥇 **Gold (GLDM)** | GLDM · GDX (β) · UGL (2×) · NUGT (2×) | Hybrid: Dual-MA + Divergence | GLDM & UGL: 25-day SMA of the GLDM close crosses above the 100-day. GDX & NUGT: U1 divergence (err_hi 3d-avg > +0.15% with ≥2 high-breaks) + regime confirm | GLDM & UGL: 25-day SMA crosses back below the 100-day or −3% stop. GDX & NUGT: D2 fade (err_hi < −0.10%) or D3 exhaustion; GDX −3%, NUGT −5% |
+| 🥇 **Gold Trend (GLDM)** | GLDM · UGL (2×) | Dual-MA 25/100 | 25-day SMA of the GLDM close crosses above the 100-day (decided at the close) | 25-day SMA crosses back below the 100-day; −3% stops |
+| ⛏️ **Gold Miners (GDXM)** | GDX (β) · NUGT (2×) | Divergence Pure-Regime | U1 divergence on the GLDM signal (err_hi 3d-avg > +0.15% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.10%) or D3 exhaustion; GDX −3%, NUGT −5% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
 | ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
 | 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |

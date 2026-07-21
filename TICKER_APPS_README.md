@@ -9,7 +9,7 @@ strategy **re-derived for the specific asset**. The BTC and GLDM apps are
 Pick any app from the **Application radio at the top of the sidebar** (grey panel):
 
 ```
-₿ Bitcoin (BTC)  🥇 Gold (GLDM)  🖥️ SOXX  ⚡ GRID  🛢️ XLE  🧲 REMX  ⛏️ WGMI
+₿ Bitcoin (BTC)  🥇 Gold Trend (GLDM·UGL)  ⛏️ Gold Miners (GDX·NUGT)  🖥️ SOXX  ⚡ GRID  🛢️ XLE  🧲 REMX  ⛏️ WGMI
 ```
 
 ```bash

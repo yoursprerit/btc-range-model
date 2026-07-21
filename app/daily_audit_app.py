@@ -51,10 +51,10 @@ except Exception:
     pass
 
 # ── sidebar Application selector (same widget/key as every other app) ─────────
-_ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+_ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
              + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading", "BTC": "₿  Bitcoin (BTC)",
-               "GLDM": "🥇  Gold (GLDM)", "DAILYAUDIT": "🕵️  Daily Audit",
+               "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)", "DAILYAUDIT": "🕵️  Daily Audit",
                "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():

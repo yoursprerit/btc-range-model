@@ -35,7 +35,8 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | Signal (parent) | Instruments (kind) | Engine |
 |---|---|---|
 | ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` | CT-model Divergence · BTC & MSTR signal-exit-only, MSTU −6% |
-| 🥇 **Gold (GLDM)** | GLDM `core` · GDX `beta` · UGL `lev` · NUGT `lev` | Hybrid: GLDM/UGL dual-MA 25/100 (−3%) · GDX/NUGT Divergence Pure-Regime (−3%/−5%) |
+| 🥇 **Gold Trend (GLDM)** | GLDM `core` · UGL `lev` | Dual-MA 25/100 on the GLDM close · −3% stops |
+| ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −3% / NUGT −5% |
 | 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
 | ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
@@ -44,7 +45,8 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | ☀️ **PBW** | PBW `core` | Clean-Energy Divergence Pure-Regime |
 | 🤖 **ARTY** | ARTY `core` | AI/Tech Divergence Pure-Regime |
 
-That is **17 instruments across 9 signals**. Each runs the **exact engine its own
+That is **17 instruments across 10 parent apps** (the two gold apps share one
+GLDM-derived signal). Each runs the **exact engine its own
 app trades** (BTC/MSTR/MSTU via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
 via the Gold app's `backtest_gldm`; the ETFs via their `ticker_config` entries
 through `backtest_ticker`), so the Overall numbers match each source app
@@ -147,10 +149,11 @@ Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdow
 deepens faster than the return — which is exactly the knob these profiles expose.
 
 Committed artifact (2026-07-21, all sleeves on the causal-model retunes, the
-XLE crash-shield, and the gold middle-path hybrid — GLDM/UGL dual-MA 25/100 +
-GDX/NUGT divergence; OOS 2021→now): **Balanced +824 % / −17.1 % MDD / Sharpe
-2.48 · Growth +1,910 % / −22.5 % / 1.72 · Aggressive +2,350 % / −30.6 % /
-1.54** vs the equal-weight buy-&-hold benchmark +229 % / −35.4 % / 0.74.
+XLE crash-shield, and the gold middle path split across its two parent apps —
+🥇 Gold Trend (GLDM/UGL dual-MA 25/100) and ⛏️ Gold Miners (GDX/NUGT
+divergence); OOS 2021→now): **Balanced +852 % / −13.1 % MDD / Sharpe 2.48 ·
+Growth +1,893 % / −22.6 % / 1.71 · Aggressive +2,387 % / −30.9 % / 1.54** vs
+the equal-weight buy-&-hold benchmark +229 % / −35.4 % / 0.74.
 Reproduce with `python scripts/build_overall.py`.
 
 ### Fundamental overlay (optional)

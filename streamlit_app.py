@@ -37,10 +37,11 @@ _APP_DIR = Path(__file__).resolve().parent / "app"
 sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
-_ALL_APPS = (["OVERALL", "BTC", "GLDM"] + ticker_config.APP_KEYS
+_ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
              + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
-           "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold (GLDM)",
+           "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
+           "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
            "DAILYAUDIT": "🕵️  Daily Audit",
            "TARGETBOOK": "📋  Target Book (IBKR)",
            "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
@@ -135,7 +136,7 @@ def _run_choice():
     elif _choice == "EXECUTEDBOOK":
         # Post-rebalance report: trades executed + current IBKR positions.
         _exec_app(_APP_DIR / "executed_book_app.py")
-    elif _choice in ("BTC", "GLDM"):
+    elif _choice in ("BTC", "GLDM", "GDXM"):
         # Upgrade the original app's built-in BTC/GLDM selector to the full list,
         # without touching the app source.  Only the ``gldm_active_app`` widget is
         # rewritten; all other st.radio calls are untouched.
@@ -150,7 +151,7 @@ def _run_choice():
 
         st.radio = _patched_radio
         try:
-            _target = "gldm_hourly_app.py" if _choice == "GLDM" else "btc_hourly_app.py"
+            _target = "btc_hourly_app.py" if _choice == "BTC" else "gldm_hourly_app.py"
             _exec_app(_APP_DIR / _target)
         finally:
             st.radio = _orig_radio

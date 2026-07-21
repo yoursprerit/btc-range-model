@@ -6,8 +6,11 @@ Bitcoin app in this repo. It shares the repo's structure and philosophy but
 every feature, model and threshold is **re-derived for gold** — nothing is
 copied blindly from BTC.
 
-Select the app from the **radio button at the top of the sidebar** (grey panel):
-**₿ Bitcoin (BTC)** or **🥇 Gold (GLDM)**. The BTC application is unchanged.
+The gold stack is served by **two sibling apps** (one shared file/signal —
+the middle-path engine split): **🥇 Gold Trend (GLDM·UGL)** trades the
+dual-MA 25/100 crossover, and **⛏️ Gold Miners (GDX·NUGT)** trades the
+Divergence Pure-Regime signal. Select either from the **radio button at the
+top of the sidebar**. The BTC application is unchanged.
 
 ```
 streamlit run streamlit_app.py     # root router → pick BTC or GLDM in the sidebar

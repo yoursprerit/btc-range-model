@@ -7,22 +7,19 @@ Historical Replay tab, and per-asset Backtesting tabs.
 Gold-specific logic lives in app/gldm_core.py; models in models/gldm/*.joblib
 (trained by src/gldm/train_gldm.py).  This module never touches the BTC app.
 
-The traded universe spans the whole gold stack off ONE GLDM-derived signal
-(the gold-scaled Divergence Pure-Regime system):
+This ONE file serves TWO gold apps (selected by the router key in
+``st.session_state['gldm_active_app']``) — the middle-path engine split, both
+driven by the shared GLDM signal/forecast models:
 
-    GLDM = SPDR Gold MiniShares 1x  (signal source AND core low-beta sleeve)
-    GDX  = VanEck Gold Miners ETF   (high-beta gold — ~MSTR analog)
-    UGL  = ProShares Ultra Gold 2x  (leveraged gold — ~MSTU analog)
-    NUGT = Direxion Gold Miners 2x  (leveraged miners)
+  "GLDM" → 🥇 Gold Trend  — GLDM (1x core) & UGL (2x gold) on a SOXX-style
+            dual-MA 25/100 crossover of the GLDM close, −3% stops
+  "GDXM" → ⛏️ Gold Miners — GDX (miners) & NUGT (2x miners) on the Divergence
+            Pure-Regime signatures (U1/D2/D3/V) from GLDM's causal H/L model
 
-Tabs
-  🔴 Live              current forecast + trend-signature alert + strategy + positions
-  🕒 Historical replay replay the signals/positions as of any past date (GDX + UGL)
-  📊 GDX Backtesting   full / bull / chop performance vs buy & hold
-  📈 UGL Backtesting   full / bull / chop performance vs buy & hold
-  ⛏️ NUGT Backtesting  full / bull / chop performance vs buy & hold
-  🥇 GLDM Backtesting  the signal applied to the 1× signal source (reference)
-  🗓️ H/L & Cones       daily High/Low + 7-day & 14-day close cones
+Tabs (per app)
+  🔴 Live              current forecast + this app's engine state + positions
+  🕒 Historical replay replay the signals/positions as of any past date
+  📊/🥇 Backtesting ×2  this app's two sleeves vs buy & hold (per-engine)
   🧠 Explain           models, features, methodology, freshness, honest framing
 """
 import os
@@ -91,9 +88,16 @@ _ENGINE_LABEL = {"dual_ma": f"Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend"
 # ════════════════════════════════════════════════════════════════════════
 if "gldm_active_app" not in st.session_state:
     st.session_state["gldm_active_app"] = "GLDM"
+# ── APP MODE: this file serves TWO gold apps off the shared GLDM signal ──
+#   "GLDM" → 🥇 Gold Trend  (GLDM & UGL · dual-MA 25/100 engine)
+#   "GDXM" → ⛏️ Gold Miners (GDX & NUGT · Divergence Pure-Regime engine)
+IS_MINERS = st.session_state.get("gldm_active_app") == "GDXM"
+APP_ASSETS = ["GDX", "NUGT"] if IS_MINERS else ["GLDM", "UGL"]
 with st.sidebar:
-    st.radio("**Application**", options=["BTC", "GLDM"],
-             format_func=lambda x: "₿  Bitcoin (BTC)" if x == "BTC" else "🥇  Gold (GLDM)",
+    st.radio("**Application**", options=["BTC", "GLDM", "GDXM"],
+             format_func=lambda x: {"BTC": "₿  Bitcoin (BTC)",
+                                    "GLDM": "🥇  Gold Trend (GLDM·UGL)",
+                                    "GDXM": "⛏️  Gold Miners (GDX·NUGT)"}[x],
              key="gldm_active_app")
     st.markdown("---")
     st.markdown("**Auto-refresh:** live data cached ~5 min.")
@@ -104,16 +108,25 @@ with st.sidebar:
     st.caption("_GLDM & macro pulled from Yahoo. Gold trades US market hours; "
                "intraday bars update through the session._")
 
-st.title("🥇 GLDM — Gold forecast & trend strategy")
-st.caption(
-    "SPDR Gold MiniShares (GLDM) tracks spot gold. Models: ridge on log-returns "
-    "(hourly close), ridge H/L bands & close cones, logistic day-type — driven by "
-    "gold's real macro factors (USD index, 10-year yields, silver, VIX). "
-    f"**{gc.STRATEGY_NAME}**: the smooth trenders **GLDM & UGL** trade a "
-    f"SOXX-style dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} crossover on the "
-    "gold close, while the miners **GDX & NUGT** trade the Divergence "
-    "Pure-Regime signal — each sleeve gets the engine that suits its character."
-)
+if IS_MINERS:
+    st.title("⛏️ Gold Miners — GDX & NUGT divergence strategy")
+    st.caption(
+        "The gold-miners half of the gold middle path: **GDX** (VanEck Gold "
+        "Miners) and **NUGT** (2× miners) trade the **Divergence Pure-Regime** "
+        "signal derived from GLDM's causal daily H/L model (U1 entry, D2/D3 "
+        "exits, per-asset stops). The sibling 🥇 Gold Trend app trades GLDM & "
+        "UGL on a dual-MA crossover off the same gold close."
+    )
+else:
+    st.title("🥇 Gold Trend — GLDM & UGL dual-MA strategy")
+    st.caption(
+        "SPDR Gold MiniShares (GLDM) tracks spot gold. Models: ridge on "
+        "log-returns (hourly close), ridge H/L bands & close cones, logistic "
+        "day-type — driven by gold's real macro factors. The smooth trenders "
+        f"**GLDM & UGL** trade a SOXX-style **dual-MA {gc.DUAL_MA_FAST}/"
+        f"{gc.DUAL_MA_SLOW}** crossover on the gold close (−3% stops). The "
+        "sibling ⛏️ Gold Miners app trades GDX & NUGT on the divergence signal."
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -186,7 +199,9 @@ try:
     import freshness as _fr
     _sig_asof = pd.Timestamp(daily.index.max())
     st.caption(_fr.signal_close_caption("us_equity", _sig_asof))
-    _fr.record_refresh("GLDM", kind="us_equity", app_label="🥇 Gold (GLDM)",
+    _fr.record_refresh("GDXM" if IS_MINERS else "GLDM", kind="us_equity",
+                       app_label=("⛏️ Gold Miners (GDX·NUGT)" if IS_MINERS
+                                  else "🥇 Gold Trend (GLDM·UGL)"),
                        as_of=str(_sig_asof.date()),
                        close_label=_fr.close_label("us_equity", _sig_asof))
 except Exception:
@@ -474,37 +489,86 @@ def net_signal(sigs):
 
 
 def _stops_line() -> str:
-    """Per-asset fixed-stop summary for the strategy card. The leveraged siblings
-    are looser than the 1×/high-beta names: GDX −3% · UGL signal-only · NUGT −5%
-    (a tight 1× stop whipsaws a 2× ETF — see LEV_SIBLINGS_STOP_EVAL.md)."""
+    """Per-asset fixed-stop summary for THIS app's traded sleeves."""
     parts = []
-    for a in gc.TRADEABLE_ASSETS:
+    for a in APP_ASSETS:
         s = gc.stop_for(a)
         parts.append(f"<b>{a}</b> " + ("signal-only" if s >= 0.999 else f"−{s * 100:.0f}%"))
     return " · ".join(parts)
 
 
-def render_strategy_card():
-    """Static BTC-style strategy-description card (gold theme)."""
+def _trend_strategy_card():
+    """Gold Trend app card: the dual-MA 25/100 engine for GLDM & UGL."""
     st.markdown(f"""
 <div style='background:#fffaf0; border:2px solid #b8860b; border-radius:12px;
      padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
   <div style='font-size:15px; font-weight:800; color:#7a5901; margin-bottom:12px;
        letter-spacing:0.3px;'>
-    🥇 {gc.STRATEGY_NAME} &nbsp;—&nbsp;
-    <span style='color:#b8860b;'>GLDM signals · GLDM, GDX, UGL &amp; NUGT execution</span>
+    🥇 Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend &nbsp;—&nbsp;
+    <span style='color:#b8860b;'>GLDM signal · GLDM &amp; UGL execution</span>
   </div>
   <div style='background:#fdf0d5; border-radius:8px; padding:10px 14px; margin-bottom:12px;
        font-size:12.5px; color:#5c4400; font-weight:600;'>
-    🔁 <b>Middle-path engine split — each sleeve gets the engine that suits its
-    character:</b><br>
-    📈 <b>GLDM &amp; UGL</b> (smooth gold trenders) ride a SOXX-style
-    <b>dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}</b> crossover on the GLDM close
-    (−3% stop) — long while the fast SMA is above the slow.<br>
-    ⛏️ <b>GDX &amp; NUGT</b> (miners) trade the <b>Divergence Pure-Regime</b>
-    signatures (U1 / D2 / D3 / V-reversal below) that read GLDM's
-    predicted-vs-actual highs/lows — better Sharpe &amp; drawdown control on the
-    miners, and the chop protection (2021-22: +12%/+11% while trend sleeves dipped).
+    🔁 <b>Core idea:</b> gold trends smoothly with shallow dips, so the smooth
+    trenders <b>GLDM</b> (1× core) and <b>UGL</b> (2× gold) ride a SOXX-style
+    <b>{gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}-day dual-MA crossover</b> on the GLDM
+    close — long while the fast SMA sits above the slow, flat otherwise.  The
+    choppier miners (GDX &amp; NUGT) trade the divergence signal in the sibling
+    ⛏️ <b>Gold Miners</b> app; together they form the gold middle path.
+  </div>
+  <div style='display:flex; gap:14px; flex-wrap:wrap;'>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long GLDM &amp; UGL</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① the <b>{gc.DUAL_MA_FAST}-day SMA</b> of the GLDM close crosses
+        <b>above</b> the <b>{gc.DUAL_MA_SLOW}-day SMA</b> (decided at the close,
+        executed next bar)
+      </div>
+    </div>
+    <div style='flex:1; min-width:230px;'>
+      <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash</div>
+      <div style='font-size:12px; color:#334155; line-height:1.7;'>
+        ① the {gc.DUAL_MA_FAST}-day SMA crosses <b>back below</b> the
+        {gc.DUAL_MA_SLOW}-day SMA<br>
+        ② <b>fixed stop</b> (per asset) — {_stops_line()}
+      </div>
+    </div>
+  </div>
+  <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
+    📈 <b>Out-of-sample 2021→now:</b>
+    GLDM <b>+137%</b> · MDD −19% · Sharpe 1.08 (B&amp;H +108% / −26% / 0.83) &nbsp;|&nbsp;
+    UGL <b>+302%</b> · MDD −38% · Sharpe 0.96 (B&amp;H +151% / −50% / 0.64).
+    9–11 trades per sleeve; the 25/100 pair matches SOXX's config and sits on the
+    /100 plateau (20–50/100 all similar).
+  </div>
+</div>""", unsafe_allow_html=True)
+
+
+def render_strategy_card():
+    """Static BTC-style strategy-description card (gold theme), per app mode."""
+    if not IS_MINERS:
+        _trend_strategy_card()
+        return
+    st.markdown(f"""
+<div style='background:#fffaf0; border:2px solid #b8860b; border-radius:12px;
+     padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
+  <div style='font-size:15px; font-weight:800; color:#7a5901; margin-bottom:12px;
+       letter-spacing:0.3px;'>
+    ⛏️ Divergence Pure-Regime &nbsp;—&nbsp;
+    <span style='color:#b8860b;'>GLDM signal · GDX &amp; NUGT execution</span>
+  </div>
+  <div style='background:#fdf0d5; border-radius:8px; padding:10px 14px; margin-bottom:12px;
+       font-size:12.5px; color:#5c4400; font-weight:600;'>
+    🔁 <b>Core idea:</b> the choppier gold-miners complex rewards signal-timing
+    over trend-riding, so <b>GDX</b> (miners) and <b>NUGT</b> (2× miners) trade
+    the <b>Divergence Pure-Regime</b> signatures (U1 / D2 / D3 / V-reversal)
+    that read GLDM's predicted-vs-actual highs/lows — better Sharpe &amp;
+    drawdown control on the miners than any trend rule, and the system stayed
+    <b>net positive (+12%/+11%) through the 2021-22 chop</b>.  The smooth
+    trenders (GLDM &amp; UGL) ride a dual-MA crossover in the sibling
+    🥇 <b>Gold Trend</b> app; together they form the gold middle path.
   </div>
   <div style='background:#fdf0d5; border:1px solid #b8860b; border-radius:7px;
        padding:8px 13px; margin-bottom:12px; font-size:12px; color:#5c4400;'>
@@ -515,7 +579,7 @@ def render_strategy_card():
   <div style='display:flex; gap:14px; flex-wrap:wrap;'>
     <div style='flex:1; min-width:230px;'>
       <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long GDX, UGL &amp; NUGT</div>
+           letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long GDX &amp; NUGT</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① <b>U1 active</b> — err_hi 3d-avg &gt; +{gc.U1_ERRHI_MIN:.2f}% &amp;&amp; ≥2 high-breaks<br>
         ② <b>one gate</b>: 🐂 Bull Regime · 🧹 Clean Breakout · ⚡ V-reversal
@@ -532,13 +596,11 @@ def render_strategy_card():
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
-    📈 <b>Out-of-sample 2021→now</b> (middle path, 2026-07):
-    GLDM <i>(dual-MA)</i> <b>+137%</b> · MDD −19% · Sharpe 1.08 &nbsp;|&nbsp;
-    UGL <i>(dual-MA)</i> <b>+302%</b> · MDD −38% · Sharpe 0.96 &nbsp;|&nbsp;
-    GDX <i>(div)</i> <b>+103%</b> · MDD −22% · Sharpe 0.85 &nbsp;|&nbsp;
-    NUGT <i>(div)</i> <b>+276%</b> · MDD −38% · Sharpe 0.90.
-    Combined equal-weight stack: <b>+214%</b> · MDD −20% · Sharpe <b>1.15</b>
-    (vs all-divergence +134%/0.95, all-dual-MA +237%/0.85 at −34% MDD).
+    📈 <b>Out-of-sample 2021→now:</b>
+    GDX <b>+103%</b> · MDD −22% · Sharpe 0.85 (B&amp;H +92% / −46% / 0.51) &nbsp;|&nbsp;
+    NUGT <b>+276%</b> · MDD −38% · Sharpe 0.90 (B&amp;H +41% / −74% / 0.45).
+    Combined gold middle-path stack (both apps, equal-weight): <b>+214%</b> ·
+    MDD −20% · Sharpe <b>1.15</b>.
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -547,22 +609,25 @@ def render_conditions_box(sigs):
     """Dynamic checklist: every entry & exit condition with its live on/off
     state, and the single resolved net decision."""
     ns = net_signal(sigs)
+    if not IS_MINERS:
+        # ── Gold Trend app: the dual-MA cross IS the strategy condition ──
+        dm = dual_ma_state()
+        st.markdown(
+            f"<div style='background:{'#f0fdf4' if dm['long_now'] else '#fff7ed'};"
+            f"border:2px solid {'#86efac' if dm['long_now'] else '#fdba74'};"
+            f"border-radius:10px;padding:12px 16px;margin-bottom:8px;font-size:13.5px;"
+            f"color:#334155;'>📈 <b>Dual-MA signal (governs both sleeves):</b> "
+            f"{gc.DUAL_MA_FAST}-day SMA ${dm['fast']:,.2f} "
+            f"{'&gt;' if dm['long_now'] else '&lt;'} {gc.DUAL_MA_SLOW}-day SMA "
+            f"${dm['slow']:,.2f} ({dm['gap']:+.2f}%) → "
+            f"<b>{'🟢 LONG GLDM &amp; UGL' if dm['long_now'] else '⬜ FLAT — below trend'}</b>. "
+            f"Entries/exits execute at the next close; per-asset −3% stops guard "
+            f"open positions. The divergence signature conditions live in the "
+            f"sibling ⛏️ Gold Miners app.</div>", unsafe_allow_html=True)
+        return
     if not sigs:
         st.info("Strategy conditions unavailable — need ≥ 3 completed bars.")
         return
-    # ── dual-MA engine status (governs the GLDM & UGL sleeves) ────────────
-    dm = dual_ma_state()
-    st.markdown(
-        f"<div style='background:{'#f0fdf4' if dm['long_now'] else '#fff7ed'};"
-        f"border:1.5px solid {'#86efac' if dm['long_now'] else '#fdba74'};"
-        f"border-radius:8px;padding:8px 14px;margin-bottom:8px;font-size:12.5px;"
-        f"color:#334155;'>📈 <b>Dual-MA engine (GLDM &amp; UGL sleeves):</b> "
-        f"{gc.DUAL_MA_FAST}-day SMA ${dm['fast']:,.2f} "
-        f"{'&gt;' if dm['long_now'] else '&lt;'} {gc.DUAL_MA_SLOW}-day SMA "
-        f"${dm['slow']:,.2f} ({dm['gap']:+.2f}%) → "
-        f"<b>{'LONG' if dm['long_now'] else 'FLAT'}</b>. "
-        f"The divergence conditions below govern the <b>GDX &amp; NUGT</b> miners "
-        f"sleeves.</div>", unsafe_allow_html=True)
 
     def row(active, name, detail):
         ico = "✅" if active else "○"
@@ -1462,10 +1527,14 @@ def render_backtest_dashboard(asset):
 # ════════════════════════════════════════════════════════════════════════
 # Tabs
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_gdx, tab_ugl, tab_nugt, tab_gldm, tab_explain = st.tabs(
-    ["🔴 Live (rolling now+1h)", "🕒 Historical replay",
-     "📊 GDX Backtesting", "📈 UGL Backtesting", "⛏️ NUGT Backtesting",
-     "🥇 GLDM Backtesting", "🧠 Explain"])
+if IS_MINERS:
+    tab_live, tab_hist, tab_bt1, tab_bt2, tab_explain = st.tabs(
+        ["🔴 Live (rolling now+1h)", "🕒 Historical replay",
+         "📊 GDX Backtesting", "⛏️ NUGT Backtesting", "🧠 Explain"])
+else:
+    tab_live, tab_hist, tab_bt1, tab_bt2, tab_explain = st.tabs(
+        ["🔴 Live (rolling now+1h)", "🕒 Historical replay",
+         "🥇 GLDM Backtesting", "📈 UGL Backtesting", "🧠 Explain"])
 
 
 # ═════════════════════════════ LIVE ══════════════════════════════════════
@@ -1494,16 +1563,17 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         s = d_df[col].dropna()
         return float(s.iloc[-1]), (float(s.iloc[-1]) / float(s.iloc[-2]) - 1) * 100
 
-    gdx_px, gdx_chg = _px_chg("gdx_close")
-    ugl_px, ugl_chg = _px_chg("ugl_close")
+    a1, a2 = APP_ASSETS
+    a1_px, a1_chg = _px_chg(f"{a1.lower()}_close")
+    a2_px, a2_chg = _px_chg(f"{a2.lower()}_close")
 
-    # ── Row 1: the three asset prices + sentiment + regime ──
+    # ── Row 1: signal + this app's two traded assets + sentiment + regime ──
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("GLDM (gold) close", f"${last_px:,.2f}", f"{(last_px/prev_px-1)*100:+.2f}% d/d")
-    c2.metric("GDX · miners (traded)", f"${gdx_px:,.2f}" if gdx_px else "—",
-              f"{gdx_chg:+.2f}% d/d" if gdx_chg is not None else None)
-    c3.metric("UGL · 2× gold (traded)", f"${ugl_px:,.2f}" if ugl_px else "—",
-              f"{ugl_chg:+.2f}% d/d" if ugl_chg is not None else None)
+    c1.metric("GLDM (gold signal) close", f"${last_px:,.2f}", f"{(last_px/prev_px-1)*100:+.2f}% d/d")
+    c2.metric(f"{ASSET_LABELS[a1]} (traded)", f"${a1_px:,.2f}" if a1_px else "—",
+              f"{a1_chg:+.2f}% d/d" if a1_chg is not None else None)
+    c3.metric(f"{ASSET_LABELS[a2]} (traded)", f"${a2_px:,.2f}" if a2_px else "—",
+              f"{a2_chg:+.2f}% d/d" if a2_chg is not None else None)
     if not np.isnan(sent_now):
         mood = ("Bullish" if sent_now >= 60 else "Bearish" if sent_now <= 40 else "Neutral")
         c4.metric("Gold macro sentiment", f"{sent_now:.0f}/100", mood)
@@ -1536,21 +1606,23 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         d4c.metric("GLDM daily High (pred)", "—"); d5c.metric("GLDM daily Low (pred)", "—")
 
-    # ── trend-signature alert (the BTC-style card block) ──
-    st.markdown("### 🔔 Trend-Signature Alert  ·  _signals derived from the GLDM daily H/L model_")
-    render_gldm_signatures(sigs)
-    st.markdown("#### 🚪 Entry-gate conditions  ·  _what turns a U1 pressure signal into an actual entry_")
-    render_gldm_gate_signatures(sigs)
-
-    # ── strategy description card + live conditions checklist + positions ──
-    st.markdown(f"### 🎯 Strategy — {gc.STRATEGY_NAME}")
+    if IS_MINERS:
+        # ── trend-signature alert (the BTC-style card block) — the miners'
+        #    trading signal, derived from the GLDM daily H/L model ──
+        st.markdown("### 🔔 Trend-Signature Alert  ·  _signals derived from the GLDM daily H/L model_")
+        render_gldm_signatures(sigs)
+        st.markdown("#### 🚪 Entry-gate conditions  ·  _what turns a U1 pressure signal into an actual entry_")
+        render_gldm_gate_signatures(sigs)
+        st.markdown("### 🎯 Strategy — Divergence Pure-Regime (GDX & NUGT)")
+    else:
+        st.markdown(f"### 🎯 Strategy — Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend (GLDM & UGL)")
     render_strategy_card()
     st.markdown("#### Strategy conditions (live)")
     render_conditions_box(sigs)
     st.markdown("#### Current positions")
-    pcols = st.columns(len(gc.TRADEABLE_ASSETS))
+    pcols = st.columns(len(APP_ASSETS))
     end = None if is_live else as_of_date
-    for _asset, _pc in zip(gc.TRADEABLE_ASSETS, pcols):
+    for _asset, _pc in zip(APP_ASSETS, pcols):
         position_panel(_asset, _pc, end=end)
 
     # ── model forecast charts (hourly + Daily H/L + 7d & 14d close cones) ──
@@ -1565,8 +1637,8 @@ with tab_live:
 
 # ═════════════════════════ HISTORICAL REPLAY ═════════════════════════════
 with tab_hist:
-    st.markdown("### 🕒 Historical replay — GDX, UGL & NUGT")
-    st.caption("Replay the gold trend-signals, forecasts and all three positions exactly as "
+    st.markdown(f"### 🕒 Historical replay — {' & '.join(APP_ASSETS)}")
+    st.caption("Replay the gold signals, forecasts and this app's positions exactly as "
                "they stood at the close of any past trading day.")
     # Restrict replay to the out-of-sample window: the daily H/L model is fit on
     # the pre-2021 window, so signals/positions before 2021 would be in-sample.
@@ -1604,14 +1676,10 @@ with tab_hist:
 
 
 # ═════════════════════════ BACKTESTING TABS ══════════════════════════════
-with tab_gdx:
-    render_backtest_dashboard("GDX")
-with tab_ugl:
-    render_backtest_dashboard("UGL")
-with tab_nugt:
-    render_backtest_dashboard("NUGT")
-with tab_gldm:
-    render_backtest_dashboard("GLDM")
+with tab_bt1:
+    render_backtest_dashboard(APP_ASSETS[0])
+with tab_bt2:
+    render_backtest_dashboard(APP_ASSETS[1])
 
 
 # ═════════════════════════════ EXPLAIN ═══════════════════════════════════

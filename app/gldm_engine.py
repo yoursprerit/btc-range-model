@@ -33,11 +33,17 @@ OOS = "2021-01-01"
 _TRADING_DAYS = 252
 CAP_BY_KIND = {"core": 0.30, "beta": 0.18, "lev": 0.10}
 KIND_EMOJI = {"core": "", "beta": "⚡", "lev": "🔺"}
+# parent = the individual app that surfaces the sleeve (the middle-path split):
+#   GLDM → 🥇 Gold Trend (dual-MA)   GDXM → ⛏️ Gold Miners (divergence)
 _META = {
-    "GLDM": dict(name="Gold (GLDM)",  kind="core", col="gldm_close"),
-    "GDX":  dict(name="Gold Miners",  kind="beta", col="gdx_close"),
-    "UGL":  dict(name="2× Gold",      kind="lev",  col="ugl_close"),
-    "NUGT": dict(name="2× Gold Miners", kind="lev", col="nugt_close"),
+    "GLDM": dict(name="Gold (GLDM)",  kind="core", col="gldm_close",
+                 parent="GLDM", emoji="🥇"),
+    "GDX":  dict(name="Gold Miners",  kind="beta", col="gdx_close",
+                 parent="GDXM", emoji="⛏️"),
+    "UGL":  dict(name="2× Gold",      kind="lev",  col="ugl_close",
+                 parent="GLDM", emoji="🥇"),
+    "NUGT": dict(name="2× Gold Miners", kind="lev", col="nugt_close",
+                 parent="GDXM", emoji="⛏️"),
 }
 
 
@@ -127,6 +133,34 @@ def _load_daily() -> pd.DataFrame:
     return _attach_nugt(df)
 
 
+import threading
+
+_RUN_CACHE: dict = {}
+_RUN_LOCK = threading.Lock()
+
+
+def run_gldm_cached() -> list[dict]:
+    """One shared engine run per process/day — the two gold parent apps
+    (🥇 Gold Trend and ⛏️ Gold Miners) both consume it, so the Overall
+    universe doesn't fetch/simulate the gold stack twice."""
+    key = pd.Timestamp.utcnow().strftime("%Y-%m-%d-%H")   # hourly freshness
+    with _RUN_LOCK:
+        if _RUN_CACHE.get("key") != key:
+            _RUN_CACHE["key"] = key
+            _RUN_CACHE["out"] = run_gldm()
+        return _RUN_CACHE["out"]
+
+
+def run_gldm_trend() -> list[dict]:
+    """🥇 Gold Trend sleeves (GLDM & UGL · dual-MA 25/100)."""
+    return [r for r in run_gldm_cached() if r["parent"] == "GLDM"]
+
+
+def run_gldm_miners() -> list[dict]:
+    """⛏️ Gold Miners sleeves (GDX & NUGT · Divergence Pure-Regime)."""
+    return [r for r in run_gldm_cached() if r["parent"] == "GDXM"]
+
+
 def run_gldm() -> list[dict]:
     daily = _load_daily()
     if daily is None or daily.empty or "gldm_close" not in daily.columns:
@@ -191,8 +225,8 @@ def run_gldm() -> list[dict]:
                            dist_stop=(last_px / (e_px * (1 - stop)) - 1) * 100)
         last_trade = r["trade_log"][-1] if r.get("trade_log") else None
         out.append(dict(
-            key=key, parent="GLDM", name=meta["name"], kind=meta["kind"],
-            emoji=EMOJI, kemoji=KIND_EMOJI[meta["kind"]], accent=ACCENT,
+            key=key, parent=meta["parent"], name=meta["name"], kind=meta["kind"],
+            emoji=meta["emoji"], kemoji=KIND_EMOJI[meta["kind"]], accent=ACCENT,
             cap=CAP_BY_KIND[meta["kind"]],
             last_close=last_px, dchg=dchg, ma_val=None,
             sentiment=sent, decision=dec, alert=(sigs or {}).get("alert_level", "NEUTRAL"),
