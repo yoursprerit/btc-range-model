@@ -20,6 +20,8 @@ Tabs
   🕒 Historical replay replay the signals/positions as of any past date (GDX + UGL)
   📊 GDX Backtesting   full / bull / chop performance vs buy & hold
   📈 UGL Backtesting   full / bull / chop performance vs buy & hold
+  ⛏️ NUGT Backtesting  full / bull / chop performance vs buy & hold
+  🥇 GLDM Backtesting  the signal applied to the 1× signal source (reference)
   🗓️ H/L & Cones       daily High/Low + 7-day & 14-day close cones
   🧠 Explain           models, features, methodology, freshness, honest framing
 """
@@ -78,7 +80,9 @@ div[data-testid="stMetricValue"] { font-size: 1.4rem; }
 </style>""", unsafe_allow_html=True)
 
 ASSET_LABELS = {"GDX": "GDX · Gold Miners", "UGL": "UGL · 2× Gold",
-                "NUGT": "NUGT · 2× Gold Miners"}
+                "NUGT": "NUGT · 2× Gold Miners",
+                "GLDM": "GLDM · 1× Gold (signal source)"}
+_BT_TAB_EMOJI = {"GDX": "📊", "UGL": "📈", "NUGT": "⛏️", "GLDM": "🥇"}
 
 # ════════════════════════════════════════════════════════════════════════
 # Sidebar — application selector (shared with the BTC app) + controls
@@ -1370,9 +1374,17 @@ def _metrics_table_html(asset):
 
 def render_backtest_dashboard(asset):
     col = f"{asset.lower()}_close"
-    st.markdown(f"## {'📊' if asset == 'GDX' else '📈'} {ASSET_LABELS[asset]} — "
+    st.markdown(f"## {_BT_TAB_EMOJI.get(asset, '📊')} {ASSET_LABELS[asset]} — "
                 "Gold Signal-Driven Backtesting")
     render_strategy_card()
+    if asset == "GLDM":
+        st.info("ℹ️ **GLDM is the signal source, not a traded sleeve.** The strategy "
+                "derives its divergence signal from GLDM and executes in GDX / UGL / "
+                "NUGT (the way the BTC app trades MSTR & MSTU off the BTC signal). "
+                "This tab backtests the same signal applied to the 1× GLDM itself "
+                f"(with the −{gc.stop_for('GLDM')*100:.0f}% stop) as the reference "
+                "sleeve — historically the best risk-adjusted but lowest-return way "
+                "to trade the signal.")
     st.caption("All trades are out-of-sample: the GLDM daily H/L signal model is fit once "
                "on the pre-2021 window and predicts every later bar, so all four periods "
                "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
@@ -1417,9 +1429,10 @@ def render_backtest_dashboard(asset):
 # ════════════════════════════════════════════════════════════════════════
 # Tabs
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_gdx, tab_ugl, tab_nugt, tab_explain = st.tabs(
+tab_live, tab_hist, tab_gdx, tab_ugl, tab_nugt, tab_gldm, tab_explain = st.tabs(
     ["🔴 Live (rolling now+1h)", "🕒 Historical replay",
-     "📊 GDX Backtesting", "📈 UGL Backtesting", "⛏️ NUGT Backtesting", "🧠 Explain"])
+     "📊 GDX Backtesting", "📈 UGL Backtesting", "⛏️ NUGT Backtesting",
+     "🥇 GLDM Backtesting", "🧠 Explain"])
 
 
 # ═════════════════════════════ LIVE ══════════════════════════════════════
@@ -1565,6 +1578,8 @@ with tab_ugl:
     render_backtest_dashboard("UGL")
 with tab_nugt:
     render_backtest_dashboard("NUGT")
+with tab_gldm:
+    render_backtest_dashboard("GLDM")
 
 
 # ═════════════════════════════ EXPLAIN ═══════════════════════════════════
