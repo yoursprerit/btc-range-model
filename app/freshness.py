@@ -48,11 +48,15 @@ ET = "America/New_York"
 # US-equity app (signals from the 4:00 PM ET market close).
 PARENT_CLASS = {"BTC": "crypto"}
 
-# The daily publish is scheduled ~15 min after the Bitcoin bar close so the
-# Overall strategy sees BTC's fresh 12:00-UTC signals AND every equity app's
-# prior-session close.  Expressed in CT because that is how the user thinks of
-# it ("7:15 AM Central"); the workflow guard resolves DST via America/Chicago.
-SCHEDULED_PUBLISH_CT = "≈7:15 AM US Central (15 min after the Bitcoin bar close)"
+# The publish runs TWICE daily — ~15 min after the Bitcoin bar close (12:15
+# UTC ≈ 7:15 AM CT in summer), so the Overall strategy sees BTC's fresh
+# 12:00-UTC signals AND every equity app's prior-session close, and again ~15
+# min after the US market close (≈4:15 PM ET) so equity signals refresh on
+# their own schedule.  GitHub cron is best-effort, so each cycle has several
+# catch-up slots; the workflow guard retries until the cycle's book publishes.
+SCHEDULED_PUBLISH_CT = ("≈15 min after the Bitcoin daily-bar close (12:15 UTC) "
+                        "and ≈15 min after the US market close (≈4:15 PM ET), "
+                        "with catch-up retries until published")
 
 
 def now_utc() -> pd.Timestamp:
@@ -301,8 +305,8 @@ def read_refresh_log() -> dict:
 
 
 def load_daily_audit() -> dict | None:
-    """The last scheduled-run audit artifact (written by the 7:15-AM-CT
-    publisher, committed to the repo).  ``None`` if not present/readable."""
+    """The last scheduled-run audit artifact (written by the twice-daily
+    headless publisher, committed to the repo).  ``None`` if not present/readable."""
     try:
         return json.loads(DAILY_AUDIT_JSON.read_text())
     except Exception:

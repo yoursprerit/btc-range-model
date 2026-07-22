@@ -11,7 +11,7 @@ One user-friendly page that answers, at a glance:
 
 All times come from ONE shared source of truth (``app/freshness.py``) — the
 same helpers that render the closing date/time captions inside each individual
-app and that gate the scheduled ≈7:15 AM CT publish — so the timestamps shown
+app and that gate the scheduled twice-daily publish — so the timestamps shown
 here always match what the apps themselves display.
 
 Data sources (all light — this page never runs the heavy engine):
@@ -19,7 +19,7 @@ Data sources (all light — this page never runs the heavy engine):
   * ``runtime/freshness_log.json`` → when each app's page last refreshed in this
     deployment and which close it displayed (written by the apps on render);
   * ``data/overall/daily_audit.json`` → the audit trail written by the scheduled
-    7:15-AM-CT publisher run (committed by the GitHub Action);
+    twice-daily publisher runs (committed by the GitHub Action);
   * ``data/overall/target_book(_live).json`` → the published books' timestamps.
 """
 from __future__ import annotations
@@ -81,6 +81,28 @@ _PARENTS = [("BTC", "₿", "Bitcoin (BTC → BTC · MSTR · MSTU)"),
 _NOW = fr.now_utc()
 _LOG = fr.read_refresh_log()
 
+# The committed scheduled-run audit trail (written headlessly by the publisher
+# GitHub Action) — the fallback source for sections 1–2 whenever an app page
+# hasn't rendered in this deployment (or rendered longer ago than the last
+# scheduled run).  This removes the page's dependency on the Streamlit apps
+# being open: signals refreshed by the scheduled publisher show up here too.
+_DA = fr.load_daily_audit() or {}
+_DA_GEN = _DA.get("generated_at_utc")
+_DA_ROWS = {r.get("app"): r for r in (_DA.get("audit") or {}).get("rows") or []}
+
+
+def _scheduled_is_newer(entry: dict | None) -> bool:
+    """True when the committed scheduled-run audit is fresher than a live
+    page-render record (or no live record exists)."""
+    if not _DA_GEN:
+        return False
+    if not entry or not entry.get("recorded_at_utc"):
+        return True
+    try:
+        return pd.Timestamp(_DA_GEN) > pd.Timestamp(entry["recorded_at_utc"])
+    except Exception:
+        return False
+
 st.title("🕵️ Daily Audit — signal freshness trail")
 st.caption(f"🔄 Audit page refreshed **{fr.fmt_ct(_NOW, seconds=True)}**")
 
@@ -90,10 +112,14 @@ st.markdown(
     "the **US market close (4:00 PM ET)**. Bitcoin's daily bar closes at "
     "**12:00 UTC — 7:00 AM Central in summer (CDT), 6:00 AM in winter (CST)** — "
     "and its predictions/signals update then. The **Overall strategy** is "
-    "recomputed on a schedule **≈15 minutes after the Bitcoin bar close** "
-    "(≈7:15 AM CT in summer), after validating that every app's signals are on "
-    "their freshest bar, and the **Target Book is published immediately** "
-    "after a passing audit.")
+    "recomputed headlessly on a schedule **twice a day** — ≈15 minutes after "
+    "the Bitcoin bar close (12:15 UTC, the book the morning executor trades) "
+    "and ≈15 minutes after the US market close (≈4:15 PM ET, so equity "
+    "signals refresh on their own schedule) — after validating that every "
+    "app's signals are on their freshest bar, and the **Target Book is "
+    "published immediately** after a passing audit. Neither cycle needs the "
+    "Streamlit app to be open: the scheduled publisher retries until the "
+    "cycle's book is committed.")
 st.markdown("---")
 
 
@@ -119,16 +145,26 @@ def _stat(col, label: str, value) -> None:
 # 1 · Individual app signals — closing bar & last generation
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("### 1 · Individual app signals")
-st.caption("What each app's signals are generated from, the freshest close "
-           "available right now, and when each app's page last refreshed its "
-           "data in this deployment.")
+st.caption("What each app's signals are generated from and the freshest close "
+           "available right now. Each row shows the NEWEST refresh of that "
+           "app's signals — a live page render in this deployment or the "
+           "scheduled headless publisher run, whichever is more recent.")
 
 rows = []
 for key, emoji, label in _PARENTS:
     kind = fr.PARENT_CLASS.get(key, "us_equity")
     exp = fr.expected_asof(kind, _NOW)
     entry = _LOG.get(key) or {}
-    logged_asof = entry.get("as_of")
+    darow = _DA_ROWS.get(key)
+    if darow is not None and _scheduled_is_newer(entry):
+        # the committed scheduled-run audit is the freshest record for this app
+        logged_asof = darow.get("actual_asof")
+        close_lbl = darow.get("actual_close") or "—"
+        refreshed = f"{_DA.get('generated_at_ct', '—')} · ⚙️ scheduled run"
+    else:
+        logged_asof = entry.get("as_of")
+        close_lbl = entry.get("close_label") or "— not refreshed yet"
+        refreshed = entry.get("recorded_at_ct") or "—"
     fresh = None
     age = 0
     if logged_asof:
@@ -140,8 +176,8 @@ for key, emoji, label in _PARENTS:
                               if kind == "crypto" else
                               "US market close — 4:00 PM ET"),
         "Freshest close available now": fr.close_label(kind, exp, _NOW),
-        "Signals last generated from": (entry.get("close_label") or "— open the app once to record"),
-        "Page last refreshed": (entry.get("recorded_at_ct") or "—"),
+        "Signals last generated from": close_lbl,
+        "Signals last refreshed": refreshed,
         "Status": _status(fresh, age),
     })
 st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -154,9 +190,22 @@ st.caption("_Each app also shows this same closing date/time and page-refresh "
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("### 2 · Overall strategy")
 _ov = _LOG.get("OVERALL")
+if _DA and _scheduled_is_newer(_ov):
+    # No live Overall render since the last scheduled publisher run — show the
+    # committed headless run (same engine, same audit) instead of a blank.
+    _aud = _DA.get("audit") or {}
+    _ovr = _DA.get("overall") or {}
+    _ov = dict(as_of=_ovr.get("as_of", "—"),
+               recorded_at_ct=f"{_DA.get('generated_at_ct', '—')} · ⚙️ scheduled run",
+               profile=_ovr.get("profile", "—"),
+               n_instruments=_ovr.get("n_instruments", "—"),
+               audit_passed=bool(_aud.get("passed")),
+               stale_apps=_aud.get("stale_apps") or [],
+               audit_rows=_aud.get("rows") or [])
 if not _ov:
-    st.info("The 🧭 Overall Trading app hasn't rendered in this deployment yet — "
-            "open it once and its update time + audit verdict will appear here.")
+    st.info("No Overall run recorded yet — the scheduled publisher hasn't "
+            "committed an audit trail and the 🧭 Overall Trading app hasn't "
+            "rendered in this deployment.")
 else:
     c = st.columns([1.1, 1.6, 0.8, 0.7])
     _stat(c[0], "Signals as-of (newest bar)", _ov.get("as_of", "—"))
@@ -183,15 +232,17 @@ else:
                 for r in _arows]), hide_index=True, use_container_width=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-# 3 · Scheduled ≈7:15 AM CT publish — the committed audit trail
+# 3 · Scheduled twice-daily publish — the committed audit trail
 # ════════════════════════════════════════════════════════════════════════════
-st.markdown("### 3 · Scheduled daily refresh (≈7:15 AM CT)")
-_da = fr.load_daily_audit()
+st.markdown("### 3 · Scheduled refresh & publish (twice daily)")
+_da = _DA or None
 if not _da:
     st.info("No scheduled-run audit artifact found yet "
-            "(`data/overall/daily_audit.json`). It is written by the daily "
-            "**Publish target book** GitHub Action at ≈7:15 AM CT and committed "
-            "to the repo; it appears here after the first scheduled run.")
+            "(`data/overall/daily_audit.json`). It is written by the "
+            "**Publish target book** GitHub Action — morning cycle ≈15 min "
+            "after the Bitcoin bar close (12:15 UTC), evening cycle ≈15 min "
+            "after the US market close (≈4:15 PM ET) — and committed to the "
+            "repo; it appears here after the first scheduled run.")
 else:
     aud = _da.get("audit") or {}
     ovr = _da.get("overall") or {}
