@@ -1079,7 +1079,7 @@ _PLOT_BG = dict(plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff", hovermode="x un
 _GRID = dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False)
 
 
-def render_trend_regime_chart(d_df, key_prefix="live"):
+def render_trend_regime_chart(d_df, key_prefix="live", pos=None):
     """Price + strategy-line chart with the LONG regime shaded green — the same
     visual the Gold Trend app carries for its dual-MA cross, generalised to
     every trend mode.  The shading always comes from ``bt.trend_long_array``
@@ -1090,7 +1090,12 @@ def render_trend_regime_chart(d_df, key_prefix="live"):
       dual_ma   fast + slow SMA (the cross being traded)
       ma/ma_vol the N-day SMA (ma_vol shading also reflects the vol gate)
       macd      the context SMA (shading = histogram > 0)
-      crash_dd  the re-entry SMA + the crash-exit level (52wk-high × (1−dd))
+      crash_dd  the re-entry SMA + the rolling 52-week high + the crash-exit
+                level (52wk-high × (1−dd))
+
+    ``pos`` is the primary asset's ``bt.run_strategy`` result; when given, its
+    trade log is overlaid as ▲ entry / ▼ exit markers (GLDM-app style) so the
+    executed trades are visible on top of the regime shading.
     """
     if not cfg.is_trend:
         return
@@ -1114,6 +1119,7 @@ def render_trend_regime_chart(d_df, key_prefix="live"):
         hi52 = c.rolling(252, min_periods=60).max()
         lines = [(c.rolling(cfg.dd_reentry_ma).mean()[view],
                   f"{cfg.dd_reentry_ma}-day SMA (re-entry)", "#2563eb", None),
+                 (hi52[view], "52-week high", "#f59e0b", "dash"),
                  ((hi52 * (1 - cfg.dd_exit_pct))[view],
                   f"crash exit (−{cfg.dd_exit_pct*100:.0f}% off 52wk high)",
                   "#dc2626", "dot")]
@@ -1141,10 +1147,43 @@ def render_trend_regime_chart(d_df, key_prefix="live"):
     for s, name, col, dash in lines:
         fig.add_trace(go.Scatter(x=idx, y=s, name=name,
                                  line=dict(color=col, width=1.3, dash=dash)))
+    # ▲ entry / ▼ exit markers from the primary asset's executed trade log
+    # (same styling as the GLDM app's NAV chart), clipped to the 2-year view.
+    if pos:
+        x_min = idx.min()
+        for t in pos.get("trade_log") or []:
+            ed = pd.Timestamp(t["entry_date"]); xd = pd.Timestamp(t["exit_date"])
+            win_col = "#16a34a" if t["ret"] > 0 else "#dc2626"
+            if ed >= x_min:
+                fig.add_trace(go.Scatter(
+                    x=[ed], y=[t["entry_px"]], mode="markers", showlegend=False,
+                    marker=dict(symbol="triangle-up", size=11, color="#16a34a",
+                                line=dict(width=1.5, color="white")),
+                    hovertemplate=(f"<b>ENTRY</b> {ed:%b %d, %Y} @ "
+                                   f"${t['entry_px']:,.2f}<extra></extra>")))
+            if xd >= x_min:
+                fig.add_trace(go.Scatter(
+                    x=[xd], y=[t["exit_px"]], mode="markers", showlegend=False,
+                    marker=dict(symbol="triangle-down", size=11, color=win_col,
+                                line=dict(width=1.5, color="white")),
+                    hovertemplate=(f"<b>EXIT</b> {xd:%b %d, %Y} @ "
+                                   f"${t['exit_px']:,.2f} ({t['ret']*100:+.1f}%) "
+                                   f"— {t['reason']}<extra></extra>")))
+        if pos.get("in_pos_now") and pos.get("entry_date") is not None \
+                and pos.get("entry_px") is not None:
+            ed = pd.Timestamp(pos["entry_date"])
+            if ed >= x_min:
+                fig.add_trace(go.Scatter(
+                    x=[ed], y=[pos["entry_px"]], mode="markers", name="▲ open entry",
+                    marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
+                                line=dict(width=1.5, color="white")),
+                    hovertemplate=(f"<b>OPEN ENTRY</b> {ed:%b %d, %Y} @ "
+                                   f"${pos['entry_px']:,.2f}<extra></extra>")))
+    marker_note = " · ▲ entry / ▼ exit" if pos else ""
     fig.update_layout(
         height=300, margin=dict(l=0, r=70, t=24, b=0),
         title=dict(text=(f"{cfg.key} {sub} — green shading = long regime "
-                         "(the traded signal)"), font=dict(size=13)),
+                         f"(the traded signal){marker_note}"), font=dict(size=13)),
         yaxis_title="$", legend=dict(orientation="h", yanchor="bottom",
                                      y=1.02, xanchor="right", x=1),
         xaxis=dict(domain=[0.0, 0.9], **_GRID), yaxis=_GRID, **_PLOT_BG)
@@ -1847,7 +1886,8 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {TUI['headline']} this app trades on_")
         render_ma_signatures(mst, primary_pos)
-        render_trend_regime_chart(d_df, key_prefix=("live" if is_live else "hist"))
+        render_trend_regime_chart(d_df, key_prefix=("live" if is_live else "hist"),
+                                  pos=primary_pos)
         with st.expander("🔬 Divergence read (U1 / D2 / D3) — context only, not traded", expanded=False):
             st.caption(f"For parity with the Gold/BTC apps. {cfg.key} is traded by the "
                        f"{TUI['headline']} above, so these divergence "
