@@ -1,17 +1,17 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-21T20:57:17+00:00",
+ "generated_at_utc": "2026-07-22T04:09:41+00:00",
  "as_of": "2026-07-21",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
   "SOXX": 0.3,
   "SOXL": 0.1,
-  "XLE": 0.1840377392202933,
-  "OIH": 0.18,
+  "XLE": 0.299393372714696,
+  "OIH": 0.05980259010839193,
   "ERX": 0.1,
-  "REMX": 0.0026310881572457465,
-  "SATA": 0.13333117262246097
+  "REMX": 0.12473418389014504,
+  "SATA": 0.016069853286767022
  },
  "cash_weight": 0.0,
  "exec_price": {
@@ -28,7 +28,7 @@
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1840377392202933,
+   "target": 0.299393372714696,
    "in_pos": true,
    "priority": 0.8449445367620928
   },
@@ -44,7 +44,7 @@
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.18,
+   "target": 0.05980259010839193,
    "in_pos": true,
    "priority": 0.7631675012521634
   },
@@ -68,7 +68,7 @@
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.0026310881572457465,
+   "target": 0.12473418389014504,
    "in_pos": true,
    "priority": 0.09142857142857141
   },
@@ -163,7 +163,11 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-21T20:57:12+00:00",
+  "checked_at_utc": "2026-07-22T04:09:39+00:00",
   "stale_apps": []
+ },
+ "signature": {
+  "alg": "HMAC-SHA256",
+  "value": "1d5d7ae6e865e4827dc133843c2038f4a618e9b94d0e88d67007d88bbbbf2a5e"
  }
 }
