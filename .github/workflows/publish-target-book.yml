@@ -7,21 +7,35 @@ name: Publish target book (IBKR Option C)
 # executor next to IB Gateway can `git pull` (or fetch the raw URL) and
 # rebalance an IBKR account without running the model itself.
 #
-# SCHEDULE — ≈7:15 AM US Central every day: 15 minutes after the Bitcoin daily
-# bar closes (12:00 UTC = 7:00 AM CDT), so the Overall strategy sees BTC's
-# fresh bar AND every equity app's prior 4:00-PM-ET close. Runs EVERY day —
-# Bitcoin trades (and BTC-driven signals move) on weekends and US market
-# holidays too; the weekend/holiday guard lives ONLY on the executor side.
-# GitHub cron is UTC-only (no DST), so BOTH DST variants are scheduled and a
-# guard step keeps whichever fires at the right Central wall-clock hour:
-#   * 12:15 UTC = 7:15 AM CDT (summer) — the winter fire (6:15 AM CST) is skipped
-#   * 13:15 UTC = 7:15 AM CST (winter) — the summer fire (8:15 AM CDT) acts as a
-#     same-day RETRY slot: it runs only if today's book was not published yet
-#     (e.g. the first fire was delayed, or its audit failed and data caught up).
-# Both slots stay BEFORE the laptop executor's 09:45-ET run in BOTH DST regimes
-# (09:45 EDT = 13:45 UTC, 09:45 EST = 14:45 UTC), so the executor's `git pull`
-# always gets a fresh book. A late fire is safe: the executor's freshness guard
-# just skips rather than trading stale.
+# SCHEDULE — two publish cycles per day, every day (Bitcoin trades — and
+# BTC-driven signals move — on weekends and US market holidays too; the
+# weekend/holiday guard lives ONLY on the executor side):
+#
+#   * MORNING cycle — starts 12:15 UTC, 15 minutes after the Bitcoin daily bar
+#     closes (12:00 UTC), so the Overall strategy sees BTC's fresh bar AND every
+#     equity app's prior 4:00-PM-ET close. This is the book the 09:45-ET
+#     executor trades (09:45 EDT = 13:45 UTC, 09:45 EST = 14:45 UTC).
+#   * EVENING cycle — starts 16:15 America/New_York (≈4:15 PM ET), 15 minutes
+#     after the US market close, so equity signals are recomputed on their own
+#     intended schedule (the fresh 4-PM-ET bar) instead of waiting for the next
+#     morning, and the audit trail / Daily Audit tab stay current overnight.
+#
+# GitHub's `on: schedule` is BEST-EFFORT: fires are routinely delayed 1–2 h and
+# are sometimes dropped entirely (observed: no scheduled fire at all on some
+# days). So each cycle gets SEVERAL cron slots, and the guard below is purely
+# idempotent — every slot asks "has the current cycle's book been published
+# yet?" and publishes if not, no matter the wall-clock hour. A day can only be
+# missed if EVERY slot of both cycles is dropped. Cron is UTC-only (no DST), so
+# the evening slots cover both 4:15 PM EDT (20:15 UTC) and 4:15 PM EST
+# (21:15 UTC); the guard resolves the true cycle start via America/New_York.
+#
+# For an EXACTLY-on-time fire (optional hardening), point any external
+# scheduler (cron-job.org, Cloud Scheduler, the executor VM's crontab) at the
+# GitHub API's workflow_dispatch endpoint for this file at the desired times:
+#   curl -X POST -H "Authorization: Bearer $GH_TOKEN" \
+#     https://api.github.com/repos/OWNER/REPO/actions/workflows/publish-target-book.yml/dispatches \
+#     -d '{"ref":"main"}'
+# API dispatch fires precisely; the cron slots below then remain as backup.
 #
 # NOTE: `on: schedule` fires only from the repo's DEFAULT branch. workflow_dispatch
 # also stays, for manual runs / first tests (it bypasses the schedule guard).
@@ -29,8 +43,12 @@ name: Publish target book (IBKR Option C)
 on:
   workflow_dispatch: {}   # manual run (Actions tab → Run workflow)
   schedule:
-    - cron: "15 12 * * *"   # 7:15 AM CDT (summer); winter fire is guarded off
-    - cron: "15 13 * * *"   # 7:15 AM CST (winter); 8:15 AM CDT retry slot in summer
+    # MORNING cycle (starts 12:15 UTC) — primary slot + catch-up retries.
+    - cron: "15 12-16 * * *"   # 12:15, 13:15, 14:15, 15:15, 16:15 UTC
+    - cron: "45 12,13 * * *"   # 12:45, 13:45 UTC (dense early retries)
+    # EVENING cycle (starts 16:15 ET) — covers EDT (20:15 UTC) and EST
+    # (21:15 UTC) primaries plus one retry each.
+    - cron: "15 20-22 * * *"   # 20:15, 21:15, 22:15 UTC
 
 # contents: write to push the artifacts back to the branch; issues: write so a
 # failed run can open / update a tracking issue (see the "Report failure" step).
@@ -50,39 +68,54 @@ jobs:
       - name: Checkout (this branch)
         uses: actions/checkout@v4
 
-      - name: 7:15 AM Central schedule guard
+      - name: Publish-cycle guard (idempotent — run until published)
         id: guard
+        # Every cron slot asks the same question: "has the CURRENT cycle's book
+        # been published yet?" — and runs only if not. The morning cycle starts
+        # at 12:15 UTC (Bitcoin bar close + 15 min); the evening cycle starts at
+        # 16:15 America/New_York (US market close + 15 min). No wall-clock
+        # whitelist: an arbitrarily delayed cron fire still publishes if the
+        # cycle's book is missing, instead of silently skipping the day.
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "Manual dispatch — always runs."
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "run=true"    >> "$GITHUB_OUTPUT"
+            echo "slot=manual" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          H="$(TZ=America/Chicago date +%H)"
-          TODAY_CT="$(TZ=America/Chicago date +%F)"
-          # Was today's book already published? (jq is preinstalled on runners.)
+          NOW="$(date -u +%s)"
+          MORNING_START="$(date -u -d "$(date -u +%F) 12:15" +%s)"
+          EVENING_START="$(TZ=America/New_York date -d "$(TZ=America/New_York date +%F) 16:15" +%s)"
+          if [ "$NOW" -lt "$MORNING_START" ]; then
+            echo "Before today's 12:15-UTC morning cycle (a fire delayed past "
+            echo "midnight UTC) — yesterday's cycles are done; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "slot=none" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$NOW" -ge "$EVENING_START" ]; then
+            CYCLE_START="$EVENING_START"; SLOT="evening"
+          else
+            CYCLE_START="$MORNING_START"; SLOT="morning"
+          fi
+          echo "Current cycle: $SLOT (started $(date -u -d "@$CYCLE_START" -Iseconds))."
+          # Was this cycle's book already published? (jq is preinstalled.)
           PUBLISHED="false"
           if [ -f data/overall/daily_audit.json ]; then
             GEN_UTC="$(jq -r '.generated_at_utc // empty' data/overall/daily_audit.json || true)"
             OK="$(jq -r '.target_book.published // false' data/overall/daily_audit.json || echo false)"
-            if [ -n "$GEN_UTC" ]; then
-              GEN_CT="$(TZ=America/Chicago date -d "$GEN_UTC" +%F || true)"
-              [ "$GEN_CT" = "$TODAY_CT" ] && [ "$OK" = "true" ] && PUBLISHED="true"
+            if [ -n "$GEN_UTC" ] && [ "$OK" = "true" ]; then
+              GEN_EPOCH="$(date -u -d "$GEN_UTC" +%s || echo 0)"
+              [ "$GEN_EPOCH" -ge "$CYCLE_START" ] && PUBLISHED="true"
             fi
           fi
           if [ "$PUBLISHED" = "true" ]; then
-            echo "Today's ($TODAY_CT CT) book is already published — skipping."
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+            echo "This cycle's book is already published (at $GEN_UTC) — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No published book for this cycle yet — running."
+            echo "run=true"  >> "$GITHUB_OUTPUT"
           fi
-          # Primary slot: the 7-o'clock CT hour. Late-fire/retry window: 8–9 CT.
-          case "$H" in
-            07) echo "7 AM Central — primary publish slot."
-                echo "run=true" >> "$GITHUB_OUTPUT" ;;
-            08|09) echo "Retry/late-fire window ($H CT), book not published yet — running."
-                   echo "run=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "Central hour is $H — this is the other DST cron; skipping."
-               echo "run=false" >> "$GITHUB_OUTPUT" ;;
-          esac
+          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         if: steps.guard.outputs.run == 'true'
@@ -101,7 +134,8 @@ jobs:
       - name: Refresh BTC feature data (synchronous, guarded)
         if: steps.guard.outputs.run == 'true'
         # The BTC/MSTR/MSTU sleeve reads data/backtest/raw_features_daily.csv.
-        # Pull it fresh RIGHT NOW (the BTC bar closed at 12:00 UTC, minutes ago)
+        # Pull it fresh RIGHT NOW (the newest BTC bar closed at 12:00 UTC —
+        # minutes before the morning cycle, earlier today for the evening one)
         # so the freshness audit sees today's completed bar. The validation
         # guard restores the committed CSV on any regression, so a failed pull
         # can never poison the engine run — worst case the audit (correctly)
@@ -162,7 +196,7 @@ jobs:
             ASOF="unknown"; OK="unknown"
           fi
           git commit \
-            -m "chore(ibkr): daily 7:15am-CT publish (as-of ${ASOF}, audit passed=${OK})" \
+            -m "chore(ibkr): scheduled ${{ steps.guard.outputs.slot }}-cycle publish (as-of ${ASOF}, audit passed=${OK})" \
             -m "Automated via .github/workflows/publish-target-book.yml"
           # Tolerate a concurrent push (e.g. the data-refresh workflow) by
           # rebasing before pushing back to the branch this ran from.

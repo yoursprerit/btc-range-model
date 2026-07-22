@@ -11,10 +11,14 @@ on:
   schedule:
     # Daily at 12:03 UTC — minutes after the 12:00-UTC (7am-CT summer) daily
     # bar closes, so the newest completed BTC bar lands in the versioned CSV
-    # BEFORE the ≈7:15-AM-CT "Publish target book" run audits signal freshness.
-    # GitHub cron is best-effort; the publish workflow also re-pulls
-    # synchronously itself, so a late fire here cannot make the publish stale.
+    # BEFORE the 12:15-UTC "Publish target book" morning cycle audits signal
+    # freshness. GitHub cron is best-effort (fires get delayed or dropped), so
+    # a second slot retries an hour later — the commit step is idempotent (it
+    # commits only when the CSV actually changed). The publish workflow also
+    # re-pulls synchronously itself, so even a fully missed day here cannot
+    # make the publish stale.
     - cron: "3 12 * * *"
+    - cron: "3 13 * * *"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 # Allow the built-in token to push the refreshed data back to the branch.

@@ -446,7 +446,7 @@ with tab_live:
                     "Status": "✅ Fresh" if r["fresh"] else f"🚨 STALE ({r['age_days']}d behind)"})
             for r in _AUDIT["rows"]])
         st.dataframe(_adf, use_container_width=True, hide_index=True)
-        st.caption("The same audit gates the scheduled ≈7:15 AM CT publish: the "
+        st.caption("The same audit gates the scheduled twice-daily publish: the "
                    "Overall strategy recomputes only after every app's signals "
                    "pass this check, then the Target Book is published "
                    "immediately. See the 🕵️ **Daily Audit** app for the full "
