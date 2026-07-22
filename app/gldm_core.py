@@ -573,12 +573,18 @@ def compute_trend_signatures(completed: pd.DataFrame) -> dict | None:
 
     # MA20 regime filter (gold trends smoothly → 20-bar is the right horizon)
     d1_hist = np.zeros(n, dtype=bool); d2_hist = np.zeros(n, dtype=bool)
+    d3_hist = np.zeros(n, dtype=bool); u1_hist = np.zeros(n, dtype=bool)
+    hi_run = 0   # consecutive hi_breaks ending at the previous bar
     for i in range(n):
         s = max(0, i - 2)
         eh = np.mean(err_hi[s:i + 1]); el = np.mean(err_lo[s:i + 1])
+        hb3 = int(np.sum(hi_break[s:i + 1]))
         lb3 = int(np.sum(lo_break[s:i + 1]))
         d1_hist[i] = (lb3 >= 2) and (el > D1_ERRLO_MIN)
         d2_hist[i] = eh < D2_ERRHI_MAX
+        d3_hist[i] = (hi_run >= 3) and bool(lo_break[i])
+        u1_hist[i] = (eh > U1_ERRHI_MIN) and (hb3 >= 2)
+        hi_run = hi_run + 1 if hi_break[i] else 0
     ma_w = min(20, n)
     ma20_value = float(np.mean(c[-ma_w:]))
     ma20_5d_ago = float(np.mean(c[-(ma_w + 5):-5])) if n >= ma_w + 5 else ma20_value
@@ -639,9 +645,10 @@ def compute_trend_signatures(completed: pd.DataFrame) -> dict | None:
         consec_hi=consec_hi, alert_level=alert_level,
         dn_count=dn_count, up_count=up_count, detail_rows=detail_rows,
         n_bars=n, as_of_date=completed["target_date"].iloc[-1],
-        # Per-bar D1/D2 history (aligned to sig_dates) — the exact arrays the
-        # Clean-Breakout gate scans (clean_10d = no D1/D2 in the prior 7 bars).
-        # Exposed so the daily-H/L chart can mark where D1/D2 fired.
-        d1_hist=d1_hist, d2_hist=d2_hist,
+        # Per-bar D1/D2/D3/U1 history (aligned to sig_dates). D1/D2 are the
+        # exact arrays the Clean-Breakout gate scans (clean_10d = no D1/D2 in
+        # the prior 7 bars); D3/U1 use the same per-bar math as the current-bar
+        # triggers. Exposed so the daily-H/L chart can mark where each fired.
+        d1_hist=d1_hist, d2_hist=d2_hist, d3_hist=d3_hist, u1_hist=u1_hist,
         sig_dates=pd.to_datetime(completed["target_date"]).to_numpy(),
     )

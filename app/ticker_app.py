@@ -1159,25 +1159,38 @@ CLEAN_BREAKOUT_LOOKBACK = 7
 
 
 def _add_clean_breakout_markers(fig, sub, sigs):
-    """Overlay D1 / D2 trigger markers on the daily-H/L chart.
+    """Overlay D1 / D2 / D3 / U1 signature markers on the daily-H/L chart.
 
     ``sigs`` is the compute_trend_signatures() dict; it carries per-bar
-    ``d1_hist`` / ``d2_hist`` aligned to ``sig_dates`` — the exact arrays the
-    Clean-Breakout gate scans. D1 (downtrend / low-break pressure) is anchored to
-    the predicted-LOW line, D2 (high-momentum fade) to the predicted-HIGH line,
-    so a glance shows whether the Clean-Breakout window is clear."""
+    ``d1_hist`` / ``d2_hist`` / ``d3_hist`` / ``u1_hist`` aligned to
+    ``sig_dates``. D1 (downtrend / low-break pressure) is anchored to the
+    predicted-LOW line and D2 (high-momentum fade) to the predicted-HIGH line —
+    the exact arrays the Clean-Breakout gate scans. D3 (exhaustion canary) sits
+    on the actual LOW that broke the floor and U1 (bullish breakout pressure)
+    on the actual HIGH, so every Pure-Regime signature is visible at a glance."""
     if not sigs or sigs.get("d1_hist") is None or sigs.get("sig_dates") is None:
         return
     dts = pd.to_datetime(sigs["sig_dates"])
     d1_by = dict(zip(dts, [bool(x) for x in sigs["d1_hist"]]))
     d2_by = dict(zip(dts, [bool(x) for x in sigs["d2_hist"]]))
+    d3_by = (dict(zip(dts, [bool(x) for x in sigs["d3_hist"]]))
+             if sigs.get("d3_hist") is not None else {})
+    u1_by = (dict(zip(dts, [bool(x) for x in sigs["u1_hist"]]))
+             if sigs.get("u1_hist") is not None else {})
     d1x, d1y, d2x, d2y = [], [], [], []
+    d3x, d3y, u1x, u1y = [], [], [], []
     for _, r in sub.iterrows():
         td = pd.Timestamp(r["target_date"])
         if d1_by.get(td):
             d1x.append(td); d1y.append(r["pred_low"])
         if d2_by.get(td):
             d2x.append(td); d2y.append(r["pred_high"])
+        if d3_by.get(td):
+            d3x.append(td)
+            d3y.append(r["actual_low"] if pd.notna(r["actual_low"]) else r["pred_low"])
+        if u1_by.get(td):
+            u1x.append(td)
+            u1y.append(r["actual_high"] if pd.notna(r["actual_high"]) else r["pred_high"])
     if d1x:
         fig.add_trace(go.Scatter(
             x=d1x, y=d1y, mode="markers+text", text=["D1"] * len(d1x),
@@ -1196,6 +1209,24 @@ def _add_clean_breakout_markers(fig, sub, sigs):
             name="D2 fired — momentum fade",
             hovertemplate="%{x|%b %d}: 🔻 D2 — momentum fade "
                           "(3d-avg high undershoot)<extra></extra>"))
+    if d3x:
+        fig.add_trace(go.Scatter(
+            x=d3x, y=d3y, mode="markers+text", text=["D3"] * len(d3x),
+            textposition="bottom center", textfont=dict(size=10, color="#6d28d9"),
+            marker=dict(symbol="triangle-down", size=13, color="#7c3aed",
+                        line=dict(width=1.4, color="white")),
+            name="D3 fired — exhaustion canary",
+            hovertemplate="%{x|%b %d}: 🔻 D3 — exhaustion canary (first low-break "
+                          "after ≥3 high-break streak)<extra></extra>"))
+    if u1x:
+        fig.add_trace(go.Scatter(
+            x=u1x, y=u1y, mode="markers+text", text=["U1"] * len(u1x),
+            textposition="top center", textfont=dict(size=10, color="#15803d"),
+            marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                        line=dict(width=1.4, color="white")),
+            name="U1 fired — bullish breakout pressure",
+            hovertemplate="%{x|%b %d}: 🔼 U1 — bullish pressure (3d-avg high "
+                          "overshoot + ≥2 high-breaks)<extra></extra>"))
 
 
 def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
@@ -1247,8 +1278,8 @@ def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
     #  dedicated trend-regime chart, keeping the forecast plots clean.)
     _add_clean_breakout_markers(fig, sub, sigs)
     fig.update_layout(height=340, margin=dict(l=0, r=10, t=44, b=0),
-                      title=dict(text="📈 Daily H/L — predictions vs actuals · 🔻 D1/D2 mark the "
-                                      "Clean-Breakout window (prior 7 bars)",
+                      title=dict(text="📈 Daily H/L — predictions vs actuals · 🔻 D1/D2/D3 + 🔼 U1 "
+                                      "signature markers (D1/D2 set the Clean-Breakout window, prior 7 bars)",
                                  font=dict(size=13), x=0, xanchor="left"),
                       yaxis_title="Price ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
