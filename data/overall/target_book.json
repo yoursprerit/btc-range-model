@@ -1,34 +1,34 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-23T14:35:50+00:00",
+ "generated_at_utc": "2026-07-23T21:21:24+00:00",
  "as_of": "2026-07-23",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
   "SOXX": 0.3,
   "SOXL": 0.1,
-  "XLE": 0.1839228418197757,
+  "XLE": 0.1839839505554943,
   "OIH": 0.18,
   "ERX": 0.1,
-  "REMX": 0.0026386735226648678
+  "REMX": 0.002643248956059148
  },
- "cash_weight": 0.13343848465755948,
+ "cash_weight": 0.13337280048844657,
  "exec_price": {
-  "SOXX": 552.73,
-  "SOXL": 158.08,
-  "XLE": 60.29,
-  "OIH": 393.58,
-  "ERX": 97.62,
-  "REMX": 70.02
+  "SOXX": 551.24,
+  "SOXL": 157.5,
+  "XLE": 59.38,
+  "OIH": 382.96,
+  "ERX": 94.49,
+  "REMX": 69.53
  },
  "actions": [
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1839228418197757,
+   "target": 0.1839839505554943,
    "in_pos": true,
-   "priority": 0.8682975598544832
+   "priority": 0.8642277072265244
   },
   {
    "key": "ERX",
@@ -36,7 +36,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.867230988068489
+   "priority": 0.8629512098567256
   },
   {
    "key": "OIH",
@@ -44,7 +44,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.7863437978818167
+   "priority": 0.7818230551153577
   },
   {
    "key": "SOXL",
@@ -52,7 +52,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.5123390792614246
+   "priority": 0.5232290550740439
   },
   {
    "key": "SOXX",
@@ -60,15 +60,15 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.4756896925082475
+   "priority": 0.48641276773378084
   },
   {
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.0026386735226648678,
+   "target": 0.002643248956059148,
    "in_pos": true,
-   "priority": 0.1038095238095238
+   "priority": 0.10285714285714284
   },
   {
    "key": "GDX",
@@ -161,11 +161,11 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-23T14:35:49+00:00",
+  "checked_at_utc": "2026-07-23T21:21:23+00:00",
   "stale_apps": []
  },
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "8308d5520899e054db2bd85fd6ace69cb7e1696b3501f15fd74706cbb3e92a11"
+  "value": "44200196219debfe396db2441ff9f76a44a0da9370b518307fdfb34da7562c5f"
  }
 }
