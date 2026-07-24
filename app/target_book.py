@@ -27,11 +27,33 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
 SCHEMA = "overall-target-book/v1"
 SIG_ALG = "HMAC-SHA256"
+
+
+def prev_path(path: Path) -> Path:
+    """``target_book.json`` → ``target_book_prev.json`` (same directory)."""
+    path = Path(path)
+    return path.with_name(path.stem + "_prev" + path.suffix)
+
+
+def rotate_prev(path: Path) -> bool:
+    """Preserve the outgoing book at *path* as ``*_prev.json`` before a new one
+    lands, so the UI can always show the *Previous Targetbook* next to the
+    current one.  Returns True when a previous book was written.  Best-effort:
+    a missing/unreadable old book never blocks a publish."""
+    path = Path(path)
+    try:
+        if path.exists():
+            prev_path(path).write_text(path.read_text())
+            return True
+    except Exception:
+        pass
+    return False
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -113,8 +135,14 @@ def verify_signature(payload: dict, secret: str | None) -> tuple[bool, str]:
 
 
 def validate(payload: dict, today: pd.Timestamp, *, max_bar_age_days: int = 4,
-             max_gen_age_hours: float = 12.0) -> tuple[bool, str]:
+             max_gen_age_hours: float = 30.0) -> tuple[bool, str]:
     """(ok, reason) structural + freshness checks, independent of the broker.
+
+    The book is published ONCE daily (≈7:15 AM CT) and intentionally frozen
+    until the next morning, so the generation-age window must span a full
+    publish cycle plus slack: 30 h accepts yesterday's book when today's
+    publish was withheld by a failed audit (the documented fallback), while
+    still rejecting anything older.
 
     Rejects a wrong schema, a stale signal bar (dead feed), a book generated
     too long ago (so a forgotten/queued artifact can't trade an old decision),

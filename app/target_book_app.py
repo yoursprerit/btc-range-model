@@ -158,10 +158,13 @@ def _render_publish_button() -> None:
     clicked = cols[0].button(
         "🚀 Publish new target book", type="primary", use_container_width=True,
         disabled=not token,
-        help="Runs the **Publish target book (IBKR Option C)** GitHub Action now: "
-             "the engine recomputes today's allocation from the freshest data, "
-             "signs it, and commits the new target_book(_live).json to "
-             f"`{repo}@{ref}` — same path as the daily scheduled publish.")
+        help="The ONLY way to replace the day's frozen Targetbook before the "
+             "next 7:15-AM-CT scheduled publish. Runs the **Publish target "
+             "book (IBKR Option C)** GitHub Action now: the engine recomputes "
+             "today's allocation from the freshest data, signs it, and commits "
+             f"the new target_book(_live).json to `{repo}@{ref}` — the current "
+             "book is rotated to target_book*_prev.json (the *Previous "
+             "Targetbook* donut).")
     if not token:
         cols[1].caption(
             "_Add a `GITHUB_TOKEN` (fine-grained PAT with **Actions: write** on "
@@ -457,7 +460,10 @@ def _bucket() -> str:
 st.title("📋 Target Book (IBKR)")
 st.caption("The signed allocation the IBKR executor trades — mapped to the "
            "instruments actually traded (BTC → IBIT). **Paper** parks idle capital "
-           "as cash; **Live** parks it in a SATA position.")
+           "as cash; **Live** parks it in a SATA position. Published **once "
+           "daily at ≈7:15 AM CT** (after the daily audit) and then **frozen "
+           "until the next morning** — only the 🚀 button below replaces it "
+           "intraday.")
 
 _src = st.radio("Book source", ["📦 Published artifact", "🔬 Live preview"],
                 horizontal=True,

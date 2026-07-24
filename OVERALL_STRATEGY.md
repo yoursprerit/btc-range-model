@@ -69,7 +69,7 @@ flowchart TD
     G --> H["signal_gated_allocation()<br/>deploy only to long/opening names,<br/>tilt by entry-priority, water-fill to caps"]
     H --> I["undeployed remainder → SATA idle-cash"]
     H --> J["live_exit_keys() — drop names whose<br/>LIVE price has broken the trend"]
-    J --> K["Recommended now (live-adjusted) book<br/>+ action plan + rebalancing moves"]
+    J --> K["Recommended Live Possible Targetbook<br/>+ action plan + rebalancing moves"]
     I --> K
 ```
 
@@ -213,14 +213,22 @@ historically-optimal weight.
   deployed risk assets total 100 % when the caps allow.
 - **Whatever can't be deployed is parked in SATA.** With **no open positions the
   entire book sits in SATA**, earning its yield until a signal fires.
-- It emits three books for the donuts:
-  - **Current book** — what's held right now (optimal weights, no priority tilt).
-  - **Recommended today** — the committed last-close signals, priority-tilted.
-  - **Recommended now (live-adjusted)** — additionally drops any position whose
-    **live** price has fallen below its trend filter (`live_exit_keys` re-runs each
-    mode's real long condition — e.g. a `dual_ma` death-cross, not a naïve
-    price-vs-line proxy — so a golden-cross name isn't mis-flagged) and reallocates
-    to the survivors and SATA.
+- The Live tab's three donuts are:
+  - **Previous Targetbook** — the published book that preceded the current one
+    (`data/overall/target_book*_prev.json`, rotated at each publish).
+  - **Current Targetbook** — the *officially published* book
+    (`data/overall/target_book*.json`): all tickers as of the last US market
+    close (yesterday) and BTC · MSTR · MSTU as of the 7:00-AM-CT Bitcoin bar
+    close today. Frozen until the next 7:15-AM-CT publish (or a manual 🚀
+    publish from the UI).
+  - **Recommended Live Possible Targetbook** — the committed last-close
+    signals, priority-tilted, and additionally dropping any position whose
+    **live** price has fallen below its trend filter (`live_exit_keys` re-runs
+    each mode's real long condition — e.g. a `dual_ma` death-cross, not a naïve
+    price-vs-line proxy — so a golden-cross name isn't mis-flagged),
+    reallocating to the survivors and SATA. It can change through the day
+    because today's market and BTC bars have not closed; it becomes official
+    only when published.
 - **Action plan.** Every instrument gets a ranked action — **CLOSE** (exits
   first), then **OPEN** / **HOLD**, then **WATCH** / **STAND ASIDE** — each with
   its priority, live price, unrealised P&L vs the real entry-bar cost basis, and
@@ -292,10 +300,11 @@ The daily cycle:
 1. **12:00 UTC** — the Bitcoin bar closes; minutes later the
    *Refresh backtest dataset* workflow pulls the fresh BTC feature CSV.
 2. **≈7:15 AM US Central** — the *Publish target book* workflow runs the full
-   Overall engine. Both DST variants are scheduled (12:15 & 13:15 UTC) with an
-   `America/Chicago` guard so it always fires at the 7-o'clock Central hour
-   (with an 8–9 AM CT same-day retry slot if the first fire was delayed or its
-   audit failed).
+   Overall engine, **once per day**. Both DST variants are scheduled (12:15 &
+   13:15 UTC) with an `America/Chicago` guard so it always fires at the
+   7-o'clock Central hour (with hourly same-day catch-up slots if the first
+   fire was delayed or its audit failed — the guard skips every slot once the
+   day's book is published).
 3. **Audit before anything else** — every signal app's newest bar is validated
    against the freshest close its asset class can possibly have
    (`freshness.audit_universe`). A failed audit forces one full data refresh +
@@ -307,7 +316,16 @@ The daily cycle:
    audited results* and the Target Book is **published immediately**
    (`data/overall/target_book*.json`, HMAC-signed, with the audit verdict
    stamped into the payload), alongside the audit trail
-   (`data/overall/daily_audit.json`).
+   (`data/overall/daily_audit.json`). The outgoing book is first rotated to
+   `data/overall/target_book*_prev.json` — the *Previous Targetbook* the
+   Overall app's donuts show.
+5. **The published book is frozen for the rest of the day.** It does not
+   update again until the next morning's 7:15-AM-CT cycle; the only intraday
+   replacement is an explicit user action — the 🚀 *Publish new target book*
+   button in the 📋 Target Book app (or a manual `workflow_dispatch`), which
+   bypasses the once-per-day guard. The Overall app's **Recommended Live
+   Possible Targetbook** donut keeps updating live, but it is advisory only
+   until published.
 
 In the UI:
 

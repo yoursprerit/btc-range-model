@@ -189,7 +189,7 @@ signature, and diffs against your current paper positions:
 
 You should see the published book, `Signature: signature OK`, a freshness line,
 your `DU…` account, and the order plan. Compare it against the Overall app's
-**"Recommended now (live-adjusted)"** panel — the target weights should match.
+**"Recommended Live Possible Targetbook"** panel — the target weights should match.
 
 ### 5d. Execute against paper
 When the dry-run looks right, place the orders during US market hours:
@@ -209,7 +209,7 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--band 0.02` | widen the no-trade band (fraction of net-liq) |
 | `--fractional` | allow fractional shares (default: whole shares) |
 | `--port 4002` | IB Gateway API port (paper) |
-| `--max-age-hours 12` | reject a book generated longer ago than this |
+| `--max-age-hours 30` | reject a book generated longer ago than this (default spans the once-daily 7:15-AM-CT publish cycle) |
 | `--require-signature` | refuse an unsigned book |
 | `--force` | override the weekend/holiday & freshness guards |
 
@@ -305,7 +305,7 @@ Get-Content C:\btc-range-model\logs\ibkr_executor.log -Tail 40
 | `Could not connect to IB Gateway` | Gateway not running / not logged in, or API not enabled on port 4002. Re-check §3. |
 | Connects but `not a paper account` abort | You're on a live login. Switch IB Gateway to **Paper Trading**. (Do **not** use `--allow-nonpaper` unless you truly intend live.) |
 | `signature MISMATCH` / `no signature present…` | `OVERALL_BOOK_SECRET` on the laptop doesn't match the publisher's, or the book was edited. Re-set the secret (§4). |
-| `book generated …h ago (> 12h) — stale` | The publisher didn't run today, or the pull failed. Re-publish, `git pull`, retry. Use `--max-age-hours` only if you understand the risk. |
+| `book generated …h ago (> 30h) — stale` | The publisher didn't run today (or yesterday), or the pull failed. Re-publish, `git pull`, retry. Use `--max-age-hours` only if you understand the risk. |
 | `Not trading: … weekend/holiday` | Working as intended. `--force` overrides. |
 | `Activate.ps1 cannot be loaded` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. |
 | Scheduled task didn't run overnight | Laptop asleep without `-WakeToRun`, or on battery with battery guards. Re-check §7 power settings. |
