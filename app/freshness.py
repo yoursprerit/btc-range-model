@@ -48,15 +48,18 @@ ET = "America/New_York"
 # US-equity app (signals from the 4:00 PM ET market close).
 PARENT_CLASS = {"BTC": "crypto"}
 
-# The publish runs TWICE daily — ~15 min after the Bitcoin bar close (12:15
-# UTC ≈ 7:15 AM CT in summer), so the Overall strategy sees BTC's fresh
-# 12:00-UTC signals AND every equity app's prior-session close, and again ~15
-# min after the US market close (≈4:15 PM ET) so equity signals refresh on
-# their own schedule.  GitHub cron is best-effort, so each cycle has several
-# catch-up slots; the workflow guard retries until the cycle's book publishes.
-SCHEDULED_PUBLISH_CT = ("≈15 min after the Bitcoin daily-bar close (12:15 UTC) "
-                        "and ≈15 min after the US market close (≈4:15 PM ET), "
-                        "with catch-up retries until published")
+# The publish runs ONCE daily at ≈7:15 AM US Central — ~15 min after the
+# Bitcoin bar close (12:00 UTC = 7:00 AM CDT), so the Overall strategy sees
+# BTC's fresh 7:00-AM-CT signals AND every equity app's prior-session 4:00 PM
+# ET close.  The daily audit runs ONCE, before the book is written; the
+# published book then stays FROZEN until the next morning's cycle — only the
+# UI's 🚀 publish button (a manual workflow dispatch) replaces it intraday.
+# GitHub cron is best-effort, so the cycle has several catch-up slots; the
+# workflow guard retries until the day's book publishes.
+SCHEDULED_PUBLISH_CT = ("once daily at ≈7:15 AM US Central (≈15 min after the "
+                        "7:00-AM-CT Bitcoin daily-bar close), with catch-up "
+                        "retries until published; frozen until the next "
+                        "morning unless manually re-published from the UI")
 
 
 def now_utc() -> pd.Timestamp:
@@ -305,7 +308,7 @@ def read_refresh_log() -> dict:
 
 
 def load_daily_audit() -> dict | None:
-    """The last scheduled-run audit artifact (written by the twice-daily
+    """The last scheduled-run audit artifact (written by the once-daily
     headless publisher, committed to the repo).  ``None`` if not present/readable."""
     try:
         return json.loads(DAILY_AUDIT_JSON.read_text())

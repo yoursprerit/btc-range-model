@@ -118,8 +118,11 @@ def main() -> int:
     ap.add_argument("--client-id", type=int, default=18)
     ap.add_argument("--fill-timeout", type=float, default=60.0,
                     help="seconds to wait for each order leg to fill")
-    ap.add_argument("--max-age-hours", type=float, default=12.0,
-                    help="reject a book generated more than this many hours ago")
+    ap.add_argument("--max-age-hours", type=float, default=30.0,
+                    help="reject a book generated more than this many hours ago "
+                         "(default 30 — spans the once-daily 7:15-AM-CT publish "
+                         "cycle, so yesterday's book still trades when today's "
+                         "publish was withheld by a failed audit)")
     ap.add_argument("--require-signature", action="store_true",
                     help="abort unless the book carries a valid signature")
     ap.add_argument("--force", action="store_true",

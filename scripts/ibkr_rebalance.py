@@ -3,7 +3,7 @@
 Pushes the Overall app's *live-adjusted* target book into an Interactive Brokers
 paper account and reconciles it against the account's current positions, once per
 trading day.  It reuses the exact same computation the Streamlit app renders — so
-the paper account mirrors the "Recommended now (live-adjusted)" allocation you
+the paper account mirrors the "Recommended Live Possible Targetbook" allocation you
 see on screen — and never re-implements any signal logic:
 
     results   = overall_core.run_universe()                     # every strategy, live

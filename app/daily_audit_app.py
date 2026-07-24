@@ -11,15 +11,15 @@ One user-friendly page that answers, at a glance:
 
 All times come from ONE shared source of truth (``app/freshness.py``) — the
 same helpers that render the closing date/time captions inside each individual
-app and that gate the scheduled twice-daily publish — so the timestamps shown
-here always match what the apps themselves display.
+app and that gate the scheduled once-daily 7:15-AM-CT publish — so the
+timestamps shown here always match what the apps themselves display.
 
 Data sources (all light — this page never runs the heavy engine):
   * the live clock → the freshest close each asset class can possibly have now;
   * ``runtime/freshness_log.json`` → when each app's page last refreshed in this
     deployment and which close it displayed (written by the apps on render);
   * ``data/overall/daily_audit.json`` → the audit trail written by the scheduled
-    twice-daily publisher runs (committed by the GitHub Action);
+    once-daily publisher run (committed by the GitHub Action);
   * ``data/overall/target_book(_live).json`` → the published books' timestamps.
 """
 from __future__ import annotations
@@ -112,14 +112,16 @@ st.markdown(
     "the **US market close (4:00 PM ET)**. Bitcoin's daily bar closes at "
     "**12:00 UTC — 7:00 AM Central in summer (CDT), 6:00 AM in winter (CST)** — "
     "and its predictions/signals update then. The **Overall strategy** is "
-    "recomputed headlessly on a schedule **twice a day** — ≈15 minutes after "
-    "the Bitcoin bar close (12:15 UTC, the book the morning executor trades) "
-    "and ≈15 minutes after the US market close (≈4:15 PM ET, so equity "
-    "signals refresh on their own schedule) — after validating that every "
-    "app's signals are on their freshest bar, and the **Target Book is "
-    "published immediately** after a passing audit. Neither cycle needs the "
-    "Streamlit app to be open: the scheduled publisher retries until the "
-    "cycle's book is committed.")
+    "recomputed headlessly on a schedule **once a day at ≈7:15 AM US Central** "
+    "— ≈15 minutes after the Bitcoin bar close, so it sees BTC's fresh "
+    "7:00-AM-CT bar and every equity app's prior 4:00-PM-ET close. The **daily "
+    "audit runs ONCE, first**: every app's signals are validated as being on "
+    "their freshest bar, and only then is the **Target Book published "
+    "immediately**. The published book then stays **frozen until the next "
+    "morning's cycle** — only the 🚀 *Publish new target book* button in the "
+    "📋 Target Book app (a manual workflow run) replaces it intraday. The "
+    "cycle doesn't need the Streamlit app to be open: the scheduled publisher "
+    "retries until the day's book is committed.")
 st.markdown("---")
 
 
@@ -232,16 +234,15 @@ else:
                 for r in _arows]), hide_index=True, use_container_width=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-# 3 · Scheduled twice-daily publish — the committed audit trail
+# 3 · Scheduled once-daily publish — the committed audit trail
 # ════════════════════════════════════════════════════════════════════════════
-st.markdown("### 3 · Scheduled refresh & publish (twice daily)")
+st.markdown("### 3 · Scheduled refresh & publish (once daily, ≈7:15 AM CT)")
 _da = _DA or None
 if not _da:
     st.info("No scheduled-run audit artifact found yet "
             "(`data/overall/daily_audit.json`). It is written by the "
-            "**Publish target book** GitHub Action — morning cycle ≈15 min "
-            "after the Bitcoin bar close (12:15 UTC), evening cycle ≈15 min "
-            "after the US market close (≈4:15 PM ET) — and committed to the "
+            "**Publish target book** GitHub Action — once daily, ≈15 min "
+            "after the 7:00-AM-CT Bitcoin bar close — and committed to the "
             "repo; it appears here after the first scheduled run.")
 else:
     aud = _da.get("audit") or {}
