@@ -148,9 +148,11 @@ def _stat(col, label: str, value) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("### 1 · Individual app signals")
 st.caption("What each app's signals are generated from and the freshest close "
-           "available right now. Each row shows the NEWEST refresh of that "
-           "app's signals — a live page render in this deployment or the "
-           "scheduled headless publisher run, whichever is more recent.")
+           "available right now. **Signals last refreshed** counts only a "
+           "refresh computed from the *freshest close available now* (a live "
+           "page render in this deployment or the scheduled headless publisher "
+           "run, whichever is more recent) — an app still sitting on an older "
+           "close shows no refresh time and a 🚨 STALE status.")
 
 rows = []
 for key, emoji, label in _PARENTS:
@@ -161,26 +163,27 @@ for key, emoji, label in _PARENTS:
     if darow is not None and _scheduled_is_newer(entry):
         # the committed scheduled-run audit is the freshest record for this app
         logged_asof = darow.get("actual_asof")
-        close_lbl = darow.get("actual_close") or "—"
         refreshed = f"{_DA.get('generated_at_ct', '—')} · ⚙️ scheduled run"
     else:
         logged_asof = entry.get("as_of")
-        close_lbl = entry.get("close_label") or "— not refreshed yet"
         refreshed = entry.get("recorded_at_ct") or "—"
     fresh = None
     age = 0
     if logged_asof:
         fresh = pd.Timestamp(logged_asof) >= exp
         age = max((exp - pd.Timestamp(logged_asof)).days, 0)
+    if not fresh:
+        # only a refresh computed from the freshest available close counts —
+        # a stale (or unrecorded) app shows no refresh time at all
+        refreshed = "— not refreshed on this close yet"
     rows.append({
         "App": f"{emoji} {label}",
+        "Status": _status(fresh, age),
         "Signals update at": ("Bitcoin daily-bar close — 12:00 UTC (7:00 AM CDT / 6:00 AM CST)"
                               if kind == "crypto" else
                               "US market close — 4:00 PM ET"),
         "Freshest close available now": fr.close_label(kind, exp, _NOW),
-        "Signals last generated from": close_lbl,
         "Signals last refreshed": refreshed,
-        "Status": _status(fresh, age),
     })
 st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 st.caption("_Each app also shows this same closing date/time and page-refresh "
