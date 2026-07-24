@@ -446,11 +446,12 @@ with tab_live:
                     "Status": "✅ Fresh" if r["fresh"] else f"🚨 STALE ({r['age_days']}d behind)"})
             for r in _AUDIT["rows"]])
         st.dataframe(_adf, use_container_width=True, hide_index=True)
-        st.caption("The same audit gates the scheduled twice-daily publish: the "
-                   "Overall strategy recomputes only after every app's signals "
-                   "pass this check, then the Target Book is published "
-                   "immediately. See the 🕵️ **Daily Audit** app for the full "
-                   "trail.")
+        st.caption("The same audit gates the scheduled once-daily publish "
+                   "(≈7:15 AM CT): the audit runs ONCE, the Overall strategy "
+                   "recomputes only after every app's signals pass this check, "
+                   "and the Target Book is then published immediately — and "
+                   "stays frozen until the next morning. See the 🕵️ **Daily "
+                   "Audit** app for the full trail.")
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
     pcomp = {r["name"]: r for r in get_profile_comparison(_bucket(), _use_fund)}
@@ -512,7 +513,8 @@ with tab_live:
 
     # live-adjusted allocation (drops MA instruments whose live price is below the
     # trend filter → they exit next bar) — used by the action table's Live target
-    # columns and by the "Recommended now" pie below. include_entries flags fresh
+    # columns and by the "Recommended Live Possible Targetbook" pie below.
+    # include_entries flags fresh
     # buys that would open into an already-broken trend as well as current holds.
     _live_exits = ov.live_exit_keys(results, _spot, include_entries=True)
     try:
@@ -522,17 +524,20 @@ with tab_live:
     except Exception:
         gate_live = gate
 
-    # ── 1. OPTIMAL ALLOCATION TODAY vs CURRENT BOOK ─────────────────────
-    st.markdown("### 📐 Optimal allocation for today")
-    st.caption("**Current book** = what the strategy holds right now. "
-               "**Recommended today** = the book after today's *committed* "
-               "(last-close) signals — risk assets sized by the optimal weights "
-               "tilted by entry priority (caps: 30% core, 18% high-beta, 10% "
-               "leveraged); the remainder sits in **SATA**. **Recommended now "
-               "(live-adjusted)** additionally drops any position whose *live* "
-               "price has fallen below its trend filter — it still holds today "
-               "but exits on the next bar — and reallocates that capital to the "
-               "survivors and SATA.")
+    # ── 1. TARGETBOOKS — previous & current (as published) vs live view ──
+    st.markdown("### 📐 Targetbooks — published vs live recommendation")
+    st.caption("**Previous Targetbook** = the book that was published before the "
+               "current one. **Current Targetbook** = the *officially published* "
+               "book the IBKR executor trades — all tickers as of the last US "
+               "market close (yesterday, 4:00 PM ET) and BTC · MSTR · MSTU as of "
+               "the **7:00 AM CT Bitcoin bar close today**. It is published "
+               "**once** daily at ≈7:15 AM CT (right after the daily audit) and "
+               "does **not** change during the day — only the 🚀 **Publish new "
+               "target book** button in the 📋 Target Book app (or a manual "
+               "workflow run) replaces it. **Recommended Live Possible "
+               "Targetbook** = what a publish right now would recommend; it can "
+               "drift through the day because today's market bar and BTC bar "
+               "have not closed yet.")
     # (_live_exits / gate_live computed above, before the action table)
     ac = st.columns([1, 1, 1])
 
@@ -541,9 +546,10 @@ with tab_live:
         for kk, vv in sorted(alloc.items(), key=lambda x: -x[1]):
             if vv <= 0.0005:
                 continue
-            tag = {"lev": " 2×", "beta": " β"}.get(by_key[kk]["kind"], "")
+            meta = by_key.get(kk) or ov.ASSET_META.get(kk, {})
+            tag = {"lev": " 2×", "beta": " β"}.get(meta.get("kind"), "")
             labels.append(f"{kk}{tag}"); vals.append(vv * 100)
-            colors.append(by_key[kk]["accent"])
+            colors.append(meta.get("accent") or "#94a3b8")
         if sata > 0.005:
             labels.append("SATA"); vals.append(sata * 100); colors.append("#334155")
         if not vals:
@@ -557,14 +563,69 @@ with tab_live:
                           height=320, margin=dict(t=40, b=10, l=10, r=10))
         return fig
 
-    _live_title = ("Recommended now (live-adjusted)" if _live_exits
-                   else "Recommended now (live) — no pending exits")
-    ac[0].plotly_chart(_alloc_donut(gate["current"], gate["sata_now"],
-                                    "Current book"), use_container_width=True)
-    ac[1].plotly_chart(_alloc_donut(gate["target"], gate["sata"],
-                                    "Recommended today"), use_container_width=True)
-    ac[2].plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
-                                    _live_title), use_container_width=True)
+    def _load_published_book(*paths: Path) -> dict | None:
+        """First readable published-book payload among *paths* (None if none)."""
+        import json as _json
+        for _p in paths:
+            try:
+                if _p.exists():
+                    return _json.loads(_p.read_text())
+            except Exception:
+                continue
+        return None
+
+    def _book_alloc(payload: dict) -> tuple[dict, float]:
+        """(risk_weights, idle_weight) from a published book — LIVE books park
+        idle capital as a SATA weight, PAPER books as cash_weight."""
+        w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
+        idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
+        return w, idle
+
+    _TB_DIR = _REPO_ROOT / "data" / "overall"
+    _prev_book = _load_published_book(_TB_DIR / "target_book_live_prev.json",
+                                      _TB_DIR / "target_book_prev.json")
+    _cur_book = _load_published_book(_TB_DIR / "target_book_live.json",
+                                     _TB_DIR / "target_book.json")
+
+    with ac[0]:
+        if _prev_book:
+            _pw, _pidle = _book_alloc(_prev_book)
+            st.plotly_chart(_alloc_donut(_pw, _pidle, "Previous Targetbook"),
+                            use_container_width=True)
+            st.caption(f"Signal bar **{_prev_book.get('as_of', '—')}** · profile "
+                       f"**{_prev_book.get('profile', '—')}** · published "
+                       f"**{fr.fmt_ct(_prev_book.get('generated_at_utc'))}**")
+        else:
+            st.info("**Previous Targetbook** — none recorded yet. It appears "
+                    "after the next publish rotates the current book out "
+                    "(`target_book*_prev.json`).")
+    with ac[1]:
+        if _cur_book:
+            _cw, _cidle = _book_alloc(_cur_book)
+            st.plotly_chart(_alloc_donut(_cw, _cidle, "Current Targetbook"),
+                            use_container_width=True)
+            st.caption(f"All tickers as of **yesterday's market close**, BTC bar "
+                       f"close **7:00 AM CT today** — signal bar "
+                       f"**{_cur_book.get('as_of', '—')}** · profile "
+                       f"**{_cur_book.get('profile', '—')}** · published "
+                       f"**{fr.fmt_ct(_cur_book.get('generated_at_utc'))}** · "
+                       f"frozen until the next 7:15 AM CT publish (or a manual "
+                       f"🚀 publish).")
+        else:
+            st.info("**Current Targetbook** — no published book found "
+                    "(`data/overall/target_book*.json`). Run the **Publish "
+                    "target book** workflow or the 🚀 button in the 📋 Target "
+                    "Book app.")
+    with ac[2]:
+        st.plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
+                                     "Recommended Live Possible Targetbook"),
+                        use_container_width=True)
+        st.caption("⚡ Live recommendation — **could change** until today's "
+                   "market-day bar (4:00 PM ET) and BTC bar (7:00 AM CT "
+                   "tomorrow) close; it becomes official only when published "
+                   "as a Targetbook."
+                   + (" **Live-adjusted:** pending exits removed." if _live_exits
+                      else " No pending live exits."))
     if _live_exits:
         st.warning("⚠️ **Live-adjusted:** " + ", ".join(sorted(_live_exits)) +
                    " " + ("is" if len(_live_exits) == 1 else "are") +
@@ -573,12 +634,14 @@ with tab_live:
                    ("it" if len(_live_exits) == 1 else "they") +
                    " won't hold — " + ("it exits" if len(_live_exits) == 1
                                         else "they exit") +
-                   " on the next bar. The **Recommended now** pie removes "
+                   " on the next bar. The **Recommended Live Possible "
+                   "Targetbook** pie removes "
                    + ("it" if len(_live_exits) == 1 else "them") +
                    " and reallocates to the survivors and SATA.")
     else:
         st.caption("No held position's live price is below its trend filter — the "
-                   "live-adjusted book matches **Recommended today**.")
+                   "**Recommended Live Possible Targetbook** matches the book "
+                   "today's committed signals would publish.")
 
     # ── 1b. USER INCLUDE / EXCLUDE overlay on the live-adjusted book ─────
     # Same control as the 📋 Target Book viewer: untick a position and its weight
@@ -614,7 +677,7 @@ with tab_live:
                 f"Deployed {_adj_dep*100:.0f}% · SATA {_adj_sata*100:.0f}%.")
         ac2 = st.columns([1, 1, 1])
         ac2[1].plotly_chart(_alloc_donut(_adj_target, _adj_sata,
-                            "Recommended now (your selection)"),
+                            "Recommended Live (your selection)"),
                             use_container_width=True)
 
     _moves_label = ("current book → your selection" if _excluded
