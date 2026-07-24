@@ -442,9 +442,11 @@ def _live_payload(profile: str, bucket: str) -> dict:
     from ibkr_rebalance import compute_target_book
     _had = os.environ.get(fr.COMPLETED_BARS_ENV)
     os.environ[fr.COMPLETED_BARS_ENV] = "1"
+    _anchor = fr.publish_anchor_ct()
     try:
         results = ov.run_universe()
-        audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS)
+        audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS,
+                                  expected_now=_anchor)
         book = compute_target_book(profile, results=results, live_adjust=False)
     finally:
         if _had is None:
@@ -457,6 +459,11 @@ def _live_payload(profile: str, bucket: str) -> dict:
     payload["signal_audit"] = dict(passed=bool(audit["passed"]),
                                    checked_at_utc=audit["checked_at_utc"],
                                    stale_apps=list(audit["stale_apps"]))
+    payload["signal_basis"] = dict(
+        anchor_ct=fr.fmt_ct(_anchor),
+        equity_close=str(fr.expected_equity_asof(_anchor).date()),
+        btc_bar_close_utc=fr.close_moment(
+            "crypto", fr.expected_crypto_asof(_anchor)).isoformat())
     return payload
 
 

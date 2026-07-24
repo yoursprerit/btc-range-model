@@ -257,11 +257,12 @@ def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:
     # forward-fill macro / analog columns across holidays (limit ~5 days)
     macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
     df[macro_cols] = df[macro_cols].ffill(limit=5)
-    # publisher mode: trim the in-progress *today* bar so a published Target
-    # Book only ever sees completed 4:00-PM-ET closes (see app/freshness.py).
+    # publisher mode: trim every US bar after the publish day's 7:15-AM-CT
+    # anchor basis session, so a published Target Book only ever sees the
+    # pre-anchor market close (see app/freshness.py).
     import freshness as _fr
     if _fr.completed_bars_only():
-        df = _fr.drop_in_progress_us_bar(df)
+        df = _fr.drop_in_progress_us_bar(df, _fr.publish_anchor_ct())
     return df
 
 

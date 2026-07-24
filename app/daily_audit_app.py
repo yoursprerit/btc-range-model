@@ -119,7 +119,10 @@ st.markdown(
     "their freshest bar, and only then is the **Target Book published "
     "immediately**. The published book then stays **frozen until the next "
     "morning's cycle** — only the 🚀 *Publish new target book* button in the "
-    "📋 Target Book app (a manual workflow run) replaces it intraday. The "
+    "📋 Target Book app (a manual workflow run) replaces it intraday, and "
+    "even that re-publish keeps the same 7:15-AM-anchored data basis: signal "
+    "changes after the US market close show up only in the Overall app's "
+    "live view, never in the published book, until the next morning. The "
     "cycle doesn't need the Streamlit app to be open: the scheduled publisher "
     "retries until the day's book is committed.")
 st.markdown("---")
