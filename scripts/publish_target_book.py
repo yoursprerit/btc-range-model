@@ -101,15 +101,20 @@ def main() -> int:
     secret = None if args.no_sign else os.environ.get("OVERALL_BOOK_SECRET")
 
     # ── 1. Run the universe ONCE, then AUDIT its signal freshness ────────────
-    # The Overall strategy must only be computed from every app's freshest bar:
-    # equities from the prior 4:00 PM ET close, Bitcoin from the 12:00-UTC
-    # (7:00 AM CT) bar that closed just before this scheduled run.  A failed
-    # audit gets ONE full re-run (the BTC engine kicks off a background feature
-    # re-pull on the first pass; the wait lets it land) — the "proper data /
-    # signal refresh" step.  Still stale ⇒ the book is NOT published (unless
-    # --allow-stale): stale signals never reach the target book.
-    print(f"Running the Overall universe (live fetch, ~30–90s) — profile "
-          f"{args.profile}…", flush=True)
+    # The Overall strategy must only be computed from every app's freshest
+    # COMPLETED bar: equities from the prior 4:00 PM ET close, Bitcoin from the
+    # 12:00-UTC (7:00 AM CT) bar that closed just before this scheduled run.
+    # The completed-bars-only flag makes the daily fetchers trim any
+    # in-progress *today* equity bar, so a delayed catch-up run or a manual 🚀
+    # publish fired mid-session still produces the same close-based book the
+    # 7:15-AM-CT run would have.  A failed audit gets ONE full re-run (the BTC
+    # engine kicks off a background feature re-pull on the first pass; the wait
+    # lets it land) — the "proper data / signal refresh" step.  Still stale ⇒
+    # the book is NOT published (unless --allow-stale): stale signals never
+    # reach the target book.
+    os.environ[fr.COMPLETED_BARS_ENV] = "1"
+    print(f"Running the Overall universe (live fetch, ~30–90s, completed bars "
+          f"only) — profile {args.profile}…", flush=True)
     results = oc.run_universe()
     if not results:
         raise RuntimeError("run_universe() returned no instruments — check data feeds")
@@ -139,9 +144,12 @@ def main() -> int:
         return 2
 
     # ── 2. Audit passed → compute the book from the SAME audited results ─────
+    # live_adjust=False: the PUBLISHED book is the committed last-close
+    # allocation only (no live-spot exit override), so it matches the Overall
+    # app's action plan and stays reproducible for the whole frozen day.
     print(f"\nAudit {'PASSED' if audit['passed'] else 'overridden (--allow-stale)'}"
-          " — computing target book…", flush=True)
-    book = compute_target_book(args.profile, results=results)
+          " — computing target book (committed close signals)…", flush=True)
+    book = compute_target_book(args.profile, results=results, live_adjust=False)
 
     if not secret:
         print("WARNING: OVERALL_BOOK_SECRET not set — writing UNSIGNED books. "

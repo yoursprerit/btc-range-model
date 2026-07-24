@@ -316,9 +316,19 @@ The daily cycle:
    audited results* and the Target Book is **published immediately**
    (`data/overall/target_book*.json`, HMAC-signed, with the audit verdict
    stamped into the payload), alongside the audit trail
-   (`data/overall/daily_audit.json`). The outgoing book is first rotated to
+   (`data/overall/daily_audit.json`). The published book is built from
+   **committed completed closes only**: the publisher sets the
+   completed-bars-only flag (`OVERALL_COMPLETED_BARS_ONLY`) so the daily
+   fetchers trim any in-progress intraday bar, and it skips the live-exit
+   spot override (`live_adjust=False`) — so the book always equals the
+   last-close targets the Overall app's action plan shows, even when a
+   catch-up or manual publish fires mid-session. A signal app that fails to
+   load entirely also fails the audit (a reduced universe is never
+   published). The outgoing book is rotated to
    `data/overall/target_book*_prev.json` — the *Previous Targetbook* the
-   Overall app's donuts show.
+   Overall app's donuts show — but **only at the first publish of a new
+   Central-time day**: an intraday 🚀 re-publish replaces the current book
+   while leaving yesterday's book in the prev slot.
 5. **The published book is frozen for the rest of the day.** It does not
    update again until the next morning's 7:15-AM-CT cycle; the only intraday
    replacement is an explicit user action — the 🚀 *Publish new target book*
