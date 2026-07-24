@@ -8,6 +8,9 @@ signal, so the combined book spans every instrument across all apps.
 
   🔴 Live — Decision Cockpit   what to CLOSE / OPEN / HOLD today, the optimal %
                                 allocation, and the strategy's current book.
+  🕰️ Historical View            the same overall view reconstructed for any
+                                calendar date — the book, positions and open/
+                                close events as they stood at that day's close.
   📊 Combined Backtesting       the historically-optimal blend of all the
                                 instruments' signal-driven strategies vs the
                                 obvious benchmarks, per-window and per-instrument.
@@ -77,6 +80,8 @@ def _stale_core(mod) -> bool:
         if not hasattr(mod, "per_asset_slice_metrics"):
             return True
         if not hasattr(mod, "overall_trade_stats"):
+            return True
+        if not hasattr(mod, "snapshot_asof"):
             return True
         return False
     except (ValueError, TypeError, AttributeError):
@@ -405,9 +410,9 @@ def _pct(x, digits=1):
     return "—" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{x:+.{digits}f}%"
 
 
-tab_live, tab_bt, tab_explain = st.tabs(
-    ["🔴 Live — Decision Cockpit", "📊 Combined Backtesting",
-     "🧠 Strategy & Methodology"])
+tab_live, tab_hist, tab_bt, tab_explain = st.tabs(
+    ["🔴 Live — Decision Cockpit", "🕰️ Historical View",
+     "📊 Combined Backtesting", "🧠 Strategy & Methodology"])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1654,7 +1659,225 @@ with tab_live:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# TAB 2 — COMBINED BACKTESTING
+# TAB 2 — HISTORICAL VIEW (the strategy as it stood on a chosen date)
+# ══════════════════════════════════════════════════════════════════════════
+with tab_hist:
+    st.markdown("### 🕰️ Historical View — the strategy as it stood on a chosen date")
+    st.caption("Pick any date from the calendar and see the overall strategy "
+               "exactly as it stood at that day's completed close — the positions "
+               "it held (with entry, days held and unrealised P&L **marked at that "
+               "bar**, not at today's price), what it opened and closed on that "
+               "bar, the book it was holding and its performance up to that point. "
+               "Everything is read off the committed back-test series — the same "
+               "engines the 🔴 Live tab runs — so this is the decision the strategy "
+               "actually took on that date: no re-fit, no hindsight. Follows the "
+               f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
+               "toggle selected on the Live tab.")
+
+    _h_curve = _PF["curves"]["Optimal blend"]
+    _h_d0, _h_d1 = _h_curve.index[0].date(), _h_curve.index[-1].date()
+    _h_top = st.columns([1, 1, 2])
+    with _h_top[0]:
+        _h_sel = st.date_input(
+            "📅 View date", value=_h_d1, min_value=_h_d0, max_value=_h_d1,
+            key="overall_hist_date",
+            help="Weekends and holidays roll back to each instrument's last "
+                 "completed bar on or before this date. Data runs "
+                 f"{_h_d0} → {_h_d1}.")
+    with _h_top[1]:
+        _h_pv = st.number_input(
+            "💼 Portfolio value ($)", min_value=0.0,
+            value=float(st.session_state.get("overall_portfolio_value", 100000.0)),
+            step=1000.0, format="%.0f", key="overall_hist_pv",
+            help="Book $ per instrument = book % × this value.")
+
+    _snap = ov.snapshot_asof(results, _h_sel)
+    if _snap is None:
+        st.warning(f"No instrument has any strategy history on or before "
+                   f"**{_h_sel}** — pick a later date (data runs "
+                   f"{_h_d0} → {_h_d1}).")
+    else:
+        _h_bar = _snap["asof"]
+        _h_alloc = ov.historical_allocation(_snap, opt["optimal"]["weights"],
+                                            caps=ov.caps_for(_profile))
+        _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
+        with _h_top[2]:
+            st.markdown(
+                f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
+                f"Signals bar used: <b>{_h_bar.strftime('%b %d, %Y')}</b> (daily "
+                f"close) · {len(_snap['rows'])} instruments live · profile "
+                f"<code>{_profile}</code></div>", unsafe_allow_html=True)
+        if _snap["not_live"]:
+            st.caption("⏳ Not yet live on that date (history starts later): "
+                       + ", ".join(sorted(_snap["not_live"])) +
+                       " — the strategy could not have traded "
+                       + ("it" if len(_snap["not_live"]) == 1 else "them")
+                       + ", so the book below excludes "
+                       + ("it" if len(_snap["not_live"]) == 1 else "them") + ".")
+
+        _h_k = st.columns(5)
+        _h_k[0].metric("Positions open", f"{_snap['n_active']}")
+        _h_k[1].metric("Opened that day", f"{_snap['n_open']}",
+                       delta="new entries" if _snap["n_open"] else None)
+        _h_k[2].metric("Closed that day", f"{_snap['n_close']}",
+                       delta="exit signal" if _snap["n_close"] else None,
+                       delta_color="inverse")
+        _h_k[3].metric("In risk assets", f"{(1 - _h_sata)*100:.0f}%")
+        _h_k[4].metric("In SATA", f"{_h_sata*100:.0f}%",
+                       help=f"{ov.SATA['name']} — idle cash parked at "
+                            f"~{ov.SATA['annual_rate']*100:.0f}% yield.")
+
+        # ── the book on that date + the blend's record up to it ────────────
+        _h_cols = st.columns([1, 1.4])
+        with _h_cols[0]:
+            st.plotly_chart(
+                _alloc_donut(_h_book, _h_sata,
+                             f"Strategy book — {_h_bar.strftime('%b %d, %Y')}"),
+                use_container_width=True)
+            st.caption("Optimal-blend weights water-filled over the sleeves in "
+                       "position at that close; undeployed capital in **SATA**. "
+                       "Same construction as the Live tab's current book (the "
+                       "entry-priority tilt needs live-only inputs, so it isn't "
+                       "applied retrospectively).")
+        with _h_cols[1]:
+            _h_cm = ov.curve_metrics(_h_curve.loc[:_h_bar])
+            _h_m = st.columns(4)
+            _h_m[0].metric("Blend return to date", f"{_h_cm['total_ret']*100:+,.0f}%",
+                           delta=f"CAGR {_h_cm['cagr']*100:+.0f}%")
+            _h_m[1].metric("Max DD to date", f"{_h_cm['mdd']*100:.1f}%")
+            _h_m[2].metric("Sharpe to date", f"{_h_cm['sharpe']:.2f}")
+            _h_fwd = ov.slice_metrics(_h_curve, _h_bar)
+            _h_m[3].metric("Since then → today",
+                           "—" if _h_fwd is None else f"{_h_fwd['total_ret']*100:+.1f}%",
+                           delta=(None if _h_fwd is None
+                                  else f"${_h_fwd['total_ret']*_h_pv:+,.0f} on ${_h_pv:,.0f}"),
+                           delta_color=("off" if _h_fwd is None else
+                                        "normal" if _h_fwd["total_ret"] >= 0 else "inverse"),
+                           help="What the optimal blend went on to return from "
+                                "this date to the latest close — the one "
+                                "forward-looking figure on this page.")
+            _h_fig = go.Figure()
+            _h_styles = {"Optimal blend": ("#111827", 3),
+                         "Equal-weight strategies": ("#0ea5e9", 1.5),
+                         "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
+            for _h_nm, _h_cv in _PF["curves"].items():
+                _h_sub = _h_cv.loc[:_h_bar]
+                if len(_h_sub) < 2:
+                    continue
+                _h_c, _h_w = _h_styles.get(_h_nm, ("#888", 1.5))
+                _h_fig.add_trace(go.Scatter(x=_h_sub.index, y=_h_sub.to_numpy() * 100000,
+                                            name=_h_nm, line=dict(color=_h_c, width=_h_w)))
+            _h_fig.add_vline(x=_h_bar, line_dash="dot", line_color="#dc2626")
+            _h_fig.update_layout(
+                height=300, margin=dict(t=30, b=10, l=10, r=10),
+                yaxis_title="Growth of $100k", yaxis_type="log",
+                hovermode="x unified", legend=dict(orientation="h", y=1.12),
+                title=dict(text=f"The record as known on {_h_bar.strftime('%b %d, %Y')}",
+                           font_size=13))
+            st.plotly_chart(_h_fig, use_container_width=True)
+
+        # ── that day's action plan — what the strategy did on the bar ──────
+        st.markdown(f"### 🎯 Action plan on {_h_bar.strftime('%b %d, %Y')}")
+        st.caption("What the strategy did at that day's close, ranked: **closes** "
+                   "first (with the trade's realised return and exit reason), then "
+                   "fresh **opens**, **holds** and the flat sleeves. β = higher-beta "
+                   "sibling · 2× = leveraged (traded off the parent signal). "
+                   "**Close** is the official close of that instrument's bar on "
+                   "the chosen date; **P&L** marks each open position at that bar. "
+                   "**Book % / $** is the allocation shown in the donut above.")
+        _h_order = {"CLOSE": 0, "OPEN": 1, "HOLD": 2, "STAND ASIDE": 3}
+        _h_rows_sorted = sorted(
+            _snap["rows"],
+            key=lambda r: (_h_order[r["action"]], -_h_book.get(r["key"], 0.0)))
+        _h_hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                  "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
+                  "<th style='text-align:right'>Bar</th>"
+                  "<th style='text-align:right'>Close</th>"
+                  "<th style='text-align:right'>Chg %</th>"
+                  "<th>Position</th>"
+                  "<th style='text-align:right'>P&amp;L at date</th>"
+                  "<th style='text-align:right'>Book %</th>"
+                  "<th style='text-align:right'>Book $</th></tr>")
+        _h_tr = []
+        for r in _h_rows_sorted:
+            _h_ac = _ACTION_COL.get(r["action"], C_FLAT)
+            _h_tgt = _h_book.get(r["key"], 0.0)
+            _h_tgt_s = f"{_h_tgt*100:.1f}%" if _h_tgt > 0.0005 else "—"
+            _h_amt_s = f"${_h_tgt*_h_pv:,.0f}" if _h_tgt > 0.0005 else "—"
+            _h_bar_note = ("" if r["bar"] == _h_bar else
+                           "<div style='font-size:10px;color:#d97706'>older bar</div>")
+            if r["dchg"] is None:
+                _h_chg_s, _h_chg_c = "—", "#94a3b8"
+            else:
+                _h_chg_s = f"{r['dchg']:+.2f}%"
+                _h_chg_c = C_BUY if r["dchg"] >= 0 else C_EXIT
+            if r["in_pos"]:
+                _h_e_px = (f" @ ${r['entry_px']:,.2f}" if r["entry_px"] else "")
+                _h_pos_s = (f"📍 LONG since {pd.Timestamp(r['entry_date']).strftime('%b %d, %Y')}"
+                            f"{_h_e_px} · {r['days']}d")
+                _h_pnl, _h_pnl_sub = r["upnl"], ""
+            elif r["trade"]:
+                t = r["trade"]
+                _h_pos_s = (f"↩︎ closed — entered "
+                            f"{t['entry_date'].strftime('%b %d, %Y')}"
+                            + (f" @ ${t['entry_px']:,.2f}" if t["entry_px"] else ""))
+                _h_pnl = t["ret"] * 100
+                _h_pnl_sub = (f"<div style='font-size:10px;color:#94a3b8'>"
+                              f"realised · {t['reason']}</div>")
+            else:
+                _h_pos_s = "<span style='color:#94a3b8'>⚪ flat</span>"
+                _h_pnl, _h_pnl_sub = None, ""
+            _h_pnl_s = _pct(_h_pnl)
+            _h_pnl_c = ("#94a3b8" if _h_pnl is None
+                        else C_BUY if _h_pnl >= 0 else C_EXIT)
+            _h_tr.append(
+                f"<tr style='border-bottom:1px solid #eef2f7'>"
+                f"<td style='padding:8px 10px'>{_pill(r['action'], _h_ac)}</td>"
+                f"<td style='font-weight:700'>{r['emoji']} {r['key']}{_kind_badge(r['kind'])}"
+                f"<div style='font-size:11px;color:#64748b;font-weight:400'>{r['name']}"
+                f"{'' if r['key'] == r['parent'] else ' · off ' + r['parent'] + ' signal'}</div></td>"
+                f"<td style='text-align:right;font-size:12px;color:#64748b'>"
+                f"{pd.Timestamp(r['bar']).strftime('%b %d')}{_h_bar_note}</td>"
+                f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${r['close']:,.2f}</td>"
+                f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;"
+                f"color:{_h_chg_c}'>{_h_chg_s}</td>"
+                f"<td style='font-size:12px'>{_h_pos_s}</td>"
+                f"<td style='text-align:right;font-weight:600;color:{_h_pnl_c}'>{_h_pnl_s}{_h_pnl_sub}</td>"
+                f"<td style='text-align:right;font-weight:700'>{_h_tgt_s}</td>"
+                f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{_h_amt_s}</td></tr>")
+        # SATA row — whatever the risk sleeves left undeployed that day
+        _h_tr.append(
+            f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+            f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
+            f"<td style='font-weight:700'>💵 SATA"
+            f"<div style='font-size:11px;color:#64748b;font-weight:400'>{ov.SATA['name']}</div></td>"
+            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${ov.SATA['par']:,.2f}</td>"
+            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+            f"<td style='font-size:12px;color:#334155'>Idle cash → SATA "
+            f"(~{ov.SATA['annual_rate']*100:.0f}%/yr daily dividend)</td>"
+            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+            f"<td style='text-align:right;font-weight:800'>{_h_sata*100:.1f}%</td>"
+            f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
+            f"${_h_sata*_h_pv:,.0f}</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                    f"{_h_hdr}{''.join(_h_tr)}</table>", unsafe_allow_html=True)
+        if _snap["n_active"] == 0:
+            st.info("**No open positions on that date** — no instrument was "
+                    "signalling long, so the entire book sat in **SATA** earning "
+                    "its idle-cash yield.")
+        st.caption("⚠️ Reconstructed from the committed back-test series: bars, "
+                   "fills and exits are exactly what the engines decided on that "
+                   "date, but the **book weights use the current optimal blend** "
+                   "(fit on the full history, in-sample) water-filled over that "
+                   "day's positions — the allocation the *current* strategy "
+                   "would have held, not a live record of a book published that "
+                   "day. Prices are official daily closes (no live-spot "
+                   "overlay). Not investment advice.")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 3 — COMBINED BACKTESTING
 # ══════════════════════════════════════════════════════════════════════════
 with tab_bt:
     o = opt["optimal"]
@@ -1855,7 +2078,7 @@ with tab_bt:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# TAB 3 — METHODOLOGY
+# TAB 4 — METHODOLOGY
 # ══════════════════════════════════════════════════════════════════════════
 with tab_explain:
     st.markdown("## 🧠 How Overall Trading works")
