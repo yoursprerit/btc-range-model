@@ -537,11 +537,12 @@ with tab_live:
                "yesterday**. An intraday re-publish never replaces it: the prev "
                "slot only rolls forward at the first publish of a new day. "
                "**Current Targetbook** = the *officially published* book the "
-               "IBKR executor trades — all tickers as of the last US market "
-               "close (yesterday, 4:00 PM ET) and BTC · MSTR · MSTU as of the "
-               "**7:00 AM CT Bitcoin bar close today**, computed from those "
-               "*committed* closes only, so it matches the last-close targets "
-               "in the action plan below. It is published **once** daily at "
+               "IBKR executor trades — all tickers as of the **last completed "
+               "US market close (4:00 PM ET)** and BTC · MSTR · MSTU as of the "
+               "**last completed 7:00 AM CT Bitcoin bar close**, computed from "
+               "those *committed* closes only, so it matches the last-close "
+               "targets in the action plan below (each donut's caption shows "
+               "the exact close dates). It is published **once** daily at "
                "≈7:15 AM CT (right after the daily audit) and does **not** "
                "change during the day — only the 🚀 **Publish new target "
                "book** button in the 📋 Target Book app (or a manual workflow "
@@ -592,6 +593,25 @@ with tab_live:
         idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
         return w, idle
 
+    def _book_close_caption(payload: dict) -> str:
+        """Explicit close DATES a published book is built from, derived from
+        its publish moment (not the payload's as_of, which legacy intraday
+        publishes stamped with a partial-bar date): equities = the last
+        completed 4:00-PM-ET close before publish, BTC · MSTR · MSTU = the
+        12:00-UTC bar that closed just before publish."""
+        gen = payload.get("generated_at_utc")
+        if not gen:
+            return ""
+        try:
+            eq = fr.expected_equity_asof(gen).strftime("%b %d, %Y")
+            btc_cm = fr.close_moment("crypto", fr.expected_crypto_asof(gen))
+            btc = (btc_cm.tz_convert("America/Chicago")
+                   .strftime("%b %d, %Y, %I:%M %p %Z").replace(" 0", " "))
+        except Exception:
+            return ""
+        return (f"Other tickers as of market close **{eq}** · BTC · MSTR · "
+                f"MSTU as of bar close **{btc}**")
+
     _TB_DIR = _REPO_ROOT / "data" / "overall"
     _prev_book = _load_published_book(_TB_DIR / "target_book_live_prev.json",
                                       _TB_DIR / "target_book_prev.json")
@@ -603,10 +623,9 @@ with tab_live:
             _pw, _pidle = _book_alloc(_prev_book)
             st.plotly_chart(_alloc_donut(_pw, _pidle, "Previous Targetbook"),
                             use_container_width=True)
-            st.caption(f"Yesterday's book — BTC bar close 7:00 AM CT "
-                       f"*yesterday*, other tickers as of the market close the "
-                       f"day before. Signal bar **{_prev_book.get('as_of', '—')}** · "
-                       f"profile **{_prev_book.get('profile', '—')}** · published "
+            st.caption(f"Yesterday's published book — "
+                       f"{_book_close_caption(_prev_book)} · profile "
+                       f"**{_prev_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_prev_book.get('generated_at_utc'))}**")
         else:
             st.info("**Previous Targetbook** — none recorded yet. It appears "
@@ -617,11 +636,9 @@ with tab_live:
             _cw, _cidle = _book_alloc(_cur_book)
             st.plotly_chart(_alloc_donut(_cw, _cidle, "Current Targetbook"),
                             use_container_width=True)
-            st.caption(f"All tickers as of **yesterday's market close**, BTC bar "
-                       f"close **7:00 AM CT today** — committed closes only, "
-                       f"matching the action plan's last-close targets. Signal "
-                       f"bar **{_cur_book.get('as_of', '—')}** · profile "
-                       f"**{_cur_book.get('profile', '—')}** · published "
+            st.caption(f"{_book_close_caption(_cur_book)} — committed closes "
+                       f"only, matching the action plan's last-close targets · "
+                       f"profile **{_cur_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_cur_book.get('generated_at_utc'))}** · "
                        f"frozen until the next 7:15 AM CT publish (or a manual "
                        f"🚀 publish).")
