@@ -119,6 +119,48 @@ def test_audit_accepts_fresher_than_expected_partial_bar():
     assert aud["passed"]
 
 
+def test_audit_fails_when_a_signal_app_is_missing_entirely():
+    """A parent listed in parent_order with NO instruments in results (its
+    sleeve failed to load) must fail the audit — a reduced universe would
+    publish a book whose optimiser re-normalised over the missing weight."""
+    now = "2026-07-21T12:20:00Z"
+    res = [_mk("BTC", "BTC", "2026-07-20"), _mk("SOXX", "SOXX", "2026-07-20")]
+    aud = fr.audit_universe(res, now=now, parent_order=["BTC", "GRID", "SOXX"])
+    assert not aud["passed"]
+    assert "GRID" in aud["stale_apps"]
+    grid = next(r for r in aud["rows"] if r["app"] == "GRID")
+    assert not grid["fresh"] and grid["instruments"] == []
+    assert "failed to load" in grid["actual_close"]
+
+
+# ── completed-bars-only mode (the publisher's close-based book) ──────────────
+def test_drop_in_progress_us_bar_trims_partial_today():
+    # Tue Jul 21 2026, 11 AM ET: today's bar is in progress → dropped;
+    # Monday's completed close stays.
+    now = pd.Timestamp("2026-07-21T15:00:00Z")
+    df = pd.DataFrame({"px_close": [1.0, 2.0, 3.0]},
+                      index=pd.to_datetime(["2026-07-17", "2026-07-20",
+                                            "2026-07-21"]))
+    out = fr.drop_in_progress_us_bar(df, now)
+    assert list(out.index) == list(pd.to_datetime(["2026-07-17", "2026-07-20"]))
+
+
+def test_drop_in_progress_us_bar_keeps_all_after_close():
+    now = pd.Timestamp("2026-07-21T20:30:00Z")     # 4:30 PM EDT — today closed
+    df = pd.DataFrame({"px_close": [1.0, 2.0]},
+                      index=pd.to_datetime(["2026-07-20", "2026-07-21"]))
+    assert len(fr.drop_in_progress_us_bar(df, now)) == 2
+
+
+def test_completed_bars_only_env_flag(monkeypatch):
+    monkeypatch.delenv(fr.COMPLETED_BARS_ENV, raising=False)
+    assert not fr.completed_bars_only()
+    monkeypatch.setenv(fr.COMPLETED_BARS_ENV, "1")
+    assert fr.completed_bars_only()
+    monkeypatch.setenv(fr.COMPLETED_BARS_ENV, "0")
+    assert not fr.completed_bars_only()
+
+
 def test_audit_before_btc_bar_close_expects_two_day_old_start():
     # 11:00 UTC: the freshest completed BTC bar STARTED two days ago.
     now = "2026-07-21T11:00:00Z"

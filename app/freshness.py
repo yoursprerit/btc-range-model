@@ -182,6 +182,39 @@ def expected_asof(kind: str, now=None) -> pd.Timestamp:
             else expected_equity_asof(now))
 
 
+# ── completed-bars-only mode (the once-daily publisher) ──────────────────────
+# The published Target Book must be computed from COMPLETED bars only: every
+# equity ticker from its last 4:00-PM-ET market close, BTC/MSTR/MSTU from the
+# last completed 12:00-UTC bar (the BTC engine already enforces its own bar
+# close).  Live Yahoo daily feeds include an in-progress *today* row during
+# market hours — fine for the live cockpit, but it must never leak into a
+# published book (e.g. a delayed catch-up publish or the UI's 🚀 manual publish
+# fired mid-session).  The publisher sets this env flag; the daily fetchers
+# then trim any US bar whose session close is still in the future.
+COMPLETED_BARS_ENV = "OVERALL_COMPLETED_BARS_ONLY"
+
+
+def completed_bars_only() -> bool:
+    return os.environ.get(COMPLETED_BARS_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def drop_in_progress_us_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
+    """Drop trailing daily rows whose US-session 4:00-PM-ET close hasn't
+    happened yet (the in-progress *today* bar during market hours).  No-op on
+    an empty frame or when every bar is already complete."""
+    if df is None or len(df) == 0:
+        return df
+    cutoff = expected_equity_asof(now)
+    try:
+        idx = pd.DatetimeIndex(df.index).normalize()
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+    except Exception:
+        return df
+    return df.loc[idx <= cutoff]
+
+
 def close_moment(kind: str, asof) -> pd.Timestamp:
     """The wall-clock CLOSE datetime implied by a bar's ``as_of`` date — the
     moment those signals were generated.  Crypto: bar start *D* closes at
@@ -234,8 +267,12 @@ def audit_universe(results: list[dict], now=None,
     For each signal app: ``actual`` = the newest ``as_of`` bar its instruments
     carry; ``expected`` = the freshest completed bar for its asset class right
     now.  ``fresh`` ⇔ ``actual ≥ expected`` (a partial intraday bar counts as
-    fresh).  Returns per-app rows plus an overall ``passed`` verdict and the
-    list of stale asset keys — the exact set the Overall app must flag."""
+    fresh).  A parent listed in ``parent_order`` with NO instruments in
+    ``results`` at all (its sleeve failed to load) also FAILS the audit — a
+    silently-reduced universe must never publish a Target Book whose optimiser
+    re-normalised over the missing app's weight.  Returns per-app rows plus an
+    overall ``passed`` verdict and the list of stale asset keys — the exact set
+    the Overall app must flag."""
     n = _as_utc(now or now_utc())
     groups: dict[str, list[dict]] = {}
     for r in results or []:
@@ -244,6 +281,19 @@ def audit_universe(results: list[dict], now=None,
     order += [k for k in groups if k not in order]
 
     rows, stale_parents, stale_assets = [], [], []
+    for pk in (parent_order or []):
+        if pk in groups:
+            continue                       # loaded fine — audited below
+        kind = PARENT_CLASS.get(pk, "us_equity")
+        exp = expected_asof(kind, n)
+        stale_parents.append(pk)
+        rows.append(dict(
+            app=pk, asset_class=kind, instruments=[],
+            actual_asof="—", expected_asof=str(exp.date()),
+            actual_close="⛔ app failed to load — no signals returned",
+            expected_close=close_label(kind, exp, n),
+            fresh=False, age_days=0,
+        ))
     for pk in order:
         grp = groups[pk]
         kind = PARENT_CLASS.get(pk, "us_equity")

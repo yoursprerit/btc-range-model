@@ -153,6 +153,13 @@ def fetch_daily(cfg: TickerConfig, start: str | None = None) -> pd.DataFrame:
     df = df.dropna(subset=["px_close"])
     macro_cols = [c for c in df.columns if not c.startswith("px_")]
     df[macro_cols] = df[macro_cols].ffill(limit=5)
+    # publisher mode: a published Target Book must be computed from COMPLETED
+    # market closes only — trim the in-progress *today* bar Yahoo includes
+    # during US market hours (the live apps keep it; only the publisher sets
+    # the flag).
+    import freshness as _fr
+    if _fr.completed_bars_only():
+        df = _fr.drop_in_progress_us_bar(df)
     return df
 
 

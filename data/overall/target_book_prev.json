@@ -1,34 +1,34 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-24T14:16:07+00:00",
- "as_of": "2026-07-24",
+ "generated_at_utc": "2026-07-23T14:35:50+00:00",
+ "as_of": "2026-07-23",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
   "SOXX": 0.3,
   "SOXL": 0.1,
-  "XLE": 0.18400576494434803,
+  "XLE": 0.1839228418197757,
   "OIH": 0.18,
   "ERX": 0.1,
-  "REMX": 0.002628896462759685
+  "REMX": 0.0026386735226648678
  },
- "cash_weight": 0.13336533859289224,
+ "cash_weight": 0.13343848465755948,
  "exec_price": {
-  "SOXX": 532.64,
-  "SOXL": 142.25,
-  "XLE": 60.155,
-  "OIH": 394.1,
-  "ERX": 96.25,
-  "REMX": 68.39
+  "SOXX": 552.73,
+  "SOXL": 158.08,
+  "XLE": 60.29,
+  "OIH": 393.58,
+  "ERX": 97.62,
+  "REMX": 70.02
  },
  "actions": [
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.18400576494434803,
+   "target": 0.1839228418197757,
    "in_pos": true,
-   "priority": 0.8631695559491381
+   "priority": 0.8682975598544832
   },
   {
    "key": "ERX",
@@ -36,7 +36,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8611816396182395
+   "priority": 0.867230988068489
   },
   {
    "key": "OIH",
@@ -44,7 +44,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.7806464795922616
+   "priority": 0.7863437978818167
   },
   {
    "key": "SOXL",
@@ -52,7 +52,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.48275385534928006
+   "priority": 0.5123390792614246
   },
   {
    "key": "SOXX",
@@ -60,15 +60,31 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.44658369746994825
+   "priority": 0.4756896925082475
   },
   {
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.002628896462759685,
+   "target": 0.0026386735226648678,
    "in_pos": true,
-   "priority": 0.09904761904761902
+   "priority": 0.1038095238095238
+  },
+  {
+   "key": "GDX",
+   "action": "WATCH",
+   "decision": "WATCH \u2014 U1 (GATE PENDING)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null
+  },
+  {
+   "key": "NUGT",
+   "action": "WATCH",
+   "decision": "WATCH \u2014 U1 (GATE PENDING)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null
   },
   {
    "key": "BTC",
@@ -111,22 +127,6 @@
    "priority": null
   },
   {
-   "key": "GDX",
-   "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
-  },
-  {
-   "key": "NUGT",
-   "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
-  },
-  {
    "key": "GRID",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 BELOW TREND",
@@ -145,7 +145,7 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -153,7 +153,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null
@@ -161,11 +161,11 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-24T14:16:06+00:00",
+  "checked_at_utc": "2026-07-23T14:35:49+00:00",
   "stale_apps": []
  },
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "585d196244f5961714255871d8cb5b0507c89ab7ece9d295aff2effb08e13da0"
+  "value": "8308d5520899e054db2bd85fd6ace69cb7e1696b3501f15fd74706cbb3e92a11"
  }
 }

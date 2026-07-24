@@ -433,13 +433,24 @@ def _downloads(payload: dict, adj_weights: dict, adj_cash: float,
 @st.cache_data(ttl=900, show_spinner="Running the engine for a live preview (~30–90s)…")
 def _live_payload(profile: str, bucket: str) -> dict:
     """Compute a fresh book via the exact publisher path (reused, no drift):
-    run the universe once, AUDIT its signal freshness, then build the book from
-    the same audited results and stamp the verdict in — so the preview carries
-    the same 🕵️ daily-audit badge as a published book."""
+    completed bars only + committed signals (live_adjust=False), run the
+    universe once, AUDIT its signal freshness, then build the book from the
+    same audited results and stamp the verdict in — so the preview shows
+    exactly what a 🚀 publish right now would emit, daily-audit badge included.
+    The completed-bars flag is restored afterwards so it never leaks into the
+    live cockpit's fetches."""
     from ibkr_rebalance import compute_target_book
-    results = ov.run_universe()
-    audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS)
-    book = compute_target_book(profile, results=results)
+    _had = os.environ.get(fr.COMPLETED_BARS_ENV)
+    os.environ[fr.COMPLETED_BARS_ENV] = "1"
+    try:
+        results = ov.run_universe()
+        audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS)
+        book = compute_target_book(profile, results=results, live_adjust=False)
+    finally:
+        if _had is None:
+            os.environ.pop(fr.COMPLETED_BARS_ENV, None)
+        else:
+            os.environ[fr.COMPLETED_BARS_ENV] = _had
     payload = tb.build_payload(
         as_of=book.as_of, profile=profile, weights=book.weights,
         cash_weight=book.cash_weight, exec_price=book.exec_price, actions=book.actions)

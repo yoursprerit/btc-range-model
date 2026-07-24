@@ -87,13 +87,48 @@ def test_validate_rejects_book_older_than_a_cycle():
 
 
 # ── previous-book rotation (the "Previous Targetbook" the UI shows) ───────────
+def _book_text(gen_utc: str) -> str:
+    return ('{"schema": "overall-target-book/v1", "as_of": "2026-07-23", '
+            f'"generated_at_utc": "{gen_utc}"}}')
+
+
 def test_rotate_prev_preserves_outgoing_book(tmp_path):
+    """A prior-day book rotates into the prev slot at the next day's publish."""
     book = tmp_path / "target_book.json"
-    book.write_text('{"schema": "overall-target-book/v1", "as_of": "2026-07-23"}')
-    assert tb.rotate_prev(book)
+    book.write_text(_book_text("2026-07-23T12:16:00+00:00"))
+    assert tb.rotate_prev(book, now="2026-07-24T12:16:00+00:00")
     prev = tb.prev_path(book)
     assert prev.name == "target_book_prev.json"
     assert prev.read_text() == book.read_text()
+
+
+def test_rotate_prev_same_day_republish_keeps_yesterdays_prev(tmp_path):
+    """An intraday 🚀 re-publish must NOT clobber yesterday's book in the prev
+    slot — "Previous Targetbook" always means yesterday's."""
+    book = tmp_path / "target_book.json"
+    prev = tb.prev_path(book)
+    prev.write_text(_book_text("2026-07-23T12:16:00+00:00"))     # yesterday's
+    book.write_text(_book_text("2026-07-24T12:16:00+00:00"))     # this morning's
+    # manual re-publish the same CT day (11:44 AM CDT = 16:44 UTC)
+    assert not tb.rotate_prev(book, now="2026-07-24T16:44:00+00:00")
+    assert "2026-07-23T12:16:00" in prev.read_text()             # untouched
+
+
+def test_rotate_prev_ct_midnight_boundary(tmp_path):
+    """Day comparison is America/Chicago: 04:00 UTC is still the SAME CT day
+    (11 PM CDT), so no rotation; 12:16 UTC next day rotates."""
+    book = tmp_path / "target_book.json"
+    book.write_text(_book_text("2026-07-24T12:16:00+00:00"))
+    assert not tb.rotate_prev(book, now="2026-07-25T04:00:00+00:00")
+    assert tb.rotate_prev(book, now="2026-07-25T12:16:00+00:00")
+
+
+def test_rotate_prev_unstamped_book_still_rotates(tmp_path):
+    """A legacy book without generated_at_utc falls back to always-rotate."""
+    book = tmp_path / "target_book.json"
+    book.write_text('{"schema": "overall-target-book/v1", "as_of": "2026-07-23"}')
+    assert tb.rotate_prev(book)
+    assert tb.prev_path(book).read_text() == book.read_text()
 
 
 def test_rotate_prev_missing_book_is_noop(tmp_path):

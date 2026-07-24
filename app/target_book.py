@@ -41,16 +41,42 @@ def prev_path(path: Path) -> Path:
     return path.with_name(path.stem + "_prev" + path.suffix)
 
 
-def rotate_prev(path: Path) -> bool:
+_ROTATE_TZ = "America/Chicago"     # the publish cycle's anchor timezone
+
+
+def rotate_prev(path: Path, now=None) -> bool:
     """Preserve the outgoing book at *path* as ``*_prev.json`` before a new one
-    lands, so the UI can always show the *Previous Targetbook* next to the
-    current one.  Returns True when a previous book was written.  Best-effort:
-    a missing/unreadable old book never blocks a publish."""
+    lands, so the UI's *Previous Targetbook* always shows **yesterday's** book.
+
+    Day-aware (America/Chicago, the 7:15-AM-CT publish anchor): the outgoing
+    book is rotated only when it was generated on an EARLIER Central-time day
+    than *now*.  An intraday re-publish (the UI's 🚀 button) therefore replaces
+    today's book WITHOUT clobbering the previous-day book in the prev slot —
+    "Previous Targetbook" keeps meaning yesterday's, not "an hour ago's".
+
+    Returns True when the prev file was (re)written.  Best-effort: a
+    missing/unreadable old book never blocks a publish."""
     path = Path(path)
     try:
-        if path.exists():
-            prev_path(path).write_text(path.read_text())
-            return True
+        if not path.exists():
+            return False
+        text = path.read_text()
+        try:
+            gen = json.loads(text).get("generated_at_utc")
+            gen_ts = pd.Timestamp(gen)
+            if gen_ts.tzinfo is None:
+                gen_ts = gen_ts.tz_localize("UTC")
+            now_ts = pd.Timestamp(now) if now is not None else \
+                pd.Timestamp(datetime.now(timezone.utc))
+            if now_ts.tzinfo is None:
+                now_ts = now_ts.tz_localize("UTC")
+            if gen_ts.tz_convert(_ROTATE_TZ).date() >= \
+                    now_ts.tz_convert(_ROTATE_TZ).date():
+                return False               # same-day re-publish — keep yesterday's prev
+        except Exception:
+            pass                           # unparsable stamp → rotate (old behaviour)
+        prev_path(path).write_text(text)
+        return True
     except Exception:
         pass
     return False

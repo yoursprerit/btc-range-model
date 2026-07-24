@@ -531,18 +531,24 @@ with tab_live:
 
     # ── 1. TARGETBOOKS — previous & current (as published) vs live view ──
     st.markdown("### 📐 Targetbooks — published vs live recommendation")
-    st.caption("**Previous Targetbook** = the book that was published before the "
-               "current one. **Current Targetbook** = the *officially published* "
-               "book the IBKR executor trades — all tickers as of the last US "
-               "market close (yesterday, 4:00 PM ET) and BTC · MSTR · MSTU as of "
-               "the **7:00 AM CT Bitcoin bar close today**. It is published "
-               "**once** daily at ≈7:15 AM CT (right after the daily audit) and "
-               "does **not** change during the day — only the 🚀 **Publish new "
-               "target book** button in the 📋 Target Book app (or a manual "
-               "workflow run) replaces it. **Recommended Live Possible "
-               "Targetbook** = what a publish right now would recommend; it can "
-               "drift through the day because today's market bar and BTC bar "
-               "have not closed yet.")
+    st.caption("**Previous Targetbook** = **yesterday's** published book — "
+               "BTC · MSTR · MSTU from *yesterday's* 7:00 AM CT bar close, all "
+               "other tickers from the market close of the **day before "
+               "yesterday**. An intraday re-publish never replaces it: the prev "
+               "slot only rolls forward at the first publish of a new day. "
+               "**Current Targetbook** = the *officially published* book the "
+               "IBKR executor trades — all tickers as of the last US market "
+               "close (yesterday, 4:00 PM ET) and BTC · MSTR · MSTU as of the "
+               "**7:00 AM CT Bitcoin bar close today**, computed from those "
+               "*committed* closes only, so it matches the last-close targets "
+               "in the action plan below. It is published **once** daily at "
+               "≈7:15 AM CT (right after the daily audit) and does **not** "
+               "change during the day — only the 🚀 **Publish new target "
+               "book** button in the 📋 Target Book app (or a manual workflow "
+               "run) replaces it. **Recommended Live Possible Targetbook** = "
+               "what today's committed signals plus *live* prices recommend "
+               "right now; it can drift through the day because today's market "
+               "bar and BTC bar have not closed yet.")
     # (_live_exits / gate_live computed above, before the action table)
     ac = st.columns([1, 1, 1])
 
@@ -597,8 +603,10 @@ with tab_live:
             _pw, _pidle = _book_alloc(_prev_book)
             st.plotly_chart(_alloc_donut(_pw, _pidle, "Previous Targetbook"),
                             use_container_width=True)
-            st.caption(f"Signal bar **{_prev_book.get('as_of', '—')}** · profile "
-                       f"**{_prev_book.get('profile', '—')}** · published "
+            st.caption(f"Yesterday's book — BTC bar close 7:00 AM CT "
+                       f"*yesterday*, other tickers as of the market close the "
+                       f"day before. Signal bar **{_prev_book.get('as_of', '—')}** · "
+                       f"profile **{_prev_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_prev_book.get('generated_at_utc'))}**")
         else:
             st.info("**Previous Targetbook** — none recorded yet. It appears "
@@ -610,8 +618,9 @@ with tab_live:
             st.plotly_chart(_alloc_donut(_cw, _cidle, "Current Targetbook"),
                             use_container_width=True)
             st.caption(f"All tickers as of **yesterday's market close**, BTC bar "
-                       f"close **7:00 AM CT today** — signal bar "
-                       f"**{_cur_book.get('as_of', '—')}** · profile "
+                       f"close **7:00 AM CT today** — committed closes only, "
+                       f"matching the action plan's last-close targets. Signal "
+                       f"bar **{_cur_book.get('as_of', '—')}** · profile "
                        f"**{_cur_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_cur_book.get('generated_at_utc'))}** · "
                        f"frozen until the next 7:15 AM CT publish (or a manual "
