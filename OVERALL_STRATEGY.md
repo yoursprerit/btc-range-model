@@ -316,13 +316,18 @@ The daily cycle:
    audited results* and the Target Book is **published immediately**
    (`data/overall/target_book*.json`, HMAC-signed, with the audit verdict
    stamped into the payload), alongside the audit trail
-   (`data/overall/daily_audit.json`). The published book is built from
-   **committed completed closes only**: the publisher sets the
-   completed-bars-only flag (`OVERALL_COMPLETED_BARS_ONLY`) so the daily
-   fetchers trim any in-progress intraday bar, and it skips the live-exit
-   spot override (`live_adjust=False`) — so the book always equals the
-   last-close targets the Overall app's action plan shows, even when a
-   catch-up or manual publish fires mid-session. A signal app that fails to
+   (`data/overall/daily_audit.json`). The published book's **data basis is
+   pinned to the day's 7:15-AM-CT anchor** (`freshness.publish_anchor_ct`):
+   the publisher sets the completed-bars-only flag
+   (`OVERALL_COMPLETED_BARS_ONLY`) so the daily fetchers trim every US bar
+   after the pre-anchor session — the in-progress intraday bar during
+   market hours AND the just-completed close after 4:00 PM ET — and it
+   skips the live-exit spot override (`live_adjust=False`). A publish at
+   any wall-clock time of the day therefore produces the same book the
+   7:15 AM run would have; signal changes after the market close appear
+   only in the live *Recommended Live Possible Targetbook* view until the
+   next morning's publish. The exact basis closes are stamped into the
+   signed payload (`signal_basis`) and shown in the donut captions. A signal app that fails to
    load entirely also fails the audit (a reduced universe is never
    published). The outgoing book is rotated to
    `data/overall/target_book*_prev.json` — the *Previous Targetbook* the

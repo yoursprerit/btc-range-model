@@ -183,15 +183,28 @@ def expected_asof(kind: str, now=None) -> pd.Timestamp:
 
 
 # ── completed-bars-only mode (the once-daily publisher) ──────────────────────
-# The published Target Book must be computed from COMPLETED bars only: every
-# equity ticker from its last 4:00-PM-ET market close, BTC/MSTR/MSTU from the
-# last completed 12:00-UTC bar (the BTC engine already enforces its own bar
-# close).  Live Yahoo daily feeds include an in-progress *today* row during
-# market hours — fine for the live cockpit, but it must never leak into a
-# published book (e.g. a delayed catch-up publish or the UI's 🚀 manual publish
-# fired mid-session).  The publisher sets this env flag; the daily fetchers
-# then trim any US bar whose session close is still in the future.
+# The published Target Book's data basis is PINNED to the publish day's
+# 7:15-AM-Central anchor, no matter what wall-clock time the publish actually
+# runs: every equity ticker from the last 4:00-PM-ET market close BEFORE the
+# anchor (i.e. the previous session — post-close signal changes belong only to
+# the live "Recommended Live Possible Targetbook" view until the next
+# morning), and BTC/MSTR/MSTU from the day's 7:00-AM-CT (12:00 UTC) bar close
+# (the BTC engine already enforces its own bar close).  Live Yahoo daily feeds
+# include an in-progress *today* row during market hours — and a completed
+# *today* row after 4:00 PM ET — but neither may leak into a published book
+# (e.g. a delayed catch-up publish or the UI's 🚀 manual publish fired
+# mid-session or after the close).  The publisher sets this env flag; the
+# daily fetchers then trim every US bar after the anchor's basis session.
 COMPLETED_BARS_ENV = "OVERALL_COMPLETED_BARS_ONLY"
+
+
+def publish_anchor_ct(now=None) -> pd.Timestamp:
+    """The publish day's 7:15-AM-America/Chicago anchor (as a UTC timestamp).
+    The Target Book's data basis is evaluated AT this moment for the whole CT
+    day, so a publish at 9 AM, 2 PM or 9 PM CT all produce the same book the
+    7:15 AM run would have."""
+    n = _as_utc(now or now_utc()).tz_convert(CT)
+    return (n.normalize() + pd.Timedelta(hours=7, minutes=15)).tz_convert("UTC")
 
 
 def completed_bars_only() -> bool:
@@ -260,7 +273,8 @@ def signal_close_caption(kind: str, asof, now=None, extra: str = "") -> str:
 # The audit — is every signal app on its freshest possible bar?
 # ════════════════════════════════════════════════════════════════════════════
 def audit_universe(results: list[dict], now=None,
-                   parent_order: list[str] | None = None) -> dict:
+                   parent_order: list[str] | None = None,
+                   expected_now=None) -> dict:
     """Freshness audit over Overall-engine result dicts (one per instrument,
     grouped by their parent signal app).
 
@@ -270,10 +284,15 @@ def audit_universe(results: list[dict], now=None,
     fresh).  A parent listed in ``parent_order`` with NO instruments in
     ``results`` at all (its sleeve failed to load) also FAILS the audit — a
     silently-reduced universe must never publish a Target Book whose optimiser
-    re-normalised over the missing app's weight.  Returns per-app rows plus an
-    overall ``passed`` verdict and the list of stale asset keys — the exact set
-    the Overall app must flag."""
+    re-normalised over the missing app's weight.  ``expected_now`` (optional)
+    evaluates the *expected* freshest bars at a different moment than the
+    check itself — the publisher passes its 7:15-AM-CT anchor so a post-close
+    publish still expects (and gets) the pre-anchor session, not the close
+    that just landed.  Returns per-app rows plus an overall ``passed`` verdict
+    and the list of stale asset keys — the exact set the Overall app must
+    flag."""
     n = _as_utc(now or now_utc())
+    exp_n = _as_utc(expected_now) if expected_now is not None else n
     groups: dict[str, list[dict]] = {}
     for r in results or []:
         groups.setdefault(r.get("parent", r.get("key")), []).append(r)
@@ -285,13 +304,13 @@ def audit_universe(results: list[dict], now=None,
         if pk in groups:
             continue                       # loaded fine — audited below
         kind = PARENT_CLASS.get(pk, "us_equity")
-        exp = expected_asof(kind, n)
+        exp = expected_asof(kind, exp_n)
         stale_parents.append(pk)
         rows.append(dict(
             app=pk, asset_class=kind, instruments=[],
             actual_asof="—", expected_asof=str(exp.date()),
             actual_close="⛔ app failed to load — no signals returned",
-            expected_close=close_label(kind, exp, n),
+            expected_close=close_label(kind, exp, exp_n),
             fresh=False, age_days=0,
         ))
     for pk in order:
@@ -299,7 +318,7 @@ def audit_universe(results: list[dict], now=None,
         kind = PARENT_CLASS.get(pk, "us_equity")
         actual = max(pd.Timestamp(r["as_of"]).tz_localize(None).normalize()
                      for r in grp)
-        exp = expected_asof(kind, n)
+        exp = expected_asof(kind, exp_n)
         fresh = actual >= exp
         age = max((exp - actual).days, 0)
         keys = [r["key"] for r in grp]
@@ -310,7 +329,7 @@ def audit_universe(results: list[dict], now=None,
             app=pk, asset_class=kind, instruments=keys,
             actual_asof=str(actual.date()), expected_asof=str(exp.date()),
             actual_close=close_label(kind, actual, n),
-            expected_close=close_label(kind, exp, n),
+            expected_close=close_label(kind, exp, exp_n),
             fresh=bool(fresh), age_days=int(age),
         ))
     return dict(

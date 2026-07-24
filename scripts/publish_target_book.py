@@ -113,19 +113,28 @@ def main() -> int:
     # the book is NOT published (unless --allow-stale): stale signals never
     # reach the target book.
     os.environ[fr.COMPLETED_BARS_ENV] = "1"
+    # The book's data basis is pinned to TODAY's 7:15-AM-CT anchor whatever
+    # the wall-clock time of this run: equities from the pre-anchor session
+    # close, BTC from the day's 7:00-AM-CT bar. The audit expects exactly that
+    # basis (expected_now=anchor), so a post-close run neither ingests nor
+    # demands the close that just landed.
+    anchor = fr.publish_anchor_ct()
     print(f"Running the Overall universe (live fetch, ~30–90s, completed bars "
-          f"only) — profile {args.profile}…", flush=True)
+          f"only, basis anchored {fr.fmt_ct(anchor)}) — profile "
+          f"{args.profile}…", flush=True)
     results = oc.run_universe()
     if not results:
         raise RuntimeError("run_universe() returned no instruments — check data feeds")
-    audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS)
+    audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS,
+                              expected_now=anchor)
     if not audit["passed"]:
         print(f"Signal-freshness audit FAILED (stale: {audit['stale_apps']}) — "
               f"forcing a data refresh and re-running once in "
               f"{AUDIT_RETRY_WAIT_S}s…", flush=True)
         time.sleep(AUDIT_RETRY_WAIT_S)
         results = oc.run_universe() or results
-        audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS)
+        audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS,
+                                  expected_now=anchor)
     for row in audit["rows"]:
         mark = "✅ fresh" if row["fresh"] else f"🚨 STALE ({row['age_days']}d behind)"
         print(f"  audit {row['app']:5s} as-of {row['actual_asof']} "
@@ -186,6 +195,17 @@ def main() -> int:
                         stale_apps=list(audit["stale_apps"]))
     paper["signal_audit"] = _audit_stamp
     live["signal_audit"] = dict(_audit_stamp)
+
+    # Stamp the DATA BASIS too (also signature-covered): the exact closes this
+    # book was built from — the UI donut captions read this instead of
+    # guessing from the publish time.
+    _basis = dict(
+        anchor_ct=fr.fmt_ct(anchor),
+        equity_close=str(fr.expected_equity_asof(anchor).date()),
+        btc_bar_close_utc=fr.close_moment(
+            "crypto", fr.expected_crypto_asof(anchor)).isoformat())
+    paper["signal_basis"] = _basis
+    live["signal_basis"] = dict(_basis)
 
     outdir = Path(args.out).parent
     outdir.mkdir(parents=True, exist_ok=True)

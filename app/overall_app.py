@@ -537,12 +537,15 @@ with tab_live:
                "yesterday**. An intraday re-publish never replaces it: the prev "
                "slot only rolls forward at the first publish of a new day. "
                "**Current Targetbook** = the *officially published* book the "
-               "IBKR executor trades — all tickers as of the **last completed "
-               "US market close (4:00 PM ET)** and BTC · MSTR · MSTU as of the "
-               "**last completed 7:00 AM CT Bitcoin bar close**, computed from "
-               "those *committed* closes only, so it matches the last-close "
-               "targets in the action plan below (each donut's caption shows "
-               "the exact close dates). It is published **once** daily at "
+               "IBKR executor trades — its data basis is pinned to the "
+               "morning **7:15 AM CT anchor**: all tickers as of the market "
+               "close **before** that anchor (yesterday's 4:00 PM ET close) "
+               "and BTC · MSTR · MSTU as of the day's **7:00 AM CT bar "
+               "close** (each donut's caption shows the exact dates). Signal "
+               "changes after today's market close appear ONLY in the "
+               "Recommended Live Possible Targetbook until tomorrow's "
+               "7:15 AM CT publish — the Current Targetbook never moves on "
+               "them, even on a manual 🚀 re-publish. It is published **once** daily at "
                "≈7:15 AM CT (right after the daily audit) and does **not** "
                "change during the day — only the 🚀 **Publish new target "
                "book** button in the 📋 Target Book app (or a manual workflow "
@@ -594,17 +597,25 @@ with tab_live:
         return w, idle
 
     def _book_close_caption(payload: dict) -> str:
-        """Explicit close DATES a published book is built from, derived from
-        its publish moment (not the payload's as_of, which legacy intraday
-        publishes stamped with a partial-bar date): equities = the last
-        completed 4:00-PM-ET close before publish, BTC · MSTR · MSTU = the
-        12:00-UTC bar that closed just before publish."""
-        gen = payload.get("generated_at_utc")
-        if not gen:
-            return ""
+        """Explicit close DATES a published book is built from.  Prefers the
+        book's own signature-covered ``signal_basis`` stamp (written by the
+        publisher); legacy books fall back to deriving the basis from their
+        publish day's 7:15-AM-CT anchor — NOT from the wall-clock publish
+        moment, since the basis is pinned to the anchor even for a late or
+        manual publish."""
         try:
-            eq = fr.expected_equity_asof(gen).strftime("%b %d, %Y")
-            btc_cm = fr.close_moment("crypto", fr.expected_crypto_asof(gen))
+            basis = payload.get("signal_basis") or {}
+            if basis.get("equity_close") and basis.get("btc_bar_close_utc"):
+                eq_d = pd.Timestamp(basis["equity_close"])
+                btc_cm = pd.Timestamp(basis["btc_bar_close_utc"])
+            else:
+                gen = payload.get("generated_at_utc")
+                if not gen:
+                    return ""
+                anchor = fr.publish_anchor_ct(gen)
+                eq_d = fr.expected_equity_asof(anchor)
+                btc_cm = fr.close_moment("crypto", fr.expected_crypto_asof(anchor))
+            eq = eq_d.strftime("%b %d, %Y")
             btc = (btc_cm.tz_convert("America/Chicago")
                    .strftime("%b %d, %Y, %I:%M %p %Z").replace(" 0", " "))
         except Exception:

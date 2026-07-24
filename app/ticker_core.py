@@ -153,13 +153,14 @@ def fetch_daily(cfg: TickerConfig, start: str | None = None) -> pd.DataFrame:
     df = df.dropna(subset=["px_close"])
     macro_cols = [c for c in df.columns if not c.startswith("px_")]
     df[macro_cols] = df[macro_cols].ffill(limit=5)
-    # publisher mode: a published Target Book must be computed from COMPLETED
-    # market closes only — trim the in-progress *today* bar Yahoo includes
-    # during US market hours (the live apps keep it; only the publisher sets
-    # the flag).
+    # publisher mode: a published Target Book's basis is pinned to the publish
+    # day's 7:15-AM-CT anchor — trim every US bar after the pre-anchor session
+    # (the in-progress *today* bar during market hours AND the just-completed
+    # *today* close after 4 PM ET; post-close changes belong only to the live
+    # view). The live apps keep everything; only the publisher sets the flag.
     import freshness as _fr
     if _fr.completed_bars_only():
-        df = _fr.drop_in_progress_us_bar(df)
+        df = _fr.drop_in_progress_us_bar(df, _fr.publish_anchor_ct())
     return df
 
 
