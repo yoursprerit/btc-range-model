@@ -69,9 +69,11 @@ price tile) in the ₿ Bitcoin app.
 > Balanced Sharpe in every MC seed tested, and it costs the deterministic
 > equal-weight book **−38 pp**. The earlier ETHA-based case for adding it was
 > inflated by a fill that preceded the signal and by a shorter window. Full
-> analysis, plus a **larger pre-existing look-ahead affecting MSTR/MSTU**:
-> [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) §4–§5. BMNR was
-> evaluated alongside and rejected.
+> analysis, plus a **larger pre-existing look-ahead affecting MSTR/MSTU —
+> fixed 2026-07-25** (equity fills now land at the first exchange close after
+> the signal moment; on the fix-date vintage MSTR +296%→+165%, MSTU
+> +685%→+499%): [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md)
+> §4–§5. BMNR was evaluated alongside and rejected.
 
 ---
 

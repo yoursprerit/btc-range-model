@@ -4292,6 +4292,26 @@ def _backtest_dataset_mtime() -> float:
         return 0.0
 
 
+def _fill_after_signal(s: "pd.Series", dates) -> "np.ndarray":
+    """Align an exchange close series onto the CT signal bars WITHOUT look-ahead.
+
+    The CT bar labeled T closes at 12:00 UTC on calendar day T+1 — only then is
+    bar T's signal knowable.  The first price an equity trader can actually get
+    on that signal is the close of the first exchange session on or after day
+    T+1 (Monday for weekend bars) — the repo's own live procedure
+    (IBKR_PAPER_TRADING.md: act on the next bar, shortly after the US open).
+    The old ``reindex(dates).ffill()`` filled at day T's close — ~15 h (up to
+    2.5 days over weekends) BEFORE the signal existed — systematically banking
+    the correlated overnight/weekend gap (ETH_BMNR_STRATEGY_EVAL.md §5).
+
+    Trailing bars whose next session hasn't printed yet are marked at the last
+    available close (provisional; replaced by the true post-signal close on the
+    next data refresh)."""
+    want = pd.DatetimeIndex(dates) + pd.Timedelta(days=1)
+    out = s.reindex(s.index.union(want)).bfill().reindex(want)
+    return out.ffill().values.astype(float)
+
+
 @st.cache_data(show_spinner="Running MSTR backtest …")
 def run_mstr_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-05-26",
@@ -4367,14 +4387,10 @@ def run_mstr_backtest(end_date_iso: str,
         _mstr_close = d_mstr["Close"].sort_index()
         _mstr_low   = d_mstr["Low"].sort_index() if "Low" in d_mstr.columns else _mstr_close
 
-    _mstr_all = _mstr_close.reindex(
-        pd.date_range(_mstr_close.index[0], max(_mstr_close.index[-1], end_dt), freq="D")
-    ).ffill()
-    _mstr_lo_all = _mstr_low.reindex(
-        pd.date_range(_mstr_low.index[0], max(_mstr_low.index[-1], end_dt), freq="D")
-    ).ffill()
-    mstr_px = _mstr_all.reindex(dates).ffill().bfill().values.astype(float)
-    mstr_lo = _mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)  # noqa: F841
+    # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+    # T+1 signal moment (see _fill_after_signal — kills the pre-signal gap capture)
+    mstr_px = _fill_after_signal(_mstr_close, dates)
+    mstr_lo = _fill_after_signal(_mstr_low, dates)  # noqa: F841
 
     # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
     c_asof  = comp["close_asof"].values.astype(float)
@@ -4502,7 +4518,8 @@ def run_mstr_backtest(end_date_iso: str,
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                # Post-signal exit: bar i's signal is knowable at 12:00 UTC i+1;
+                # price[i] is already the NEXT exchange close (_fill_after_signal)
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
                 exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
@@ -4522,7 +4539,8 @@ def run_mstr_backtest(end_date_iso: str,
         else:
             if from_sl:
                 bars_since_sl += 1
-            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            # Bar i's signals fill at price[i] = the next exchange close after
+            # the signal moment (_fill_after_signal) — no pre-signal fills
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
@@ -5360,14 +5378,16 @@ def run_mstu_backtest(end_date_iso: str,
 
     if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
         _mstu_syn_ext = _yf_extend_series(_mstu_syn_csv, "MSTU", end_date_iso)
-        mstu_px = _mstu_syn_ext.reindex(dates).ffill().bfill().values.astype(float)
+        # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+        # T+1 signal moment (see _fill_after_signal)
+        mstu_px = _fill_after_signal(_mstu_syn_ext, dates)
     else:
         _mstu_syn = _build_synthetic_mstu_prices(
             pre_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
         )
         if _mstu_syn is None or len(_mstu_syn) == 0:
             return None
-        mstu_px = _mstu_syn.reindex(dates).ffill().bfill().values.astype(float)
+        mstu_px = _fill_after_signal(_mstu_syn, dates)
 
     # MSTU intraday lows — versioned CSV → fallback to yfinance; display only
     if _mstu_act_csv is not None and "low" in _mstu_act_csv.columns:
@@ -5524,7 +5544,8 @@ def run_mstu_backtest(end_date_iso: str,
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                # Post-signal exit: bar i's signal is knowable at 12:00 UTC i+1;
+                # price[i] is already the NEXT exchange close (_fill_after_signal)
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
                 exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
@@ -5544,7 +5565,8 @@ def run_mstu_backtest(end_date_iso: str,
         else:
             if from_sl:
                 bars_since_sl += 1
-            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            # Bar i's signals fill at price[i] = the next exchange close after
+            # the signal moment (_fill_after_signal) — no pre-signal fills
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
@@ -5763,19 +5785,21 @@ def run_mstr_options_backtest(end_date_iso: str,
         if d_mstr.empty or "Close" not in d_mstr.columns:
             return None
         mstr_raw = d_mstr["Close"].sort_index()
-    mstr_all = mstr_raw.reindex(
-        pd.date_range(mstr_raw.index[0],
-                      max(mstr_raw.index[-1], end_dt), freq="D")
-    ).ffill()
-    mstr_px = mstr_all.reindex(dates).ffill().bfill().values.astype(float)
+    # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+    # T+1 signal moment (see _fill_after_signal)
+    mstr_px = _fill_after_signal(mstr_raw, dates)
 
     # ── 60-day rolling historical volatility of MSTR (annualised) ────────────
+    # Trailing only — no bfill: backfilling pre-window bars with later realized
+    # vol is future data in the pricing input.  Bars before the first
+    # computable HV use a fixed causal prior instead.
     mstr_log_ret = np.log(mstr_raw / mstr_raw.shift(1)).dropna()
-    hv_series = (mstr_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
+    hv_series = (mstr_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill()
     hv_all = hv_series.reindex(
         pd.date_range(mstr_raw.index[0], max(mstr_raw.index[-1], end_dt), freq="D")
-    ).ffill().bfill()
-    hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
+    ).ffill()
+    hv_arr = hv_all.reindex(dates).ffill().values.astype(float)
+    hv_arr = np.where(np.isfinite(hv_arr), hv_arr, 0.80)   # causal prior pre-HV
     # Clamp to [0.20, 4.00] to keep BS numerically well-behaved
     hv_arr = np.clip(hv_arr, 0.20, 4.00)
 
@@ -6095,7 +6119,9 @@ def run_mstu_options_backtest(end_date_iso: str,
     _mstu_act_csv = _load_mstu_prices()
     if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
         _mstu_syn_ext = _yf_extend_series(_mstu_syn_csv, "MSTU", end_date_iso)
-        mstu_px = _mstu_syn_ext.reindex(dates).ffill().bfill().values.astype(float)
+        # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+        # T+1 signal moment (see _fill_after_signal)
+        mstu_px = _fill_after_signal(_mstu_syn_ext, dates)
     else:
         try:
             d_mstu = yf.download(
@@ -6112,10 +6138,7 @@ def run_mstu_options_backtest(end_date_iso: str,
         if d_mstu.empty or "Close" not in d_mstu.columns:
             return None
         mstu_raw_fb = d_mstu["Close"].sort_index()
-        mstu_all_fb = mstu_raw_fb.reindex(
-            pd.date_range(mstu_raw_fb.index[0], max(mstu_raw_fb.index[-1], end_dt), freq="D")
-        ).ffill()
-        mstu_px = mstu_all_fb.reindex(dates).ffill().bfill().values.astype(float)
+        mstu_px = _fill_after_signal(mstu_raw_fb, dates)
 
     # ── MSTU volatility: actual (post-inception) prices ───────────────────────
     if _mstu_act_csv is not None and "close" in _mstu_act_csv.columns:
@@ -6140,12 +6163,15 @@ def run_mstu_options_backtest(end_date_iso: str,
     if len(mstu_trading) < 2:
         hv_arr = np.full(N, 1.20)  # default 120% vol when history unavailable
     else:
+        # Trailing only — no bfill (future vol must not price earlier bars);
+        # bars before the first computable HV use the fixed causal prior.
         mstu_log_ret = np.log(mstu_trading / mstu_trading.shift(1)).dropna()
-        hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
+        hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill()
         hv_all = hv_series.reindex(
             pd.date_range(mstu_trading.index[0], max(mstu_trading.index[-1], end_dt), freq="D")
-        ).ffill().bfill()
-        hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
+        ).ffill()
+        hv_arr = hv_all.reindex(dates).ffill().values.astype(float)
+        hv_arr = np.where(np.isfinite(hv_arr), hv_arr, 1.20)   # causal prior pre-HV
     hv_arr = np.clip(hv_arr, 0.20, 5.00)  # MSTU is 2× leveraged — wider vol range
 
     # ── BTC signal arrays ─────────────────────────────────────────────────────
@@ -7255,7 +7281,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market Performance ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -7561,7 +7587,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_chart(
                     bt_oos,
-                    f"TF2+V-Gate vs B&H — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate vs B&H — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -7720,7 +7746,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
   </div>
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
   <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the MSTR trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the MSTR trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -8091,7 +8117,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -8403,7 +8429,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_mstr_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTR) vs B&H MSTR — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (MSTR) vs B&H MSTR — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -8945,7 +8971,7 @@ def render_eth_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -9257,7 +9283,7 @@ def render_eth_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_eth_chart(
                     bt_oos,
-                    f"TF2+V-Gate (ETH) vs B&H ETH — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (ETH) vs B&H ETH — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9468,7 +9494,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
   </div>
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
   <div style='font-size:11px; color:#0f766e; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the MSTU trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the MSTU trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -9836,7 +9862,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -10149,7 +10175,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 so = bt_oos["stats"]
                 fig_o = _make_mstu_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTU) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -10677,7 +10703,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -10976,7 +11002,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_btc_chart(
                     bt_oos,
-                    f"TF2+V-Gate (BTC) vs B&H BTC — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (BTC) vs B&H BTC — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -11153,7 +11179,7 @@ def render_mstr_options_trading_strategy_dashboard(
   <div style='border-top:1px solid #fcd34d; margin:10px 0;'></div>
 
   <div style='font-size:11px; color:#b45309; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the option trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the option trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -11463,7 +11489,7 @@ def render_mstr_options_trading_strategy_dashboard(
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -11754,7 +11780,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 so = bt_oos["stats"]
                 fig_o = _make_opts_chart(
                     bt_oos,
-                    f"CU (MSTR Calls) vs B&H MSTR — OOS Period (Fully Blind)  "
+                    f"CU (MSTR Calls) vs B&H MSTR — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -11929,7 +11955,7 @@ def render_mstu_options_trading_strategy_dashboard(
   <div style='border-top:1px solid #7dd3fc; margin:10px 0;'></div>
 
   <div style='font-size:11px; color:#0369a1; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the option trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the option trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -12239,7 +12265,7 @@ def render_mstu_options_trading_strategy_dashboard(
         lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -12531,7 +12557,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 so = bt_oos["stats"]
                 fig_o = _make_mstu_opts_chart(
                     bt_oos,
-                    f"CU (MSTU Calls) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"CU (MSTU Calls) vs B&H MSTU — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )

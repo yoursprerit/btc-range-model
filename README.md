@@ -284,9 +284,13 @@ Full analysis: **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** (live config),
 - **Some MSTU history is synthetic.** The long-window MSTU series is an
   **OLS-synthetic** reconstruction, cross-checked against the real fund only from
   2024-09-18 — the earlier leveraged path is modelled, not traded.
-- **Execution optimism.** The deployed CT engine executes **same-bar** and stops
-  **intrabar**, which modestly flatters it versus the conservative next-bar fills
-  used for the comparison rules.
+- **Execution timing (fixed 2026-07-25).** BTC/ETH fill at the 12:00-UTC bar
+  close — the exact moment their signal becomes knowable (zero-latency
+  assumption, feasible on a 24/7 asset). The equity sleeves (MSTR/MSTU) used to
+  fill at the *prior* US close — ~15 h **before** the signal existed — banking
+  the correlated overnight/weekend gap; they now fill at the first exchange
+  close after the signal moment (on the fix-date vintage: MSTR +296%→+165%,
+  MSTU +685%→+499%). Stops trigger and fill on closes, not intraday.
 - **Daily-rebuild caveat.** The divergence thresholds are tuned for the app's
   **hourly** CT model; re-run daily inside the Overall engine the H/L predictions
   are noisier, so BTC/MSTR/MSTU earn ~0 weight in the *daily* blend — the

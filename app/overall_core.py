@@ -1180,9 +1180,12 @@ def adjust_for_selection(weights: dict, cash: float, included) -> tuple:
 
 # ════════════════════════════════════════════════════════════════════════
 # HISTORICAL SNAPSHOT — the strategy exactly as it stood on a past date.
-# Everything is read off the committed back-test series (``pos_series``, the
-# normalised buy-&-hold price curve and the dated trade log), so the view is
-# the decision the engine actually took on that bar — no re-fit, no hindsight.
+# Positions and trades are read off the committed back-test series
+# (``pos_series``, the normalised buy-&-hold price curve and the dated trade
+# log), so those are the engine's genuine bar-by-bar decisions.  Caveat: the
+# blend weights and per-sleeve strategy parameters applied to that date are
+# TODAY'S (full-sample-fit) — the book percentages are a current-weights
+# projection, not the as-of record (the app captions this).
 # ════════════════════════════════════════════════════════════════════════
 def asset_close_series(res: dict) -> pd.Series | None:
     """Actual daily close series over one instrument's back-test window.
@@ -1356,7 +1359,9 @@ def period_breakdown(returns: pd.DataFrame, weights: np.ndarray,
 
 
 # combined-history windows (per-instrument return streams begin at the common
-# OOS start, so every window below is genuinely out-of-sample).
+# OOS start — out-of-sample for the H/L models, but strategy parameters and
+# blend weights are tuned/fit on these same windows, and the BTC CT sleeves'
+# model training extends into them; treat levels as in-sample-selected).
 COMBINED_PERIODS = [
     ("🌐 Full OOS (2021 → now)", "2021-01-01", None),
     ("🐻 Bear (2021–2022)", "2021-01-01", "2022-12-31"),

@@ -55,7 +55,10 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
     prev_c = close.shift(1)
     y_hi = high / prev_c - 1.0
     y_lo = low / prev_c - 1.0
-    frac = feat.isna().mean()
+    # Feature availability decided on the pre-OOS window only, so a series that
+    # only starts (or dies) inside the OOS window can't leak its future
+    # availability into the column choice.
+    frac = feat.loc[feat.index < pd.Timestamp(oos_start)].isna().mean()
     feat_cols = [c for c in feat.columns if frac[c] <= 0.35]
 
     # CAUSAL alignment (matches the BTC app): the prediction for bar D must use
@@ -73,7 +76,7 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
             df[f"{a}_close"] = daily[f"{a}_close"]
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=feat_cols + ["y_hi", "y_lo", "close_asof"])
 
-    train = df.loc[:oos_start]
+    train = df[df.index < pd.Timestamp(oos_start)]   # strictly pre-OOS
     def _mk():
         return Pipeline([("sc", StandardScaler()),
                          ("m", RidgeCV(alphas=np.logspace(-3, 3, 13)))])
@@ -85,7 +88,7 @@ def build_predictions(daily: pd.DataFrame, oos_start: str = OOS_START):
     #    at zero on the training window so hi/lo breaks occur ~50% of the time.
     #    Without this, ridge's raw band is biased and the U1/D2 signals never
     #    fire.  This is the gold analog of the BTC daily-H/L calibration_meta.
-    tr_mask = df.index <= pd.Timestamp(oos_start)
+    tr_mask = df.index < pd.Timestamp(oos_start)
     # symmetric centering: pred = raw + mean(actual − raw) on the train window,
     # so both err_hi=(actual_high−pred_high) and err_lo derived from
     # (actual_low−pred_low) sit at zero and hi/lo breaks occur ~50% of bars.
@@ -188,6 +191,9 @@ def simulate_regime(preds, sig, price_col, ma_window=50, stop_pct=1.0,
     if d2_exit:
         long_at_close = long_at_close & ~(sig["ehma3"] < -0.15)
     oos_i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
+    # Never start at bar 0: long_at_close[i-1] would wrap to the LAST bar's
+    # signal (future data deciding the first bar).
+    oos_i0 = max(oos_i0, 1)
 
     eq = 1.0
     strat_eq = []; bh_eq = []; used_dates = []
@@ -231,6 +237,9 @@ def simulate_dual(preds, price_col, stop_pct, oos_start=OOS_START, end=None,
     dates = preds["target_date"].to_numpy()
     n = len(price)
     i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
+    # Never start at bar 0: long_at_close[i-1] would wrap to the LAST bar's
+    # signal (future data deciding the first bar).
+    i0 = max(i0, 1)
     i1 = n if end is None else int(np.searchsorted(
         dates, np.datetime64(pd.Timestamp(end)), side="right"))
 
@@ -289,16 +298,42 @@ def _clean_flags(sig, i, U1, D2, D1):
     return not bool(np.any(d2h | d1h))
 
 
+def lag_signals(sig: dict, k: int = 1) -> dict:
+    """Shift every signal array ``k`` bars forward so index i holds the signal
+    as it stood at the close of bar i−k (first ``k`` slots are neutral).
+
+    The divergence signals need bar i's realized high/low, which is only final
+    at bar i's close — so a fill at bar i's close on bar i's own signal books a
+    price the live workflow (signal published at the close, order worked the
+    next session) cannot get.  Lagging one bar makes the divergence engine use
+    the same decide-at-close-i−1 / fill-at-close-i convention as the trend
+    engines (``simulate_regime`` / ``simulate_dual``)."""
+    out = {}
+    for key, v in sig.items():
+        a = np.asarray(v)
+        s = np.empty_like(a)
+        s[:k] = False if a.dtype == bool else 0
+        s[k:] = a[:-k] if k else a
+        out[key] = s
+    return out
+
+
 # ── strategy simulation on one price series ───────────────────────────────
 def simulate(preds, sig, price_col, stop_pct, U1, D2, D1,
              use_d1_exit=False, oos_start=OOS_START, end=None):
     """Walk bars; long when the Pure-Regime entry gate fires, exit on D2/D3
     (+optional D1) or the fixed stop.  Window = [oos_start, end].
 
+    Execution is decide-at-close-i−1 / fill-at-close-i: the divergence gate for
+    a bar needs that bar's realized high/low (final only at its close), so the
+    signal is lagged one bar before the fill — same convention as the trend
+    engines and the live workflow (signal at the close → traded next session).
+
     Returns, over the window: strategy & buy&hold equity curves (start 1.0), a
     per-bar long/flat position array, the completed-trade log (entry/exit date,
     price, return, exit reason) and the trade-return array.
     """
+    sig = lag_signals(sig)   # kill the same-bar H/L look-ahead
     price = preds[price_col].to_numpy(float)
     dates = preds["target_date"].to_numpy()
     n = len(price)

@@ -12,11 +12,16 @@ sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
 all three assets trade the Standard MA (above-MA30) gate — the most profitable
 and most stable gate on the current data.
 
-Verified: reproduces the BTC app's headline BTC +86% / MSTR +266% / MSTU +524%
-(all Standard MA; 2026-07e per-asset stop retune — MSTR now signal-exit-only with
-no fixed stop, MSTU widened −3% → −6% (vol-matched to its ~2× vol); the post-stop
-re-entry override applies only to MSTU now, plus the 2026-07c 5-bar V-reversal
-window), full period Jun 2024 → May 2026.
+2026-07-25 look-ahead fix: MSTR/MSTU fills moved from the *signal-bar date's*
+equity close (printed ~15 h — up to 2.5 days over weekends — BEFORE the CT
+signal is knowable at 12:00 UTC the next day) to the first exchange close at
+or after signal availability (see ``_next_session_close`` and
+ETH_BMNR_STRATEGY_EVAL.md §5).  On the 2026-07-25 vintage this moves MSTR
++296%→+165% and MSTU +685%→+499% over the full CT window; BTC/ETH are
+unchanged (their 12:00-UTC bars fill exactly at the signal moment).  All
+figures remain data-vintage-dependent.  Gate/stop config: all sleeves trade
+the Standard MA gate; MSTR signal-exit-only, MSTU −6% stop, post-stop
+re-entry override (MSTU only), 5-bar V-reversal window.
 
 2026-07f: ETH (spot Ethereum) added as a fourth sleeve on the same parent BTC
 signal — Standard-MA gate, signal-exit-only, no fixed stop (the MSTR
@@ -291,7 +296,9 @@ def _run_bt(dates, asset_px, sigs, fixed_pct, bt_start):
         nav_arr[N - 1] = qty * asset_px[N - 1]
     idx = pd.DatetimeIndex(dates[_bt0:])
     nav_s = pd.Series(nav_arr[_bt0:], index=idx).ffill()
-    bh_s = pd.Series(cap * asset_px[_bt0:] / asset_px[_bt0], index=idx)
+    # ffill: equity sleeves can carry a NaN tail (signal bars whose next
+    # exchange session hasn't printed yet — pending fills)
+    bh_s = pd.Series(cap * asset_px[_bt0:] / asset_px[_bt0], index=idx).ffill()
     pos_s = pd.Series(pos_arr[_bt0:], index=idx)
     open_entry = (dict(price=float(e_price), date=pd.Timestamp(e_date), trigger=e_trig)
                   if pos == "LONG" else None)
@@ -299,15 +306,31 @@ def _run_bt(dates, asset_px, sigs, fixed_pct, bt_start):
                 open_pos=(pos == "LONG"), open_entry=open_entry)
 
 
+def _next_session_close(s: pd.Series, dates: pd.DatetimeIndex) -> np.ndarray:
+    """Align an exchange close series onto the CT signal bars WITHOUT look-ahead.
+
+    The CT bar labeled T closes at 12:00 UTC on calendar day T+1 — only then is
+    bar T's signal knowable.  The first price an equity trader can actually get
+    on that signal is therefore the close of the first exchange session on or
+    after day T+1 (Monday for weekend bars).  The old ``reindex(dates).ffill()``
+    filled at day T's close — ~15 h (up to 2.5 days over weekends) BEFORE the
+    signal existed, systematically banking the correlated overnight/weekend gap
+    (see ETH_BMNR_STRATEGY_EVAL.md §5).  Bars whose next session hasn't traded
+    yet are NaN (a genuinely pending fill — the loop holds until it prints)."""
+    want = pd.DatetimeIndex(dates) + pd.Timedelta(days=1)
+    filled = s.reindex(s.index.union(want)).bfill()
+    return filled.reindex(want).to_numpy(float)
+
+
 def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
     btc = comp["actual_close"].values.astype(float)
-    mstr = T.load_asset("MSTR").reindex(dates).ffill().to_numpy(float)
+    mstr = _next_session_close(T.load_asset("MSTR"), dates)
     try:
         syn = pd.read_csv(T.DATA / "mstu_synthetic_daily.csv", parse_dates=["Date"])
         syn = syn.set_index("Date").sort_index()["close"].astype(float)
-        mstu = syn.reindex(dates).ffill().to_numpy(float)
+        mstu = _next_session_close(syn, dates)
     except Exception:
-        mstu = T.load_asset("MSTU").reindex(dates).ffill().to_numpy(float)
+        mstu = _next_session_close(T.load_asset("MSTU"), dates)
     out = {"BTC": btc, "MSTR": mstr, "MSTU": mstu}
     # ETH spot on BTC's own 12:00-UTC bars — full coverage of the CT window, so
     # (unlike an ETF sleeve) there is no staggered start to work around.
@@ -333,8 +356,12 @@ def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
             rf = T.load_raw_features()
             if "eth_close" not in rf.columns:
                 raise KeyError("eth_close")
+            # midnight-UTC closes: day T's close prints 12 h BEFORE bar T's
+            # signal exists, so take the NEXT day's close (first one after the
+            # 12:00-UTC signal moment) rather than ffilling a pre-signal print.
             out["ETH"] = (rf["eth_close"].astype(float)
-                          .reindex(dates).ffill().to_numpy(float))
+                          .reindex(pd.DatetimeIndex(dates) + pd.Timedelta(days=1))
+                          .to_numpy(float))
             warnings.warn(
                 f"eth_usd_daily.csv unavailable ({exc}); ETH sleeve falling back to "
                 "raw_features eth_close (midnight-UTC anchor — degraded fills).",
@@ -445,8 +472,12 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
         r = dict(bh=bh.to_numpy(float), dates=list(nav.index), trades=bt["trades"],
                  trade_log=bt["trades"],
                  in_pos_now=bt["open_pos"], strat=nav.to_numpy(float))
-        last_px = float(px[key][last])
-        prev_px = float(px[key][last - 1]) if last >= 1 else last_px
+        # display price = last FINITE fill: equity sleeves end with a NaN tail
+        # (bars whose next exchange session hasn't printed yet)
+        _fin_idx = np.flatnonzero(_fin)
+        _last_fin = int(_fin_idx[-1]) if len(_fin_idx) else last
+        last_px = float(px[key][_last_fin])
+        prev_px = float(px[key][_last_fin - 1]) if _last_fin >= 1 else last_px
         dchg = (last_px / prev_px - 1) * 100 if prev_px else 0.0
         dec = _decision(sigs_k, last, bt["open_pos"])
         m = _curve_metrics(nav); bhm = _curve_metrics(bh)

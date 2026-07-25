@@ -87,14 +87,15 @@ character, because the two engines are regime-complementary:
   causal signal), −3% stop
 - **NUGT** — Direxion Gold Miners 2× → **Divergence Pure-Regime**, −5% stop
 
-Out-of-sample (2021→now): **GLDM +137%** (B&H +108%; MDD −19% vs −26%, Sharpe
-1.08 vs 0.83), **UGL +302%** (B&H +151%; MDD −38% vs −50%, Sharpe 0.96 vs 0.64),
-**GDX +103%** (B&H +92%; MDD −22% vs −46%, Sharpe 0.85 vs 0.51), **NUGT +276%**
-(B&H +41%; MDD −38% vs −74%, Sharpe 0.90 vs 0.45). Combined equal-weight stack:
-**+214% / −19.8% MDD / Sharpe 1.15** — more return AND higher Sharpe than
-all-divergence (+134%/0.95), far shallower drawdown than all-dual-MA
-(−20% vs −34%), and still positive (+4%) through the 2021–22 chop because the
-divergence miners sleeves hedge the trend sleeves' dips.
+Model-OOS (2021→now; post-signal divergence fills since the 2026-07-25
+look-ahead fix; thresholds tuned on this window): **GLDM +137%** (B&H +108%;
+MDD −19% vs −26%, Sharpe 1.08 vs 0.83), **UGL +302%** (B&H +151%; MDD −38% vs
+−50%, Sharpe 0.96 vs 0.64), **GDX +85%** (B&H +92%; MDD −23% vs −47%, Sharpe
+0.77 vs 0.51), **NUGT +161%** (B&H +41%; MDD −43% vs −74%, Sharpe 0.71 vs
+0.45). Combined equal-weight stack: **+178% / −29% MDD / Sharpe 1.03**. The
+divergence miners sleeves still hedge the trend sleeves' dips through the
+2021–22 chop. (Pre-fix figures — GDX +103%, NUGT +276%, stack +214% — included
+a same-bar fill on a signal needing that bar's realized high/low and are void.)
 
 Full methodology, parameter choice and per-period results:
 **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.

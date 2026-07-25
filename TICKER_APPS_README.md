@@ -84,8 +84,13 @@ The strategy and its thresholds are **not** assumed — a frontier sweep
 (`backtest_ticker.py <KEY> --sweep`) searches both engines (MA trend-filter and
 the Gold/BTC Divergence Pure-Regime system) and picks the config that maximises
 return **subject to a drawdown no worse than buy-&-hold in every period** and
-that **beats buy-&-hold in the loss periods**. The daily H/L signal model is fit
-once on the pre-OOS window, so all reported windows are genuinely out-of-sample.
+that **beats buy-&-hold in the loss periods**. The daily H/L signal *model* is
+fit once on the pre-OOS window (model-OOS) — but the sweep itself scores and
+selects over the reported windows, so the strategy layer (engine mode,
+windows, thresholds, stops) is in-sample-selected on them; no reported window
+is blind to those choices. Since the 2026-07-25 look-ahead fix, divergence
+engines decide at close *i−1* and fill at close *i* (their signal needs bar
+*i*'s realized high/low), matching the trend engines.
 
 **Out-of-sample results (2021→now window vs Buy-&-Hold):**
 

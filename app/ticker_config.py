@@ -559,10 +559,11 @@ CONFIGS["PBW"] = TickerConfig(
     hl_band_pct=0.014,
     fetch_start="2010-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.012, day_down_thresh=-0.012,
-    results_note=("OOS 2021→now (causal signal, 2026-07 retune): the U1/D2 "
-                  "divergence system returns +148% at a −30% max drawdown "
-                  "(Sharpe 0.97) while buy-&-hold is DOWN −67% at a −90% "
-                  "drawdown. On this boom-bust clean-energy basket the "
+    results_note=("Model-OOS 2021→now (causal signal; thresholds tuned on this "
+                  "window; post-signal fills since the 2026-07-25 look-ahead "
+                  "fix): the U1/D2 divergence system returns +110% at a −23% "
+                  "max drawdown (Sharpe 0.81) while buy-&-hold is DOWN −67% at "
+                  "a −90% drawdown. On this boom-bust clean-energy basket the "
                   "divergence Pure-Regime — which stands aside through the "
                   "multi-year bust and re-enters on confirmed momentum — "
                   "remains decisively the better way to trade it."),
@@ -613,12 +614,13 @@ CONFIGS["ARTY"] = TickerConfig(
         ("🔬 Most-recent OOS (2025 → now)", "2025-01-01", None),
     ],
     day_up_thresh=0.010, day_down_thresh=-0.010,
-    results_note=("OOS 2021→now (causal signal, 2026-07 retune): the U1/D2 "
-                  "divergence system (signal-only exits, no fixed stop) returns "
-                  "+148% at a −27% max drawdown (Sharpe 1.11) vs buy-&-hold "
-                  "+73% at −56% (Sharpe 0.48) — it beats the market on return "
-                  "AND roughly halves the drawdown, so the divergence "
-                  "Pure-Regime remains the tuned strategy."),
+    results_note=("Model-OOS 2021→now (causal signal; thresholds tuned on this "
+                  "window; post-signal fills since the 2026-07-25 look-ahead "
+                  "fix): the U1/D2 divergence system (signal-only exits, no "
+                  "fixed stop) returns +113% at a −24% max drawdown (Sharpe "
+                  "0.93) vs buy-&-hold +73% at −56% (Sharpe 0.48) — it beats "
+                  "the market on return AND halves the drawdown, so the "
+                  "divergence Pure-Regime remains the tuned strategy."),
 )
 
 

@@ -10,7 +10,9 @@ Select it from the **Application radio at the top of the sidebar** →
 **₿ Bitcoin (BTC)**. For the platform overview see **[`README.md`](README.md)**;
 for the full strategy spec see **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)**
 and **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**; the
-ETH sleeve — and an important **look-ahead finding affecting MSTR/MSTU** — are in
+ETH sleeve — and an important **look-ahead finding affecting MSTR/MSTU (fixed
+2026-07-25: equity fills now land at the first exchange close after the
+signal moment)** — are in
 **[`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md)**.
 
 Each traded instrument has its own **Backtesting tab** — ₿ BTC · 📊 MSTR ·
@@ -389,6 +391,14 @@ Following a May 2026 audit, five classes of issue were hardened:
 | Stacked in-sample H/L preds used as 3-class features | `train_3class_day_type.py` | TimeSeriesSplit-5 OOF H/L predictions for in-train rows. |
 | Replay tab silently shows in-sample fit | `btc_hourly_app.py` | Yellow warning banner naming each affected model and its `train_end`. |
 | Fear & Greed index updated intraday | `train_hourly_model.py` + `app` | F&G lagged 1 day before joining. |
+
+A **July 2026 follow-up audit (2026-07-25)** fixed three further classes:
+
+| Issue | Where | Fix |
+|---|---|---|
+| Equity fills preceded the signal: MSTR/MSTU (stock + options) filled at the US close of the signal-bar *date*, ~15 h (weekends: up to 2.5 days) before the CT signal is knowable at 12:00 UTC the next day | `btc_hourly_app.py` (4 backtests), `btc_ct_engine.py` | Fills moved to the first exchange close at/after signal availability (`_fill_after_signal` / `_next_session_close`). MSTR +296%→+165%, MSTU +685%→+499% on the fix-date vintage; BTC/ETH unchanged. |
+| Options backtests backfilled early bars with later realized volatility (`.bfill()`) | `btc_hourly_app.py` | Trailing-only HV with a fixed causal prior for pre-window bars. |
+| "OOS Only — Fully Blind" labels: the window is blind only to model weights — strategy thresholds/stops/gates were tuned (2026-07) on a window that includes it | `btc_hourly_app.py` dashboards | Relabeled "Model-OOS ⚠️ Strategy Tuned In-Window". |
 
 Effect on headline metrics: MAPE moved ≤ 0.2 pp (magnitude estimates were
 honest); direction accuracy collapsed by ~3.8 pp (it was test-tuning inflation).
