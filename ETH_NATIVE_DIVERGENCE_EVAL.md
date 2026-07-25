@@ -142,6 +142,55 @@ Supporting detail:
    Nothing in this evaluation strengthens the case for ETH; it only closes
    the "maybe a native engine would fix it" avenue.
 
+---
+
+## 4. Addendum — the shipped strategy backtested from 2021
+
+Follow-up question: *what would the ETH backtest look like from 2021 with the
+currently implemented strategy?* The shipped sleeve reports from 2024-03-05
+only because the CT feature CSV starts 2023-11, so
+`scripts/eval_eth_2021_backtest.py` rebuilds the same 116-feature matrix back
+to 2020-06 (Binance-mirror BTC 12:00-UTC bars, Yahoo macro, blockchain.info
+on-chain, Coinbase premium — the pull script's own recipe), splices the
+committed CSV verbatim from 2023-11, and runs the deployed engine unchanged.
+The validation row over the shipped window reproduces the published figures
+exactly (+40.0% / −22.9% / Sharpe 0.52), so the extension is trustworthy on
+the live era.
+
+**2021-01-01 → 2026-07-24** *(return / maxDD / Sharpe; trades / win rate)*:
+
+| Strategy | Result |
+|---|---|
+| CT-on-BTC, Standard-MA gate, −8% stop (shipped) | **+0.7% / −60.6% / 0.17** · 36 tr / 44% |
+| CT-on-BTC, Standard-MA gate, no stop | +26.2% / −61.1% / 0.26 · 34 tr / 47% |
+| ETH Buy & hold | +154.6% / −78.9% / 0.50 |
+
+Per year (shipped config vs B&H, each year rebased):
+
+| Year | Strategy | Buy & hold |
+|---|---|---|
+| 2021 | −7.5% / −36.8% | **+406.1%** / −58.9% |
+| 2022 | −14.1% / −43.3% | −68.0% / −73.8% |
+| 2023 | −18.8% / −31.3% | +89.2% / −27.0% |
+| 2024 | +12.5% / −23.0% | +39.7% / −43.7% |
+| 2025 | **+28.1%** / −18.7% | −14.0% / −60.1% |
+| 2026 YTD | **+8.4%** / −6.8% | −39.0% / −53.8% |
+
+Reading: over the full window the current strategy is roughly **flat (+0.7%)
+with a −61% drawdown**, far behind B&H's +155% — it misses essentially all of
+2021's +406% (14 choppy trades, five −8% stops) and bleeds through 2022-23.
+It only starts adding value from 2024 on, and is *excellent* in 2025-26
+(+28% and +8% against B&H's −14% and −39%). That inflection is exactly where
+the thresholds/gate/stop were tuned — and the deploy-mode CT model is
+in-sample over 2021→2026-02 anyway — so the 2021-23 weakness is a fair
+warning that the sleeve's published edge is concentrated in the recent,
+tuned-on regime, while the pre-2024 numbers cannot be read as honest OOS
+either (they're the same model *with* look-ahead into its training window,
+and it still lost). Additional reconstruction caveats: pre-2023-11 features
+are re-fetched today (not a production vintage) and pre-2023-11 ETH prices
+come from the global-Binance mirror (≤0.6% venue difference), so
+reconstructed-era signals are approximate.
+
 ### Caveats
 
 * The holdout is a single ~1-year regime (a deep ETH bear). A long-only
