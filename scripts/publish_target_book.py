@@ -215,6 +215,11 @@ def main() -> int:
             print(f"Rotated previous book → {tb.prev_path(_bp)}")
     Path(args.out).write_text(tb.dumps(paper, secret))
     Path(args.live_out).write_text(tb.dumps(live, secret))
+    # dated as-of record (book_archive/<as_of>.json) — the Historical View's
+    # source for "the book actually published from this bar's signals"
+    _arch = tb.archive_book(live, Path(args.live_out), secret)
+    if _arch:
+        print(f"Archived as-of record → {_arch}")
 
     _write_audit(Path(args.audit_out), audit=audit, results=results,
                  profile=args.profile, book_published=True,

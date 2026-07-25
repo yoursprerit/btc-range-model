@@ -41,6 +41,40 @@ def prev_path(path: Path) -> Path:
     return path.with_name(path.stem + "_prev" + path.suffix)
 
 
+# ── dated as-of archive ──────────────────────────────────────────────────────
+# One JSON per signal day (keyed by the book's ``as_of``), so the UI's
+# Historical View can show the book that was ACTUALLY published from a past
+# bar's committed signals — the as-of record — instead of only a current-
+# weights projection.  An intraday re-publish for the same ``as_of`` replaces
+# that day's record: last publish wins, matching what the executor traded.
+ARCHIVE_DIRNAME = "book_archive"
+
+
+def archive_path(book_path: Path, as_of) -> Path:
+    """``…/target_book_live.json`` + as_of → ``…/book_archive/<as_of>.json``."""
+    return (Path(book_path).parent / ARCHIVE_DIRNAME
+            / f"{pd.Timestamp(as_of).date()}.json")
+
+
+def archive_book(payload: dict, book_path: Path,
+                 secret: str | None = None) -> Path | None:
+    """Persist *payload* as the dated as-of record next to *book_path*.
+
+    Signed with *secret* when given (same HMAC as the live book), so archived
+    records stay verifiable.  Best-effort: a failure to archive never blocks a
+    publish.  Returns the path written, or None."""
+    try:
+        as_of = payload.get("as_of")
+        if not as_of:
+            return None
+        p = archive_path(book_path, as_of)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(dumps(payload, secret))
+        return p
+    except Exception:
+        return None
+
+
 _ROTATE_TZ = "America/Chicago"     # the publish cycle's anchor timezone
 
 

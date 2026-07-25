@@ -1731,6 +1731,8 @@ with tab_hist:
                "weights and per-sleeve strategy parameters are TODAY'S (fit on the "
                "full sample), not the ones that existed on that date — the book "
                "percentages are a current-weights projection, not the as-of record. "
+               "Where a Targetbook was actually **published** from the chosen "
+               "bar's signals, it is shown alongside as the true as-of record. "
                "Follows the "
                f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
                "toggle selected on the Live tab.")
@@ -1789,18 +1791,45 @@ with tab_hist:
                             f"~{ov.SATA['annual_rate']*100:.0f}% yield.")
 
         # ── the book on that date + the blend's record up to it ────────────
-        _h_cols = st.columns([1, 1.4])
-        with _h_cols[0]:
+        # the as-of RECORD: the book actually published from this bar's
+        # committed signals (data/overall/book_archive/<as_of>.json — written
+        # by the daily publisher, backfilled from git history), shown next to
+        # the projection whenever one exists.
+        _h_arch_dir = _TB_DIR / "book_archive"
+        _h_pub = _load_published_book(_h_arch_dir / f"{_h_bar.date()}.json")
+        _h_cols = st.columns([1, 1, 1.4]) if _h_pub else st.columns([1, 1.4])
+        if _h_pub:
+            with _h_cols[0]:
+                _hw, _hidle = _book_alloc(_h_pub)
+                st.plotly_chart(
+                    _alloc_donut(_hw, _hidle,
+                                 f"Published book — {_h_bar.strftime('%b %d, %Y')}"),
+                    use_container_width=True)
+                st.caption(f"The **as-of record** — the Targetbook actually "
+                           f"published from this bar's committed signals, with "
+                           f"the blend weights and entry-priority tilt of that "
+                           f"day · {_book_close_caption(_h_pub)} · profile "
+                           f"**{_h_pub.get('profile', '—')}** · published "
+                           f"**{fr.fmt_ct(_h_pub.get('generated_at_utc'))}**")
+        with _h_cols[-2]:
             st.plotly_chart(
                 _alloc_donut(_h_book, _h_sata,
                              f"Strategy book — {_h_bar.strftime('%b %d, %Y')}"),
                 use_container_width=True)
+            _h_first = min((p.stem for p in _h_arch_dir.glob("*.json")),
+                           default=None)
             st.caption("Optimal-blend weights water-filled over the sleeves in "
                        "position at that close; undeployed capital in **SATA**. "
                        "Same construction as the Live tab's current book (the "
                        "entry-priority tilt needs live-only inputs, so it isn't "
-                       "applied retrospectively).")
-        with _h_cols[1]:
+                       "applied retrospectively)."
+                       + (" **Current-weights projection** — TODAY'S blend "
+                          "weights; the published book alongside is the record "
+                          "of what actually traded." if _h_pub else
+                          " No published Targetbook was recorded for this bar"
+                          + (f" (records start {_h_first})" if _h_first else "")
+                          + ", so this projection is the only view."))
+        with _h_cols[-1]:
             _h_cm = ov.curve_metrics(_h_curve.loc[:_h_bar])
             _h_m = st.columns(4)
             _h_m[0].metric("Blend return to date", f"{_h_cm['total_ret']*100:+,.0f}%",
