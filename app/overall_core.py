@@ -11,7 +11,7 @@ primary plus higher-beta / leveraged siblings — exactly as the dedicated apps 
 
     App     Signal     Traded off that signal
     ─────   ──────     ────────────────────────────────────────────
-    BTC     BTC        BTC (1×) · MSTR (BTC-proxy) · MSTU (2× MSTR)
+    BTC     BTC        BTC (1×) · MSTR (BTC-proxy) · MSTU (2× MSTR) · ETHA (spot ETH)
     Gold    GLDM       GLDM (1×) · GDX (miners) · UGL (2× gold)
     XLE     XLE        XLE (1×) · OIH (oil services, high-beta)
     SOXX    SOXX       SOXX
@@ -106,13 +106,14 @@ BTC_CFG = TickerConfig(
     primary_symbol="BTC-USD",
     macro_syms={"eth": "ETH-USD", "spx": "^GSPC", "ndx": "^NDX",
                 "vix": "^VIX", "gold": "GC=F", "dxy": "DX-Y.NYB", "tnx": "^TNX"},
-    extra_syms={"mstr": "MSTR", "mstu": "MSTU"},
+    extra_syms={"mstr": "MSTR", "mstu": "MSTU", "etha": "ETHA"},
     sentiment=[("spx_close", "mom", +1.0), ("ndx_close", "mom", +1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Crypto/risk macro sentiment",
-    traded_assets=[("BTC", "px_close"), ("MSTR", "mstr_close"), ("MSTU", "mstu_close")],
+    traded_assets=[("BTC", "px_close"), ("MSTR", "mstr_close"), ("MSTU", "mstu_close"),
+                   ("ETHA", "etha_close")],
     asset_labels={"px_close": "BTC · Bitcoin", "mstr_close": "MSTR · MicroStrategy",
-                  "mstu_close": "MSTU · 2× MSTR"},
+                  "mstu_close": "MSTU · 2× MSTR", "etha_close": "ETHA · Ethereum"},
     strategy_mode="divergence", strategy_name="BTC Divergence Pure-Regime",
     ma_window=30, fixed_stop=0.03,
     u1_errhi_min=0.013, d2_errhi_max=-0.013, d1_errlo_min=0.005, v_errlo_min=0.50,
@@ -241,6 +242,7 @@ ASSET_META = {
     "BTC":  dict(name="Bitcoin",        kind="core"),
     "MSTR": dict(name="MicroStrategy",  kind="beta"),
     "MSTU": dict(name="2× MSTR",        kind="lev"),
+    "ETHA": dict(name="Ethereum (ETHA)", kind="core"),
     "GLDM": dict(name="Gold (GLDM)",    kind="core"),
     "GDX":  dict(name="Gold Miners",    kind="beta"),
     "UGL":  dict(name="2× Gold",        kind="lev"),
@@ -270,6 +272,7 @@ CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 FUNDAMENTAL_VIEW = {
     "SOXX": 1.40, "SOXL": 1.40, "ARTY": 1.40,   # AI / semiconductor supercycle (SOXL = 3× semis)
     "BTC": 1.40, "MSTR": 1.40, "MSTU": 1.40,    # crypto institutional era
+    "ETHA": 1.40,                                # spot ETH — same crypto thesis
     "GLDM": 1.30, "GDX": 1.40, "UGL": 1.40, "NUGT": 1.40,   # structural gold bull (NUGT = 2× miners)
     "GRID": 1.40,                                # electrification / grid capex
     "WGMI": 1.30,                                # miners' AI/HPC pivot
@@ -279,7 +282,7 @@ FUNDAMENTAL_VIEW = {
 }
 FUNDAMENTAL_VIEW_NOTE = (
     "Mid-2026 sector outlook: overweight AI/semis (SOXX, ARTY), the crypto "
-    "institutional era (BTC/MSTR/MSTU, WGMI), the structural gold bull "
+    "institutional era (BTC/MSTR/MSTU/ETHA, WGMI), the structural gold bull "
     "(GLDM/GDX/UGL) and electrification (GRID); underweight clean energy (PBW) "
     "and oil services (OIH).")
 

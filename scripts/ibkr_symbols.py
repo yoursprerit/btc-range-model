@@ -1,8 +1,8 @@
 """Signal-key → IBKR contract mapping for the Overall Trading paper rebalancer.
 
 The Overall engine (``app/overall_core.py``) keys every traded instrument by a
-short signal key (``ASSET_META``): BTC, MSTR, MSTU, GLDM, GDX, UGL, NUGT, SOXX,
-SOXL, GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.  Every one of these is a
+short signal key (``ASSET_META``): BTC, MSTR, MSTU, ETHA, GLDM, GDX, UGL, NUGT,
+SOXX, SOXL, GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.  Every one of these is a
 US-listed ETF / equity that Interactive Brokers can trade **except spot BTC** —
 IBKR has no spot-Bitcoin product, so the BTC signal sleeve is traded via the
 **IBIT** spot-Bitcoin ETF, exactly as the user specified.
@@ -25,6 +25,8 @@ TRADE_SYMBOL: dict[str, str] = {
     "SATA": "SATA",   # idle-cash park (Strive preferred) — used by the LIVE book only
     "MSTR": "MSTR",
     "MSTU": "MSTU",
+    "ETHA": "ETHA",   # spot-ETH sleeve on the BTC signal — ordinary US-listed ETF
+
     "GLDM": "GLDM",
     "GDX":  "GDX",
     "UGL":  "UGL",

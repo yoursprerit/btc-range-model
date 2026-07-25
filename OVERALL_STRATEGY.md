@@ -34,7 +34,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 
 | Signal (parent) | Instruments (kind) | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` | CT-model Divergence · BTC & MSTR signal-exit-only, MSTU −6% |
+| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETHA `core` | CT-model Divergence · BTC & MSTR & ETHA signal-exit-only, MSTU −6% |
 | 🥇 **Gold Trend (GLDM)** | GLDM `core` · UGL `lev` | Dual-MA 25/100 on the GLDM close · −3% stops |
 | ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −3% / NUGT −5% |
 | 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
@@ -45,13 +45,21 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | ☀️ **PBW** | PBW `core` | Clean-Energy Divergence Pure-Regime |
 | 🤖 **ARTY** | ARTY `core` | AI/Tech Divergence Pure-Regime |
 
-That is **17 instruments across 10 parent apps** (the two gold apps share one
+That is **18 instruments across 10 parent apps** (the two gold apps share one
 GLDM-derived signal). Each runs the **exact engine its own
-app trades** (BTC/MSTR/MSTU via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
+app trades** (BTC/MSTR/MSTU/ETHA via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
 via the Gold app's `backtest_gldm`; the ETFs via their `ticker_config` entries
 through `backtest_ticker`), so the Overall numbers match each source app
 bar-for-bar. Sibling stops are looser than the 1× because a tight stop whipsaws a
 leveraged/high-beta name.
+
+**ETHA (added 2026-07)** — the iShares Ethereum Trust (1× spot-ETH ETF) is the
+fourth sleeve on the BTC parent signal, traded with the MSTR treatment
+(Standard-MA gate, signal-exit-only, no fixed stop) from its 2024-07-23
+inception. It is an *Overall-universe* sleeve — the dedicated ₿ Bitcoin app
+continues to display BTC/MSTR/MSTU. Rationale and full validation:
+[`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md) (BMNR was evaluated
+at the same time and rejected).
 
 ---
 
@@ -148,12 +156,13 @@ the user dials the return-vs-risk trade-off on the Live tab:
 Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdown
 deepens faster than the return — which is exactly the knob these profiles expose.
 
-Committed artifact (2026-07-21, all sleeves on the causal-model retunes, the
-XLE crash-shield, and the gold middle path split across its two parent apps —
+Committed artifact (2026-07-25, all sleeves on the causal-model retunes, the
+XLE crash-shield, the gold middle path split across its two parent apps —
 🥇 Gold Trend (GLDM/UGL dual-MA 25/100) and ⛏️ Gold Miners (GDX/NUGT
-divergence); OOS 2021→now): **Balanced +852 % / −13.1 % MDD / Sharpe 2.48 ·
-Growth +1,893 % / −22.6 % / 1.71 · Aggressive +2,387 % / −30.9 % / 1.54** vs
-the equal-weight buy-&-hold benchmark +229 % / −35.4 % / 0.74.
+divergence) — and the new ETHA sleeve on the BTC signal; 18 instruments,
+OOS 2021→now): **Balanced +793 % / −8.6 % MDD / Sharpe 2.60 ·
+Growth +1,743 % / −19.9 % / 1.77 · Aggressive +2,134 % / −32.0 % / 1.48** vs
+the equal-weight buy-&-hold benchmark +199 % / −35.4 % / 0.69.
 Reproduce with `python scripts/build_overall.py`.
 
 ### Fundamental overlay (optional)
@@ -218,7 +227,7 @@ historically-optimal weight.
     (`data/overall/target_book*_prev.json`, rotated at each publish).
   - **Current Targetbook** — the *officially published* book
     (`data/overall/target_book*.json`): all tickers as of the last US market
-    close (yesterday) and BTC · MSTR · MSTU as of the 7:00-AM-CT Bitcoin bar
+    close (yesterday) and BTC · MSTR · MSTU · ETHA as of the 7:00-AM-CT Bitcoin bar
     close today. Frozen until the next 7:15-AM-CT publish (or a manual 🚀
     publish from the UI).
   - **Recommended Live Possible Targetbook** — the committed last-close

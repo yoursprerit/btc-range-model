@@ -123,7 +123,7 @@ out-of-sample over multiple periods **and** the full bull+bear cycle.
 **Common rules across every app:**
 
 - The signal is executed in **higher-beta / leveraged proxies**, not always the
-  1× underlying (BTC→MSTR/MSTU, Gold→UGL & GDX/NUGT, XLE→OIH/ERX, SOXX→SOXL).
+  1× underlying (BTC→MSTR/MSTU/ETHA, Gold→UGL & GDX/NUGT, XLE→OIH/ERX, SOXX→SOXL).
 - Strategies are **long/flat** — when flat, idle capital is parked in **SATA**
   (a ~13 %-yield preferred), not dead cash.
 - **Portfolio blend (Overall):** a Monte-Carlo optimiser searches long-only
@@ -142,7 +142,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 
 | Strategy | Signal(s) | Current strategy doc → additional |
 |---|---|---|
-| BTC Divergence Pure-Regime | BTC · MSTR · MSTU | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
+| BTC Divergence Pure-Regime | BTC · MSTR · MSTU · ETHA (Overall sleeve) | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md) (ETHA add) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
 | Gold middle path (dual-MA + divergence) | GLDM · UGL & GDX · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
 | Semis Dual-MA 25/100 | SOXX · SOXL | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
 | Grid MACD 10/20/9 | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |

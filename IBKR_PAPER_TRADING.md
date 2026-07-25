@@ -58,7 +58,7 @@ overall_core.run_universe()                       every strategy, live
   (default 1% of net-liq) to suppress churn, then place **market orders
   sells-first** so freed capital funds the buys.
 
-The full universe: BTC(→IBIT), MSTR, MSTU, GLDM, GDX, UGL, NUGT, SOXX, SOXL,
+The full universe: BTC(→IBIT), MSTR, MSTU, ETHA, GLDM, GDX, UGL, NUGT, SOXX, SOXL,
 GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.
 
 ---

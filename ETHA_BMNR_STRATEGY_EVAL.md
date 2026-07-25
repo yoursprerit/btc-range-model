@@ -1,8 +1,22 @@
 # ETHA / BMNR — strategy & portfolio-addition evaluation
 
-**Status: evaluation only — nothing implemented.** No app, config or strategy
-code was changed; reproduce every number with
-`python scripts/eval_etha_bmnr.py`.
+**Status: ETHA shipped (2026-07); BMNR rejected.** Unlike most eval docs this
+one led to a change: **ETHA is now the 18th instrument** in the Overall
+universe — a `core` sleeve on the BTC parent signal, CT Standard-MA gate,
+signal-exit-only, no fixed stop (`app/btc_ct_engine.py`, `app/overall_core.py`,
+`data/backtest/etha_daily.csv`, IBKR map `scripts/ibkr_symbols.py`; conviction
+1.40 with the crypto family). BMNR was **not** added. Reproduce the analysis
+with `python scripts/eval_etha_bmnr.py`.
+
+> **Data-vintage note.** The CT engine's numbers drift with feature-CSV
+> refreshes (on-chain/premium series are revised between pulls — a known
+> property, see `HYPERPARAM_SEARCH_EVAL.md` lineage). On the 2026-07-23 vintage
+> used below the ETHA sleeve shows +264% / −18% / Sharpe 1.61; on the refreshed
+> 2026-07-25 vintage the same 6 trades occur but the big Apr-2025 position
+> exits earlier (2025-06-22, +47% instead of +167%), giving +101% / −19% /
+> Sharpe 1.04 — still ~150pp over buy-&-hold at a quarter of its drawdown. The
+> qualitative ranking (CT signal > simple BTC trend > own-price rules > B&H)
+> is unchanged on both vintages.
 
 **Questions.**
 1. Can trading **ETHA** (iShares Ethereum Trust, 1× spot-ETH ETF) and/or

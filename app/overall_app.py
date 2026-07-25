@@ -3,7 +3,7 @@
 One screen that fuses the live signals, positions and back-tests of every other
 app into a single portfolio view built for one question: *where do I put money to
 work today?*  Each signal app trades its 1× primary plus higher-beta / leveraged
-siblings (BTC→MSTR/MSTU, Gold→GDX/UGL, XLE→OIH), all steered off the parent
+siblings (BTC→MSTR/MSTU/ETHA, Gold→GDX/UGL, XLE→OIH), all steered off the parent
 signal, so the combined book spans every instrument across all apps.
 
   🔴 Live — Decision Cockpit   what to CLOSE / OPEN / HOLD today, the optimal %
@@ -361,7 +361,7 @@ fr.record_refresh("OVERALL", kind="overall",
 
 # ── live spot prices — overlay onto the display (not the signals/back-test) ──
 # Signals run on completed daily bars (some cached, so a few days stale for
-# BTC/MSTR/MSTU); the action-plan price and open-position P&L must show the
+# BTC/MSTR/MSTU/ETHA); the action-plan price and open-position P&L must show the
 # current spot, so fetch each instrument's live quote and overlay it.
 _spot_ts = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M")
 _spot = {}
@@ -532,7 +532,7 @@ with tab_live:
     # ── 1. TARGETBOOKS — previous & current (as published) vs live view ──
     st.markdown("### 📐 Targetbooks — published vs live recommendation")
     st.caption("**Previous Targetbook** = **yesterday's** published book — "
-               "BTC · MSTR · MSTU from *yesterday's* 7:00 AM CT bar close, all "
+               "BTC · MSTR · MSTU · ETHA from *yesterday's* 7:00 AM CT bar close, all "
                "other tickers from the market close of the **day before "
                "yesterday**. An intraday re-publish never replaces it: the prev "
                "slot only rolls forward at the first publish of a new day. "
@@ -540,7 +540,7 @@ with tab_live:
                "IBKR executor trades — its data basis is pinned to the "
                "morning **7:15 AM CT anchor**: all tickers as of the market "
                "close **before** that anchor (yesterday's 4:00 PM ET close) "
-               "and BTC · MSTR · MSTU as of the day's **7:00 AM CT bar "
+               "and BTC · MSTR · MSTU · ETHA as of the day's **7:00 AM CT bar "
                "close** (each donut's caption shows the exact dates). Signal "
                "changes after today's market close appear ONLY in the "
                "Recommended Live Possible Targetbook until tomorrow's "
@@ -621,7 +621,7 @@ with tab_live:
         except Exception:
             return ""
         return (f"Other tickers as of market close **{eq}** · BTC · MSTR · "
-                f"MSTU as of bar close **{btc}**")
+                f"MSTU · ETHA as of bar close **{btc}**")
 
     _TB_DIR = _REPO_ROOT / "data" / "overall"
     _prev_book = _load_published_book(_TB_DIR / "target_book_live_prev.json",
@@ -1013,7 +1013,7 @@ with tab_live:
                     st.markdown("".join(body), unsafe_allow_html=True)
 
         st.info("Unified **daily** reads. For the canonical hourly Pure-Regime view of "
-                "BTC (BTC/MSTR/MSTU) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
+                "BTC (BTC/MSTR/MSTU/ETHA) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
                 "**🥇 Gold** app in the sidebar.")
 
     st.markdown("---")
@@ -2055,11 +2055,11 @@ with tab_bt:
     st.caption("Each instrument's signal-driven strategy vs buy-&-hold, and its "
                "weight in the optimal blend. Grouped by signal — β = high-beta "
                "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
-               "parent's signal**, not their own: MSTR/MSTU enter and exit on "
+               "parent's signal**, not their own: MSTR/MSTU/ETHA enter and exit on "
                "BTC's divergence signal, GDX/UGL on gold's, OIH on XLE's — the "
                "higher-beta name executes on its own price but is steered by the "
                "cleaner parent read. Every asset here runs its **own app's actual "
-               "engine** — BTC/MSTR/MSTU via the BTC app's trained CT model, "
+               "engine** — BTC/MSTR/MSTU/ETHA via the BTC app's trained CT model, "
                "GLDM/GDX/UGL via the Gold app's Divergence Pure-Regime, the ETFs "
                "via their tuned configs — so these numbers match each source app. "
                "(BTC's CT features begin ~2024, so its sleeve covers a shorter "
