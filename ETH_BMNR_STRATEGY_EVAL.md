@@ -182,6 +182,21 @@ the owner, not a side effect of an ETH swap. Suggested follow-up: re-tune MSTR/M
 against a post-signal fill and re-publish, or re-anchor the equity sleeves onto a
 bar boundary that closes with the signal.
 
+> **✅ FIXED 2026-07-25.** The equity sleeves now fill at the **first exchange
+> close at/after the 12:00-UTC signal moment** (next session; Monday for
+> weekend signal bars) in both `app/btc_hourly_app.py` (stock + options
+> backtests) and `app/btc_ct_engine.py` (the Overall app's sleeves) — see
+> `_fill_after_signal` / `_next_session_close`. On the 2026-07-25 vintage this
+> moves MSTR **+296% → +184%** and MSTU **+685% → +402%** config-unchanged
+> over the full CT window; BTC/ETH are unchanged. The same fix pass also
+> lagged the divergence engines in `backtest_ticker.py` / `backtest_gldm.py`
+> one bar (their signal needs the bar's realized H/L). Stops were then
+> re-swept against the post-signal fill (2026-07-25): MSTR −3% is back on
+> (its earlier removal was an artifact of the leaky fill), MSTU keeps −6%,
+> ETH gains −8% (thin 8-trade sample — tail-protection convention), BTC stays
+> stop-less — headline BTC +58% · MSTR +245% · MSTU +677% · ETH +40% on the
+> fix-date vintage.
+
 ---
 
 ## 6. Caveats

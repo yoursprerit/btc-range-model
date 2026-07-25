@@ -1726,8 +1726,12 @@ with tab_hist:
                "bar**, not at today's price), what it opened and closed on that "
                "bar, the book it was holding and its performance up to that point. "
                "Everything is read off the committed back-test series — the same "
-               "engines the 🔴 Live tab runs — so this is the decision the strategy "
-               "actually took on that date: no re-fit, no hindsight. Follows the "
+               "engines the 🔴 Live tab runs — so the positions and trades shown are "
+               "the engine's genuine bar-by-bar decisions. Caveat: the blend "
+               "weights and per-sleeve strategy parameters are TODAY'S (fit on the "
+               "full sample), not the ones that existed on that date — the book "
+               "percentages are a current-weights projection, not the as-of record. "
+               "Follows the "
                f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
                "toggle selected on the Live tab.")
 
@@ -1953,6 +1957,11 @@ with tab_bt:
         _pt = opt["optimal_pretilt"]
         st.info(f"🔭 **Fundamental overlay applied** — these figures tilt the quant "
                 f"optimum toward the mid-2026 sector view (toggle on the Live tab). "
+                f"⚠️ The view was formed *knowing* how 2021→2026 played out, and the "
+                f"tilt is applied retroactively to that same history — so the "
+                f"overlay-ON historical curves are hindsight-tilted and were not "
+                f"achievable ex-ante (the weights themselves are full-sample-fit "
+                f"either way; see Methodology). "
                 f"This profile: **{o['total_ret']*100:,.0f}%** return / "
                 f"Sharpe **{o['sharpe']:.2f}** *with* the overlay vs "
                 f"**{_pt['total_ret']*100:,.0f}%** / **{_pt['sharpe']:.2f}** without. "
@@ -2071,7 +2080,8 @@ with tab_bt:
     st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ph}{''.join(pr)}</table>",
                 unsafe_allow_html=True)
 
-    st.markdown("#### Per-instrument strategy (standalone, out-of-sample)")
+    st.markdown("#### Per-instrument strategy (standalone, model-OOS — "
+                "strategy parameters tuned in-window)")
     st.caption("Each instrument's signal-driven strategy vs buy-&-hold, and its "
                "weight in the optimal blend. Grouped by signal — β = high-beta "
                "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
@@ -2178,17 +2188,26 @@ signals, positions and back-tests match each source app:
   (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
   premium) with the app's live **Standard MA (above-MA30) entry gate** (U1>+1.3%
   + ≥2 high-breaks, regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL
-  re-entry) — all three assets share the same gate. With the 2026-07 per-asset
-  stop retune (BTC & MSTR signal-exit-only, MSTU −6%) this reproduces the BTC
-  app's headline **BTC +86% / MSTR +266% / MSTU +524%**. The CT feature data
+  re-entry) — all three assets share the same gate. Since the **2026-07-25
+  look-ahead fix**, MSTR/MSTU fills land at the first exchange close *after*
+  the 12:00-UTC signal moment (the old same-date fill preceded the signal by
+  ~15 h and banked the overnight gap; config-unchanged the fix moved MSTR
+  +296%→+184% and MSTU +685%→+402% — BTC/ETH unchanged). Stops were then
+  re-swept on the honest fill (MSTR −3%, MSTU −6%, ETH −8%; BTC stop-less),
+  giving **BTC +58% · MSTR +245% · MSTU +677% · ETH +40%** on the 2026-07-25
+  vintage. Figures drift with data-vintage refreshes. The CT feature data
   begins ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine
-  handles the staggered start).
-- **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** Divergence
-  Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
-  per-asset stops — GLDM/GDX −3%, but the leveraged siblings are looser (**UGL
-  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF. OOS
-  2021→now: **GLDM +73% · GDX +156% · UGL (stop-less) +247% · NUGT +1183%**
-  (see LEV_SIBLINGS_STOP_EVAL.md).
+  handles the staggered start), and the CT model's training window extends
+  into the displayed period — only bars after its `train_end` are model-blind.
+- **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** middle-path
+  split — dual-MA 25/100 for GLDM/UGL, Divergence Pure-Regime for GDX/NUGT —
+  with per-asset stops (GLDM/UGL −3%, GDX −5%, NUGT −8% after the 2026-07-25
+  re-sweep). Since the 2026-07-25 look-ahead fix the divergence engine decides
+  at close i−1 and fills at close i (its signal needs bar i's realized
+  high/low). Model-OOS 2021→now on the fix-date vintage: **GLDM +137% ·
+  UGL +302% · GDX +110% · NUGT +217%** (strategy thresholds tuned on this
+  window; older LEV_SIBLINGS_STOP_EVAL.md figures pre-date the causal H/L fix
+  and are historical).
 - **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
   `ticker_config`** entries through the same `backtest_ticker` engine their apps
   use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,

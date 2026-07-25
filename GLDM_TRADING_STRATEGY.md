@@ -54,9 +54,9 @@ Gold-scaled thresholds (vs BTC's ±1.3%), re-tuned on the causal error:
 
 | Signal | GLDM threshold | Meaning |
 |---|---|---|
-| **U1** entry | 3-day centered `err_hi` > **+0.15%** and ≥2 high-breaks | bullish pressure |
-| **D2** exit | 3-day centered `err_hi` < **−0.10%** | momentum fading |
-| **D1** | 3-day centered `err_lo` > **+0.15%** and ≥2 low-breaks | bearish pressure (clean-gate input; not an exit for gold) |
+| **U1** entry | 3-day centered `err_hi` > **+0.10%** and ≥2 high-breaks | bullish pressure |
+| **D2** exit | 3-day centered `err_hi` < **−0.20%** | momentum fading |
+| **D1** | 3-day centered `err_lo` > **+0.45%** and ≥2 low-breaks | bearish pressure (clean-gate input; not an exit for gold) |
 | **V** reversal | single-bar low undershoot > **+1.00%** + high down-score | capitulation |
 | Regime | close > rising 20-day MA | bull regime gate |
 
@@ -70,21 +70,25 @@ system wins the chop, the trend system wins the trend):
 |---|---|---|---|
 | **GLDM** (1× core) | **Dual-MA 25/100** on the GLDM close | −3% | smooth trender — the crossover beats both B&H and divergence on return AND Sharpe |
 | **UGL** (2× gold) | **Dual-MA 25/100** on the GLDM close | −3% | same smooth-trend character, amplified; the −3% stop *improves* it under this engine |
-| **GDX** (miners) | **Divergence Pure-Regime** | −3% | divergence's Sharpe/drawdown control clearly better on the choppier miners |
-| **NUGT** (2× miners) | **Divergence Pure-Regime** | −5% | divergence +276% vs dual-MA's deeper-drawdown alternatives |
+| **GDX** (miners) | **Divergence Pure-Regime** | −5% | divergence's Sharpe/drawdown control clearly better on the choppier miners |
+| **NUGT** (2× miners) | **Divergence Pure-Regime** | −8% | divergence +217% (post-fix re-sweep) vs dual-MA's deeper-drawdown alternatives |
 
-**Divergence engine rules** (GDX & NUGT): enter on **U1** bullish divergence
-(3-day centered `err_hi` > **+0.15%** with ≥2 high-breaks) confirmed inside the
+**Divergence engine rules** (GDX & NUGT): decide at close *i−1*, fill at close
+*i* (post-signal, 2026-07-25 fix): enter on **U1** bullish divergence (3-day
+centered `err_hi` > **+0.10%** with ≥2 high-breaks) confirmed inside the
 **Pure-Regime gate** (Bull Regime **or** washed-out Clean Breakout **or** recent
-V-reversal); exit on **D2** (< **−0.10%**) / **D3** exhaustion or the stop.
+V-reversal); exit on **D2** (< **−0.20%**) / **D3** exhaustion or the stop.
 **Trend engine rules** (GLDM & UGL): long while the 25-day SMA of the GLDM
 close is above the 100-day SMA (decision at the close, executed next bar).
 
 ### Why these parameters
 
-*Divergence thresholds* `U1 +0.15 / D2 −0.10 / D1 +0.15 / V 1.0` are the tier-1
-pick of the joint frontier sweep (`backtest_gldm.py --sweep`), on a robust
-plateau (`U1 +0.15…+0.20` within 0.03 avg Sharpe across data snapshots).
+*Divergence thresholds* `U1 +0.10 / D2 −0.20 / D1 +0.45 / V 1.0` are the tier-0
+pick of the joint frontier sweep (`backtest_gldm.py --sweep`) re-run 2026-07-25
+on the lagged (bias-free) engine, on a robust plateau (the top-10 configs sit
+within 0.09 avg Sharpe). Stops re-swept on the same engine: GDX −5% (flat
+−3/−5/−8 plateau), NUGT −8% (frontier prefers loose; −8% keeps the 2×-fund
+tail truncated for ~9 pp / 0.02 Sharpe vs stop-less).
 
 *Dual-MA 25/100* mirrors SOXX's config exactly and sits on the /100 plateau
 (20/100, 25/100, 50/100 all land within Sharpe 1.06–1.14 on GLDM and
@@ -101,7 +105,7 @@ hedged (divergence sleeves +12%/+11% while trend sleeves dipped −5%/−7%).
 - **Causal + out-of-sample by construction:** the daily H/L ridge pairs
   features known at the **prior close** with the next bar's high/low (no
   same-bar information), is fit **once** on the pre-2021 window and predicts
-  every later bar. Reported window: **2021-01-01 → 2026-07-21** (1,392 trading
+  every later bar. Reported window: **2021-01-01 → 2026-07-24** (1,395 trading
   days).
 - **Execution:** decisions at the daily close; positions marked close-to-close;
   fixed stop checked against the close. No leverage assumption beyond the ETF's
@@ -113,7 +117,17 @@ hedged (divergence sleeves +12%/+11% while trend sleeves dipped −5%/−7%).
 > costs are no longer fully negligible — treat the totals as gross figures.
 > Results are historical and not a guarantee of future performance.
 
-## 6. Results (OOS 2021-01-01 → 2026-07-21)
+## 6. Results (model-OOS 2021-01-01 → 2026-07-24)
+
+> **2026-07-25 look-ahead fix.** The divergence engine previously filled at the
+> same bar's close on a signal that needs that bar's realized high/low (final
+> only at the close). It now decides at close *i−1* and fills at close *i* —
+> the same convention as the trend engines and the live workflow. The GDX/NUGT
+> figures below reflect the fixed engine plus the 2026-07-25 re-sweep on it
+> (U1 +0.10 / D2 −0.20 / D1 +0.45 / V 1.0; GDX −5%, NUGT −8%); GLDM/UGL
+> (dual-MA, already lagged) are unchanged. Strategy thresholds/stops/engine
+> split are tuned on this window, so read levels as in-sample-selected — only
+> the H/L *model* is blind here (fit pre-2021).
 
 **Chosen strategy — the middle-path hybrid (dual-MA 25/100 for GLDM & UGL,
 Divergence Pure-Regime for GDX & NUGT):**
@@ -122,16 +136,14 @@ Divergence Pure-Regime for GDX & NUGT):**
 |---|---|---|---|---|---|---|---|---|---|
 | **GLDM** (1× core) | dual-MA | **+137.3%** | +108.1% | **−19.1%** | −26.3% | **1.08** | 0.83 | 9 | 67% |
 | **UGL** (2× gold) | dual-MA | **+302.4%** | +151.0% | **−37.6%** | −50.0% | **0.96** | 0.64 | 11 | 55% |
-| **GDX** (miners) | divergence | **+102.8%** | +92.3% | **−21.8%** | −46.5% | **0.85** | 0.51 | 98 | 49% |
-| **NUGT** (2× miners) | divergence | **+276.1%** | +40.8% | **−38.3%** | −73.8% | **0.90** | 0.45 | 100 | 50% |
+| **GDX** (miners) | divergence | **+109.7%** | +95.4% | **−23.7%** | −46.5% | **0.84** | 0.51 | 96 | 53% |
+| **NUGT** (2× miners) | divergence | **+216.8%** | +44.5% | **−45.7%** | −73.8% | **0.77** | 0.46 | 96 | 52% |
 
-**Combined equal-weight gold stack (OOS): +214% / −19.8% MDD / Sharpe 1.15** —
-vs +134% / 0.95 all-divergence, +237% / 0.85 (−33.6% MDD) all-dual-MA, and
-+125% / 0.57 (−46.8% MDD) equal-weight buy-&-hold. The mix stays positive in
-the 2021-22 chop (+4.0%) because the divergence miners sleeves hedge the trend
-sleeves' dips. *(The pure-divergence sleeve numbers for GLDM/UGL — +58%/−9.6%/
-0.99 and +119%/−19.3%/0.90 — remain the lower-drawdown alternative if risk
-control is preferred over return.)*
+**Combined equal-weight gold stack (daily-rebalanced): +203% / −29% MDD /
+Sharpe 1.07.** The divergence miners sleeves still cushion the trend sleeves'
+dips in the 2021-22 chop. *(Pre-fix figures — GDX +102.8%, NUGT +276.1%, stack
++214%/−19.8%/1.15 — included the same-bar fill and are void; earlier
+all-divergence / all-dual-MA comparison figures likewise pre-date the fix.)*
 
 ### Sub-period breakdown (shown per-asset in the app's Backtesting tabs)
 

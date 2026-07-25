@@ -1747,7 +1747,8 @@ def _metrics_table_html(label, col):
             f"<thead>{hdr}{subr}</thead><tbody>{body}</tbody></table></div>"
             f"<p style='font-size:11px;color:#64748b;margin:2px 0 10px;'>"
             f"🟢 green = Strategy beats Buy&amp;Hold on that metric · 🔴 red = worse · "
-            f"Max Drawdown closer to 0 is better. All windows are out-of-sample.</p>")
+            f"Max Drawdown closer to 0 is better. The H/L model is out-of-sample; "
+            f"strategy parameters were tuned on these windows (in-sample-selected).</p>")
 
 
 def render_backtest_dashboard(label, col):
@@ -1761,9 +1762,14 @@ def render_backtest_dashboard(label, col):
         st.caption(f"↳ **{label}** trades the same {cfg.key} signal but with {_txt} "
                    f"(vs {cfg.stop_label} on {cfg.key}) — a 1× stop is too tight for this "
                    f"higher-beta sibling, so signal-driven exits give a higher win-rate and Sharpe.")
-    st.caption(f"All trades are out-of-sample: the {cfg.key} daily H/L signal model is fit once "
-               f"on the pre-{cfg.oos_start[:4]} window and predicts every later bar, so all periods "
-               "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
+    st.caption(f"The {cfg.key} daily H/L signal model is fit once on the pre-{cfg.oos_start[:4]} "
+               "window and predicts every later bar (model-OOS). The strategy layer on top — "
+               "engine mode, MA/MACD windows, divergence thresholds and stops — was selected by "
+               "sweeps run over these same periods, so the levels shown are in-sample-selected, "
+               "not blind; periods that predate the model's fit window replay in-sample "
+               "predictions. Divergence fills are post-signal (decide at close i−1, fill at "
+               "close i) since the 2026-07-25 look-ahead fix. NAV starts at $100k; "
+               "costs/slippage not modelled.")
     st.markdown(_metrics_table_html(label, col), unsafe_allow_html=True)
     period_tabs = st.tabs([lbl for lbl, _, _ in cfg.periods])
     for (lbl, s, e), tb in zip(cfg.periods, period_tabs):

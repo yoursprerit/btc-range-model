@@ -54,7 +54,10 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     prev_c = close.shift(1)
     y_hi = high / prev_c - 1.0
     y_lo = low / prev_c - 1.0
-    frac = feat.isna().mean()
+    # Feature availability decided on the pre-OOS window only, so a series that
+    # only starts (or dies) inside the OOS window can't leak its future
+    # availability into the column choice.
+    frac = feat.loc[feat.index < pd.Timestamp(oos_start)].isna().mean()
     feat_cols = [c for c in feat.columns if frac[c] <= 0.35]
 
     # CAUSAL alignment (matches the BTC app): predictions for bar D use only
@@ -76,7 +79,7 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     df = df.replace([np.inf, -np.inf], np.nan).dropna(
         subset=feat_cols + ["y_hi", "y_lo", "close_asof"])
 
-    train = df.loc[:oos_start]
+    train = df[df.index < pd.Timestamp(oos_start)]   # strictly pre-OOS
     def _mk():
         return Pipeline([("sc", StandardScaler()),
                          ("m", RidgeCV(alphas=np.logspace(-3, 3, 13)))])
@@ -84,7 +87,7 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     ml = _mk().fit(train[feat_cols], train["y_lo"])
     raw_ph = df["close_asof"] * (1 + mh.predict(df[feat_cols]))
     raw_pl = df["close_asof"] * (1 + ml.predict(df[feat_cols]))
-    tr_mask = df.index <= pd.Timestamp(oos_start)
+    tr_mask = df.index < pd.Timestamp(oos_start)
     bias_hi = float((df.loc[tr_mask, "actual_high"] - raw_ph.loc[tr_mask]).mean())
     bias_lo = float((df.loc[tr_mask, "actual_low"] - raw_pl.loc[tr_mask]).mean())
     df["pred_high"] = raw_ph + bias_hi
@@ -288,6 +291,10 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
     else:
         long_at_close = trend_long_array(cfg, gcl)
     i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
+    # Never start at bar 0: long_at_close[i-1] would wrap to the LAST bar's
+    # signal (future data deciding the first bar) — reachable on the
+    # "Full history" period whose start predates the first prediction row.
+    i0 = max(i0, 1)
     i1 = n if end is None else int(np.searchsorted(
         dates, np.datetime64(pd.Timestamp(end)), side="right"))
 
@@ -327,14 +334,40 @@ def _clean_flags(sig, i, D2, D1):
     return not bool(np.any(d2h | d1h))
 
 
+def lag_signals(sig: dict, k: int = 1) -> dict:
+    """Shift every signal array ``k`` bars forward so index i holds the signal
+    as it stood at the close of bar i−k (first ``k`` slots are neutral).
+
+    The divergence signals need bar i's realized high/low, which is only final
+    at bar i's close — so a fill at bar i's close on bar i's own signal books a
+    price the live workflow (signal published at the close, order worked the
+    next session) cannot get.  Lagging one bar makes the divergence engine use
+    the same decide-at-close-i−1 / fill-at-close-i convention as the trend
+    engine (``simulate_regime``)."""
+    out = {}
+    for key, v in sig.items():
+        a = np.asarray(v)
+        s = np.empty_like(a)
+        s[:k] = False if a.dtype == bool else 0
+        s[k:] = a[:-k] if k else a
+        out[key] = s
+    return out
+
+
 # ── divergence Pure-Regime strategy ───────────────────────────────────────
 def simulate(cfg, preds, sig, price_col, stop_pct=None, U1=None, D2=None, D1=None,
              use_d1_exit=False, oos_start=None, end=None):
+    """Divergence Pure-Regime walk.  Execution is decide-at-close-i−1 /
+    fill-at-close-i: the divergence gate for a bar needs that bar's realized
+    high/low (final only at its close), so the signal is lagged one bar before
+    the fill — same convention as the trend engine and the live workflow
+    (signal at the close → traded next session)."""
     stop_pct = cfg.fixed_stop if stop_pct is None else stop_pct
     U1 = cfg.u1_errhi_min if U1 is None else U1
     D2 = cfg.d2_errhi_max if D2 is None else D2
     D1 = cfg.d1_errlo_min if D1 is None else D1
     oos_start = oos_start or cfg.oos_start
+    sig = lag_signals(sig)   # kill the same-bar H/L look-ahead
     price = preds[price_col].to_numpy(float)
     dates = preds["target_date"].to_numpy()
     n = len(price)

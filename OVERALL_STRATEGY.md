@@ -34,9 +34,9 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 
 | Signal (parent) | Instruments (kind) | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETH `core` | CT-model Divergence · BTC & MSTR & ETH signal-exit-only, MSTU −6% |
+| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETH `core` | CT-model Divergence · BTC signal-exit-only; MSTR −3% · MSTU −6% · ETH −8% (2026-07-25 honest-fill re-sweep) |
 | 🥇 **Gold Trend (GLDM)** | GLDM `core` · UGL `lev` | Dual-MA 25/100 on the GLDM close · −3% stops |
-| ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −3% / NUGT −5% |
+| ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −5% / NUGT −8% (2026-07-25 re-sweep) |
 | 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
 | ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
@@ -54,8 +54,8 @@ bar-for-bar. Sibling stops are looser than the 1× because a tight stop whipsaws
 leveraged/high-beta name.
 
 **ETH (added 2026-07f)** — **spot Ethereum** is the fourth sleeve on the BTC
-parent signal, traded with the MSTR treatment (Standard-MA gate,
-signal-exit-only, no fixed stop). Its bars share BTC's **12:00-UTC anchor**, so
+parent signal, traded with the MSTR treatment (Standard-MA gate; a −8% stop
+since the 2026-07-25 honest-fill re-sweep). Its bars share BTC's **12:00-UTC anchor**, so
 the sleeve's same-bar fill lands exactly at the signal bar's close and its
 history spans the whole CT window. **Live execution routes to the ETHA ETF**,
 exactly as the BTC sleeve executes via IBIT (`scripts/ibkr_symbols.py`) — the
@@ -69,7 +69,10 @@ price tile) in the ₿ Bitcoin app.
 > Balanced Sharpe in every MC seed tested, and it costs the deterministic
 > equal-weight book **−38 pp**. The earlier ETHA-based case for adding it was
 > inflated by a fill that preceded the signal and by a shorter window. Full
-> analysis, plus a **larger pre-existing look-ahead affecting MSTR/MSTU**:
+> analysis, plus a **larger pre-existing look-ahead affecting MSTR/MSTU —
+> fixed 2026-07-25** (equity fills now land at the first exchange close after
+> the signal moment; config-unchanged MSTR +296%→+184%, MSTU +685%→+402%;
+> after the honest-fill stop re-sweep MSTR +245%, MSTU +677%):
 > [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) §4–§5. BMNR was
 > evaluated alongside and rejected.
 

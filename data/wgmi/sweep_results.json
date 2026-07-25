@@ -1,22 +1,18 @@
 {
   "WGMI": {
-    "mode": "divergence",
-    "U1": 1.12,
-    "D2": -1.68,
-    "D1": 0.79,
-    "V": 3.0,
-    "d1x": true,
+    "mode": "ma",
+    "ma_window": 50,
     "stop": 1.0,
-    "total_ret": 2.030050186415801,
-    "mdd": -0.32948855941479016,
-    "sharpe": 1.3407562068776755,
-    "cagr": 0.5448361920417106,
-    "trades": 38,
-    "beats_loss": true,
+    "total_ret": 1.3904651295327795,
+    "mdd": -0.5408824806721428,
+    "sharpe": 0.8637271819044174,
+    "cagr": 0.4060776859798032,
+    "trades": 18,
+    "beats_loss": false,
     "mdd_ok": true,
-    "participate": true,
-    "bh_ret": 2.2338480339313946,
+    "participate": false,
+    "bh_ret": 2.0640366411601043,
     "bh_mdd": -0.6286360836202833,
-    "bh_sharpe": 0.9743158959989437
+    "bh_sharpe": 0.9458956814859483
   }
 }
