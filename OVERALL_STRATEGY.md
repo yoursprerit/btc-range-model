@@ -34,7 +34,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 
 | Signal (parent) | Instruments (kind) | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETHA `core` | CT-model Divergence · BTC & MSTR & ETHA signal-exit-only, MSTU −6% |
+| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETH `core` | CT-model Divergence · BTC & MSTR & ETH signal-exit-only, MSTU −6% |
 | 🥇 **Gold Trend (GLDM)** | GLDM `core` · UGL `lev` | Dual-MA 25/100 on the GLDM close · −3% stops |
 | ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −3% / NUGT −5% |
 | 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
@@ -47,20 +47,31 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 
 That is **18 instruments across 10 parent apps** (the two gold apps share one
 GLDM-derived signal). Each runs the **exact engine its own
-app trades** (BTC/MSTR/MSTU/ETHA via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
+app trades** (BTC/MSTR/MSTU/ETH via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
 via the Gold app's `backtest_gldm`; the ETFs via their `ticker_config` entries
 through `backtest_ticker`), so the Overall numbers match each source app
 bar-for-bar. Sibling stops are looser than the 1× because a tight stop whipsaws a
 leveraged/high-beta name.
 
-**ETHA (added 2026-07)** — the iShares Ethereum Trust (1× spot-ETH ETF) is the
-fourth sleeve on the BTC parent signal, traded with the MSTR treatment
-(Standard-MA gate, signal-exit-only, no fixed stop) from its 2024-07-23
-inception. It is surfaced in both places: as an instrument here, and as its own
-**🔹 ETHA Backtesting** tab (plus the live signal/position panels and a price
-tile) in the dedicated ₿ Bitcoin app. Rationale and full validation:
-[`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md) (BMNR was evaluated
-at the same time and rejected).
+**ETH (added 2026-07f)** — **spot Ethereum** is the fourth sleeve on the BTC
+parent signal, traded with the MSTR treatment (Standard-MA gate,
+signal-exit-only, no fixed stop). Its bars share BTC's **12:00-UTC anchor**, so
+the sleeve's same-bar fill lands exactly at the signal bar's close and its
+history spans the whole CT window. **Live execution routes to the ETHA ETF**,
+exactly as the BTC sleeve executes via IBIT (`scripts/ibkr_symbols.py`) — the
+signal asset and the traded vehicle are deliberately different. Surfaced both
+here and as a **🔹 ETH Backtesting** tab (plus live signal/position panels and a
+price tile) in the ₿ Bitcoin app.
+
+> ⚠️ **ETH is the weakest sleeve in the universe and is not an endorsement.** On
+> the honest fill it returns **+8.8 % at −39.5 % / Sharpe 0.23** (vs ETH
+> buy-&-hold −51.4 %), it is **0.80-correlated to the BTC sleeve**, it *lowers*
+> Balanced Sharpe in every MC seed tested, and it costs the deterministic
+> equal-weight book **−38 pp**. The earlier ETHA-based case for adding it was
+> inflated by a fill that preceded the signal and by a shorter window. Full
+> analysis, plus a **larger pre-existing look-ahead affecting MSTR/MSTU**:
+> [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) §4–§5. BMNR was
+> evaluated alongside and rejected.
 
 ---
 
@@ -160,11 +171,19 @@ deepens faster than the return — which is exactly the knob these profiles expo
 Committed artifact (2026-07-25, all sleeves on the causal-model retunes, the
 XLE crash-shield, the gold middle path split across its two parent apps —
 🥇 Gold Trend (GLDM/UGL dual-MA 25/100) and ⛏️ Gold Miners (GDX/NUGT
-divergence) — and the new ETHA sleeve on the BTC signal; 18 instruments,
-OOS 2021→now): **Balanced +793 % / −8.6 % MDD / Sharpe 2.60 ·
-Growth +1,743 % / −19.9 % / 1.77 · Aggressive +2,134 % / −32.0 % / 1.48** vs
-the equal-weight buy-&-hold benchmark +199 % / −35.4 % / 0.69.
+divergence) — and the ETH sleeve on the BTC signal; 18 instruments,
+OOS 2021→now): **Balanced +826 % / −16.1 % MDD / Sharpe 2.38 ·
+Growth +1,653 % / −20.1 % / 1.79 · Aggressive +2,105 % / −32.0 % / 1.48** vs
+the equal-weight buy-&-hold benchmark +198 % / −39.0 % / 0.68.
 Reproduce with `python scripts/build_overall.py`.
+
+Per-period (Balanced optimum): 🌐 Full OOS 2021→now **+826 % / −16.1 % / 2.38** ·
+🐻 Bear 2021-22 **+40.5 % / −8.0 % / 1.40** · 🐂 Bull 2023→now
+**+552 % / −16.1 % / 2.74** · 🔬 Recent 2025→now **+213 % / −9.3 % / 3.28**.
+
+*Note the ETHA→ETH swap cost the Balanced profile ~0.2 Sharpe (2.60 → 2.38) and
+roughly doubled its drawdown (−8.6 % → −16.1 %): the ETHA figures it replaces
+were flattered by an early fill, not beaten by better trading.*
 
 ### Fundamental overlay (optional)
 
@@ -228,7 +247,7 @@ historically-optimal weight.
     (`data/overall/target_book*_prev.json`, rotated at each publish).
   - **Current Targetbook** — the *officially published* book
     (`data/overall/target_book*.json`): all tickers as of the last US market
-    close (yesterday) and BTC · MSTR · MSTU · ETHA as of the 7:00-AM-CT Bitcoin bar
+    close (yesterday) and BTC · MSTR · MSTU · ETH as of the 7:00-AM-CT Bitcoin bar
     close today. Frozen until the next 7:15-AM-CT publish (or a manual 🚀
     publish from the UI).
   - **Recommended Live Possible Targetbook** — the committed last-close

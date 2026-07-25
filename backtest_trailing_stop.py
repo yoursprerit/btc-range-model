@@ -187,7 +187,7 @@ def build_preds_offline(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_asset(name: str) -> pd.Series:
     fn = {"MSTR": "mstr_daily.csv", "MSTU": "mstu_daily.csv",
-          "ETHA": "etha_daily.csv"}[name]
+          "ETH": "eth_usd_daily.csv"}[name]
     df = pd.read_csv(DATA / fn, parse_dates=["Date"]).set_index("Date").sort_index()
     return df["close"].astype(float)
 

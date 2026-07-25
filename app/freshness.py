@@ -3,7 +3,7 @@ daily publisher — the ONE place that knows *when each app's signals close*.
 
 Semantics (kept in lock-step with the engines):
 
-* **Bitcoin (BTC / MSTR / MSTU / ETHA)** — the BTC app trades 12:00-UTC-anchored daily
+* **Bitcoin (BTC / MSTR / MSTU / ETH)** — the BTC app trades 12:00-UTC-anchored daily
   bars (7:00 AM CT in summer, 6:00 AM CT in winter).  Bar *D* covers
   ``[D 12:00 UTC, D+1 12:00 UTC)`` and its signals become available the moment
   the bar closes at ``D+1 12:00 UTC``.  The engines report ``as_of`` as the bar
@@ -188,7 +188,7 @@ def expected_asof(kind: str, now=None) -> pd.Timestamp:
 # runs: every equity ticker from the last 4:00-PM-ET market close BEFORE the
 # anchor (i.e. the previous session — post-close signal changes belong only to
 # the live "Recommended Live Possible Targetbook" view until the next
-# morning), and BTC/MSTR/MSTU/ETHA from the day's 7:00-AM-CT (12:00 UTC) bar close
+# morning), and BTC/MSTR/MSTU/ETH from the day's 7:00-AM-CT (12:00 UTC) bar close
 # (the BTC engine already enforces its own bar close).  Live Yahoo daily feeds
 # include an in-progress *today* row during market hours — and a completed
 # *today* row after 4:00 PM ET — but neither may leak into a published book

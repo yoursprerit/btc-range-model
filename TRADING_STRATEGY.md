@@ -5,29 +5,36 @@
 
 ---
 
-## ⭐ 2026-07f — ETHA added as a fourth sleeve on the BTC signal (CURRENT LIVE)
+## ⭐ 2026-07f — ETH added as a fourth sleeve on the BTC signal (CURRENT LIVE)
 
-**Change.** **ETHA** (iShares Ethereum Trust, 1× spot-ETH ETF) now trades off the same
-BTC CT signal as BTC/MSTR/MSTU, with the **MSTR treatment**: Standard-MA entry gate,
-regime-adaptive D2/D3 exits, **no fixed stop**. Its window starts at the fund's
-**2024-07-23 inception** (all backtest periods are clamped there — no synthetic
-pre-listing history). Every fixed stop ≤8% tested reduced both return and Sharpe: the
-signal exits already cap intra-trade pain on a 1× ETF with no wipeout tail, exactly as
-on MSTR. ETH trades as a high-beta crypto sibling of Bitcoin, so BTC's cleaner regime
-read steers the sleeve — and it beats every rule built on ETHA's *own* price action
-(and the rejected BMNR candidate) on return, drawdown, Sharpe and fold-consistency.
+**Change.** **Spot ETH (Ethereum)** now trades off the same BTC CT signal as
+BTC/MSTR/MSTU, with the **MSTR treatment**: Standard-MA entry gate, regime-adaptive
+D2/D3 exits, **no fixed stop**. ETH bars use BTC's **12:00-UTC anchor**, so the
+sleeve's same-bar fill lands exactly at the signal bar's close, and its history spans
+the whole CT window (2024-03 → now, no staggered start). **Live orders route to the
+ETHA ETF**, exactly as the BTC sleeve is executed via IBIT — signal asset and traded
+vehicle are deliberately distinct. Surfaced as the **🔹 ETH Backtesting** tab in the
+₿ Bitcoin app and as a `core` instrument in the Overall portfolio.
 
-Surfaced as the **🔹 ETHA Backtesting** tab in the ₿ Bitcoin app (with a live price
-tile and its own chip in the signal/position panels) and as a `core` instrument in the
-Overall portfolio. Full evaluation, including the k-fold / walk-forward / cost
-sensitivity battery and the portfolio-level deltas across all three risk profiles:
-**[`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md)**.
-
-> **Data-vintage caveat.** CT-engine figures drift with feature-CSV refreshes. ETHA's
-> sleeve measured +264% / −18% / Sharpe 1.61 on the 2026-07-23 vintage and
-> +101% / −19% / Sharpe 1.04 on the 2026-07-25 vintage (same 6 trades; the big
-> Apr-2025 position exits earlier). Both are far above ETHA's −46% buy-&-hold at a
-> fraction of its −68% drawdown.
+> ### ⚠️ ETH is the weakest sleeve — and this supersedes the earlier ETHA claims
+>
+> | ETH sleeve, full CT window | Return | MaxDD | Sharpe |
+> |---|--:|--:|--:|
+> | Buy & hold | −51.4% | −67.5% | — |
+> | **CT Standard-MA (shipped)** | **+8.8%** | **−39.5%** | **0.23** |
+>
+> It beats buy-&-hold by ~60pp at roughly half the drawdown, but Sharpe 0.23 is far
+> below BTC (0.84), MSTR (1.47) and MSTU (1.38); one −32.6% trade dominates the log;
+> and the result moves ±47pp if the fill shifts one bar. At portfolio level it
+> *lowers* Balanced Sharpe in every MC seed and costs the deterministic equal-weight
+> book 38pp, because it is **0.80-correlated to the BTC sleeve**.
+>
+> This **replaces** the previous ETHA-based figures (+264%/+101%, Sharpe 1.6/1.0),
+> which were inflated by (a) a fill ~16h ahead of signal availability and (b) a
+> window that skipped Mar–Jul 2024. **The same fill issue affects MSTR and MSTU more
+> severely — MSTR +338% → +184% (Sharpe 1.47 → 1.08) once the fill is moved past the
+> signal.** That is pre-existing and NOT fixed here.
+> See **[`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md)** §4–§5.
 
 ---
 
