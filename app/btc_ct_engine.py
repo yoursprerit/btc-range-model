@@ -308,10 +308,42 @@ def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
         mstu = syn.reindex(dates).ffill().to_numpy(float)
     except Exception:
         mstu = T.load_asset("MSTU").reindex(dates).ffill().to_numpy(float)
+    out = {"BTC": btc, "MSTR": mstr, "MSTU": mstu}
     # ETH spot on BTC's own 12:00-UTC bars — full coverage of the CT window, so
     # (unlike an ETF sleeve) there is no staggered start to work around.
-    eth = T.load_asset("ETH").reindex(dates).ffill().to_numpy(float)
-    return {"BTC": btc, "MSTR": mstr, "MSTU": mstu, "ETH": eth}
+    #
+    # This load is NON-FATAL by design.  It used to be a bare
+    # ``T.load_asset("ETH")``, so a missing/unreadable eth_usd_daily.csv (a
+    # checkout that predates the file, or a failed background feature pull on a
+    # long-running deployment) raised FileNotFoundError out of run_btc_ct() and
+    # took down the WHOLE BTC app — BTC, MSTR and MSTU included.  The Overall
+    # app then reported "⛔ app failed to load" and raised its flashing
+    # STALE-SIGNALS alert even though the BTC signal itself was perfectly fresh.
+    # One optional sibling must never be able to kill its parent's sleeves, so:
+    #   1. prefer the 12:00-UTC CSV (correct bar anchor, matches the signal bar);
+    #   2. else fall back to the CT feature matrix's own ``eth_close`` column,
+    #      which is always present — note it is a midnight-UTC yfinance close, a
+    #      DEGRADED anchor, so the sleeve's fills no longer coincide exactly with
+    #      the signal bar;
+    #   3. else omit ETH entirely and let the other three sleeves load.
+    try:
+        out["ETH"] = T.load_asset("ETH").reindex(dates).ffill().to_numpy(float)
+    except Exception as exc:
+        try:
+            rf = T.load_raw_features()
+            if "eth_close" not in rf.columns:
+                raise KeyError("eth_close")
+            out["ETH"] = (rf["eth_close"].astype(float)
+                          .reindex(dates).ffill().to_numpy(float))
+            warnings.warn(
+                f"eth_usd_daily.csv unavailable ({exc}); ETH sleeve falling back to "
+                "raw_features eth_close (midnight-UTC anchor — degraded fills).",
+                RuntimeWarning)
+        except Exception as exc2:
+            warnings.warn(
+                f"ETH sleeve unavailable ({exc}; fallback: {exc2}) — running "
+                "BTC/MSTR/MSTU only so the BTC app still loads.", RuntimeWarning)
+    return out
 
 
 # ── result assembly (standard Overall-app result dicts) ──────────────────
@@ -387,7 +419,7 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
     as_of = pd.Timestamp(dates[last])
 
     out = []
-    for key in ("BTC", "MSTR", "MSTU", "ETH"):
+    for key in [k for k in ("BTC", "MSTR", "MSTU", "ETH") if k in px]:
         meta = _META[key]
         # per-asset entry gate: BTC → Pure Regime, MSTR/MSTU/ETH → Standard MA
         sigs_k = dict(sigs)
