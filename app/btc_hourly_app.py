@@ -554,18 +554,24 @@ def fetch_live_spot():
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_equity_prices():
-    """Fetch live MSTR, MSTU, ETH, STRC and SATA prices via Yahoo Finance."""
+    """Fetch live MSTR, MSTU, ETH, STRC and SATA prices via Yahoo Finance.
+
+    NOTE the (key, yahoo-symbol) pairs: spot Ether is ``ETH-USD``. The bare
+    ticker ``ETH`` is Ethan Allen Interiors (a ~$18 furniture stock), so quoting
+    it here silently showed ~$18 in the ETH tile instead of ~$1,870.
+    """
     prices, changes = {}, {}
-    for ticker in ("MSTR", "MSTU", "ETH", "STRC", "SATA"):
+    for key, ticker in (("MSTR", "MSTR"), ("MSTU", "MSTU"), ("ETH", "ETH-USD"),
+                        ("STRC", "STRC"), ("SATA", "SATA")):
         try:
             fi = yf.Ticker(ticker).fast_info
             price = float(fi.last_price)
             prev  = float(fi.previous_close)
-            prices[ticker] = price
-            changes[ticker] = (price - prev) / prev * 100 if prev else None
+            prices[key] = price
+            changes[key] = (price - prev) / prev * 100 if prev else None
         except Exception:
-            prices[ticker] = None
-            changes[ticker] = None
+            prices[key] = None
+            changes[key] = None
     return (prices.get("MSTR"), changes.get("MSTR"),
             prices.get("MSTU"), changes.get("MSTU"),
             prices.get("ETH"), changes.get("ETH"),
@@ -3747,6 +3753,53 @@ def _btc_daily_12utc_bars() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _eth_daily_12utc_bars() -> pd.DataFrame:
+    """ETH 12:00-UTC (7am-CT) daily OHLCV bars — the SAME anchor as the versioned
+    data/backtest/eth_usd_daily.csv and as the BTC signal bar.
+
+    The committed ETH series is deliberately on BTC's bar boundary so the sleeve's
+    fill coincides with the signal bar's close.  yfinance daily returns
+    MIDNIGHT-UTC bars, so extending the CSV with it would splice two different bar
+    conventions together (the same trap ``_btc_daily_12utc_bars`` exists to avoid).
+    This fetches ETHUSDT hourly klines straight from the Binance public API and
+    rebuckets them with the shared ``_rebucket_12utc``.  Deliberately independent
+    of ``_fetch_binance_hourly`` (which is BTC-specific, CSV-seeded and feeds the
+    forecast pipeline) so nothing here can perturb the BTC path.
+
+    Returns an EMPTY frame on any failure — the caller then leaves the CSV
+    unextended, which is strictly better than mixing anchors.
+    """
+    try:
+        rows, cursor = [], int((pd.Timestamp.utcnow().tz_localize(None)
+                                - pd.Timedelta(days=30)).timestamp() * 1000)
+        end_ms = int(pd.Timestamp.utcnow().tz_localize(None).timestamp() * 1000)
+        while cursor < end_ms:
+            batch = _binance_get("/api/v3/klines",
+                                 {"symbol": "ETHUSDT", "interval": "1h",
+                                  "startTime": cursor, "limit": 1000})
+            if not batch or not isinstance(batch, list):
+                break
+            rows.extend(batch)
+            cursor = int(batch[-1][0]) + 3_600_000
+        if not rows:
+            return pd.DataFrame()
+        h = pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close",
+                                        "volume", "close_time", "qv", "n", "tb",
+                                        "tq", "ig"])
+        # NB: pd.to_datetime on a Series returns a Series, so the tz strip needs
+        # `.dt.tz_convert` — a bare `.tz_convert` raises TypeError and (being
+        # swallowed by the except below) would silently disable this fetch.
+        h.index = pd.to_datetime(h["open_time"], unit="ms", utc=True).dt.tz_convert(None)
+        for c in ("open", "high", "low", "close", "volume"):
+            h[c] = h[c].astype(float)
+        h = h[["open", "high", "low", "close", "volume"]]
+        h = h[~h.index.duplicated(keep="last")].sort_index()
+        return _rebucket_12utc(h)
+    except Exception:
+        return pd.DataFrame()
+
+
 def _yf_extend_raw_features(df: pd.DataFrame, end_iso: str) -> pd.DataFrame:
     """Extend a stale raw-features DataFrame with fresh BTC + macro data.
 
@@ -3821,8 +3874,9 @@ def _yf_extend_price_df(df: pd.DataFrame, ticker: str, end_iso: str) -> pd.DataF
     # BTC-USD must extend on the 12:00-UTC (7am-CT) bar boundary to match the
     # model / live path — NOT yfinance's midnight-UTC daily bars. Equities
     # (MSTR/MSTU) keep exchange-session daily bars from yfinance.
-    if ticker == "BTC-USD":
-        _b12 = _btc_daily_12utc_bars()
+    if ticker in ("BTC-USD", "ETH-USD"):
+        _b12 = (_btc_daily_12utc_bars() if ticker == "BTC-USD"
+                else _eth_daily_12utc_bars())
         if _b12.empty:
             return df
         ext = _b12.rename(columns=str.lower)
@@ -4655,13 +4709,15 @@ def run_eth_backtest(end_date_iso: str,
     # ── ETH prices: versioned CSV → fallback to live yfinance ──────────────
     _eth_csv = _load_eth_prices()
     if _eth_csv is not None and "close" in _eth_csv.columns:
-        _eth_csv   = _yf_extend_price_df(_eth_csv, "ETH", end_date_iso)
+        # ETH-USD, NOT "ETH" (= Ethan Allen Interiors) — appending that ticker
+        # would splice ~$18 equity closes onto a ~$1,870 spot-ETH series.
+        _eth_csv   = _yf_extend_price_df(_eth_csv, "ETH-USD", end_date_iso)
         _eth_close = _eth_csv["close"].sort_index()
         _eth_low   = _eth_csv["low"].sort_index() if "low" in _eth_csv.columns else _eth_close
     else:
         try:
             d_eth = yf.download(
-                "ETH",
+                "ETH-USD",
                 start=pre_dt.strftime("%Y-%m-%d"),
                 end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
                 progress=False, auto_adjust=True,
