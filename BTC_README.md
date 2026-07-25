@@ -2,13 +2,19 @@
 
 The original app in this repo: a **four-model Bitcoin forecasting stack** served
 through the Streamlit dashboard, plus the **BTC Divergence Pure-Regime** trading
-strategy that trades BTC and its higher-beta siblings **MSTR** and **MSTU** off
+strategy that trades BTC and its siblings **MSTR**, **MSTU** and **ETHA** off
 the Bitcoin signal.
 
 Select it from the **Application radio at the top of the sidebar** →
 **₿ Bitcoin (BTC)**. For the platform overview see **[`README.md`](README.md)**;
 for the full strategy spec see **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)**
-and **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**.
+and **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**; the
+ETHA sleeve's rationale is in
+**[`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md)**.
+
+Each traded instrument has its own **Backtesting tab** — ₿ BTC · 📊 MSTR ·
+📈 MSTU · 🔹 ETHA — plus the two options tabs, all driven by the same BTC
+signal.
 
 ## The four forecasting models
 

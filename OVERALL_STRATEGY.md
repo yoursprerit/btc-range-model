@@ -56,8 +56,9 @@ leveraged/high-beta name.
 **ETHA (added 2026-07)** — the iShares Ethereum Trust (1× spot-ETH ETF) is the
 fourth sleeve on the BTC parent signal, traded with the MSTR treatment
 (Standard-MA gate, signal-exit-only, no fixed stop) from its 2024-07-23
-inception. It is an *Overall-universe* sleeve — the dedicated ₿ Bitcoin app
-continues to display BTC/MSTR/MSTU. Rationale and full validation:
+inception. It is surfaced in both places: as an instrument here, and as its own
+**🔹 ETHA Backtesting** tab (plus the live signal/position panels and a price
+tile) in the dedicated ₿ Bitcoin app. Rationale and full validation:
 [`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md) (BMNR was evaluated
 at the same time and rejected).
 

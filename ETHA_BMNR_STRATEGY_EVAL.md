@@ -5,8 +5,12 @@ one led to a change: **ETHA is now the 18th instrument** in the Overall
 universe — a `core` sleeve on the BTC parent signal, CT Standard-MA gate,
 signal-exit-only, no fixed stop (`app/btc_ct_engine.py`, `app/overall_core.py`,
 `data/backtest/etha_daily.csv`, IBKR map `scripts/ibkr_symbols.py`; conviction
-1.40 with the crypto family). BMNR was **not** added. Reproduce the analysis
-with `python scripts/eval_etha_bmnr.py`.
+1.40 with the crypto family) — **and it has its own 🔹 ETHA Backtesting tab in
+the ₿ Bitcoin app** (`app/btc_hourly_app.py`: `run_etha_backtest` +
+`render_etha_trading_strategy_dashboard`, four-period layout, gate-variant
+radio, live price tile, and an ETHA chip in the signal / open-position panels).
+BMNR was **not** added. Reproduce the analysis with
+`python scripts/eval_etha_bmnr.py`.
 
 > **Data-vintage note.** The CT engine's numbers drift with feature-CSV
 > refreshes (on-chain/premium series are revised between pulls — a known
