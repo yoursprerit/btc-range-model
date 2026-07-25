@@ -1,11 +1,12 @@
 """Signal-key → IBKR contract mapping for the Overall Trading paper rebalancer.
 
 The Overall engine (``app/overall_core.py``) keys every traded instrument by a
-short signal key (``ASSET_META``): BTC, MSTR, MSTU, ETHA, GLDM, GDX, UGL, NUGT,
+short signal key (``ASSET_META``): BTC, MSTR, MSTU, ETH, GLDM, GDX, UGL, NUGT,
 SOXX, SOXL, GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.  Every one of these is a
-US-listed ETF / equity that Interactive Brokers can trade **except spot BTC** —
-IBKR has no spot-Bitcoin product, so the BTC signal sleeve is traded via the
-**IBIT** spot-Bitcoin ETF, exactly as the user specified.
+US-listed ETF / equity that Interactive Brokers can trade **except the two spot
+crypto sleeves** — IBKR has no spot-Bitcoin or spot-Ether product, so the BTC
+signal sleeve is traded via the **IBIT** spot-Bitcoin ETF and the ETH sleeve via
+the **ETHA** spot-Ether ETF, exactly as the user specified.
 
 This module is the single source of truth for that key → tradeable-symbol map so
 both the rebalancer and the price-sizing step agree.  ``ib_async`` is imported
@@ -22,10 +23,10 @@ from __future__ import annotations
 # LIVE book parks it in a real SATA position — so SATA maps to itself here.
 TRADE_SYMBOL: dict[str, str] = {
     "BTC":  "IBIT",   # spot-BTC signal → iShares Bitcoin Trust ETF (no spot BTC on IBKR)
+    "ETH":  "ETHA",   # spot-ETH signal → iShares Ethereum Trust ETF (no spot ETH on IBKR)
     "SATA": "SATA",   # idle-cash park (Strive preferred) — used by the LIVE book only
     "MSTR": "MSTR",
     "MSTU": "MSTU",
-    "ETHA": "ETHA",   # spot-ETH sleeve on the BTC signal — ordinary US-listed ETF
 
     "GLDM": "GLDM",
     "GDX":  "GDX",
@@ -62,7 +63,7 @@ def ibkr_contract(symbol: str):
     """A qualified-ready IBKR ``Stock`` contract for a US-listed ``symbol``.
 
     Routed ``SMART`` in USD — the correct venue for every ETF/equity in the
-    universe (IBIT, the leveraged sleeves, and the sector ETFs all trade as
+    universe (IBIT, ETHA, the leveraged sleeves, and the sector ETFs all trade as
     ordinary US stocks).  ``ib_async`` is imported here (not at module top) so
     this file stays importable for offline dry-runs and unit tests.
     """

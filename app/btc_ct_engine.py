@@ -1,4 +1,4 @@
-"""BTC / MSTR / MSTU / ETHA via the BTC app's ACTUAL signal engine.
+"""BTC / MSTR / MSTU / ETH via the BTC app's ACTUAL signal engine.
 
 The BTC app (``app/btc_hourly_app.py``) is not importable (it runs Streamlit at
 module top), but its H/L prediction + Pure-Regime backtest are byte-identically
@@ -18,10 +18,13 @@ no fixed stop, MSTU widened −3% → −6% (vol-matched to its ~2× vol); the p
 re-entry override applies only to MSTU now, plus the 2026-07c 5-bar V-reversal
 window), full period Jun 2024 → May 2026.
 
-2026-07f: ETHA (iShares Ethereum Trust, 1× spot-ETH ETF) added as a fourth
-sleeve on the same parent BTC signal — Standard-MA gate, signal-exit-only, no
-fixed stop (the MSTR treatment); its sleeve begins at the fund's 2024-07-23
-inception.  See ETHA_BMNR_STRATEGY_EVAL.md for the full evaluation.
+2026-07f: ETH (spot Ethereum) added as a fourth sleeve on the same parent BTC
+signal — Standard-MA gate, signal-exit-only, no fixed stop (the MSTR
+treatment).  ETH bars share BTC's 12:00-UTC anchor, so the sleeve's same-bar
+fill lands exactly when the signal bar closes, and its history covers the whole
+CT window (no staggered start).  ETH is the *signal* asset; live execution runs
+through the ETHA ETF, exactly as the BTC sleeve executes via IBIT (see
+scripts/ibkr_symbols.py).  See ETH_BMNR_STRATEGY_EVAL.md for the evaluation.
 
 Caveat: the CT feature data (``data/backtest/raw_features_daily.csv``) spans
 ~2023-11 → the last pull, so BTC-sleeve returns begin ~2024 (not 2021).
@@ -122,16 +125,15 @@ def _ensure_fresh_features() -> None:
 #                              that going stopless blows open. See stop-loss eval.)
 U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
-# 2026-07f — ETHA (iShares Ethereum Trust, 1× spot-ETH ETF) added as a fourth
-# sleeve on the SAME parent BTC signal, with the MSTR treatment: Standard-MA
-# gate, signal-exit-only, no fixed stop.  Evaluated in
-# ETHA_BMNR_STRATEGY_EVAL.md — the CT signal turns ETHA's −46% B&H (from its
-# 2024-07-23 inception) into +264% at −18% MDD / Sharpe 1.61; a fixed stop
-# ≤8% only hurts (signal exits already cap intra-trade pain), exactly as MSTR.
+# 2026-07f — ETH (spot Ethereum) added as a fourth sleeve on the SAME parent BTC
+# signal, with the MSTR treatment: Standard-MA gate, signal-exit-only, no fixed
+# stop.  Evaluated in ETH_BMNR_STRATEGY_EVAL.md — a fixed stop ≤8% only hurts
+# (the signal exits already cap intra-trade pain), exactly as on MSTR.  ETH is
+# the signal/backtest asset and is executed live through the ETHA ETF.
 STOP_PCT = {"BTC": None, "MSTR": None, "MSTU": 0.06,   # BTC/MSTR: no fixed stop; MSTU −6%
-            "ETHA": None}                              # ETHA: MSTR treatment — no stop
+            "ETH": None}                               # ETH: MSTR treatment — no stop
 GATE_BY_ASSET = {"BTC": "above_ma30", "MSTR": "above_ma30", "MSTU": "above_ma30",
-                 "ETHA": "above_ma30"}
+                 "ETH": "above_ma30"}
 # 2026-07 structural fix — post-stop re-entry override (STOPPED leveraged sleeve only).
 # Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
 # even when the XOR combined-block is on. Fixes the "stopped out at the
@@ -148,7 +150,7 @@ _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
     "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.0),
     "MSTU": dict(name="2× MSTR",        kind="lev",  stop=0.06),
-    "ETHA": dict(name="Ethereum (ETHA)", kind="core", stop=0.0),
+    "ETH":  dict(name="Ethereum",       kind="core", stop=0.0),
 }
 ACCENT = "#f7931a"
 EMOJI = "₿"
@@ -306,11 +308,10 @@ def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
         mstu = syn.reindex(dates).ffill().to_numpy(float)
     except Exception:
         mstu = T.load_asset("MSTU").reindex(dates).ffill().to_numpy(float)
-    # ETHA lists 2024-07-23 — NaN before inception; run_btc_ct starts its
-    # sleeve at the first finite bar so the pre-inception window carries no
-    # phantom flat stream in the Overall matrices.
-    etha = T.load_asset("ETHA").reindex(dates).ffill().to_numpy(float)
-    return {"BTC": btc, "MSTR": mstr, "MSTU": mstu, "ETHA": etha}
+    # ETH spot on BTC's own 12:00-UTC bars — full coverage of the CT window, so
+    # (unlike an ETF sleeve) there is no staggered start to work around.
+    eth = T.load_asset("ETH").reindex(dates).ffill().to_numpy(float)
+    return {"BTC": btc, "MSTR": mstr, "MSTU": mstu, "ETH": eth}
 
 
 # ── result assembly (standard Overall-app result dicts) ──────────────────
@@ -386,16 +387,17 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
     as_of = pd.Timestamp(dates[last])
 
     out = []
-    for key in ("BTC", "MSTR", "MSTU", "ETHA"):
+    for key in ("BTC", "MSTR", "MSTU", "ETH"):
         meta = _META[key]
-        # per-asset entry gate: BTC → Pure Regime, MSTR/MSTU/ETHA → Standard MA
+        # per-asset entry gate: BTC → Pure Regime, MSTR/MSTU/ETH → Standard MA
         sigs_k = dict(sigs)
         sigs_k["tf2_entry"] = (sigs["tf2_entry_ma"]
                                if GATE_BY_ASSET[key] == "above_ma30"
                                else sigs["tf2_entry_pure"])
-        # start each sleeve at its asset's first finite bar (ETHA lists
-        # 2024-07-23, after the CT window opens) so B&H rebasing and the
-        # Overall return/position matrices see no pre-inception stream.
+        # start each sleeve at its asset's first finite bar, so a sleeve whose
+        # series begins after the CT window opens contributes no phantom
+        # pre-inception stream to B&H rebasing or the Overall matrices.  (All
+        # four current sleeves cover the full window; this is a safety net.)
         _fin = np.isfinite(px[key]) & (px[key] > 0)
         sd_k = sd
         if _fin.any():
