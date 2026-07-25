@@ -102,6 +102,13 @@ instrument through one unified daily engine (`overall_core` → `ticker_core` +
 `backtest_ticker`, with BTC/Gold via their own CT/gold engines) so all
 strategies are directly comparable and blendable.
 
+**Price-feed resilience.** Daily bars come from Yahoo, but the app no longer
+depends on it alone: if Yahoo withholds the newest completed session (its daily
+feed lags its intraday one, and shared-egress IPs get rate-limited), the fetchers
+rebuild that session from Yahoo hourly and, failing that, from **Nasdaq's keyless
+quote API** — an independent provider. See `app/market_fallback.py` for why Yahoo
+stays primary (macro index/futures coverage, history depth, adjustment provenance).
+
 ---
 
 ## Trading strategy

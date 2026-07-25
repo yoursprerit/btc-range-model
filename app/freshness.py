@@ -25,6 +25,25 @@ and the 🕵️ Daily Audit tab, so the times shown everywhere always agree.
 A tiny JSON log (``runtime/freshness_log.json``) records, per app, when its page
 last refreshed and which close it displayed; the Daily Audit tab reads it.  All
 writes are best-effort and atomic — a failed write never breaks an app render.
+
+Recovering a session the price feed is withholding
+-------------------------------------------------
+Yahoo's daily series lags its own intraday series, and on shared egress IPs
+(Streamlit Community Cloud, GitHub Actions) its responses are rate-limited or
+stale for hours — which strands every equity app one session behind and trips the
+STALE-SIGNALS alert.  Two helpers here repair that with real data rather than a
+relaxed audit, and the daily fetchers apply them in this order:
+
+1. ``backfill_sessions_from_hourly`` — rebuild the missing session from Yahoo's
+   *hourly* series (a different pipeline that usually still has it);
+2. ``merge_missing_sessions`` — if Yahoo is withholding it on both feeds, take it
+   from an INDEPENDENT provider (``app/market_fallback.py``, Nasdaq's keyless
+   quote API), with a split-scale guard because the two providers differ in
+   split/dividend adjustment.
+
+Both are strictly additive: they never overwrite a session the primary feed has,
+never add an in-progress or non-trading session, and no-op when the frame is
+already current — so a genuinely stale feed still fails the audit.
 """
 from __future__ import annotations
 
@@ -226,6 +245,112 @@ def drop_in_progress_us_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
     except Exception:
         return df
     return df.loc[idx <= cutoff]
+
+
+# ── intraday backstop: rebuild a daily bar Yahoo's daily feed is missing ─────
+# Yahoo serves the daily (`interval=1d`) and intraday (`interval=1h`) series from
+# different pipelines, and the daily one lags: the newest session is routinely
+# absent or carries a null close for a while after the 4:00 PM ET close, and on
+# heavily-shared egress IPs (Streamlit Community Cloud) that lag can persist for
+# hours because responses are rate-limited/cached upstream.  Since `_chart` drops
+# null-close rows, the whole app then sits one session behind and the Overall
+# cockpit raises its STALE-SIGNALS alert even though the data is obtainable — the
+# HOURLY series usually still has the session (observed 2026-07-25: daily stuck on
+# Jul 23 while hourly had Jul 24 20:00).
+#
+# This rebuilds those missing COMPLETED sessions by aggregating the hourly bars,
+# so the fix is real data rather than a relaxed audit.  It never invents an
+# in-progress session (the cap is ``expected_equity_asof``), never rewrites a
+# session the daily feed already has, and returns the frame untouched if the
+# hourly series is no fresher — in which case the audit correctly still flags
+# staleness.
+_AGG_BY_SUFFIX = {"open": "first", "high": "max", "low": "min",
+                  "close": "last", "volume": "sum"}
+
+
+def et_session_dates(idx) -> pd.DatetimeIndex:
+    """Map intraday (tz-naive UTC) timestamps to their US/Eastern session date."""
+    i = pd.DatetimeIndex(idx)
+    i = i.tz_localize("UTC") if i.tz is None else i.tz_convert("UTC")
+    return pd.DatetimeIndex(i.tz_convert(ET).normalize().tz_localize(None))
+
+
+def backfill_sessions_from_hourly(daily: pd.DataFrame, hourly: pd.DataFrame,
+                                  price_col: str, now=None) -> pd.DataFrame:
+    """Append any COMPLETED US sessions the daily frame lacks, aggregated from
+    ``hourly``.  No-op when the daily frame is already current, when ``hourly`` is
+    empty/no fresher, or when the synthesized session has no primary-price data."""
+    if daily is None or daily.empty or hourly is None or hourly.empty:
+        return daily
+    cutoff = expected_equity_asof(now)
+    last = pd.DatetimeIndex(daily.index).max()
+    if pd.isna(last) or last >= cutoff:
+        return daily                            # already current — nothing to do
+    h = hourly.copy()
+    h["_sess"] = et_session_dates(h.index)
+    want = [d for d in sorted(set(h["_sess"]))
+            if last < d <= cutoff and is_us_trading_day(d)]
+    if not want:
+        return daily
+    agg = {}
+    for c in daily.columns:
+        if c not in h.columns:
+            continue
+        agg[c] = _AGG_BY_SUFFIX.get(str(c).rsplit("_", 1)[-1], "last")
+    if price_col not in agg:
+        return daily
+    rows = h[h["_sess"].isin(want)].groupby("_sess").agg(agg)
+    rows = rows.dropna(subset=[price_col])
+    rows = rows[~rows.index.isin(daily.index)]
+    if rows.empty:
+        return daily
+    out = pd.concat([daily, rows.reindex(columns=daily.columns)]).sort_index()
+    return out[~out.index.duplicated(keep="last")]
+
+
+def merge_missing_sessions(daily: pd.DataFrame, alt: pd.DataFrame, price_col: str,
+                          now=None, max_rel_jump: float = 0.60) -> pd.DataFrame:
+    """Append COMPLETED US sessions that ``daily`` lacks, taken from an alternate
+    DAILY-indexed frame (a second provider — see ``app/market_fallback.py``).
+
+    Used after the hourly backstop, when Yahoo is withholding sessions entirely.
+    Guards, in order:
+
+    * never touches a session ``daily`` already has, and never adds one past the
+      last completed close (``expected_equity_asof``) or on a non-trading day;
+    * requires the primary price column to be present and non-null;
+    * **split-scale guard** — a candidate whose close differs from the newest
+      known close by more than ``max_rel_jump`` is DROPPED.  The two providers
+      differ in split/dividend adjustment, so this is what stops a raw,
+      unadjusted print being spliced onto an adjusted series (a 10-for-1 split
+      shows up as a ~90% gap; a genuine leveraged-ETF day stays well inside 60%).
+    """
+    if daily is None or daily.empty or alt is None or alt.empty:
+        return daily
+    cutoff = expected_equity_asof(now)
+    last = pd.DatetimeIndex(daily.index).max()
+    if pd.isna(last) or last >= cutoff:
+        return daily
+    a = alt.copy()
+    a.index = pd.DatetimeIndex(a.index).normalize()
+    a = a[~a.index.duplicated(keep="last")].sort_index()
+    want = [d for d in a.index
+            if last < d <= cutoff and d not in daily.index and is_us_trading_day(d)]
+    if not want or price_col not in a.columns:
+        return daily
+    rows = a.loc[want].dropna(subset=[price_col])
+    if rows.empty:
+        return daily
+    ref = pd.to_numeric(daily[price_col], errors="coerce").dropna()
+    if len(ref):
+        base = float(ref.iloc[-1])
+        if base > 0:
+            keep = (rows[price_col].astype(float) / base - 1.0).abs() <= max_rel_jump
+            rows = rows[keep]
+    if rows.empty:
+        return daily
+    out = pd.concat([daily, rows.reindex(columns=daily.columns)]).sort_index()
+    return out[~out.index.duplicated(keep="last")]
 
 
 def close_moment(kind: str, asof) -> pd.Timestamp:

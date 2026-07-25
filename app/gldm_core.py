@@ -261,6 +261,28 @@ def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:
     # anchor basis session, so a published Target Book only ever sees the
     # pre-anchor market close (see app/freshness.py).
     import freshness as _fr
+    # See ticker_core.fetch_daily: Yahoo's daily feed can sit a session behind its
+    # hourly feed, stranding the gold apps one bar back and tripping the Overall
+    # STALE-SIGNALS alert. Rebuild the missing completed session from hourly.
+    try:
+        if _fr.expected_equity_asof() > pd.DatetimeIndex(df.index).max():
+            _h = _merge(syms, "1h", range_="1mo")
+            df = _fr.backfill_sessions_from_hourly(df, _h, "gldm_close")
+            macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
+            df[macro_cols] = df[macro_cols].ffill(limit=5)
+        # Still behind? Yahoo is withholding the session on both its feeds, so
+        # fall back to an INDEPENDENT provider (Nasdaq's keyless quote API) for
+        # the listed tickers. Indices/futures aren't served there and stay
+        # ffilled. See app/market_fallback.py for why Yahoo remains primary.
+        if _fr.expected_equity_asof() > pd.DatetimeIndex(df.index).max():
+            import market_fallback as _mf
+            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(
+                pd.DatetimeIndex(df.index).max()).date()))
+            df = _fr.merge_missing_sessions(df, _alt, "gldm_close")
+            macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
+            df[macro_cols] = df[macro_cols].ffill(limit=5)
+    except Exception:
+        pass                    # best-effort; the audit still flags real staleness
     if _fr.completed_bars_only():
         df = _fr.drop_in_progress_us_bar(df, _fr.publish_anchor_ct())
     return df
