@@ -33,6 +33,13 @@ name: Publish target book (IBKR Option C)
 # 7:15 AM CDT (12:15 UTC) and 7:15 AM CST (13:15 UTC); the guard resolves the
 # true cycle start via America/Chicago.
 #
+# 2026-07-25: the slot window was widened 12–17 → 12–23 UTC. A transient upstream
+# feed lag (Yahoo had not yet served Friday's daily bar for the ETF universe on the
+# first-ever weekend run) made the audit fail; with only six slots the day risked
+# ending unpublished. The guard is idempotent and the book's basis is pinned to the
+# 7:15-AM-CT anchor, so a later slot publishes exactly the book the morning run
+# would have — extra slots cost nothing on a day that already published.
+#
 # For an EXACTLY-on-time fire (optional hardening), point any external
 # scheduler (cron-job.org, Cloud Scheduler, the executor VM's crontab) at the
 # GitHub API's workflow_dispatch endpoint for this file at the desired times:
@@ -51,7 +58,7 @@ on:
     # retries. 12:15 UTC = 7:15 CDT primary (13:15 UTC covers 7:15 CST); later
     # slots only fire if the day's book still isn't published (guard-skipped
     # otherwise).
-    - cron: "15 12-17 * * *"   # 12:15 … 17:15 UTC hourly
+    - cron: "15 12-23 * * *"   # 12:15 … 23:15 UTC hourly (was 12-17)
     - cron: "45 12,13 * * *"   # 12:45, 13:45 UTC (dense early retries)
 
 # contents: write to push the artifacts back to the branch; issues: write so a
@@ -211,12 +218,56 @@ jobs:
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
-      - name: Fail if publish failed or was refused (stale signals)
+      - name: Classify + record the failure (stale-withheld vs engine error)
+        id: classify
         if: steps.guard.outputs.run == 'true' && steps.publish.outcome != 'success'
+        # publish_target_book.py exits 2 when the freshness audit failed and the
+        # book was deliberately WITHHELD (a designed, safe outcome — the executor
+        # keeps the previous verified book); any other non-zero exit is a real
+        # engine/data error. Surface which, plus the stale app list, into the job
+        # summary so the cause is visible WITHOUT relying on Issues being enabled
+        # (they are disabled on this repo — see the "Report failure" step).
         run: |
-          echo "Publish step outcome: ${{ steps.publish.outcome }}."
-          echo "Either the engine errored, or the signal-freshness audit failed and"
-          echo "the book was withheld (see data/overall/daily_audit.json)."
+          set -uo pipefail
+          KIND="error"; STALE="unknown"; ASOF="unknown"; REASON=""
+          if [ -f data/overall/daily_audit.json ]; then
+            ASOF="$(jq -r '.overall.as_of // "unknown"' data/overall/daily_audit.json)"
+            STALE="$(jq -r '(.audit.stale_apps // []) | join(", ")' data/overall/daily_audit.json)"
+            REASON="$(jq -r '.target_book.skip_reason // ""' data/overall/daily_audit.json)"
+            # NB: jq's `//` treats `false` as empty, so `.audit.passed // "unknown"`
+            # would report "unknown" for a genuinely FAILED audit and misclassify a
+            # withheld book as an engine error. Test for the key, then stringify.
+            PASSED="$(jq -r 'if (.audit | has("passed")) then (.audit.passed | tostring) else "unknown" end' data/overall/daily_audit.json)"
+            [ "$PASSED" = "false" ] && KIND="withheld"
+          fi
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          {
+            if [ "$KIND" = "withheld" ]; then
+              echo "### ⏸️ Target book WITHHELD (signal-freshness audit failed)"
+              echo ""
+              echo "This is the **designed safe path**, not a crash: stale signals are never"
+              echo "published. The IBKR executor keeps the previous verified book and its own"
+              echo "freshness guard skips trading if that book ages out — so no bad orders."
+              echo ""
+              echo "- Stale apps: \`${STALE:-none}\`"
+              echo "- Engine as-of: \`${ASOF}\`"
+              [ -n "$REASON" ] && echo "- Reason: \`${REASON}\`"
+              echo ""
+              echo "A later catch-up slot re-runs automatically and publishes once the feeds"
+              echo "catch up (the guard is idempotent, and the book's basis stays pinned to"
+              echo "today's 7:15 AM CT anchor, so a later publish yields the same book)."
+            else
+              echo "### ❌ Target-book publish ERRORED"
+              echo ""
+              echo "The publish step exited non-zero for a reason other than a failed"
+              echo "freshness audit (engine, data feed, or dependency error). See the step log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$KIND" = "withheld" ]; then
+            echo "::warning title=Target book withheld::Freshness audit failed (stale: ${STALE:-none}) — book not published; a catch-up slot will retry."
+          else
+            echo "::error title=Target-book publish errored::Publish step outcome ${{ steps.publish.outcome }} (not an audit refusal) — see log."
+          fi
           exit 1
 
       # Make a broken publish loud: on any failure above, open a tracking issue
@@ -225,6 +276,15 @@ jobs:
       # it to anyone watching issues / notifications too.
       - name: Report failure
         if: failure()
+        # MUST NOT throw. This repo has Issues DISABLED, so the create/comment
+        # calls return HTTP 410 ("Issues has been disabled in this repository")
+        # and an unguarded script fails the step with an "Unhandled error" that
+        # buries the real cause (observed 2026-07-25). Every API call is wrapped:
+        # if issue reporting is unavailable we fall back to the job summary +
+        # an annotation, which the "Classify" step above has already written.
+        # continue-on-error is belt-and-braces so the reporter can never be the
+        # thing that decides the job's status.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -244,28 +304,46 @@ jobs:
               `rather than act on a stale book, so no bad orders result — but today's book `,
               `was not published. Check the run log above.`,
             ].join('\n');
-            // find an existing open failure issue to avoid one-per-day spam
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: label, per_page: 1,
-            });
-            if (existing.data.length) {
-              await github.rest.issues.createComment({
+            // Issues may be DISABLED on this repo (HTTP 410) or the token may
+            // lack scope — either way, reporting must degrade, never throw.
+            const disabled = (e) =>
+              e?.status === 410 || e?.status === 404 || e?.status === 403;
+            try {
+              // find an existing open failure issue to avoid one-per-day spam
+              const existing = await github.rest.issues.listForRepo({
                 owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: existing.data[0].number, body,
+                state: 'open', labels: label, per_page: 1,
               });
-            } else {
-              // ensure the label exists (ignore error if it already does)
-              try {
-                await github.rest.issues.createLabel({
+              if (existing.data.length) {
+                await github.rest.issues.createComment({
                   owner: context.repo.owner, repo: context.repo.repo,
-                  name: label, color: 'd24444',
-                  description: 'Automated: target-book publish failed',
+                  issue_number: existing.data[0].number, body,
                 });
-              } catch (e) { /* label already exists */ }
-              await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title: '⚠️ Target-book publish failed',
-                body, labels: [label],
-              });
+              } else {
+                // ensure the label exists (ignore error if it already does)
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    name: label, color: 'd24444',
+                    description: 'Automated: target-book publish failed',
+                  });
+                } catch (e) { /* label already exists */ }
+                await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: '⚠️ Target-book publish failed',
+                  body, labels: [label],
+                });
+              }
+              core.info('Failure reported to Issues.');
+            } catch (e) {
+              const why = disabled(e)
+                ? `Issues are unavailable on this repository (HTTP ${e.status}) — ` +
+                  `falling back to the job summary.`
+                : `Issue reporting failed (${e?.status ?? '?'}: ${e?.message ?? e}) — ` +
+                  `falling back to the job summary.`;
+              core.warning(why);
+              await core.summary
+                .addRaw(`\n\n> ℹ️ ${why}\n\n`)
+                .addRaw(body)
+                .write();
             }
