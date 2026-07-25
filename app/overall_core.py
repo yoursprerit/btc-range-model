@@ -1014,12 +1014,16 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
 
 
 def _cap_normalise(w: np.ndarray, cap_vec: np.ndarray) -> np.ndarray:
-    """Normalise to sum 1 then water-fill against a per-element cap vector."""
+    """Normalise to sum 1 then water-fill against a per-element cap vector.
+
+    Sums to 1 whenever the caps allow it (``cap_vec.sum() >= 1``); only an
+    infeasible cap set leaves a remainder (→ cash/SATA in the callers)."""
     w = np.asarray(w, float).copy()
     if w.sum() <= 0:
         return w
     w = w / w.sum()
-    for _ in range(30):
+    # each pass pins at least one more name at its cap, so n+1 passes suffice
+    for _ in range(len(w) + 1):
         over = w > cap_vec + 1e-9
         if not over.any():
             break
@@ -1029,7 +1033,10 @@ def _cap_normalise(w: np.ndarray, cap_vec: np.ndarray) -> np.ndarray:
         base = w[room].sum()
         if not room.any() or base <= 0:
             break
-        w[room] = np.minimum(cap_vec[room], w[room] + spill * (w[room] / base))
+        # a recipient pushed past its own cap is NOT clipped here — the next
+        # pass re-caps it and re-spills the excess to the names still below
+        # cap, so no weight is silently dropped while room remains
+        w[room] += spill * (w[room] / base)
     return w
 
 
