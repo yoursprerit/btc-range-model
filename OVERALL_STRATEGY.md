@@ -34,7 +34,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 
 | Signal (parent) | Instruments (kind) | Engine |
 |---|---|---|
-| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` | CT-model Divergence · BTC & MSTR signal-exit-only, MSTU −6% |
+| ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETHA `core` | CT-model Divergence · BTC & MSTR & ETHA signal-exit-only, MSTU −6% |
 | 🥇 **Gold Trend (GLDM)** | GLDM `core` · UGL `lev` | Dual-MA 25/100 on the GLDM close · −3% stops |
 | ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −3% / NUGT −5% |
 | 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
@@ -45,13 +45,21 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | ☀️ **PBW** | PBW `core` | Clean-Energy Divergence Pure-Regime |
 | 🤖 **ARTY** | ARTY `core` | AI/Tech Divergence Pure-Regime |
 
-That is **17 instruments across 10 parent apps** (the two gold apps share one
+That is **18 instruments across 10 parent apps** (the two gold apps share one
 GLDM-derived signal). Each runs the **exact engine its own
-app trades** (BTC/MSTR/MSTU via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
+app trades** (BTC/MSTR/MSTU/ETHA via the BTC app's trained CT model; GLDM/GDX/UGL/NUGT
 via the Gold app's `backtest_gldm`; the ETFs via their `ticker_config` entries
 through `backtest_ticker`), so the Overall numbers match each source app
 bar-for-bar. Sibling stops are looser than the 1× because a tight stop whipsaws a
 leveraged/high-beta name.
+
+**ETHA (added 2026-07)** — the iShares Ethereum Trust (1× spot-ETH ETF) is the
+fourth sleeve on the BTC parent signal, traded with the MSTR treatment
+(Standard-MA gate, signal-exit-only, no fixed stop) from its 2024-07-23
+inception. It is an *Overall-universe* sleeve — the dedicated ₿ Bitcoin app
+continues to display BTC/MSTR/MSTU. Rationale and full validation:
+[`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md) (BMNR was evaluated
+at the same time and rejected).
 
 ---
 
@@ -69,7 +77,7 @@ flowchart TD
     G --> H["signal_gated_allocation()<br/>deploy only to long/opening names,<br/>tilt by entry-priority, water-fill to caps"]
     H --> I["undeployed remainder → SATA idle-cash"]
     H --> J["live_exit_keys() — drop names whose<br/>LIVE price has broken the trend"]
-    J --> K["Recommended now (live-adjusted) book<br/>+ action plan + rebalancing moves"]
+    J --> K["Recommended Live Possible Targetbook<br/>+ action plan + rebalancing moves"]
     I --> K
 ```
 
@@ -148,12 +156,13 @@ the user dials the return-vs-risk trade-off on the Live tab:
 Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdown
 deepens faster than the return — which is exactly the knob these profiles expose.
 
-Committed artifact (2026-07-21, all sleeves on the causal-model retunes, the
-XLE crash-shield, and the gold middle path split across its two parent apps —
+Committed artifact (2026-07-25, all sleeves on the causal-model retunes, the
+XLE crash-shield, the gold middle path split across its two parent apps —
 🥇 Gold Trend (GLDM/UGL dual-MA 25/100) and ⛏️ Gold Miners (GDX/NUGT
-divergence); OOS 2021→now): **Balanced +852 % / −13.1 % MDD / Sharpe 2.48 ·
-Growth +1,893 % / −22.6 % / 1.71 · Aggressive +2,387 % / −30.9 % / 1.54** vs
-the equal-weight buy-&-hold benchmark +229 % / −35.4 % / 0.74.
+divergence) — and the new ETHA sleeve on the BTC signal; 18 instruments,
+OOS 2021→now): **Balanced +793 % / −8.6 % MDD / Sharpe 2.60 ·
+Growth +1,743 % / −19.9 % / 1.77 · Aggressive +2,134 % / −32.0 % / 1.48** vs
+the equal-weight buy-&-hold benchmark +199 % / −35.4 % / 0.69.
 Reproduce with `python scripts/build_overall.py`.
 
 ### Fundamental overlay (optional)
@@ -213,14 +222,22 @@ historically-optimal weight.
   deployed risk assets total 100 % when the caps allow.
 - **Whatever can't be deployed is parked in SATA.** With **no open positions the
   entire book sits in SATA**, earning its yield until a signal fires.
-- It emits three books for the donuts:
-  - **Current book** — what's held right now (optimal weights, no priority tilt).
-  - **Recommended today** — the committed last-close signals, priority-tilted.
-  - **Recommended now (live-adjusted)** — additionally drops any position whose
-    **live** price has fallen below its trend filter (`live_exit_keys` re-runs each
-    mode's real long condition — e.g. a `dual_ma` death-cross, not a naïve
-    price-vs-line proxy — so a golden-cross name isn't mis-flagged) and reallocates
-    to the survivors and SATA.
+- The Live tab's three donuts are:
+  - **Previous Targetbook** — the published book that preceded the current one
+    (`data/overall/target_book*_prev.json`, rotated at each publish).
+  - **Current Targetbook** — the *officially published* book
+    (`data/overall/target_book*.json`): all tickers as of the last US market
+    close (yesterday) and BTC · MSTR · MSTU · ETHA as of the 7:00-AM-CT Bitcoin bar
+    close today. Frozen until the next 7:15-AM-CT publish (or a manual 🚀
+    publish from the UI).
+  - **Recommended Live Possible Targetbook** — the committed last-close
+    signals, priority-tilted, and additionally dropping any position whose
+    **live** price has fallen below its trend filter (`live_exit_keys` re-runs
+    each mode's real long condition — e.g. a `dual_ma` death-cross, not a naïve
+    price-vs-line proxy — so a golden-cross name isn't mis-flagged),
+    reallocating to the survivors and SATA. It can change through the day
+    because today's market and BTC bars have not closed; it becomes official
+    only when published.
 - **Action plan.** Every instrument gets a ranked action — **CLOSE** (exits
   first), then **OPEN** / **HOLD**, then **WATCH** / **STAND ASIDE** — each with
   its priority, live price, unrealised P&L vs the real entry-bar cost basis, and
@@ -292,10 +309,11 @@ The daily cycle:
 1. **12:00 UTC** — the Bitcoin bar closes; minutes later the
    *Refresh backtest dataset* workflow pulls the fresh BTC feature CSV.
 2. **≈7:15 AM US Central** — the *Publish target book* workflow runs the full
-   Overall engine. Both DST variants are scheduled (12:15 & 13:15 UTC) with an
-   `America/Chicago` guard so it always fires at the 7-o'clock Central hour
-   (with an 8–9 AM CT same-day retry slot if the first fire was delayed or its
-   audit failed).
+   Overall engine, **once per day**. Both DST variants are scheduled (12:15 &
+   13:15 UTC) with an `America/Chicago` guard so it always fires at the
+   7-o'clock Central hour (with hourly same-day catch-up slots if the first
+   fire was delayed or its audit failed — the guard skips every slot once the
+   day's book is published).
 3. **Audit before anything else** — every signal app's newest bar is validated
    against the freshest close its asset class can possibly have
    (`freshness.audit_universe`). A failed audit forces one full data refresh +
@@ -307,7 +325,31 @@ The daily cycle:
    audited results* and the Target Book is **published immediately**
    (`data/overall/target_book*.json`, HMAC-signed, with the audit verdict
    stamped into the payload), alongside the audit trail
-   (`data/overall/daily_audit.json`).
+   (`data/overall/daily_audit.json`). The published book's **data basis is
+   pinned to the day's 7:15-AM-CT anchor** (`freshness.publish_anchor_ct`):
+   the publisher sets the completed-bars-only flag
+   (`OVERALL_COMPLETED_BARS_ONLY`) so the daily fetchers trim every US bar
+   after the pre-anchor session — the in-progress intraday bar during
+   market hours AND the just-completed close after 4:00 PM ET — and it
+   skips the live-exit spot override (`live_adjust=False`). A publish at
+   any wall-clock time of the day therefore produces the same book the
+   7:15 AM run would have; signal changes after the market close appear
+   only in the live *Recommended Live Possible Targetbook* view until the
+   next morning's publish. The exact basis closes are stamped into the
+   signed payload (`signal_basis`) and shown in the donut captions. A signal app that fails to
+   load entirely also fails the audit (a reduced universe is never
+   published). The outgoing book is rotated to
+   `data/overall/target_book*_prev.json` — the *Previous Targetbook* the
+   Overall app's donuts show — but **only at the first publish of a new
+   Central-time day**: an intraday 🚀 re-publish replaces the current book
+   while leaving yesterday's book in the prev slot.
+5. **The published book is frozen for the rest of the day.** It does not
+   update again until the next morning's 7:15-AM-CT cycle; the only intraday
+   replacement is an explicit user action — the 🚀 *Publish new target book*
+   button in the 📋 Target Book app (or a manual `workflow_dispatch`), which
+   bypasses the once-per-day guard. The Overall app's **Recommended Live
+   Possible Targetbook** donut keeps updating live, but it is advisory only
+   until published.
 
 In the UI:
 

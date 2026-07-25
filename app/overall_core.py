@@ -11,7 +11,7 @@ primary plus higher-beta / leveraged siblings — exactly as the dedicated apps 
 
     App     Signal     Traded off that signal
     ─────   ──────     ────────────────────────────────────────────
-    BTC     BTC        BTC (1×) · MSTR (BTC-proxy) · MSTU (2× MSTR)
+    BTC     BTC        BTC (1×) · MSTR (BTC-proxy) · MSTU (2× MSTR) · ETHA (spot ETH)
     Gold    GLDM       GLDM (1×) · GDX (miners) · UGL (2× gold)
     XLE     XLE        XLE (1×) · OIH (oil services, high-beta)
     SOXX    SOXX       SOXX
@@ -106,13 +106,14 @@ BTC_CFG = TickerConfig(
     primary_symbol="BTC-USD",
     macro_syms={"eth": "ETH-USD", "spx": "^GSPC", "ndx": "^NDX",
                 "vix": "^VIX", "gold": "GC=F", "dxy": "DX-Y.NYB", "tnx": "^TNX"},
-    extra_syms={"mstr": "MSTR", "mstu": "MSTU"},
+    extra_syms={"mstr": "MSTR", "mstu": "MSTU", "etha": "ETHA"},
     sentiment=[("spx_close", "mom", +1.0), ("ndx_close", "mom", +1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Crypto/risk macro sentiment",
-    traded_assets=[("BTC", "px_close"), ("MSTR", "mstr_close"), ("MSTU", "mstu_close")],
+    traded_assets=[("BTC", "px_close"), ("MSTR", "mstr_close"), ("MSTU", "mstu_close"),
+                   ("ETHA", "etha_close")],
     asset_labels={"px_close": "BTC · Bitcoin", "mstr_close": "MSTR · MicroStrategy",
-                  "mstu_close": "MSTU · 2× MSTR"},
+                  "mstu_close": "MSTU · 2× MSTR", "etha_close": "ETHA · Ethereum"},
     strategy_mode="divergence", strategy_name="BTC Divergence Pure-Regime",
     ma_window=30, fixed_stop=0.03,
     u1_errhi_min=0.013, d2_errhi_max=-0.013, d1_errlo_min=0.005, v_errlo_min=0.50,
@@ -241,6 +242,7 @@ ASSET_META = {
     "BTC":  dict(name="Bitcoin",        kind="core"),
     "MSTR": dict(name="MicroStrategy",  kind="beta"),
     "MSTU": dict(name="2× MSTR",        kind="lev"),
+    "ETHA": dict(name="Ethereum (ETHA)", kind="core"),
     "GLDM": dict(name="Gold (GLDM)",    kind="core"),
     "GDX":  dict(name="Gold Miners",    kind="beta"),
     "UGL":  dict(name="2× Gold",        kind="lev"),
@@ -270,6 +272,7 @@ CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 FUNDAMENTAL_VIEW = {
     "SOXX": 1.40, "SOXL": 1.40, "ARTY": 1.40,   # AI / semiconductor supercycle (SOXL = 3× semis)
     "BTC": 1.40, "MSTR": 1.40, "MSTU": 1.40,    # crypto institutional era
+    "ETHA": 1.40,                                # spot ETH — same crypto thesis
     "GLDM": 1.30, "GDX": 1.40, "UGL": 1.40, "NUGT": 1.40,   # structural gold bull (NUGT = 2× miners)
     "GRID": 1.40,                                # electrification / grid capex
     "WGMI": 1.30,                                # miners' AI/HPC pivot
@@ -279,7 +282,7 @@ FUNDAMENTAL_VIEW = {
 }
 FUNDAMENTAL_VIEW_NOTE = (
     "Mid-2026 sector outlook: overweight AI/semis (SOXX, ARTY), the crypto "
-    "institutional era (BTC/MSTR/MSTU, WGMI), the structural gold bull "
+    "institutional era (BTC/MSTR/MSTU/ETHA, WGMI), the structural gold bull "
     "(GLDM/GDX/UGL) and electrification (GRID); underweight clean energy (PBW) "
     "and oil services (OIH).")
 
@@ -1137,6 +1140,143 @@ def adjust_for_selection(weights: dict, cash: float, included) -> tuple:
     excluded = [k for k in weights if k not in inc]
     moved = sum(float(weights[k]) for k in excluded)
     return adj, float(cash) + moved, excluded, sum(adj.values()), moved
+
+
+# ════════════════════════════════════════════════════════════════════════
+# HISTORICAL SNAPSHOT — the strategy exactly as it stood on a past date.
+# Everything is read off the committed back-test series (``pos_series``, the
+# normalised buy-&-hold price curve and the dated trade log), so the view is
+# the decision the engine actually took on that bar — no re-fit, no hindsight.
+# ════════════════════════════════════════════════════════════════════════
+def asset_close_series(res: dict) -> pd.Series | None:
+    """Actual daily close series over one instrument's back-test window.
+
+    ``r['bh']`` is proportional to price in every engine (price/price₀ in the
+    ticker/gold engines, capital×price/price₀ in the BTC CT engine), so one
+    real fill anchors the scale.  Trade fills are preferred as anchors —
+    ``last_close`` is mutated to the live spot quote by ``apply_spot``, which
+    would skew the whole reconstructed history — falling back to the open
+    position's fill, then to ``last_close``/bh[-1] for a sleeve that has never
+    traded.  Returns ``None`` when no anchor exists or shapes disagree."""
+    bh = np.asarray(res["r"]["bh"], float)
+    idx = pd.DatetimeIndex(pd.Series(res["dates"]))
+    if not len(bh) or len(bh) != len(idx):
+        return None
+    s = pd.Series(bh, index=idx)
+
+    def _anchor() -> float | None:
+        log = [t for t in (res["r"].get("trade_log") or []) if isinstance(t, dict)]
+        for t in reversed(log):                      # newest fills first
+            for dk, pks in (("exit_date", ("exit_px", "exit_price")),
+                            ("entry_date", ("entry_px", "entry_price"))):
+                d = t.get(dk)
+                px = next((t[k] for k in pks if t.get(k) is not None), None)
+                if d is None or px is None or not np.isfinite(px) or px <= 0:
+                    continue
+                d = pd.Timestamp(d)
+                if d in s.index and float(s.loc[d]) > 0:
+                    return float(px) / float(s.loc[d])
+        pos = res.get("pos") or {}
+        e_px = pos.get("entry_px_model") or pos.get("entry_px")
+        if pos.get("in_pos") and e_px and pos.get("entry_date") is not None:
+            d = pd.Timestamp(pos["entry_date"])
+            if d in s.index and float(s.loc[d]) > 0:
+                return float(e_px) / float(s.loc[d])
+        last = res.get("last_close")
+        if last and np.isfinite(last) and float(s.iloc[-1]) > 0:
+            return float(last) / float(s.iloc[-1])
+        return None
+
+    sc = _anchor()
+    return s * sc if sc else None
+
+
+def snapshot_asof(results: list[dict], date) -> dict | None:
+    """Every instrument's strategy state as of the last completed bar on/before
+    ``date``.  Per row: the bar actually used (each sleeve's own calendar —
+    weekends/holidays roll back), its official close and day-change, the
+    position state (entry date/px, days held, unrealised P&L **marked at that
+    bar**, not at today's price), and what happened ON that bar — ``OPEN``
+    (entered), ``CLOSE`` (exited, with the trade's realised return and exit
+    reason), ``HOLD``, or ``STAND ASIDE`` (flat).  Sleeves whose history starts
+    after ``date`` are listed in ``not_live``.  ``None`` when no instrument has
+    data by then."""
+    date = pd.Timestamp(date)
+    rows, not_live = [], []
+    for res in results:
+        pos_sub = res["pos_series"].loc[:date]
+        closes = asset_close_series(res)
+        px_sub = closes.loc[:date].dropna() if closes is not None else pd.Series(dtype=float)
+        if not len(pos_sub) or not len(px_sub):
+            not_live.append(res["key"])
+            continue
+        bar = pos_sub.index[-1]
+        v = pos_sub.to_numpy(float)
+        in_pos = bool(v[-1])
+        prev_in = bool(v[-2]) if len(v) > 1 else False
+        opened = in_pos and not prev_in
+        closed = (not in_pos) and prev_in
+        close_px = float(px_sub.iloc[-1])
+        prev_px = float(px_sub.iloc[-2]) if len(px_sub) > 1 else np.nan
+        dchg = ((close_px / prev_px - 1) * 100) if np.isfinite(prev_px) and prev_px else None
+
+        entry_date = entry_px = upnl = days = None
+        if in_pos:
+            # entry bar = the start of the current 1-run (fills are that bar's close)
+            z = np.nonzero(v == 0)[0]
+            e_i = int(z[-1]) + 1 if len(z) else 0
+            entry_date = pos_sub.index[e_i]
+            e_val = float(closes.loc[entry_date]) if entry_date in closes.index else np.nan
+            if np.isfinite(e_val) and e_val > 0:
+                entry_px = e_val
+                if np.isfinite(close_px):
+                    upnl = (close_px / e_val - 1) * 100
+            days = int((bar - entry_date).days)
+
+        trade = None
+        if closed:                              # the round-trip that exited on this bar
+            log = [t for t in (res["r"].get("trade_log") or []) if isinstance(t, dict)]
+            for t in reversed(log):
+                if pd.Timestamp(t["exit_date"]) == bar:
+                    trade = dict(
+                        entry_date=pd.Timestamp(t["entry_date"]),
+                        entry_px=next((float(t[k]) for k in ("entry_px", "entry_price")
+                                       if t.get(k) is not None), None),
+                        exit_px=next((float(t[k]) for k in ("exit_px", "exit_price")
+                                      if t.get(k) is not None), None),
+                        ret=float(t["ret"]),
+                        reason=str(t.get("reason") or "signal exit"))
+                    break
+        action = ("CLOSE" if closed else "OPEN" if opened
+                  else "HOLD" if in_pos else "STAND ASIDE")
+        rows.append(dict(
+            key=res["key"], name=res["name"], kind=res["kind"], parent=res["parent"],
+            emoji=res["emoji"], accent=res["accent"], bar=bar, close=close_px,
+            dchg=dchg, in_pos=in_pos, opened=opened, closed=closed, action=action,
+            entry_date=entry_date, entry_px=entry_px, upnl=upnl, days=days,
+            trade=trade))
+    if not rows:
+        return None
+    return dict(date=date, asof=max(r["bar"] for r in rows), rows=rows,
+                not_live=not_live,
+                n_active=int(sum(r["in_pos"] for r in rows)),
+                n_open=int(sum(r["opened"] for r in rows)),
+                n_close=int(sum(r["closed"] for r in rows)))
+
+
+def historical_allocation(snap: dict, base_weights: dict,
+                          caps: dict | None = None) -> dict:
+    """The book the strategy held on the snapshot bar: the blend's optimal
+    weights water-filled (to the profile caps) over the sleeves in position on
+    that bar, the undeployed remainder parked in SATA — the same construction
+    as the Live tab's *current book*.  The entry-priority tilt uses live-only
+    inputs (spot momentum, today's sentiment), so it is not applied
+    retrospectively."""
+    caps = caps or CAP_BY_KEY
+    held = {r["key"]: max(base_weights.get(r["key"], 0.0), 1e-6)
+            for r in snap["rows"] if r["in_pos"]}
+    book = _waterfill(held, caps)
+    return dict(book=book, sata=max(1.0 - sum(book.values()), 0.0))
 
 
 def benchmarks(returns: pd.DataFrame, results: list[dict],

@@ -158,10 +158,13 @@ def _render_publish_button() -> None:
     clicked = cols[0].button(
         "🚀 Publish new target book", type="primary", use_container_width=True,
         disabled=not token,
-        help="Runs the **Publish target book (IBKR Option C)** GitHub Action now: "
-             "the engine recomputes today's allocation from the freshest data, "
-             "signs it, and commits the new target_book(_live).json to "
-             f"`{repo}@{ref}` — same path as the daily scheduled publish.")
+        help="The ONLY way to replace the day's frozen Targetbook before the "
+             "next 7:15-AM-CT scheduled publish. Runs the **Publish target "
+             "book (IBKR Option C)** GitHub Action now: the engine recomputes "
+             "today's allocation from the freshest data, signs it, and commits "
+             f"the new target_book(_live).json to `{repo}@{ref}` — the current "
+             "book is rotated to target_book*_prev.json (the *Previous "
+             "Targetbook* donut).")
     if not token:
         cols[1].caption(
             "_Add a `GITHUB_TOKEN` (fine-grained PAT with **Actions: write** on "
@@ -430,19 +433,37 @@ def _downloads(payload: dict, adj_weights: dict, adj_cash: float,
 @st.cache_data(ttl=900, show_spinner="Running the engine for a live preview (~30–90s)…")
 def _live_payload(profile: str, bucket: str) -> dict:
     """Compute a fresh book via the exact publisher path (reused, no drift):
-    run the universe once, AUDIT its signal freshness, then build the book from
-    the same audited results and stamp the verdict in — so the preview carries
-    the same 🕵️ daily-audit badge as a published book."""
+    completed bars only + committed signals (live_adjust=False), run the
+    universe once, AUDIT its signal freshness, then build the book from the
+    same audited results and stamp the verdict in — so the preview shows
+    exactly what a 🚀 publish right now would emit, daily-audit badge included.
+    The completed-bars flag is restored afterwards so it never leaks into the
+    live cockpit's fetches."""
     from ibkr_rebalance import compute_target_book
-    results = ov.run_universe()
-    audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS)
-    book = compute_target_book(profile, results=results)
+    _had = os.environ.get(fr.COMPLETED_BARS_ENV)
+    os.environ[fr.COMPLETED_BARS_ENV] = "1"
+    _anchor = fr.publish_anchor_ct()
+    try:
+        results = ov.run_universe()
+        audit = fr.audit_universe(results, parent_order=ov.PARENT_KEYS,
+                                  expected_now=_anchor)
+        book = compute_target_book(profile, results=results, live_adjust=False)
+    finally:
+        if _had is None:
+            os.environ.pop(fr.COMPLETED_BARS_ENV, None)
+        else:
+            os.environ[fr.COMPLETED_BARS_ENV] = _had
     payload = tb.build_payload(
         as_of=book.as_of, profile=profile, weights=book.weights,
         cash_weight=book.cash_weight, exec_price=book.exec_price, actions=book.actions)
     payload["signal_audit"] = dict(passed=bool(audit["passed"]),
                                    checked_at_utc=audit["checked_at_utc"],
                                    stale_apps=list(audit["stale_apps"]))
+    payload["signal_basis"] = dict(
+        anchor_ct=fr.fmt_ct(_anchor),
+        equity_close=str(fr.expected_equity_asof(_anchor).date()),
+        btc_bar_close_utc=fr.close_moment(
+            "crypto", fr.expected_crypto_asof(_anchor)).isoformat())
     return payload
 
 
@@ -457,7 +478,10 @@ def _bucket() -> str:
 st.title("📋 Target Book (IBKR)")
 st.caption("The signed allocation the IBKR executor trades — mapped to the "
            "instruments actually traded (BTC → IBIT). **Paper** parks idle capital "
-           "as cash; **Live** parks it in a SATA position.")
+           "as cash; **Live** parks it in a SATA position. Published **once "
+           "daily at ≈7:15 AM CT** (after the daily audit) and then **frozen "
+           "until the next morning** — only the 🚀 button below replaces it "
+           "intraday.")
 
 _src = st.radio("Book source", ["📦 Published artifact", "🔬 Live preview"],
                 horizontal=True,

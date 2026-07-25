@@ -8,6 +8,8 @@ Pull ALL data used by the CT model for backtesting:
   - MSTR OHLCV               (yfinance)
   - MSTU OHLCV               (yfinance, post-inception Sep 18 2024)
   - MSTU synthetic prices    (OLS on MSTR log-returns)
+  - ETHA OHLCV               (yfinance, post-inception Jul 23 2024 — the
+                              spot-ETH sleeve traded off the BTC CT signal)
 
 Saves versioned CSVs to data/backtest/ and updates manifest.json.
 
@@ -375,6 +377,10 @@ def main() -> int:
     print("Synthesising MSTU pre-inception (OLS) …")
     mstu_syn = synthesise_mstu(mstr, mstu).to_frame("close")
 
+    print("Downloading ETHA …")
+    etha_raw = _yf("ETHA", FETCH_FROM)      # Yahoo returns from inception (2024-07-23)
+    etha = etha_raw[["Open","High","Low","Close","Volume"]].rename(columns=str.lower).ffill()
+
     # ── 7. Quality checks ─────────────────────────────────────────────────────
     print("\nQuality checks:")
     rf_ok   = validate_raw("raw_features", df)
@@ -382,8 +388,9 @@ def main() -> int:
     mstr_ok = validate("MSTR",              mstr,     min_rows=200)
     mstu_ok = validate("MSTU (actual)",     mstu,     min_rows=50)
     msyn_ok = validate("MSTU (synthetic)",  mstu_syn, min_rows=100)
+    etha_ok = validate("ETHA",              etha,     min_rows=200)
 
-    all_ok = all([rf_ok, btc_ok, mstr_ok, mstu_ok, msyn_ok])
+    all_ok = all([rf_ok, btc_ok, mstr_ok, mstu_ok, msyn_ok, etha_ok])
     if not all_ok:
         print("\n⚠  One or more QC checks failed — data saved with warnings.")
     else:
@@ -396,6 +403,7 @@ def main() -> int:
     mstr.to_csv(     DATA_DIR / "mstr_daily.csv")
     mstu.to_csv(     DATA_DIR / "mstu_daily.csv")
     mstu_syn.to_csv( DATA_DIR / "mstu_synthetic_daily.csv")
+    etha.to_csv(     DATA_DIR / "etha_daily.csv")
 
     # ── 9. Manifest ───────────────────────────────────────────────────────────
     manifest = {
@@ -455,6 +463,16 @@ def main() -> int:
                 "date_to":         str(mstu_syn.index[-1].date()),
                 "checksum_sha256": _checksum(mstu_syn),
                 "qc_passed":       msyn_ok,
+            },
+            "etha_daily": {
+                "file":            "etha_daily.csv",
+                "ticker":          "ETHA",
+                "note":            "spot-ETH ETF sleeve traded off the BTC CT signal (from inception 2024-07-23)",
+                "rows":            len(etha),
+                "date_from":       str(etha.index[0].date()),
+                "date_to":         str(etha.index[-1].date()),
+                "checksum_sha256": _checksum(etha),
+                "qc_passed":       etha_ok,
             },
         },
     }

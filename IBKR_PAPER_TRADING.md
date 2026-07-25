@@ -3,8 +3,8 @@
 Connect the **Overall Trading** strategy signals to an Interactive Brokers
 **paper** account and rebalance it once per trading day. The paper account is
 driven to the same allocation the Overall Streamlit app shows as **"Recommended
-now (live-adjusted)"** — no signal logic is re-implemented; everything calls the
-same `overall_core` engine.
+Live Possible Targetbook"** — no signal logic is re-implemented; everything
+calls the same `overall_core` engine.
 
 > **Paper only.** Every tool here refuses to run against any account whose id
 > does not start with `DU` (IBKR's paper prefix) unless you explicitly pass
@@ -58,7 +58,7 @@ overall_core.run_universe()                       every strategy, live
   (default 1% of net-liq) to suppress churn, then place **market orders
   sells-first** so freed capital funds the buys.
 
-The full universe: BTC(→IBIT), MSTR, MSTU, GLDM, GDX, UGL, NUGT, SOXX, SOXL,
+The full universe: BTC(→IBIT), MSTR, MSTU, ETHA, GLDM, GDX, UGL, NUGT, SOXX, SOXL,
 GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.
 
 ---
@@ -133,7 +133,7 @@ Useful flags:
 
 ### Recommended validation before trusting automation
 1. `scripts/ibkr_rebalance.py` (dry-run) — eyeball the target book against the
-   Overall app's "Recommended now (live-adjusted)" panel; they should match.
+   Overall app's "Recommended Live Possible Targetbook" panel; they should match.
 2. Connect the gateway and dry-run again — check the order plan (deltas vs your
    current paper positions) looks sane.
 3. `--execute` once by hand during US market hours; confirm fills and that
@@ -215,14 +215,18 @@ OVERALL_BOOK_SECRET=… python scripts/publish_target_book.py --profile Aggressi
 
 Or let the **GitHub Action** do it: `.github/workflows/publish-target-book.yml`
 runs the publisher and commits the artifact back to the branch. The scheduled
-cron fires **every day** (12:30 UTC), weekends and US market holidays included —
-Bitcoin trades continuously, so the book is refreshed daily; only the *executor*
-skips non-trading days.
+cron fires **once every day at ≈7:15 AM US Central** (≈15 min after the
+7:00-AM-CT Bitcoin bar close), weekends and US market holidays included —
+Bitcoin trades continuously, so the book is refreshed daily; only the
+*executor* skips non-trading days. The daily audit runs **once**, before the
+book is written, and the published book then stays **frozen until the next
+morning's cycle**.
 
-You can also publish **on demand from the app**: the 📋 Target Book page has a
-**🚀 Publish new target book** button that dispatches the same GitHub Action via
-`workflow_dispatch`, so a fresh signed book is computed and committed without
-leaving the UI. It needs a `GITHUB_TOKEN` in Streamlit secrets (or env) — a
+The **only** way to replace the frozen book intraday is to publish **on demand
+from the app**: the 📋 Target Book page has a **🚀 Publish new target book**
+button that dispatches the same GitHub Action via `workflow_dispatch`, so a
+fresh signed book is computed and committed without leaving the UI (the
+outgoing book is rotated to `target_book*_prev.json`). It needs a `GITHUB_TOKEN` in Streamlit secrets (or env) — a
 fine-grained PAT with **Actions: read & write** on this repo. Optional secrets:
 `GITHUB_REPO` (`owner/repo`, auto-detected otherwise) and `GITHUB_PUBLISH_REF`
 (branch to run/commit on, default `main`).
@@ -252,7 +256,8 @@ If you use the git-commit transport, the executor host just does `git pull` (to
 get the latest committed book) before running with `--file`.
 
 Executor-specific flags: `--file` / `--url` / stdin (source), `--max-age-hours`
-(reject a book generated too long ago, default 12), `--require-signature`. The
+(reject a book generated too long ago, default 30 — spans the once-daily
+7:15-AM-CT publish cycle), `--require-signature`. The
 `--execute`, `--band`, `--fractional`, `--port`, `--allow-nonpaper`, `--force`
 flags behave exactly as in the all-in-one rebalancer.
 

@@ -119,6 +119,83 @@ def test_audit_accepts_fresher_than_expected_partial_bar():
     assert aud["passed"]
 
 
+def test_audit_fails_when_a_signal_app_is_missing_entirely():
+    """A parent listed in parent_order with NO instruments in results (its
+    sleeve failed to load) must fail the audit — a reduced universe would
+    publish a book whose optimiser re-normalised over the missing weight."""
+    now = "2026-07-21T12:20:00Z"
+    res = [_mk("BTC", "BTC", "2026-07-20"), _mk("SOXX", "SOXX", "2026-07-20")]
+    aud = fr.audit_universe(res, now=now, parent_order=["BTC", "GRID", "SOXX"])
+    assert not aud["passed"]
+    assert "GRID" in aud["stale_apps"]
+    grid = next(r for r in aud["rows"] if r["app"] == "GRID")
+    assert not grid["fresh"] and grid["instruments"] == []
+    assert "failed to load" in grid["actual_close"]
+
+
+# ── completed-bars-only mode (the publisher's close-based book) ──────────────
+def test_drop_in_progress_us_bar_trims_partial_today():
+    # Tue Jul 21 2026, 11 AM ET: today's bar is in progress → dropped;
+    # Monday's completed close stays.
+    now = pd.Timestamp("2026-07-21T15:00:00Z")
+    df = pd.DataFrame({"px_close": [1.0, 2.0, 3.0]},
+                      index=pd.to_datetime(["2026-07-17", "2026-07-20",
+                                            "2026-07-21"]))
+    out = fr.drop_in_progress_us_bar(df, now)
+    assert list(out.index) == list(pd.to_datetime(["2026-07-17", "2026-07-20"]))
+
+
+def test_drop_in_progress_us_bar_keeps_all_after_close():
+    now = pd.Timestamp("2026-07-21T20:30:00Z")     # 4:30 PM EDT — today closed
+    df = pd.DataFrame({"px_close": [1.0, 2.0]},
+                      index=pd.to_datetime(["2026-07-20", "2026-07-21"]))
+    assert len(fr.drop_in_progress_us_bar(df, now)) == 2
+
+
+def test_publish_anchor_is_715_ct_all_day():
+    """Any wall-clock moment of a CT day maps to that day's 7:15 AM CT anchor
+    (12:15 UTC during CDT)."""
+    anchor = pd.Timestamp("2026-07-21T12:15:00Z")
+    for now in ("2026-07-21T12:20:00Z",    # right after the morning cycle
+                "2026-07-21T18:00:00Z",    # mid-session
+                "2026-07-21T22:00:00Z",    # after the 4 PM ET close
+                "2026-07-22T02:00:00Z"):   # 9 PM CDT — still the same CT day
+        assert fr.publish_anchor_ct(now) == anchor, now
+
+
+def test_anchor_trim_excludes_same_day_close_after_market():
+    """Publishing AFTER the 4 PM ET close must still exclude today's close —
+    post-close signal changes belong only to the live view."""
+    now = pd.Timestamp("2026-07-21T21:30:00Z")      # 5:30 PM EDT, market closed
+    df = pd.DataFrame({"px_close": [1.0, 2.0]},
+                      index=pd.to_datetime(["2026-07-20", "2026-07-21"]))
+    out = fr.drop_in_progress_us_bar(df, fr.publish_anchor_ct(now))
+    assert list(out.index) == [pd.Timestamp("2026-07-20")]
+
+
+def test_audit_expected_now_anchors_post_close_publish():
+    """After the close, plain now expects today's bar (stale verdict for a
+    yesterday-close book) but expected_now=anchor accepts it — and the anchor
+    still demands the day's completed BTC bar."""
+    now = "2026-07-21T21:30:00Z"                    # post-close
+    anchor = fr.publish_anchor_ct(now)
+    res = [_mk("SOXX", "SOXX", "2026-07-20"), _mk("BTC", "BTC", "2026-07-20")]
+    assert not fr.audit_universe(res, now=now)["passed"]
+    aud = fr.audit_universe(res, now=now, expected_now=anchor)
+    assert aud["passed"]
+    stale_btc = [_mk("BTC", "BTC", "2026-07-19")]   # yesterday's BTC bar → stale
+    assert not fr.audit_universe(stale_btc, now=now, expected_now=anchor)["passed"]
+
+
+def test_completed_bars_only_env_flag(monkeypatch):
+    monkeypatch.delenv(fr.COMPLETED_BARS_ENV, raising=False)
+    assert not fr.completed_bars_only()
+    monkeypatch.setenv(fr.COMPLETED_BARS_ENV, "1")
+    assert fr.completed_bars_only()
+    monkeypatch.setenv(fr.COMPLETED_BARS_ENV, "0")
+    assert not fr.completed_bars_only()
+
+
 def test_audit_before_btc_bar_close_expects_two_day_old_start():
     # 11:00 UTC: the freshest completed BTC bar STARTED two days ago.
     now = "2026-07-21T11:00:00Z"

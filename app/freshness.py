@@ -3,7 +3,7 @@ daily publisher — the ONE place that knows *when each app's signals close*.
 
 Semantics (kept in lock-step with the engines):
 
-* **Bitcoin (BTC / MSTR / MSTU)** — the BTC app trades 12:00-UTC-anchored daily
+* **Bitcoin (BTC / MSTR / MSTU / ETHA)** — the BTC app trades 12:00-UTC-anchored daily
   bars (7:00 AM CT in summer, 6:00 AM CT in winter).  Bar *D* covers
   ``[D 12:00 UTC, D+1 12:00 UTC)`` and its signals become available the moment
   the bar closes at ``D+1 12:00 UTC``.  The engines report ``as_of`` as the bar
@@ -48,15 +48,18 @@ ET = "America/New_York"
 # US-equity app (signals from the 4:00 PM ET market close).
 PARENT_CLASS = {"BTC": "crypto"}
 
-# The publish runs TWICE daily — ~15 min after the Bitcoin bar close (12:15
-# UTC ≈ 7:15 AM CT in summer), so the Overall strategy sees BTC's fresh
-# 12:00-UTC signals AND every equity app's prior-session close, and again ~15
-# min after the US market close (≈4:15 PM ET) so equity signals refresh on
-# their own schedule.  GitHub cron is best-effort, so each cycle has several
-# catch-up slots; the workflow guard retries until the cycle's book publishes.
-SCHEDULED_PUBLISH_CT = ("≈15 min after the Bitcoin daily-bar close (12:15 UTC) "
-                        "and ≈15 min after the US market close (≈4:15 PM ET), "
-                        "with catch-up retries until published")
+# The publish runs ONCE daily at ≈7:15 AM US Central — ~15 min after the
+# Bitcoin bar close (12:00 UTC = 7:00 AM CDT), so the Overall strategy sees
+# BTC's fresh 7:00-AM-CT signals AND every equity app's prior-session 4:00 PM
+# ET close.  The daily audit runs ONCE, before the book is written; the
+# published book then stays FROZEN until the next morning's cycle — only the
+# UI's 🚀 publish button (a manual workflow dispatch) replaces it intraday.
+# GitHub cron is best-effort, so the cycle has several catch-up slots; the
+# workflow guard retries until the day's book publishes.
+SCHEDULED_PUBLISH_CT = ("once daily at ≈7:15 AM US Central (≈15 min after the "
+                        "7:00-AM-CT Bitcoin daily-bar close), with catch-up "
+                        "retries until published; frozen until the next "
+                        "morning unless manually re-published from the UI")
 
 
 def now_utc() -> pd.Timestamp:
@@ -179,6 +182,52 @@ def expected_asof(kind: str, now=None) -> pd.Timestamp:
             else expected_equity_asof(now))
 
 
+# ── completed-bars-only mode (the once-daily publisher) ──────────────────────
+# The published Target Book's data basis is PINNED to the publish day's
+# 7:15-AM-Central anchor, no matter what wall-clock time the publish actually
+# runs: every equity ticker from the last 4:00-PM-ET market close BEFORE the
+# anchor (i.e. the previous session — post-close signal changes belong only to
+# the live "Recommended Live Possible Targetbook" view until the next
+# morning), and BTC/MSTR/MSTU/ETHA from the day's 7:00-AM-CT (12:00 UTC) bar close
+# (the BTC engine already enforces its own bar close).  Live Yahoo daily feeds
+# include an in-progress *today* row during market hours — and a completed
+# *today* row after 4:00 PM ET — but neither may leak into a published book
+# (e.g. a delayed catch-up publish or the UI's 🚀 manual publish fired
+# mid-session or after the close).  The publisher sets this env flag; the
+# daily fetchers then trim every US bar after the anchor's basis session.
+COMPLETED_BARS_ENV = "OVERALL_COMPLETED_BARS_ONLY"
+
+
+def publish_anchor_ct(now=None) -> pd.Timestamp:
+    """The publish day's 7:15-AM-America/Chicago anchor (as a UTC timestamp).
+    The Target Book's data basis is evaluated AT this moment for the whole CT
+    day, so a publish at 9 AM, 2 PM or 9 PM CT all produce the same book the
+    7:15 AM run would have."""
+    n = _as_utc(now or now_utc()).tz_convert(CT)
+    return (n.normalize() + pd.Timedelta(hours=7, minutes=15)).tz_convert("UTC")
+
+
+def completed_bars_only() -> bool:
+    return os.environ.get(COMPLETED_BARS_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def drop_in_progress_us_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
+    """Drop trailing daily rows whose US-session 4:00-PM-ET close hasn't
+    happened yet (the in-progress *today* bar during market hours).  No-op on
+    an empty frame or when every bar is already complete."""
+    if df is None or len(df) == 0:
+        return df
+    cutoff = expected_equity_asof(now)
+    try:
+        idx = pd.DatetimeIndex(df.index).normalize()
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+    except Exception:
+        return df
+    return df.loc[idx <= cutoff]
+
+
 def close_moment(kind: str, asof) -> pd.Timestamp:
     """The wall-clock CLOSE datetime implied by a bar's ``as_of`` date — the
     moment those signals were generated.  Crypto: bar start *D* closes at
@@ -224,16 +273,26 @@ def signal_close_caption(kind: str, asof, now=None, extra: str = "") -> str:
 # The audit — is every signal app on its freshest possible bar?
 # ════════════════════════════════════════════════════════════════════════════
 def audit_universe(results: list[dict], now=None,
-                   parent_order: list[str] | None = None) -> dict:
+                   parent_order: list[str] | None = None,
+                   expected_now=None) -> dict:
     """Freshness audit over Overall-engine result dicts (one per instrument,
     grouped by their parent signal app).
 
     For each signal app: ``actual`` = the newest ``as_of`` bar its instruments
     carry; ``expected`` = the freshest completed bar for its asset class right
     now.  ``fresh`` ⇔ ``actual ≥ expected`` (a partial intraday bar counts as
-    fresh).  Returns per-app rows plus an overall ``passed`` verdict and the
-    list of stale asset keys — the exact set the Overall app must flag."""
+    fresh).  A parent listed in ``parent_order`` with NO instruments in
+    ``results`` at all (its sleeve failed to load) also FAILS the audit — a
+    silently-reduced universe must never publish a Target Book whose optimiser
+    re-normalised over the missing app's weight.  ``expected_now`` (optional)
+    evaluates the *expected* freshest bars at a different moment than the
+    check itself — the publisher passes its 7:15-AM-CT anchor so a post-close
+    publish still expects (and gets) the pre-anchor session, not the close
+    that just landed.  Returns per-app rows plus an overall ``passed`` verdict
+    and the list of stale asset keys — the exact set the Overall app must
+    flag."""
     n = _as_utc(now or now_utc())
+    exp_n = _as_utc(expected_now) if expected_now is not None else n
     groups: dict[str, list[dict]] = {}
     for r in results or []:
         groups.setdefault(r.get("parent", r.get("key")), []).append(r)
@@ -241,12 +300,25 @@ def audit_universe(results: list[dict], now=None,
     order += [k for k in groups if k not in order]
 
     rows, stale_parents, stale_assets = [], [], []
+    for pk in (parent_order or []):
+        if pk in groups:
+            continue                       # loaded fine — audited below
+        kind = PARENT_CLASS.get(pk, "us_equity")
+        exp = expected_asof(kind, exp_n)
+        stale_parents.append(pk)
+        rows.append(dict(
+            app=pk, asset_class=kind, instruments=[],
+            actual_asof="—", expected_asof=str(exp.date()),
+            actual_close="⛔ app failed to load — no signals returned",
+            expected_close=close_label(kind, exp, exp_n),
+            fresh=False, age_days=0,
+        ))
     for pk in order:
         grp = groups[pk]
         kind = PARENT_CLASS.get(pk, "us_equity")
         actual = max(pd.Timestamp(r["as_of"]).tz_localize(None).normalize()
                      for r in grp)
-        exp = expected_asof(kind, n)
+        exp = expected_asof(kind, exp_n)
         fresh = actual >= exp
         age = max((exp - actual).days, 0)
         keys = [r["key"] for r in grp]
@@ -257,7 +329,7 @@ def audit_universe(results: list[dict], now=None,
             app=pk, asset_class=kind, instruments=keys,
             actual_asof=str(actual.date()), expected_asof=str(exp.date()),
             actual_close=close_label(kind, actual, n),
-            expected_close=close_label(kind, exp, n),
+            expected_close=close_label(kind, exp, exp_n),
             fresh=bool(fresh), age_days=int(age),
         ))
     return dict(
@@ -305,7 +377,7 @@ def read_refresh_log() -> dict:
 
 
 def load_daily_audit() -> dict | None:
-    """The last scheduled-run audit artifact (written by the twice-daily
+    """The last scheduled-run audit artifact (written by the once-daily
     headless publisher, committed to the repo).  ``None`` if not present/readable."""
     try:
         return json.loads(DAILY_AUDIT_JSON.read_text())
