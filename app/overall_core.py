@@ -1125,6 +1125,42 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 sata_info=SATA)
 
 
+def rebalancing_moves(base_weights: dict, base_idle: float,
+                      target: dict, target_idle: float,
+                      idle_key: str = "SATA") -> list[dict]:
+    """The trades that take the book you HOLD to the recommended ``target``.
+
+    ``base_weights``/``base_idle`` must describe the book actually in force — the
+    *published* Target Book the executor trades — not the engine's synthetic
+    "what we hold now" (``signal_gated_allocation()["current"]``, which is the
+    untilted optimal weights over the in-position names and matches neither what
+    was published nor what is held).
+
+    Weights are reported to whole percentage points, and the delta is the
+    difference of those ROUNDED endpoints so a row always adds up.  Computing it
+    from the raw weights instead let the endpoints and the arrow disagree
+    (17% → 10% labelled ▼8pt, 18% → 22% labelled ▲5pt).  A move that rounds to
+    0pt is omitted: it is invisible at display precision.
+
+    Keys present only in ``base_weights`` are kept — a book published before a
+    universe change can name a retired instrument, and the required action is to
+    sell it down to zero.  Returns dicts of ``key``/``from_pct``/``to_pct``/
+    ``delta_pct``, risk assets first (by target weight), idle cash last.
+    """
+    out = []
+    for k in sorted(set(base_weights) | set(target),
+                    key=lambda x: -float(target.get(x, 0.0))):
+        c = round(float(base_weights.get(k, 0.0)) * 100)
+        t = round(float(target.get(k, 0.0)) * 100)
+        if t - c:
+            out.append(dict(key=k, from_pct=c, to_pct=t, delta_pct=t - c))
+    c = round(float(base_idle or 0.0) * 100)
+    t = round(float(target_idle or 0.0) * 100)
+    if t - c:
+        out.append(dict(key=idle_key, from_pct=c, to_pct=t, delta_pct=t - c))
+    return out
+
+
 def adjust_for_selection(weights: dict, cash: float, included) -> tuple:
     """Apply a user include/exclude choice to an allocation.
 

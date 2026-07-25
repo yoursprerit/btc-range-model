@@ -722,30 +722,50 @@ with tab_live:
                             "Recommended Live (your selection)"),
                             use_container_width=True)
 
-    _moves_label = ("current book → your selection" if _excluded
-                    else "current book → live-adjusted target")
+    # ── BASELINE — the book actually in force ────────────────────────────
+    # These moves must be the trades that take you from what you HOLD to the
+    # recommended target, so the "from" side has to be the *published* Current
+    # Targetbook — the artifact the IBKR executor trades and the middle donut
+    # draws.  It used to be ``gate["current"]``, which is a different thing: the
+    # engine's synthetic "what we hold now" (optimal base weights over the
+    # in-position names, water-filled to caps, with NO priority tilt).  That
+    # construct is neither what was published nor what is held, so the line
+    # contradicted the donut right above it — e.g. it showed REMX 17% and OIH 15%
+    # while the published book held REMX 0.3% and OIH 18.0%.
+    # Fall back to the synthetic book only when nothing has been published yet.
+    if _cur_book:
+        _base_w, _base_idle = _book_alloc(_cur_book)
+        _base_src = "published Current Targetbook"
+    else:
+        _base_w, _base_idle = dict(gate["current"]), gate["sata_now"]
+        _base_src = "current holdings (nothing published yet)"
+    _moves_label = (f"{_base_src} → your selection" if _excluded
+                    else f"{_base_src} → live-adjusted target")
     st.markdown(f"**Rebalancing moves** — {_moves_label}")
     moves = []
-    for kk in sorted(set(gate["current"]) | set(_adj_target),
-                     key=lambda x: -(_adj_target.get(x, 0))):
-        cur = gate["current"].get(kk, 0.0); tg = _adj_target.get(kk, 0.0)
-        d = tg - cur
-        if abs(d) < 0.005:
-            continue
-        col = C_BUY if d > 0 else C_EXIT
-        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-                     f"<b>{kk}</b>{_kind_badge(by_key[kk]['kind'])} "
-                     f"{cur*100:.0f}% → {tg*100:.0f}% "
-                     f"<span style='color:{col};font-weight:700'>"
-                     f"{'▲' if d>0 else '▼'}{abs(d)*100:.0f}pt</span></span>")
-    dsata = _adj_sata - gate["sata_now"]
-    if abs(dsata) >= 0.005:
-        col = C_EXIT if dsata > 0 else C_BUY
-        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-                     f"💵 <b>SATA</b> "
-                     f"{gate['sata_now']*100:.0f}% → {_adj_sata*100:.0f}% "
-                     f"<span style='color:{col};font-weight:700'>"
-                     f"{'▲' if dsata>0 else '▼'}{abs(dsata)*100:.0f}pt</span></span>")
+
+    # Rounding-consistent deltas + retired-key handling live in the core so they
+    # are unit-tested; this loop only renders them.
+    for _mv in ov.rebalancing_moves(_base_w, _base_idle, _adj_target, _adj_sata):
+        _kk, _d = _mv["key"], _mv["delta_pct"]
+        if _kk == "SATA":
+            _label, _badge = "💵 <b>SATA</b>", ""
+            _col = C_EXIT if _d > 0 else C_BUY      # more idle cash = de-risking
+        else:
+            # A book published before a universe change can name an instrument
+            # the live universe no longer trades (an ETHA-era book after the ETH
+            # swap); it still belongs here, since the action is to sell it to 0.
+            _meta = by_key.get(_kk)
+            _badge = _kind_badge(_meta["kind"]) if _meta else ""
+            _label = (f"<b>{_kk}</b>" if _meta else
+                      f"<b>{_kk}</b><span style='font-size:10px;color:#94a3b8'>"
+                      f" (retired)</span>")
+            _col = C_BUY if _d > 0 else C_EXIT
+        moves.append(
+            f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
+            f"{_label}{_badge} {_mv['from_pct']:.0f}% → {_mv['to_pct']:.0f}% "
+            f"<span style='color:{_col};font-weight:700'>"
+            f"{'▲' if _d > 0 else '▼'}{abs(_d):.0f}pt</span></span>")
     st.markdown("".join(moves) if moves
                 else "_Book already at target — no rebalancing needed._",
                 unsafe_allow_html=True)
