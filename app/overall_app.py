@@ -1732,7 +1732,8 @@ with tab_hist:
                "full sample), not the ones that existed on that date — the book "
                "percentages are a current-weights projection, not the as-of record. "
                "Where a Targetbook was actually **published** from the chosen "
-               "bar's signals, it is shown alongside as the true as-of record. "
+               "bar's signals, the **Executed Playbook** section below shows "
+               "it — the record of what actually traded. "
                "Follows the "
                f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
                "toggle selected on the Live tab.")
@@ -1791,45 +1792,28 @@ with tab_hist:
                             f"~{ov.SATA['annual_rate']*100:.0f}% yield.")
 
         # ── the book on that date + the blend's record up to it ────────────
-        # the as-of RECORD: the book actually published from this bar's
-        # committed signals (data/overall/book_archive/<as_of>.json — written
-        # by the daily publisher, backfilled from git history), shown next to
-        # the projection whenever one exists.
+        # this donut stays the CURRENT strategy's view of that day; the as-of
+        # RECORD (the book actually published from this bar's committed
+        # signals, data/overall/book_archive/<as_of>.json) is rendered in the
+        # Executed Playbook section below.
         _h_arch_dir = _TB_DIR / "book_archive"
         _h_pub = _load_published_book(_h_arch_dir / f"{_h_bar.date()}.json")
-        _h_cols = st.columns([1, 1, 1.4]) if _h_pub else st.columns([1, 1.4])
-        if _h_pub:
-            with _h_cols[0]:
-                _hw, _hidle = _book_alloc(_h_pub)
-                st.plotly_chart(
-                    _alloc_donut(_hw, _hidle,
-                                 f"Published book — {_h_bar.strftime('%b %d, %Y')}"),
-                    use_container_width=True)
-                st.caption(f"The **as-of record** — the Targetbook actually "
-                           f"published from this bar's committed signals, with "
-                           f"the blend weights and entry-priority tilt of that "
-                           f"day · {_book_close_caption(_h_pub)} · profile "
-                           f"**{_h_pub.get('profile', '—')}** · published "
-                           f"**{fr.fmt_ct(_h_pub.get('generated_at_utc'))}**")
-        with _h_cols[-2]:
+        _h_cols = st.columns([1, 1.4])
+        with _h_cols[0]:
             st.plotly_chart(
                 _alloc_donut(_h_book, _h_sata,
                              f"Strategy book — {_h_bar.strftime('%b %d, %Y')}"),
                 use_container_width=True)
-            _h_first = min((p.stem for p in _h_arch_dir.glob("*.json")),
-                           default=None)
-            st.caption("Optimal-blend weights water-filled over the sleeves in "
-                       "position at that close; undeployed capital in **SATA**. "
-                       "Same construction as the Live tab's current book (the "
-                       "entry-priority tilt needs live-only inputs, so it isn't "
-                       "applied retrospectively)."
-                       + (" **Current-weights projection** — TODAY'S blend "
-                          "weights; the published book alongside is the record "
-                          "of what actually traded." if _h_pub else
-                          " No published Targetbook was recorded for this bar"
-                          + (f" (records start {_h_first})" if _h_first else "")
-                          + ", so this projection is the only view."))
-        with _h_cols[-1]:
+            st.caption("What the **currently implemented** strategy would have "
+                       "traded on that bar: today's optimal-blend weights "
+                       "water-filled over the sleeves in position at that "
+                       "close; undeployed capital in **SATA**. Same "
+                       "construction as the Live tab's current book (the "
+                       "entry-priority tilt needs live-only inputs, so it "
+                       "isn't applied retrospectively)."
+                       + (" What was **actually traded** that day is in the "
+                          "🧾 Executed Playbook below." if _h_pub else ""))
+        with _h_cols[1]:
             _h_cm = ov.curve_metrics(_h_curve.loc[:_h_bar])
             _h_m = st.columns(4)
             _h_m[0].metric("Blend return to date", f"{_h_cm['total_ret']*100:+,.0f}%",
@@ -1964,6 +1948,98 @@ with tab_hist:
                    "would have held, not a live record of a book published that "
                    "day. Prices are official daily closes (no live-spot "
                    "overlay). Not investment advice.")
+
+        # ── EXECUTED PLAYBOOK — the book actually published & traded ───────
+        st.markdown(f"### 🧾 Executed Playbook — {_h_bar.strftime('%b %d, %Y')}")
+        if not _h_pub:
+            _h_first = min((p.stem for p in _h_arch_dir.glob("*.json")),
+                           default=None)
+            st.info("No published Targetbook was recorded for this bar, so the "
+                    "Strategy book above is the only view."
+                    + (f" Records start **{_h_first}** — the daily 7:15 AM CT "
+                       f"publisher archives every book it hands to the "
+                       f"executor." if _h_first else ""))
+        else:
+            st.caption("The **as-of record**: the Targetbook actually published "
+                       "from this bar's committed signals and handed to the "
+                       "IBKR executor — built with the blend weights and "
+                       "entry-priority tilt of **that day**, unlike the "
+                       "current-weights Strategy book above · "
+                       f"{_book_close_caption(_h_pub)} · profile "
+                       f"**{_h_pub.get('profile', '—')}** · published "
+                       f"**{fr.fmt_ct(_h_pub.get('generated_at_utc'))}**")
+            _ep_cols = st.columns([1, 1.4])
+            _epw, _epidle = _book_alloc(_h_pub)
+            with _ep_cols[0]:
+                st.plotly_chart(
+                    _alloc_donut(_epw, _epidle,
+                                 f"Executed book — {_h_bar.strftime('%b %d, %Y')}"),
+                    use_container_width=True)
+            with _ep_cols[1]:
+                _ep_px = _h_pub.get("exec_price") or {}
+                _ep_order = {"CLOSE": 0, "OPEN": 1, "HOLD": 2, "WATCH": 3,
+                             "STAND ASIDE": 4}
+                _ep_acts = sorted(
+                    (a for a in (_h_pub.get("actions") or []) if a.get("key")),
+                    key=lambda a: (_ep_order.get(a.get("action"), 9),
+                                   -float(a.get("target") or 0.0)))
+                _ep_hdr = ("<tr style='background:#f1f5f9;font-size:12px;"
+                           "text-align:left'>"
+                           "<th style='padding:7px 10px'>Action</th>"
+                           "<th>Instrument</th><th>Published decision</th>"
+                           "<th style='text-align:right'>Priority</th>"
+                           "<th style='text-align:right'>Exec px</th>"
+                           "<th style='text-align:right'>Book %</th>"
+                           "<th style='text-align:right'>Book $</th></tr>")
+                _ep_tr = []
+                for a in _ep_acts:
+                    k = a["key"]
+                    meta = by_key.get(k) or ov.ASSET_META.get(k, {})
+                    _ep_w = float(a.get("target") or 0.0)
+                    _ep_w_s = f"{_ep_w*100:.1f}%" if _ep_w > 0.0005 else "—"
+                    _ep_amt = f"${_ep_w*_h_pv:,.0f}" if _ep_w > 0.0005 else "—"
+                    _ep_p = a.get("priority")
+                    _ep_p_s = f"{_ep_p:.2f}" if _ep_p is not None else "—"
+                    _ep_x = _ep_px.get(k)
+                    _ep_x_s = f"${_ep_x:,.2f}" if _ep_x else "—"
+                    _ep_tr.append(
+                        f"<tr style='border-bottom:1px solid #eef2f7'>"
+                        f"<td style='padding:8px 10px'>"
+                        f"{_pill(a.get('action') or '—', _ACTION_COL.get(a.get('action'), C_FLAT))}</td>"
+                        f"<td style='font-weight:700'>{meta.get('emoji', '')} {k}"
+                        f"{_kind_badge(meta.get('kind'))}"
+                        f"<div style='font-size:11px;color:#64748b;font-weight:400'>"
+                        f"{meta.get('name', '')}</div></td>"
+                        f"<td style='font-size:12px'>{a.get('decision') or '—'}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_ep_p_s}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_ep_x_s}</td>"
+                        f"<td style='text-align:right;font-weight:700'>{_ep_w_s}</td>"
+                        f"<td style='text-align:right;font-weight:700;"
+                        f"font-variant-numeric:tabular-nums'>{_ep_amt}</td></tr>")
+                if _epidle > 0.0005:
+                    _ep_sata_px = _ep_px.get("SATA")
+                    _ep_tr.append(
+                        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+                        f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
+                        f"<td style='font-weight:700'>💵 SATA"
+                        f"<div style='font-size:11px;color:#64748b;font-weight:400'>"
+                        f"{ov.SATA['name']}</div></td>"
+                        f"<td style='font-size:12px;color:#334155'>Idle capital "
+                        f"parked (~{ov.SATA['annual_rate']*100:.0f}%/yr)</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"{f'${_ep_sata_px:,.2f}' if _ep_sata_px else '—'}</td>"
+                        f"<td style='text-align:right;font-weight:800'>{_epidle*100:.1f}%</td>"
+                        f"<td style='text-align:right;font-weight:800;"
+                        f"font-variant-numeric:tabular-nums'>${_epidle*_h_pv:,.0f}</td></tr>")
+                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
+                            f"{_ep_hdr}{''.join(_ep_tr)}</table>",
+                            unsafe_allow_html=True)
+                st.caption("Published decisions, entry-priority scores and "
+                           "execution prices exactly as archived at publish "
+                           "time (`data/overall/book_archive/`) — signature-"
+                           "covered, never recomputed. **Book $** applies the "
+                           "portfolio value above to the published weights.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
