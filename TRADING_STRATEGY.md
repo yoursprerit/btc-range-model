@@ -5,7 +5,33 @@
 
 ---
 
-## ⭐ 2026-07e — Per-asset stop retune: MSTR stop-free · MSTU −3% → −6% (CURRENT LIVE)
+## ⭐ 2026-07f — ETHA added as a fourth sleeve on the BTC signal (CURRENT LIVE)
+
+**Change.** **ETHA** (iShares Ethereum Trust, 1× spot-ETH ETF) now trades off the same
+BTC CT signal as BTC/MSTR/MSTU, with the **MSTR treatment**: Standard-MA entry gate,
+regime-adaptive D2/D3 exits, **no fixed stop**. Its window starts at the fund's
+**2024-07-23 inception** (all backtest periods are clamped there — no synthetic
+pre-listing history). Every fixed stop ≤8% tested reduced both return and Sharpe: the
+signal exits already cap intra-trade pain on a 1× ETF with no wipeout tail, exactly as
+on MSTR. ETH trades as a high-beta crypto sibling of Bitcoin, so BTC's cleaner regime
+read steers the sleeve — and it beats every rule built on ETHA's *own* price action
+(and the rejected BMNR candidate) on return, drawdown, Sharpe and fold-consistency.
+
+Surfaced as the **🔹 ETHA Backtesting** tab in the ₿ Bitcoin app (with a live price
+tile and its own chip in the signal/position panels) and as a `core` instrument in the
+Overall portfolio. Full evaluation, including the k-fold / walk-forward / cost
+sensitivity battery and the portfolio-level deltas across all three risk profiles:
+**[`ETHA_BMNR_STRATEGY_EVAL.md`](ETHA_BMNR_STRATEGY_EVAL.md)**.
+
+> **Data-vintage caveat.** CT-engine figures drift with feature-CSV refreshes. ETHA's
+> sleeve measured +264% / −18% / Sharpe 1.61 on the 2026-07-23 vintage and
+> +101% / −19% / Sharpe 1.04 on the 2026-07-25 vintage (same 6 trades; the big
+> Apr-2025 position exits earlier). Both are far above ETHA's −46% buy-&-hold at a
+> fraction of its −68% drawdown.
+
+---
+
+## ⭐ 2026-07e — Per-asset stop retune: MSTR stop-free · MSTU −3% → −6%
 
 **Change.** k-fold-cross-validated on history **and** 200 Monte-Carlo synthetic-OOS futures, the
 per-asset fixed stops were retuned. The old flat **−3%** was applied to instruments of very
