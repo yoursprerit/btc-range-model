@@ -289,8 +289,9 @@ Full analysis: **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** (live config),
   assumption, feasible on a 24/7 asset). The equity sleeves (MSTR/MSTU) used to
   fill at the *prior* US close — ~15 h **before** the signal existed — banking
   the correlated overnight/weekend gap; they now fill at the first exchange
-  close after the signal moment (on the fix-date vintage: MSTR +296%→+165%,
-  MSTU +685%→+499%). Stops trigger and fill on closes, not intraday.
+  close after the signal moment (config-unchanged: MSTR +296%→+184%, MSTU
+  +685%→+402%; after the 2026-07-25 stop re-sweep on the honest fill: MSTR
+  +245%, MSTU +677%). Stops trigger and fill on closes, not intraday.
 - **Daily-rebuild caveat.** The divergence thresholds are tuned for the app's
   **hourly** CT model; re-run daily inside the Overall engine the H/L predictions
   are noisier, so BTC/MSTR/MSTU earn ~0 weight in the *daily* blend — the

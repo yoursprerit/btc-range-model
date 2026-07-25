@@ -187,11 +187,15 @@ bar boundary that closes with the signal.
 > weekend signal bars) in both `app/btc_hourly_app.py` (stock + options
 > backtests) and `app/btc_ct_engine.py` (the Overall app's sleeves) — see
 > `_fill_after_signal` / `_next_session_close`. On the 2026-07-25 vintage this
-> moves MSTR **+296% → +165%** (Sharpe 1.31 → 0.98) and MSTU **+685% → +499%**
+> moves MSTR **+296% → +184%** and MSTU **+685% → +402%** config-unchanged
 > over the full CT window; BTC/ETH are unchanged. The same fix pass also
 > lagged the divergence engines in `backtest_ticker.py` / `backtest_gldm.py`
-> one bar (their signal needs the bar's realized H/L). Strategy parameters
-> have **not** been re-tuned against the post-signal fill yet.
+> one bar (their signal needs the bar's realized H/L). Stops were then
+> re-swept against the post-signal fill (2026-07-25): MSTR −3% is back on
+> (its earlier removal was an artifact of the leaky fill), MSTU keeps −6%,
+> ETH gains −8% (thin 8-trade sample — tail-protection convention), BTC stays
+> stop-less — headline BTC +58% · MSTR +245% · MSTU +677% · ETH +40% on the
+> fix-date vintage.
 
 ---
 

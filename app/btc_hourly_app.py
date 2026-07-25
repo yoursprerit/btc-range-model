@@ -128,8 +128,13 @@ BTC_STRATEGY_GATE  = "above_ma30"
 MSTR_STRATEGY_LABEL = "Standard MA"
 MSTU_STRATEGY_LABEL = "Standard MA"
 BTC_STRATEGY_LABEL  = "Standard MA"
-MSTR_STOP_PCT = None   # MSTR: no fixed stop (signal exits only) — 2026-07e retune
-MSTU_STOP_PCT = 0.06   # MSTU fixed stop −6% (vol-matched to ~2× vol; was −3%) — 2026-07e
+# 2026-07-25 post-look-ahead-fix stop retune: with fills at the first exchange
+# close AFTER the signal moment (no more pre-signal gap capture), a −3% stop
+# HELPS MSTR (+245%/Sh 1.33/MDD −22.5% vs stop-less +184%/1.08/−27.5% on the
+# fix-date vintage) — the old "signal-exit-only" pick was an artifact of the
+# leaky fill. MSTU's −3..−8% plateau is flat (+677%/1.27); −6% kept (mid-plateau).
+MSTR_STOP_PCT = 0.03   # MSTR fixed stop −3% — 2026-07-25 retune (was None)
+MSTU_STOP_PCT = 0.06   # MSTU fixed stop −6% (vol-matched to ~2× vol) — 2026-07e
 # 2026-07f — ETH (spot Ethereum) added as a fourth sleeve on the same BTC signal
 # with the MSTR treatment: Standard MA gate, signal-exit-only, no fixed stop.
 # ETH bars share BTC's 12:00-UTC anchor, so the sleeve fills at the very close of
@@ -138,7 +143,11 @@ MSTU_STOP_PCT = 0.06   # MSTU fixed stop −6% (vol-matched to ~2× vol; was −
 # Validated in ETH_BMNR_STRATEGY_EVAL.md (fixed stops ≤8% only hurt, as on MSTR).
 ETH_STRATEGY_GATE  = "above_ma30"
 ETH_STRATEGY_LABEL = "Standard MA"
-ETH_STOP_PCT = None    # ETH: no fixed stop (signal exits only) — 2026-07f add
+# 2026-07-25 retune: on the honest engine a −8% stop lifts ETH +8.8%→+40.0%
+# (Sharpe 0.23→0.52) and cuts MDD −39.5%→−22.9% by truncating the 2022-style
+# slides. CAVEAT: only 8 trades in the window — thin sample, treat as the
+# tail-protection convention (MSTU/NUGT) rather than a fitted edge.
+ETH_STOP_PCT = 0.08    # ETH fixed stop −8% — 2026-07-25 retune (was None)
 ETH_TRADE_VEHICLE = "ETHA"  # spot ETH is executed via the iShares Ethereum Trust
 # 2026-07 structural fix — post-stop re-entry override (STOPPED leveraged sleeve only).
 # Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
@@ -4474,10 +4483,10 @@ def run_mstr_backtest(end_date_iso: str,
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
-    # 2026-07e: MSTR runs SIGNAL-EXIT-ONLY (MSTR_STOP_PCT is None). With no fixed
-    # stop, `_has_stop` is False → the stop never fires, `from_sl` is never set,
-    # and the post-stop re-entry override / SL5 cooldown stay inert. Exits are the
-    # D2/D3 regime signals only.
+    # 2026-07-25 retune: MSTR carries a fixed stop again (MSTR_STOP_PCT) —
+    # on the honest post-signal fill the stop helps (see the constant's comment).
+    # If the constant is ever set back to None, `_has_stop` turns the stop, the
+    # SL5 cooldown and the re-entry override inert automatically.
     _has_stop = MSTR_STOP_PCT is not None
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -4841,10 +4850,10 @@ def run_eth_backtest(end_date_iso: str,
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
     # ── Backtest loop — execute in ETH ──────────────────────────────────────
-    # 2026-07e: ETH runs SIGNAL-EXIT-ONLY (ETH_STOP_PCT is None). With no fixed
-    # stop, `_has_stop` is False → the stop never fires, `from_sl` is never set,
-    # and the post-stop re-entry override / SL5 cooldown stay inert. Exits are the
-    # D2/D3 regime signals only.
+    # 2026-07-25 retune: ETH carries a fixed stop again (ETH_STOP_PCT) —
+    # on the honest post-signal fill the stop helps (see the constant's comment).
+    # If the constant is ever set back to None, `_has_stop` turns the stop, the
+    # SL5 cooldown and the re-entry override inert automatically.
     _has_stop = ETH_STOP_PCT is not None
     nav      = initial_capital; pos = "CASH"; eth_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None

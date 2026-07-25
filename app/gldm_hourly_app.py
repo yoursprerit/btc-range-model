@@ -740,12 +740,12 @@ def render_strategy_card():
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
-    📈 <b>Model-OOS 2021→now</b> (thresholds/stops tuned on this window;
-    post-signal fills since the 2026-07-25 look-ahead fix):
-    GDX <b>+85%</b> · MDD −23% · Sharpe 0.77 (B&amp;H +92% / −47% / 0.51) &nbsp;|&nbsp;
-    NUGT <b>+161%</b> · MDD −43% · Sharpe 0.71 (B&amp;H +41% / −74% / 0.45).
+    📈 <b>Model-OOS 2021→now</b> (post-signal fills + thresholds re-swept on the
+    bias-free engine, 2026-07-25; tuned on this window):
+    GDX <b>+110%</b> · MDD −24% · Sharpe 0.84 (B&amp;H +95% / −47% / 0.51) &nbsp;|&nbsp;
+    NUGT <b>+217%</b> · MDD −46% · Sharpe 0.77 (B&amp;H +45% / −74% / 0.46).
     Combined gold middle-path stack (both apps, equal-weight daily-rebalanced):
-    <b>+178%</b> · MDD −29% · Sharpe <b>1.03</b>.
+    <b>+203%</b> · MDD −29% · Sharpe <b>1.07</b>.
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -1943,22 +1943,23 @@ close predict the next bar — fixed & re-tuned 2026-07).
 
 **Model-OOS results (2021→now, middle path).** The H/L *model* is blind here
 (fit pre-2021); the *strategy* thresholds/stops/engine split were tuned on this
-same window (2026-07 sweeps), so read levels as in-sample-selected. Divergence
-fills are post-signal (decide close i−1 → fill close i) since the 2026-07-25
-look-ahead fix:
+same window, so read levels as in-sample-selected. Divergence fills are
+post-signal (decide close i−1 → fill close i) since the 2026-07-25 look-ahead
+fix, and the thresholds/stops below are the 2026-07-25 re-sweep on that
+bias-free engine (U1 +0.10 / D2 −0.20 / D1 +0.45 / V 1.0; GDX −5%, NUGT −8%):
 
 | Asset | Engine | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
-| GLDM | dual-MA | **+137%** | +108% | **−19%** | −26% | **1.08 / 0.83** |
-| UGL | dual-MA | **+302%** | +151% | **−38%** | −50% | **0.96 / 0.64** |
-| GDX | divergence | **+85%** | +92% | **−23%** | −47% | **0.77 / 0.51** |
-| NUGT | divergence | **+161%** | +41% | **−43%** | −74% | **0.71 / 0.45** |
+| GLDM | dual-MA | **+137%** | +107% | **−19%** | −26% | **1.08 / 0.82** |
+| UGL | dual-MA | **+302%** | +149% | **−38%** | −50% | **0.96 / 0.64** |
+| GDX | divergence | **+110%** | +95% | **−24%** | −47% | **0.84 / 0.51** |
+| NUGT | divergence | **+217%** | +45% | **−46%** | −74% | **0.77 / 0.46** |
 
-Combined equal-weight gold stack: **+178% / −29% MDD / Sharpe 1.03**. The mix
+Combined equal-weight gold stack: **+203% / −29% MDD / Sharpe 1.07**. The mix
 still cushions the 2021-22 chop because the divergence miners sleeves hedge
-the trend sleeves' dips. (Pre-fix figures — GDX +103% / NUGT +276% / stack
-+214% — included a same-bar fill on a signal needing that bar's realized
-high/low, and are void.)
+the trend sleeves' dips. (Figures published before 2026-07-25 — GDX +103% /
+NUGT +276% / stack +214% — included a same-bar fill on a signal needing that
+bar's realized high/low, and are void.)
 
 **Honest framing.** Intraday gold direction is ~coin-flip (like BTC); the hourly
 model's value is a tight CI, not a directional bet. The edge is in the trend

@@ -14,14 +14,18 @@
 > (`ETH_BMNR_STRATEGY_EVAL.md` §5). Since 2026-07-25 they fill at the **first
 > exchange close at/after the signal moment** (next session), matching the live
 > procedure in `IBKR_PAPER_TRADING.md`. On the fix-date data vintage this moves
-> the full-CT-window headline **MSTR +296% → +165%** (Sharpe 1.31 → 0.98) and
-> **MSTU +685% → +499%** (Sharpe 1.22 → 1.11); **BTC and ETH are unchanged**
+> the full-CT-window headline **MSTR +296% → +184%** and **MSTU +685% → +402%**
+> config-unchanged; **BTC and ETH are unchanged**
 > (their 12:00-UTC bars fill exactly at signal availability). Every "same-bar /
 > after-hours" description of MSTR/MSTU execution below, and every MSTR/MSTU
 > table stamped before 2026-07-25, reflects the **old pre-signal fill** — treat
-> those numbers as upper bounds until re-published. Also note: strategy
-> gates/thresholds/stops were tuned (2026-07) over windows that include the
-> model-OOS period, so no displayed window is blind to the strategy layer.
+> those numbers as upper bounds until re-published. The stops were then
+> **re-swept on the honest fill (2026-07-25)**: MSTR −3% (back on — its removal
+> was an artifact of the leaky fill), MSTU −6%, ETH −8%, BTC stop-less, giving
+> **BTC +58% · MSTR +245% · MSTU +677% · ETH +40%** on the fix-date vintage.
+> Also note: strategy gates/thresholds/stops are tuned over windows that
+> include the model-OOS period, so no displayed window is blind to the
+> strategy layer.
 
 ---
 

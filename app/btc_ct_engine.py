@@ -12,16 +12,19 @@ sleeve matches the BTC app in both live signal and back-test.  2026-07 retune:
 all three assets trade the Standard MA (above-MA30) gate — the most profitable
 and most stable gate on the current data.
 
-2026-07-25 look-ahead fix: MSTR/MSTU fills moved from the *signal-bar date's*
-equity close (printed ~15 h — up to 2.5 days over weekends — BEFORE the CT
-signal is knowable at 12:00 UTC the next day) to the first exchange close at
-or after signal availability (see ``_next_session_close`` and
-ETH_BMNR_STRATEGY_EVAL.md §5).  On the 2026-07-25 vintage this moves MSTR
-+296%→+165% and MSTU +685%→+499% over the full CT window; BTC/ETH are
-unchanged (their 12:00-UTC bars fill exactly at the signal moment).  All
-figures remain data-vintage-dependent.  Gate/stop config: all sleeves trade
-the Standard MA gate; MSTR signal-exit-only, MSTU −6% stop, post-stop
-re-entry override (MSTU only), 5-bar V-reversal window.
+2026-07-25 look-ahead fix + retune: MSTR/MSTU fills moved from the
+*signal-bar date's* equity close (printed ~15 h — up to 2.5 days over
+weekends — BEFORE the CT signal is knowable at 12:00 UTC the next day) to the
+first exchange close at or after signal availability (see
+``_next_session_close`` and ETH_BMNR_STRATEGY_EVAL.md §5).  Config-unchanged,
+the fix alone moved MSTR +296%→+184% and MSTU +685%→+402% on the fix-date
+vintage; BTC/ETH are unchanged (their 12:00-UTC bars fill exactly at the
+signal moment).  Stops were then re-swept on the honest fill (see STOP_PCT):
+with MSTR −3% / MSTU −6% / ETH −8% the full-CT-window headline is
+BTC +58% · MSTR +245% · MSTU +677% · ETH +40% (2026-07-25 vintage; all
+figures drift with data refreshes).  Gate config: all sleeves trade the
+Standard MA gate, post-stop re-entry override on the stopped sleeves,
+5-bar V-reversal window.
 
 2026-07f: ETH (spot Ethereum) added as a fourth sleeve on the same parent BTC
 signal — Standard-MA gate, signal-exit-only, no fixed stop (the MSTR
@@ -117,17 +120,10 @@ def _ensure_fresh_features() -> None:
 # 2026-07 retune: all three assets use the Standard MA (above-MA30) gate — the
 # most profitable and most stable gate on the current data (mirrors
 # BTC/MSTR/MSTU_STRATEGY_GATE in btc_hourly_app.py). Only the stop differs.
-# 2026-07e per-asset STOP retune (k-fold + synthetic-OOS validated):
-#   BTC  → no fixed stop      (1× core; signal exits only)
-#   MSTR → no fixed stop      (its −3% was ~0.6σ but only ever whipsawed in bulls;
-#                              removing it lifts Full +212→+266%, Sharpe 1.34→1.41,
-#                              MDD unchanged −22%, win-rate 75→85% — and a 1× name
-#                              has no wipeout tail, so a stop adds nothing)
-#   MSTU → fixed −6%          (2× fund; its −3% sat at only ~0.3σ and stopped out on
-#                              routine noise. Vol-matched −6% (≈2× MSTR's old 3%)
-#                              lifts Full +309→+524%, Sharpe 1.08→1.27, MDD −48→−42%,
-#                              win-rate 33→62%, while still truncating the crash tail
-#                              that going stopless blows open. See stop-loss eval.)
+# Stop history: the 2026-07e retune (removing MSTR's stop, MSTU −3%→−6%) was
+# validated against the PRE-SIGNAL fill and is superseded by the 2026-07-25
+# post-look-ahead-fix retune below — on the honest fill, MSTR's −3% stop is
+# clearly beneficial again.
 U1_ERRHI_MIN = 1.3
 D2_ERRHI_MAX = -1.3
 # 2026-07f — ETH (spot Ethereum) added as a fourth sleeve on the SAME parent BTC
@@ -135,16 +131,22 @@ D2_ERRHI_MAX = -1.3
 # stop.  Evaluated in ETH_BMNR_STRATEGY_EVAL.md — a fixed stop ≤8% only hurts
 # (the signal exits already cap intra-trade pain), exactly as on MSTR.  ETH is
 # the signal/backtest asset and is executed live through the ETHA ETF.
-STOP_PCT = {"BTC": None, "MSTR": None, "MSTU": 0.06,   # BTC/MSTR: no fixed stop; MSTU −6%
-            "ETH": None}                               # ETH: MSTR treatment — no stop
+# 2026-07-25 post-look-ahead-fix stop retune (fills now post-signal): a −3%
+# stop HELPS MSTR on the honest fill (+245%/1.33 vs stop-less +184%/1.08) —
+# the old signal-exit-only pick was an artifact of the pre-signal fill.  ETH
+# gets −8% (+8.8%→+40.0%, MDD −39.5%→−22.9%; thin 8-trade sample — treat as
+# tail protection, not a fitted edge).  BTC stays stop-less (flat frontier);
+# MSTU keeps −6% (mid-plateau of the flat −3..−8% frontier, +677%/1.27).
+STOP_PCT = {"BTC": None, "MSTR": 0.03, "MSTU": 0.06,
+            "ETH": 0.08}
 GATE_BY_ASSET = {"BTC": "above_ma30", "MSTR": "above_ma30", "MSTU": "above_ma30",
                  "ETH": "above_ma30"}
-# 2026-07 structural fix — post-stop re-entry override (STOPPED leveraged sleeve only).
+# 2026-07 structural fix — post-stop re-entry override (stopped sleeves only).
 # Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
 # even when the XOR combined-block is on. Fixes the "stopped out at the
-# capitulation low, then locked out of the recovery" failure. It fires only after a
-# fixed-stop exit, so with the 2026-07e retune it applies to MSTU alone — BTC and
-# MSTR now carry no stop (from_sl is never set), leaving them untouched. Stable 12–20 bars.
+# capitulation low, then locked out of the recovery" failure. It fires only after
+# a fixed-stop exit, so it applies to the stopped sleeves (MSTR/MSTU/ETH since
+# the 2026-07-25 stop retune); BTC carries no stop and is untouched. Stable 12–20 bars.
 REENTRY_OVERRIDE_BARS = 12
 # 2026-07c — V-reversal recency window (bars). Bridges the capitulation bar to the
 # U1 confirmation a few bars later; widened 3→5 so the bridge survives data-vintage
@@ -153,9 +155,9 @@ REENTRY_OVERRIDE_BARS = 12
 V_RECENT_WIN = 5
 _META = {
     "BTC":  dict(name="Bitcoin",       kind="core", stop=0.0),
-    "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.0),
+    "MSTR": dict(name="MicroStrategy",  kind="beta", stop=0.03),
     "MSTU": dict(name="2× MSTR",        kind="lev",  stop=0.06),
-    "ETH":  dict(name="Ethereum",       kind="core", stop=0.0),
+    "ETH":  dict(name="Ethereum",       kind="core", stop=0.08),
 }
 ACCENT = "#f7931a"
 EMOJI = "₿"

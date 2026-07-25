@@ -2191,20 +2191,23 @@ signals, positions and back-tests match each source app:
   re-entry) — all three assets share the same gate. Since the **2026-07-25
   look-ahead fix**, MSTR/MSTU fills land at the first exchange close *after*
   the 12:00-UTC signal moment (the old same-date fill preceded the signal by
-  ~15 h and banked the overnight gap; on the fix-date vintage that moved MSTR
-  +296%→+165% and MSTU +685%→+499% — BTC/ETH unchanged). Figures drift with
-  data-vintage refreshes. The CT feature data begins ~2023-11, so the BTC
-  sleeve covers ~2024→now (the combined engine handles the staggered start),
-  and the CT model's training window extends into the displayed period —
-  only bars after its `train_end` are model-blind.
+  ~15 h and banked the overnight gap; config-unchanged the fix moved MSTR
+  +296%→+184% and MSTU +685%→+402% — BTC/ETH unchanged). Stops were then
+  re-swept on the honest fill (MSTR −3%, MSTU −6%, ETH −8%; BTC stop-less),
+  giving **BTC +58% · MSTR +245% · MSTU +677% · ETH +40%** on the 2026-07-25
+  vintage. Figures drift with data-vintage refreshes. The CT feature data
+  begins ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine
+  handles the staggered start), and the CT model's training window extends
+  into the displayed period — only bars after its `train_end` are model-blind.
 - **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** middle-path
   split — dual-MA 25/100 for GLDM/UGL, Divergence Pure-Regime for GDX/NUGT —
-  with per-asset stops (GLDM/UGL/GDX −3%, NUGT −5%). Since the 2026-07-25
-  look-ahead fix the divergence engine decides at close i−1 and fills at close
-  i (its signal needs bar i's realized high/low). Model-OOS 2021→now on the
-  fix-date vintage: **GLDM +137% · UGL +302% · GDX +85% · NUGT +161%**
-  (strategy thresholds tuned on this window; older LEV_SIBLINGS_STOP_EVAL.md
-  figures pre-date the causal H/L fix and are historical).
+  with per-asset stops (GLDM/UGL −3%, GDX −5%, NUGT −8% after the 2026-07-25
+  re-sweep). Since the 2026-07-25 look-ahead fix the divergence engine decides
+  at close i−1 and fills at close i (its signal needs bar i's realized
+  high/low). Model-OOS 2021→now on the fix-date vintage: **GLDM +137% ·
+  UGL +302% · GDX +110% · NUGT +217%** (strategy thresholds tuned on this
+  window; older LEV_SIBLINGS_STOP_EVAL.md figures pre-date the causal H/L fix
+  and are historical).
 - **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
   `ticker_config`** entries through the same `backtest_ticker` engine their apps
   use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,

@@ -625,7 +625,7 @@ def main():
 
     print(f"\n=== PRIMARY (traded): {gc.STRATEGY_NAME} — per-asset engines "
           f"(GLDM/UGL dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} −3%; "
-          f"GDX divergence −3%; NUGT divergence −5%) ===")
+          f"GDX divergence −5%; NUGT divergence −8%) ===")
     for asset in ("GLDM", "UGL", "GDX", "NUGT"):
         col = "gldm_close" if asset == "GLDM" else f"{asset.lower()}_close"
         if col not in preds:
