@@ -199,6 +199,7 @@ jobs:
           # the 🕵️ Daily Audit tab shows the stale-run record.
           git add data/overall/target_book.json data/overall/target_book_live.json \
                   data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
+                  data/overall/book_archive/ \
                   data/overall/daily_audit.json data/backtest/ || true
           if git diff --cached --quiet; then
             echo "No changes — nothing to commit."
