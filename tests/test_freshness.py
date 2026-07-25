@@ -221,3 +221,119 @@ def test_record_refresh_never_raises(monkeypatch, tmp_path):
     # unwritable dir → still no exception (best-effort by design)
     monkeypatch.setattr(fr, "RUNTIME_DIR", tmp_path / "no" / "such" / "\0bad")
     fr.record_refresh("X", foo=1)   # must not raise
+
+
+# ── hourly → daily backstop (Yahoo's daily feed lagging its intraday feed) ───
+def _hourly_session(day: str, closes, *, tz_hours=(14, 15, 16, 20)):
+    """A few tz-naive-UTC hourly bars inside one US session."""
+    idx = [pd.Timestamp(f"{day}T{h:02d}:00:00") for h in tz_hours]
+    n = len(idx)
+    return pd.DataFrame(
+        {"px_open": closes[:n], "px_high": [c + 1 for c in closes[:n]],
+         "px_low": [c - 1 for c in closes[:n]], "px_close": closes[:n],
+         "px_volume": [10] * n, "vix_close": [20] * n},
+        index=pd.DatetimeIndex(idx))
+
+
+def _daily(days, closes):
+    return pd.DataFrame(
+        {"px_open": closes, "px_high": [c + 2 for c in closes],
+         "px_low": [c - 2 for c in closes], "px_close": closes,
+         "px_volume": [100] * len(days), "vix_close": [21] * len(days)},
+        index=pd.DatetimeIndex([pd.Timestamp(d) for d in days]))
+
+
+def test_backfill_rebuilds_the_session_the_daily_feed_is_missing():
+    # Sat Jul 25 → last completed session is Fri Jul 24, but daily stops Jul 23.
+    daily = _daily(["2026-07-22", "2026-07-23"], [100.0, 101.0])
+    hourly = _hourly_session("2026-07-24", [102.0, 103.0, 104.0, 105.5])
+    out = fr.backfill_sessions_from_hourly(daily, hourly, "px_close",
+                                           now="2026-07-25T14:00:00Z")
+    assert str(out.index.max().date()) == "2026-07-24"
+    row = out.loc[pd.Timestamp("2026-07-24")]
+    assert row["px_close"] == 105.5          # last hourly close of the session
+    assert row["px_open"] == 102.0           # first
+    assert row["px_high"] == 106.5           # max of highs
+    assert row["px_low"] == 101.0            # min of lows
+    assert row["px_volume"] == 40            # summed
+    assert list(out.columns) == list(daily.columns)
+
+
+def test_backfill_is_noop_when_daily_already_current():
+    daily = _daily(["2026-07-23", "2026-07-24"], [100.0, 101.0])
+    hourly = _hourly_session("2026-07-24", [9.0, 9.0, 9.0, 9.0])
+    out = fr.backfill_sessions_from_hourly(daily, hourly, "px_close",
+                                           now="2026-07-25T14:00:00Z")
+    assert len(out) == 2
+    assert out.loc[pd.Timestamp("2026-07-24"), "px_close"] == 101.0  # not overwritten
+
+
+def test_backfill_never_invents_an_incomplete_or_nontrading_session():
+    daily = _daily(["2026-07-23", "2026-07-24"], [100.0, 101.0])
+    # Sat Jul 25 has hourly ticks but is not a trading day, and Mon Jul 27 has
+    # not closed yet at Mon 14:00 UTC (10:00 ET) — neither may be appended.
+    hourly = pd.concat([_hourly_session("2026-07-25", [1.0, 1.0, 1.0, 1.0]),
+                        _hourly_session("2026-07-27", [2.0, 2.0, 2.0, 2.0])])
+    out = fr.backfill_sessions_from_hourly(daily, hourly, "px_close",
+                                           now="2026-07-27T14:00:00Z")
+    assert str(out.index.max().date()) == "2026-07-24"
+
+
+def test_backfill_degrades_safely():
+    daily = _daily(["2026-07-22", "2026-07-23"], [100.0, 101.0])
+    now = "2026-07-25T14:00:00Z"
+    # empty / None hourly, and hourly with no usable price column → unchanged
+    assert len(fr.backfill_sessions_from_hourly(daily, pd.DataFrame(), "px_close", now=now)) == 2
+    assert fr.backfill_sessions_from_hourly(daily, None, "px_close", now=now) is daily
+    assert fr.backfill_sessions_from_hourly(None, pd.DataFrame(), "px_close", now=now) is None
+    bad = _hourly_session("2026-07-24", [1.0, 1.0, 1.0, 1.0]).rename(columns={"px_close": "other"})
+    assert len(fr.backfill_sessions_from_hourly(daily, bad, "px_close", now=now)) == 2
+
+
+def test_et_session_dates_maps_utc_ticks_to_the_right_session():
+    # 20:00 UTC = 16:00 ET (same day); 00:30 UTC = 20:30 ET the PREVIOUS day.
+    idx = pd.DatetimeIndex([pd.Timestamp("2026-07-24T20:00:00"),
+                            pd.Timestamp("2026-07-25T00:30:00")])
+    got = [str(d.date()) for d in fr.et_session_dates(idx)]
+    assert got == ["2026-07-24", "2026-07-24"]
+
+
+# ── secondary-provider backfill (Nasdaq fallback when Yahoo withholds a bar) ──
+def test_merge_missing_sessions_recovers_a_withheld_session():
+    daily = _daily(["2026-07-22", "2026-07-23"], [100.0, 101.0])
+    alt = _daily(["2026-07-23", "2026-07-24"], [101.0, 104.0])   # 2nd provider
+    out = fr.merge_missing_sessions(daily, alt, "px_close", now="2026-07-25T14:00:00Z")
+    assert str(out.index.max().date()) == "2026-07-24"
+    assert out.loc[pd.Timestamp("2026-07-24"), "px_close"] == 104.0
+    # the session both providers had is NOT overwritten by the fallback
+    assert out.loc[pd.Timestamp("2026-07-23"), "px_close"] == 101.0
+
+
+def test_merge_missing_sessions_split_scale_guard():
+    # A raw/unadjusted print (10x the adjusted level) must be refused, since the
+    # two providers differ in split adjustment.
+    daily = _daily(["2026-07-22", "2026-07-23"], [100.0, 101.0])
+    alt = _daily(["2026-07-24"], [1010.0])
+    out = fr.merge_missing_sessions(daily, alt, "px_close", now="2026-07-25T14:00:00Z")
+    assert str(out.index.max().date()) == "2026-07-23"      # rejected
+    # a plausible move on the same day IS accepted
+    ok = fr.merge_missing_sessions(daily, _daily(["2026-07-24"], [120.0]),
+                                   "px_close", now="2026-07-25T14:00:00Z")
+    assert ok.loc[pd.Timestamp("2026-07-24"), "px_close"] == 120.0
+
+
+def test_merge_missing_sessions_respects_cutoff_and_calendar():
+    daily = _daily(["2026-07-23", "2026-07-24"], [100.0, 101.0])
+    # Sat Jul 25 is not a session; Mon Jul 27 has not closed at 14:00 UTC.
+    alt = _daily(["2026-07-25", "2026-07-27"], [102.0, 103.0])
+    out = fr.merge_missing_sessions(daily, alt, "px_close", now="2026-07-27T14:00:00Z")
+    assert str(out.index.max().date()) == "2026-07-24"
+
+
+def test_merge_missing_sessions_degrades_safely():
+    daily = _daily(["2026-07-22", "2026-07-23"], [100.0, 101.0])
+    now = "2026-07-25T14:00:00Z"
+    assert fr.merge_missing_sessions(daily, None, "px_close", now=now) is daily
+    assert len(fr.merge_missing_sessions(daily, pd.DataFrame(), "px_close", now=now)) == 2
+    alt = _daily(["2026-07-24"], [104.0]).rename(columns={"px_close": "nope"})
+    assert len(fr.merge_missing_sessions(daily, alt, "px_close", now=now)) == 2
