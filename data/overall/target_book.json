@@ -1,18 +1,18 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-25T14:17:22+00:00",
- "as_of": "2026-07-24",
+ "generated_at_utc": "2026-07-26T13:54:27+00:00",
+ "as_of": "2026-07-25",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
   "SOXX": 0.3,
   "SOXL": 0.1,
-  "XLE": 0.22418551306912599,
+  "XLE": 0.22428345128126354,
   "OIH": 0.18,
   "ERX": 0.1,
-  "REMX": 0.09567475202085281
+  "REMX": 0.09571654871873637
  },
- "cash_weight": 0.000139734910021172,
+ "cash_weight": 1.1102230246251565e-16,
  "exec_price": {
   "SOXX": 527.01,
   "SOXL": 136.81,
@@ -26,7 +26,7 @@
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.22418551306912599,
+   "target": 0.22428345128126354,
    "in_pos": true,
    "priority": 0.8635767155865326
   },
@@ -66,7 +66,7 @@
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.09567475202085281,
+   "target": 0.09571654871873637,
    "in_pos": true,
    "priority": 0.09714285714285713
   },
@@ -169,16 +169,16 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-25T14:17:21+00:00",
+  "checked_at_utc": "2026-07-26T13:54:26+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Jul 25, 2026 at 7:15 AM CDT",
+  "anchor_ct": "Jul 26, 2026 at 7:15 AM CDT",
   "equity_close": "2026-07-24",
-  "btc_bar_close_utc": "2026-07-25T12:00:00+00:00"
+  "btc_bar_close_utc": "2026-07-26T12:00:00+00:00"
  },
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "81a9e0daf419afc95d7735da9d32b814413a7e0cd36f73d48ee6c923749176d2"
+  "value": "fe45b8e1b33edc8042dad8c1d576482130f2a0f730c2dfcac5347dd80b3a9125"
  }
 }
