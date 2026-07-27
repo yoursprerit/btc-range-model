@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-26T13:54:27+00:00",
- "as_of": "2026-07-25",
+ "generated_at_utc": "2026-07-27T17:07:21+00:00",
+ "as_of": "2026-07-26",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -14,12 +14,12 @@
  },
  "cash_weight": 1.1102230246251565e-16,
  "exec_price": {
-  "SOXX": 527.01,
-  "SOXL": 136.81,
-  "XLE": 59.62,
-  "OIH": 391.66,
-  "ERX": 95.26,
-  "REMX": 67.51
+  "SOXX": 505.6,
+  "SOXL": 119.925,
+  "XLE": 58.78,
+  "OIH": 388.41,
+  "ERX": 92.49,
+  "REMX": 67.995
  },
  "actions": [
   {
@@ -169,16 +169,16 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-26T13:54:26+00:00",
+  "checked_at_utc": "2026-07-27T17:07:20+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Jul 26, 2026 at 7:15 AM CDT",
+  "anchor_ct": "Jul 27, 2026 at 7:15 AM CDT",
   "equity_close": "2026-07-24",
-  "btc_bar_close_utc": "2026-07-26T12:00:00+00:00"
+  "btc_bar_close_utc": "2026-07-27T12:00:00+00:00"
  },
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "fe45b8e1b33edc8042dad8c1d576482130f2a0f730c2dfcac5347dd80b3a9125"
+  "value": "c3238e9ac076c4192b9fcc935b4e63e381c73148103615e82c618e9bcd0d58c5"
  }
 }
