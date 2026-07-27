@@ -117,6 +117,17 @@ for _k, _c in ticker_config.CONFIGS.items():
 st.set_page_config(page_title="Overall Trading", page_icon="🧭",
                    layout="wide", initial_sidebar_state="expanded")
 
+# Trim the wide-layout gutter: Streamlit's default side padding leaves a wide
+# dead strip between the sidebar and the content on large screens, while wide
+# tables (e.g. the action-plan table) still had no room to breathe on the
+# right — hence the overflow-x:auto wrapper used on every raw <table> below.
+st.markdown(
+    "<style>"
+    "[data-testid='stMainBlockContainer'], .main .block-container, .block-container"
+    "{padding-left:2rem;padding-right:2rem;max-width:100%;}"
+    "</style>",
+    unsafe_allow_html=True)
+
 # colour tokens
 C_BUY = "#16a34a"; C_HOLD = "#0ea5e9"; C_EXIT = "#dc2626"
 C_WATCH = "#d97706"; C_FLAT = "#64748b"; C_CASH = "#94a3b8"
@@ -941,7 +952,8 @@ with tab_live:
             f"<td style='text-align:right;font-weight:800;color:{_sata_col}'>{sata_live*100:.1f}%{sbar_live}</td>"
             f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_sata_col}'>"
             f"${sata_live*portfolio_value:,.0f}</td></tr>")
-        st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
+        st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                    f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table></div>",
                     unsafe_allow_html=True)
         if gate["n_active"] == 0:
             st.warning("**No open positions today** — no instrument is signalling long, "
@@ -1138,7 +1150,8 @@ with tab_live:
                         f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
                         f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
                         f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
-                st.markdown(f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table>",
+                st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                            f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table></div>",
                             unsafe_allow_html=True)
 
             # equity curve re-based to the portfolio value at the chosen start
@@ -1284,8 +1297,9 @@ with tab_live:
                             f"<td style='text-align:right'>100%</td>"
                             f"<td style='text-align:right'>100%</td>"
                             f"<td style='text-align:right;color:#94a3b8'>idle bal.</td></tr>")
-                    st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                                f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{pah}{''.join(par)}</table></div>", unsafe_allow_html=True)
                     st.caption("🏆 = the sleeve's strategy beat buying & holding it "
                                "over this window. **Trades** counts round-trips open "
                                "at any point since the start date (open positions "
@@ -1375,8 +1389,9 @@ with tab_live:
                             f"{_pct(_ret * 100 if _ret is not None else None)}{_unreal}</td>"
                             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_imp_s}</td>"
                             f"<td style='padding-left:10px;font-size:11px;color:#64748b'>{_reason}</td></tr>")
-                    st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                                f"{tlh}{''.join(tlr)}</table>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{tlh}{''.join(tlr)}</table></div>", unsafe_allow_html=True)
 
             # ── capital traded by asset — where the strategy put the money ─────
             if st.toggle(
@@ -1934,8 +1949,9 @@ with tab_hist:
             f"<td style='text-align:right;font-weight:800'>{_h_sata*100:.1f}%</td>"
             f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
             f"${_h_sata*_h_pv:,.0f}</td></tr>")
-        st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                    f"{_h_hdr}{''.join(_h_tr)}</table>", unsafe_allow_html=True)
+        st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                    f"<table style='width:100%;border-collapse:collapse'>"
+                    f"{_h_hdr}{''.join(_h_tr)}</table></div>", unsafe_allow_html=True)
         if _snap["n_active"] == 0:
             st.info("**No open positions on that date** — no instrument was "
                     "signalling long, so the entire book sat in **SATA** earning "
@@ -2032,8 +2048,9 @@ with tab_hist:
                         f"<td style='text-align:right;font-weight:800'>{_epidle*100:.1f}%</td>"
                         f"<td style='text-align:right;font-weight:800;"
                         f"font-variant-numeric:tabular-nums'>${_epidle*_h_pv:,.0f}</td></tr>")
-                st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                            f"{_ep_hdr}{''.join(_ep_tr)}</table>",
+                st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                            f"<table style='width:100%;border-collapse:collapse'>"
+                            f"{_ep_hdr}{''.join(_ep_tr)}</table></div>",
                             unsafe_allow_html=True)
                 st.caption("Published decisions, entry-priority scores and "
                            "execution prices exactly as archived at publish "
@@ -2095,7 +2112,8 @@ with tab_bt:
                 f"<td style='text-align:right;color:{C_EXIT}'>{row['mdd']*100:.0f}%</td>"
                 f"<td style='text-align:right;font-weight:600'>{row['sharpe']:.2f}</td>"
                 f"<td style='text-align:right'>{row['betalev']*100:.0f}%</td></tr>")
-        st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ch}{''.join(crows)}</table>",
+        st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                    f"<table style='width:100%;border-collapse:collapse'>{ch}{''.join(crows)}</table></div>",
                     unsafe_allow_html=True)
         st.caption("Loading the high-beta / leveraged proxies (β + 2× weight) "
                    "**boosts return but lowers Sharpe** — the drawdown deepens "
@@ -2138,10 +2156,11 @@ with tab_bt:
                             f"<td style='text-align:right'>{d['mdd']*100:.0f}%</td>"
                             f"<td style='text-align:right'>{d['sharpe']:.2f}</td></tr>")
         st.markdown(
+            "<div style='overflow-x:auto;margin:8px 0;'>"
             "<table style='width:100%;font-size:13px;border-collapse:collapse'>"
             "<tr style='background:#f1f5f9'><th style='text-align:left;padding:4px 6px'>Scheme</th>"
             "<th style='text-align:right'>Ret</th><th style='text-align:right'>MDD</th>"
-            "<th style='text-align:right'>Sharpe</th></tr>" + "".join(cmp_rows) + "</table>",
+            "<th style='text-align:right'>Sharpe</th></tr>" + "".join(cmp_rows) + "</table></div>",
             unsafe_allow_html=True)
         st.caption("Leveraged sleeves capped at 10%, high-beta at 18%, core at "
                    "30% — so the optimiser only leans on the 2× / β names when "
@@ -2182,7 +2201,8 @@ with tab_bt:
                   f"<td style='text-align:right'>{row['cagr']*100:.0f}%</td>"
                   f"<td style='text-align:right;color:{C_EXIT}'>{row['mdd']*100:.0f}%</td>"
                   f"<td style='text-align:right;font-weight:600'>{row['sharpe']:.2f}</td></tr>")
-    st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ph}{''.join(pr)}</table>",
+    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                f"<table style='width:100%;border-collapse:collapse'>{ph}{''.join(pr)}</table></div>",
                 unsafe_allow_html=True)
 
     st.markdown("#### Per-instrument strategy (standalone, model-OOS — "
@@ -2229,7 +2249,8 @@ with tab_bt:
                       f"<td style='text-align:right'>{res['win_rate']:.0f}%</td>"
                       f"<td style='text-align:right;font-weight:700'>"
                       f"{o['weights'].get(res['key'],0)*100:.1f}%</td></tr>")
-    st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ah}{''.join(ar)}</table>",
+    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                f"<table style='width:100%;border-collapse:collapse'>{ah}{''.join(ar)}</table></div>",
                 unsafe_allow_html=True)
 
     st.success(
