@@ -1,18 +1,18 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-07-27T15:13:27+00:00",
- "generated_at_ct": "Jul 27, 2026 at 10:13:27 AM CDT",
+ "generated_at_utc": "2026-07-27T15:32:39+00:00",
+ "generated_at_ct": "Jul 27, 2026 at 10:32:39 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
   "as_of": "2026-07-26",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-07-27T15:13:27+00:00"
+  "computed_at_utc": "2026-07-27T15:32:39+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-07-27T15:13:27+00:00",
-  "checked_at_ct": "Jul 27, 2026 at 10:13:27 AM CDT",
+  "checked_at_utc": "2026-07-27T15:32:39+00:00",
+  "checked_at_ct": "Jul 27, 2026 at 10:32:39 AM CDT",
   "passed": false,
   "stale_apps": [
    "GLDM",
