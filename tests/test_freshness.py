@@ -290,6 +290,48 @@ def test_backfill_degrades_safely():
     assert len(fr.backfill_sessions_from_hourly(daily, bad, "px_close", now=now)) == 2
 
 
+def test_last_completed_session_ignores_partial_today_row():
+    # Mon Jul 27 2026, 11:30 ET (market open): the in-progress Monday row must
+    # not count — the newest COMPLETED session present is Thu Jul 23.
+    now = "2026-07-27T15:30:00Z"
+    idx = pd.to_datetime(["2026-07-22", "2026-07-23", "2026-07-27"])
+    assert fr.last_completed_session(idx, now) == pd.Timestamp("2026-07-23")
+    # degenerate inputs → None
+    assert fr.last_completed_session(pd.DatetimeIndex([]), now) is None
+    assert fr.last_completed_session(["not-a-date"], now) is None
+    # only post-cutoff rows present → None
+    assert fr.last_completed_session(pd.to_datetime(["2026-07-27"]), now) is None
+
+
+def test_backfill_recovers_session_masked_by_partial_today_row():
+    """Regression for 2026-07-27: during Monday market hours Yahoo's daily feed
+    served an in-progress Mon row while Friday's completed close was still
+    missing.  index.max() (= Mon) masked the gap, the backstops never fired,
+    and the publish audit failed all day.  The gap must be detected and Friday
+    rebuilt from hourly, leaving the partial Monday row untouched."""
+    now = "2026-07-27T15:30:00Z"                     # Mon 11:30 ET, market open
+    daily = _daily(["2026-07-22", "2026-07-23", "2026-07-27"],
+                   [100.0, 101.0, 103.0])
+    hourly = _hourly_session("2026-07-24", [102.0, 103.0, 104.0, 105.5])
+    out = fr.backfill_sessions_from_hourly(daily, hourly, "px_close", now=now)
+    assert pd.Timestamp("2026-07-24") in out.index
+    assert out.loc[pd.Timestamp("2026-07-24"), "px_close"] == 105.5
+    assert out.loc[pd.Timestamp("2026-07-27"), "px_close"] == 103.0  # kept
+    assert list(out.index) == sorted(out.index)
+
+
+def test_backfill_at_anchor_repairs_basis_session_after_close():
+    # Post-close catch-up publish (Mon 5:30 PM ET): the frame has Monday's
+    # completed row but Friday is still missing.  Evaluated at the 7:15-AM-CT
+    # anchor (the publisher's basis), Friday must still be rebuilt.
+    anchor = fr.publish_anchor_ct("2026-07-27T22:30:00Z")
+    daily = _daily(["2026-07-23", "2026-07-27"], [100.0, 103.0])
+    hourly = _hourly_session("2026-07-24", [102.0, 103.0, 104.0, 105.0])
+    out = fr.backfill_sessions_from_hourly(daily, hourly, "px_close", now=anchor)
+    assert pd.Timestamp("2026-07-24") in out.index
+    assert out.loc[pd.Timestamp("2026-07-24"), "px_close"] == 105.0
+
+
 def test_et_session_dates_maps_utc_ticks_to_the_right_session():
     # 20:00 UTC = 16:00 ET (same day); 00:30 UTC = 20:30 ET the PREVIOUS day.
     idx = pd.DatetimeIndex([pd.Timestamp("2026-07-24T20:00:00"),
@@ -328,6 +370,18 @@ def test_merge_missing_sessions_respects_cutoff_and_calendar():
     alt = _daily(["2026-07-25", "2026-07-27"], [102.0, 103.0])
     out = fr.merge_missing_sessions(daily, alt, "px_close", now="2026-07-27T14:00:00Z")
     assert str(out.index.max().date()) == "2026-07-24"
+
+
+def test_merge_recovers_session_masked_by_partial_today_row():
+    # Same 2026-07-27 regression as the hourly backstop, on the second-provider
+    # path: the partial Monday row must not stop Friday being spliced in.
+    now = "2026-07-27T15:30:00Z"
+    daily = _daily(["2026-07-22", "2026-07-23", "2026-07-27"],
+                   [100.0, 101.0, 103.0])
+    alt = _daily(["2026-07-24"], [104.0])
+    out = fr.merge_missing_sessions(daily, alt, "px_close", now=now)
+    assert out.loc[pd.Timestamp("2026-07-24"), "px_close"] == 104.0
+    assert out.loc[pd.Timestamp("2026-07-27"), "px_close"] == 103.0  # kept
 
 
 def test_merge_missing_sessions_degrades_safely():

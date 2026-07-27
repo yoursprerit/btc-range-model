@@ -231,6 +231,30 @@ def completed_bars_only() -> bool:
         "1", "true", "yes", "on")
 
 
+def last_completed_session(index, now=None) -> pd.Timestamp | None:
+    """The newest COMPLETED US session present in a daily index — i.e. the
+    newest entry at or before ``expected_equity_asof(now)``.
+
+    This — not ``index.max()`` — is how "is this daily frame behind?" must be
+    measured: during US market hours Yahoo's daily series carries an
+    in-progress *today* row even while a prior session's completed close is
+    still missing from it (observed 2026-07-27: Mon's partial bar present,
+    Fri Jul 24 absent), so ``index.max()`` masks the gap and the backstops
+    below never fire.  ``None`` when the index is empty/unparseable or holds
+    no completed session."""
+    try:
+        idx = pd.DatetimeIndex(index).normalize()
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+    except Exception:
+        return None
+    if not len(idx):
+        return None
+    idx = idx[idx <= expected_equity_asof(now)]
+    last = idx.max() if len(idx) else None
+    return None if last is None or pd.isna(last) else pd.Timestamp(last)
+
+
 def drop_in_progress_us_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
     """Drop trailing daily rows whose US-session 4:00-PM-ET close hasn't
     happened yet (the in-progress *today* bar during market hours).  No-op on
@@ -283,13 +307,16 @@ def backfill_sessions_from_hourly(daily: pd.DataFrame, hourly: pd.DataFrame,
     if daily is None or daily.empty or hourly is None or hourly.empty:
         return daily
     cutoff = expected_equity_asof(now)
-    last = pd.DatetimeIndex(daily.index).max()
-    if pd.isna(last) or last >= cutoff:
+    # Completed sessions only: an in-progress *today* row (which Yahoo's daily
+    # feed serves during market hours even while a prior close is missing)
+    # must not mask the gap — see last_completed_session.
+    last = last_completed_session(daily.index, now)
+    if last is not None and last >= cutoff:
         return daily                            # already current — nothing to do
     h = hourly.copy()
     h["_sess"] = et_session_dates(h.index)
     want = [d for d in sorted(set(h["_sess"]))
-            if last < d <= cutoff and is_us_trading_day(d)]
+            if (last is None or last < d) and d <= cutoff and is_us_trading_day(d)]
     if not want:
         return daily
     agg = {}
@@ -328,14 +355,16 @@ def merge_missing_sessions(daily: pd.DataFrame, alt: pd.DataFrame, price_col: st
     if daily is None or daily.empty or alt is None or alt.empty:
         return daily
     cutoff = expected_equity_asof(now)
-    last = pd.DatetimeIndex(daily.index).max()
-    if pd.isna(last) or last >= cutoff:
+    # Completed sessions only, for the same reason as the hourly backstop.
+    last = last_completed_session(daily.index, now)
+    if last is not None and last >= cutoff:
         return daily
     a = alt.copy()
     a.index = pd.DatetimeIndex(a.index).normalize()
     a = a[~a.index.duplicated(keep="last")].sort_index()
     want = [d for d in a.index
-            if last < d <= cutoff and d not in daily.index and is_us_trading_day(d)]
+            if (last is None or last < d) and d <= cutoff
+            and d not in daily.index and is_us_trading_day(d)]
     if not want or price_col not in a.columns:
         return daily
     rows = a.loc[want].dropna(subset=[price_col])
