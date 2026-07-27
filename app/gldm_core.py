@@ -275,20 +275,29 @@ def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:
     # hourly feed, stranding the gold apps one bar back and tripping the Overall
     # STALE-SIGNALS alert. Rebuild the missing completed session from hourly.
     try:
-        if _fr.expected_equity_asof() > pd.DatetimeIndex(df.index).max():
+        # "Behind" must be measured on COMPLETED sessions only — an in-progress
+        # *today* row otherwise masks a missing prior close and the backstops
+        # never fire (see ticker_core.fetch_daily / freshness.last_completed_session).
+        # In publisher mode the moment of record is the 7:15-AM-CT anchor.
+        _basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
+        _cut = _fr.expected_equity_asof(_basis_now)
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
             _h = _merge(syms, "1h", range_="1mo")
-            df = _fr.backfill_sessions_from_hourly(df, _h, "gldm_close")
+            df = _fr.backfill_sessions_from_hourly(df, _h, "gldm_close",
+                                                   now=_basis_now)
             macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
             df[macro_cols] = df[macro_cols].ffill(limit=5)
         # Still behind? Yahoo is withholding the session on both its feeds, so
         # fall back to an INDEPENDENT provider (Nasdaq's keyless quote API) for
         # the listed tickers. Indices/futures aren't served there and stay
         # ffilled. See app/market_fallback.py for why Yahoo remains primary.
-        if _fr.expected_equity_asof() > pd.DatetimeIndex(df.index).max():
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
             import market_fallback as _mf
-            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(
-                pd.DatetimeIndex(df.index).max()).date()))
-            df = _fr.merge_missing_sessions(df, _alt, "gldm_close")
+            _start = _lc if _lc is not None else pd.DatetimeIndex(df.index).min()
+            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(_start).date()))
+            df = _fr.merge_missing_sessions(df, _alt, "gldm_close", now=_basis_now)
             macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
             df[macro_cols] = df[macro_cols].ffill(limit=5)
     except Exception:

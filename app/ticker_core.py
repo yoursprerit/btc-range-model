@@ -166,20 +166,32 @@ def fetch_daily(cfg: TickerConfig, start: str | None = None) -> pd.DataFrame:
     # missing COMPLETED session from the hourly series, which usually still has
     # it. Only pays the extra fetch when the daily frame is actually behind.
     try:
-        if _fr.expected_equity_asof() > pd.DatetimeIndex(df.index).max():
+        # "Behind" must be measured on COMPLETED sessions only: during market
+        # hours Yahoo's daily feed serves an in-progress *today* row even while
+        # a prior session's close is still missing, so index.max() masks the
+        # gap (observed 2026-07-27: Mon partial bar present, Fri Jul 24 absent
+        # — the backstops never fired and the publish audit failed all day).
+        # In publisher mode the moment of record is the 7:15-AM-CT anchor, so
+        # a post-close catch-up run still repairs the anchor's basis session.
+        _basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
+        _cut = _fr.expected_equity_asof(_basis_now)
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
             _h = _merge(syms, "1h", range_="1mo")
-            df = _fr.backfill_sessions_from_hourly(df, _h, "px_close")
+            df = _fr.backfill_sessions_from_hourly(df, _h, "px_close",
+                                                   now=_basis_now)
             macro_cols = [c for c in df.columns if not c.startswith("px_")]
             df[macro_cols] = df[macro_cols].ffill(limit=5)
         # Still behind? Yahoo is withholding the session on both its feeds, so
         # fall back to an INDEPENDENT provider (Nasdaq's keyless quote API) for
         # the listed tickers. Indices/futures aren't served there and stay
         # ffilled. See app/market_fallback.py for why Yahoo remains primary.
-        if _fr.expected_equity_asof() > pd.DatetimeIndex(df.index).max():
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
             import market_fallback as _mf
-            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(
-                pd.DatetimeIndex(df.index).max()).date()))
-            df = _fr.merge_missing_sessions(df, _alt, "px_close")
+            _start = _lc if _lc is not None else pd.DatetimeIndex(df.index).min()
+            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(_start).date()))
+            df = _fr.merge_missing_sessions(df, _alt, "px_close", now=_basis_now)
             macro_cols = [c for c in df.columns if not c.startswith("px_")]
             df[macro_cols] = df[macro_cols].ffill(limit=5)
     except Exception:
