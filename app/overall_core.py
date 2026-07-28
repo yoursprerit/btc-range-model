@@ -1168,6 +1168,96 @@ def rebalancing_moves(base_weights: dict, base_idle: float,
     return out
 
 
+def book_move_reasons(prev_payload: dict, cur_payload: dict,
+                      caps: dict | None = None,
+                      idle_key: str = "SATA") -> list[dict]:
+    """Why each Previous → Current Targetbook weight moved.
+
+    Works from the two *published* payloads alone (schema
+    ``overall-target-book/v1``) so the explanation describes what the optimizer
+    actually committed at publish time, not a live recomputation.  Extends each
+    ``rebalancing_moves`` row with a short ``reason`` derived from the books'
+    recorded per-key actions and priority scores.  A published book's weights
+    are the optimal base blend tilted by that morning's entry-priority score
+    (momentum · sentiment · win-rate · risk-adjusted edge), water-filled to the
+    per-instrument caps — so between two publishes a weight can only move
+    because:
+
+      * a signal fired → fresh entry, funded at its recorded priority;
+      * a signal died → exit (the current book's recorded decision says why) or
+        the instrument was retired from the universe entirely;
+      * the priority tilt drifted → the water-fill re-spread weight across the
+        uncapped names (a weight pinned at its cap is reported as cap-bound;
+        a weight that moved *against* its own priority drift moved because the
+        competing names' tilts shifted more);
+      * everything the risk sleeve can't hold is the idle-cash (SATA) residual.
+
+    Legacy books without an ``actions`` list degrade to weight-only reasons.
+    Sub-point moves are omitted, same as ``rebalancing_moves``.
+    """
+    caps = caps or CAP_BY_KEY
+
+    def _alloc(payload):
+        w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
+        idle = w.pop(idle_key, 0.0) + float(payload.get("cash_weight") or 0.0)
+        return w, idle
+
+    prev_w, prev_idle = _alloc(prev_payload)
+    cur_w, cur_idle = _alloc(cur_payload)
+    prev_act = {a.get("key"): a for a in (prev_payload.get("actions") or [])}
+    cur_act = {a.get("key"): a for a in (cur_payload.get("actions") or [])}
+
+    moves = rebalancing_moves(prev_w, prev_idle, cur_w, cur_idle, idle_key)
+    for m in moves:
+        k = m["key"]
+        if k == idle_key:
+            m["reason"] = ("the risk signals deploy less capital — the residual "
+                           "parks in idle cash" if m["delta_pct"] > 0 else
+                           "newly funded risk positions absorb previously idle "
+                           "cash")
+            continue
+        fw, tw = float(prev_w.get(k, 0.0)), float(cur_w.get(k, 0.0))
+        pa, ca = prev_act.get(k), cur_act.get(k)
+        if fw < 5e-4 < tw:                               # flat → funded
+            p = (ca or {}).get("priority")
+            m["reason"] = ("fresh entry — "
+                           + ((ca or {}).get("decision") or "signal fired long")
+                           + (f" · funded at priority {p:.2f}"
+                              if p is not None else ""))
+        elif tw < 5e-4 < fw:                             # funded → flat
+            if ca is None and cur_act:
+                m["reason"] = ("retired from the trading universe — sold down "
+                               "to zero")
+            else:
+                m["reason"] = ("signal exited — "
+                               + ((ca or {}).get("decision")
+                                  or "no longer signalling long"))
+        else:                                            # resized hold
+            cap = float(caps.get(k, 0.30))
+            if abs(tw - cap) < 5e-4:
+                m["reason"] = (f"filled to its {cap*100:.0f}% cap — takes all "
+                               f"the weight the cap allows")
+                continue
+            pp = (pa or {}).get("priority")
+            cp = (ca or {}).get("priority")
+            if pp is not None and cp is not None and (cp - pp) * (tw - fw) > 0:
+                up = cp > pp
+                m["reason"] = (f"priority {'rose' if up else 'fell'} "
+                               f"{pp:.2f} → {cp:.2f} (momentum · sentiment · "
+                               f"win-rate · edge) — the optimizer re-tilted "
+                               f"its slice {'up' if up else 'down'}")
+            elif pp is not None and cp is not None:
+                m["reason"] = (f"own priority only moved {pp:.2f} → {cp:.2f}; "
+                               f"competing names' tilts shifted more, so the "
+                               f"water-fill re-spread weight "
+                               f"{'into' if tw > fw else 'out of'} this "
+                               f"uncapped name")
+            else:
+                m["reason"] = ("re-tilted by the water-fill as competing "
+                               "priorities shifted")
+    return moves
+
+
 def adjust_for_selection(weights: dict, cash: float, included) -> tuple:
     """Apply a user include/exclude choice to an allocation.
 

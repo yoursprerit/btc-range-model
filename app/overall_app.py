@@ -781,6 +781,55 @@ with tab_live:
                 else "_Book already at target — no rebalancing needed._",
                 unsafe_allow_html=True)
 
+    # ── prev → current published books: what changed at the last publish & why
+    # Same donut-to-donut comparison the two left pies invite, with the
+    # optimizer's rationale spelled out per move. Reasons come from the two
+    # published payloads themselves (recorded decisions + priority scores),
+    # not a live recomputation — see ov.book_move_reasons.
+    if _prev_book and _cur_book:
+        _bm_hdr = (f"🔁 **Rebalancing moves — Previous → Current Targetbook** "
+                   f"(as-of {_prev_book.get('as_of', '—')} → "
+                   f"{_cur_book.get('as_of', '—')}: why the optimizer moved)")
+        with st.expander(_bm_hdr, expanded=False):
+            st.caption("Each published book's weights are the optimal base "
+                       "blend tilted by that morning's **entry-priority** score "
+                       "(live momentum · macro sentiment · back-tested win-rate "
+                       "· risk-adjusted edge), then **water-filled** to the "
+                       "per-instrument caps, with the undeployable residual "
+                       "parked in **SATA**. So a weight only moves between two "
+                       "publishes because a **signal fired** (fresh entry), a "
+                       "**signal died** (exit / trend break / retired from the "
+                       "universe), or the **priority tilt drifted** and the "
+                       "water-fill re-spread the difference across the uncapped "
+                       "names. Sub-point moves are omitted, matching the moves "
+                       "line above.")
+            _bm_rows = []
+            for _mv in ov.book_move_reasons(_prev_book, _cur_book):
+                _kk, _d = _mv["key"], _mv["delta_pct"]
+                if _kk == "SATA":
+                    _label, _badge = "💵 <b>SATA</b>", ""
+                    _col = C_EXIT if _d > 0 else C_BUY
+                else:
+                    _meta = by_key.get(_kk)
+                    _badge = _kind_badge(_meta["kind"]) if _meta else ""
+                    _label = (f"<b>{_kk}</b>" if _meta else
+                              f"<b>{_kk}</b><span style='font-size:10px;"
+                              f"color:#94a3b8'> (retired)</span>")
+                    _col = C_BUY if _d > 0 else C_EXIT
+                _bm_rows.append(
+                    f"<div style='font-size:13px;margin:4px 0'>"
+                    f"{_label}{_badge} {_mv['from_pct']:.0f}% → "
+                    f"{_mv['to_pct']:.0f}% "
+                    f"<span style='color:{_col};font-weight:700'>"
+                    f"{'▲' if _d > 0 else '▼'}{abs(_d):.0f}pt</span>"
+                    f"<span style='color:#64748b'> — {_mv['reason']}</span>"
+                    f"</div>")
+            st.markdown("".join(_bm_rows) if _bm_rows else
+                        "_No whole-point moves — the optimizer kept the "
+                        "current book essentially unchanged from the previous "
+                        "one (signals and priority tilts barely drifted)._",
+                        unsafe_allow_html=True)
+
     st.markdown("---")
 
     # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
