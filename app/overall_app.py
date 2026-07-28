@@ -784,6 +784,17 @@ with tab_live:
     st.markdown("---")
 
     # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
+    # The "Target % / $ (Last bar)" columns must show the SAME committed
+    # allocation the Current Targetbook donut draws — the *published* book.
+    # They used to show ``gate["target"]``, the engine's re-run of the
+    # committed signals: its priority tilt blends live momentum/sentiment, so
+    # the column drifted through the day and contradicted the frozen donut
+    # above it.  Fall back to the engine's committed target only when nothing
+    # has been published yet (same rule as the rebalancing-moves baseline).
+    if _cur_book:
+        _committed_w, _committed_idle = _book_alloc(_cur_book)
+    else:
+        _committed_w, _committed_idle = None, None
     with st.expander("🎯 **Today's action plan**", expanded=False):
         st.caption("What to do now, ranked: **close** exits first, then **open** / "
                    "**hold**, ordered by entry priority. β = higher-beta sibling · "
@@ -801,7 +812,9 @@ with tab_live:
                    "that close). **Unreal. P&L** is measured "
                    "against each position's real cost basis — the official close on its "
                    "entry bar. **Target % / $ (Last bar)** is the committed allocation "
-                   "from the last-close signals; **Target % / $ (Live)** re-runs it "
+                   "of the **published Current Targetbook** — the same values as the "
+                   "donut above (falling back to the engine's last-close targets only "
+                   "when nothing has been published yet); **Target % / $ (Live)** re-runs it "
                    "against the current live price, dropping any position exiting next "
                    "bar and reallocating to the survivors and SATA (differences are "
                    "coloured green/red).")
@@ -825,7 +838,10 @@ with tab_live:
         rows = []
         for a in gate["actions"]:
             ac = _ACTION_COL[a["action"]]
-            tgt = a["target"]                                    # last-bar (committed)
+            # last-bar (committed) — the published book's weight, so the column
+            # matches the Current Targetbook donut slice for slice
+            tgt = (_committed_w.get(a["key"], 0.0) if _committed_w is not None
+                   else a["target"])
             # live-adjusted target, further reduced by the user's include/exclude
             # selection (an excluded position shows 0 here, its weight in SATA).
             tgt_live = _adj_target.get(a["key"], 0.0)
@@ -913,8 +929,12 @@ with tab_live:
                 f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td>"
                 f"<td style='text-align:right;font-weight:700;color:{_live_col}'>{tgt_live_s}{bar_live}</td>"
                 f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:{_live_col}'>{amt_live_s}</td></tr>")
-        # SATA row — the idle-cash park absorbing whatever risk assets can't hold
-        si = gate["sata_info"]; sata_pct = gate["sata"]; sata_live = gate_live["sata"]
+        # SATA row — the idle-cash park absorbing whatever risk assets can't hold;
+        # the last-bar cell shows the published book's idle weight (the donut's
+        # SATA slice), falling back to the engine's committed SATA when unpublished.
+        si = gate["sata_info"]
+        sata_pct = _committed_idle if _committed_idle is not None else gate["sata"]
+        sata_live = gate_live["sata"]
 
         def _sata_bar(t):
             return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
