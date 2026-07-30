@@ -516,6 +516,13 @@ if _src.startswith("📦"):
                     f"**{_fr.fmt_ct(payload.get('generated_at_utc'))}** from the "
                     f"**{payload.get('as_of', '—')}** signal bar · 🔄 page data "
                     f"refreshed **{_fr.fmt_ct(_fr.now_utc(), seconds=True)}**")
+                if _fr.publish_pending(payload.get("generated_at_utc")):
+                    st.warning(
+                        "⏳ **Today's ≈7:15 AM CT publish hasn't landed yet** — "
+                        "this is still **yesterday's** book. GitHub's scheduler "
+                        "often delivers the publish cycle late; this page picks "
+                        "up today's book automatically once it commits, or use "
+                        "🚀 **Publish new target book** above to publish now.")
                 _fr.record_refresh("TARGETBOOK", kind="targetbook",
                                    app_label="📋 Target Book (IBKR)",
                                    as_of=str(payload.get("as_of", "")),

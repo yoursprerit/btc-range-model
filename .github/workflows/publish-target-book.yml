@@ -60,6 +60,18 @@ on:
     # otherwise).
     - cron: "15 12-23 * * *"   # 12:15 … 23:15 UTC hourly (was 12-17)
     - cron: "45 12,13 * * *"   # 12:45, 13:45 UTC (dense early retries)
+    # 2026-07-30: pre-anchor LEAD slots. Every publish since this workflow was
+    # created landed 13:54–17:07 UTC: GitHub delivered each cron fire ~1 h late
+    # (often more) and dropped the day's first slots outright, so with the
+    # earliest slot sitting exactly AT the 12:15 UTC anchor the day's book was
+    # chronically 1.5–3 h late and the app showed yesterday's Targetbooks all
+    # morning. These slots fire BEFORE the anchor so that, after GitHub's
+    # routine delivery delay, they arrive shortly AFTER it and publish on time.
+    # Risk-free by construction: the guard below skips any fire that arrives
+    # before the day's 7:15-AM-CT anchor, and the book's data basis is pinned
+    # to that anchor — so a lead fire can neither publish early nor publish a
+    # different book than the 12:15 slot would have.
+    - cron: "5,25,45 11 * * *" # 11:05/11:25/11:45 UTC → typically land ≥12:15
 
 # contents: write to push the artifacts back to the branch; issues: write so a
 # failed run can open / update a tracking issue (see the "Report failure" step).

@@ -565,7 +565,6 @@ with tab_live:
                "right now; it can drift through the day because today's market "
                "bar and BTC bar have not closed yet.")
     # (_live_exits / gate_live computed above, before the action table)
-    ac = st.columns([1, 1, 1])
 
     def _alloc_donut(alloc: dict, sata: float, title: str):
         labels, vals, colors = [], [], []
@@ -640,6 +639,20 @@ with tab_live:
     _cur_book = _load_published_book(_TB_DIR / "target_book_live.json",
                                      _TB_DIR / "target_book.json")
 
+    # Today's-publish-pending notice: past the 7:15-AM-CT anchor but the newest
+    # published book still predates it (GitHub cron fires routinely arrive
+    # late), the donuts below are necessarily YESTERDAY's books — say so
+    # instead of letting them read as silently stuck.
+    if _cur_book and fr.publish_pending(_cur_book.get("generated_at_utc")):
+        st.warning(
+            "⏳ **Today's ≈7:15 AM CT publish hasn't landed yet** — the "
+            "Previous / Current Targetbooks below are still **yesterday's** "
+            "books. GitHub's scheduler often delivers the publish cycle late; "
+            "the donuts roll forward automatically once today's book commits. "
+            "To publish right now, use the 🚀 button in the 📋 Target Book "
+            "app (or run the *Publish target book* workflow manually).")
+
+    ac = st.columns([1, 1, 1])
     with ac[0]:
         if _prev_book:
             _pw, _pidle = _book_alloc(_prev_book)

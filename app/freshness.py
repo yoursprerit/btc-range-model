@@ -226,6 +226,24 @@ def publish_anchor_ct(now=None) -> pd.Timestamp:
     return (n.normalize() + pd.Timedelta(hours=7, minutes=15)).tz_convert("UTC")
 
 
+def publish_pending(generated_at_utc, now=None) -> bool:
+    """True when *now* is already past today's 7:15-AM-CT publish anchor but
+    the published book at hand was generated BEFORE it — i.e. today's scheduled
+    publish hasn't landed yet and the book shown is still yesterday's.  GitHub
+    cron fires are routinely delivered late (or dropped), so this is the state
+    the Targetbook donuts sit in every morning between the anchor and the
+    moment the day's publish commit actually lands.  Falsy/unparsable input →
+    False (no notice rather than a wrong one)."""
+    if not generated_at_utc:
+        return False
+    try:
+        gen = _as_utc(generated_at_utc)
+        n = _as_utc(now or now_utc())
+    except Exception:
+        return False
+    return bool(gen < publish_anchor_ct(n) <= n)
+
+
 def completed_bars_only() -> bool:
     return os.environ.get(COMPLETED_BARS_ENV, "").strip().lower() in (
         "1", "true", "yes", "on")

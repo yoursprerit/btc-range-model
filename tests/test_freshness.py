@@ -163,6 +163,22 @@ def test_publish_anchor_is_715_ct_all_day():
         assert fr.publish_anchor_ct(now) == anchor, now
 
 
+def test_publish_pending_states():
+    """Pending ⇔ now is past today's 7:15-AM-CT anchor AND the book predates
+    it; before the anchor (or with today's book / bad input) → not pending."""
+    yday_book = "2026-07-29T14:30:11+00:00"          # yesterday's publish
+    # 8:09 AM CDT, past today's 12:15 UTC anchor, book still yesterday's → pending
+    assert fr.publish_pending(yday_book, now="2026-07-30T13:09:00Z")
+    # 6:00 AM CDT — before today's anchor, yesterday's book is the expected one
+    assert not fr.publish_pending(yday_book, now="2026-07-30T11:00:00Z")
+    # today's book already landed → not pending
+    assert not fr.publish_pending("2026-07-30T12:20:00+00:00",
+                                  now="2026-07-30T13:09:00Z")
+    # missing / unparsable stamps never warn
+    assert not fr.publish_pending(None, now="2026-07-30T13:09:00Z")
+    assert not fr.publish_pending("not-a-date", now="2026-07-30T13:09:00Z")
+
+
 def test_anchor_trim_excludes_same_day_close_after_market():
     """Publishing AFTER the 4 PM ET close must still exclude today's close —
     post-close signal changes belong only to the live view."""
