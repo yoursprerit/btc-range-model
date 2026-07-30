@@ -84,11 +84,7 @@ price tile) in the ₿ Bitcoin app.
 flowchart TD
     A["run_universe() — every instrument's<br/>signal, position and daily return stream"] --> B["returns_matrix + position_matrix<br/>(align, handle staggered inception)"]
     B --> C["optimize_weights()<br/>Monte-Carlo long-only blend, per-kind caps,<br/>objective by risk profile"]
-    C --> D{"fundamental<br/>overlay?"}
-    D -- on --> E["tilt by conviction → re-water-fill to caps"]
-    D -- off --> F["pure quant optimum"]
-    E --> G["base target weights"]
-    F --> G
+    C --> G["base target weights<br/>(pure quant optimum — the fundamental<br/>overlay is retired)"]
     G --> H["signal_gated_allocation()<br/>deploy only to long/opening names,<br/>tilt by entry-priority, water-fill to caps"]
     H --> I["undeployed remainder → SATA idle-cash"]
     H --> J["live_exit_keys() — drop names whose<br/>LIVE price has broken the trend"]
@@ -194,7 +190,7 @@ the user dials the return-vs-risk trade-off on the Live tab:
 |---|---|---:|---|
 | **Balanced** *(default)* | `balanced` (near-max-Sharpe, then max return) | −35 % | Best historical **risk-adjusted** blend. |
 | **Growth** | `max_return` | −22 % | Leans harder on β / 2× for more return inside a tighter DD budget. |
-| **Aggressive** | `max_return` | −38 % | Heaviest β / 2×: highest return, deepest drawdowns, lower Sharpe. |
+| **Aggressive** | `max_return` | −38 % | Heaviest β / 2×: highest return, deepest drawdowns, lower Sharpe. **Retired from the app UI** (budget judged too deep to publish); still available to the CLI tools. |
 
 Loading the β + 2× sleeves **boosts return but lowers Sharpe** — the drawdown
 deepens faster than the return — which is exactly the knob these profiles expose.
@@ -216,14 +212,16 @@ Per-period (Balanced optimum): 🌐 Full OOS 2021→now **+826 % / −16.1 % / 2
 roughly doubled its drawdown (−8.6 % → −16.1 %): the ETHA figures it replaces
 were flattered by an early fill, not beaten by better trading.*
 
-### Fundamental overlay (optional)
+### Fundamental overlay — retired
 
-With the overlay **on** (default), the quant-optimal blend is multiplied by a
-per-instrument **conviction score** (mid-2026 sector view — overweight AI/semis,
-crypto, structural gold, electrification; underweight clean energy & oil
-services), then **re-water-filled to the same caps**. High-conviction names are
-allowed a small floor so a name the pure optimum ignored can still enter. The app
-shows both the with- and without-overlay figures so the tilt is transparent.
+Earlier builds could multiply the quant-optimal blend by a per-instrument
+**conviction score** (the mid-2026 sector view) before re-water-filling to the
+caps. The overlay is now **retired everywhere** — the app checkbox is gone and
+the daily Target-Book publisher passes `fundamental=False` — because the view
+was formed knowing how 2021→2026 played out: using it anywhere bakes a
+hindsight-formed conviction into the sizing. `FUNDAMENTAL_VIEW` remains in
+`overall_core` only as a documented record; all published allocations are the
+pure quant optimum under the profile caps.
 
 ---
 

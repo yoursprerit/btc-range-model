@@ -147,9 +147,12 @@ _KIND_TAG = {"lev": ("2×", "#7c3aed"), "beta": ("β", "#0891b2"), "core": ("", 
 # ══════════════════════════════════════════════════════════════════════════
 if st.session_state.get("gldm_active_app") not in _ALL_APPS:
     st.session_state["gldm_active_app"] = "OVERALL"
-if st.session_state.get("overall_risk_profile") not in ov.RISK_PROFILES:
+# Risk profiles offered in the UI — Aggressive is retired from the interface
+# (−38% drawdown budget: too deep to publish); its definition stays in core
+# for the CLI tools. A stale session pointing at it falls back to the default.
+UI_PROFILES = [p for p in ov.RISK_PROFILES if p != "Aggressive"]
+if st.session_state.get("overall_risk_profile") not in UI_PROFILES:
     st.session_state["overall_risk_profile"] = ov.DEFAULT_PROFILE
-st.session_state.setdefault("overall_use_fundamental", True)
 with st.sidebar:
     st.radio("**Application**", options=_ALL_APPS,
              format_func=lambda x: _APP_LABELS.get(x, x), key="gldm_active_app")
@@ -225,17 +228,17 @@ STRAT_CURVE = "Overall strategy (gated replay)"
 
 
 @st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
-def get_all_profiles(bucket: str, fundamental: bool = True):
-    """Compute the full portfolio for EVERY risk profile once, so switching
+def get_all_profiles(bucket: str):
+    """Compute the full portfolio for every UI risk profile once, so switching
     profiles (and rendering the comparison table) is instant — no recompute.
 
-    ``opt``/``gate`` power TODAY'S live book (full-history optimal weights,
-    optionally tilted by the ``fundamental`` mid-2026 forward view — all data
-    to date is legitimately known when sizing today).  Every BACK-TEST number
-    (``wf``/``per``/``curves[STRAT_CURVE]``) instead comes from the
-    walk-forward gated replay: daily gate/tilt/water-fill with expanding-
-    window anchor refits and as-of priority inputs, fundamental overlay OFF —
-    no look-ahead anywhere in the history."""
+    ``opt``/``gate`` power TODAY'S live book (full-history optimal weights —
+    all data to date is legitimately known when sizing today; the mid-2026
+    fundamental overlay is retired everywhere, being a hindsight-formed view).
+    Every BACK-TEST number (``wf``/``per``/``curves[STRAT_CURVE]``) instead
+    comes from the walk-forward gated replay: daily gate/tilt/water-fill with
+    expanding-window anchor refits and as-of priority inputs — no look-ahead
+    anywhere in the history."""
     res = get_results(bucket)
     results, computed_at = res["results"], res["computed_at"]
     if not results:
@@ -247,11 +250,12 @@ def get_all_profiles(bucket: str, fundamental: bool = True):
     base_curves = {"Equal-weight strategies": bm["strat_equal"]["equity"],
                    "Equal-weight Buy & Hold": bm["bh_equal"]["equity"]}
     profiles = {}
-    for name, prof in ov.RISK_PROFILES.items():
+    for name in UI_PROFILES:
+        prof = ov.RISK_PROFILES[name]
         caps = ov.caps_for(name)
         opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
                                   mdd_floor=prof["mdd_floor"], objective=prof["objective"],
-                                  fundamental=fundamental)
+                                  fundamental=False)
         w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
         wf = ov.walkforward_gated_replay(results, caps=caps,
                                          mdd_floor=prof["mdd_floor"],
@@ -266,8 +270,8 @@ def get_all_profiles(bucket: str, fundamental: bool = True):
                 profiles=profiles)
 
 
-def get_portfolio(bucket: str, profile: str, fundamental: bool = True):
-    allp = get_all_profiles(bucket, fundamental)
+def get_portfolio(bucket: str, profile: str):
+    allp = get_all_profiles(bucket)
     if not allp:
         return None
     p = allp["profiles"][profile]
@@ -275,13 +279,14 @@ def get_portfolio(bucket: str, profile: str, fundamental: bool = True):
                 rets=allp["rets"], bm=allp["bm"], profile=profile, **p)
 
 
-def get_profile_comparison(bucket: str, fundamental: bool = True):
-    """Headline metrics for every risk profile (reads the shared computation)."""
-    allp = get_all_profiles(bucket, fundamental)
+def get_profile_comparison(bucket: str):
+    """Headline metrics for every UI risk profile (reads the shared computation)."""
+    allp = get_all_profiles(bucket)
     if not allp:
         return []
     rows = []
-    for name, prof in ov.RISK_PROFILES.items():
+    for name in UI_PROFILES:
+        prof = ov.RISK_PROFILES[name]
         o = allp["profiles"][name]["opt"]["optimal"]     # live anchors → β/2× posture
         wm = allp["profiles"][name]["wf"]["metrics"]     # back-test = gated replay
         bl = sum(v for k, v in o["weights"].items()
@@ -299,9 +304,8 @@ st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instrume
            "single question: **where should capital go today?**")
 
 _profile = st.session_state["overall_risk_profile"]
-_use_fund = st.session_state["overall_use_fundamental"]
 try:
-    _PF = get_portfolio(_bucket(), _profile, _use_fund)
+    _PF = get_portfolio(_bucket(), _profile)
 except Exception as exc:                       # never blank the sidebar/selector
     st.error(f"Live data fetch hit an error: {exc}. Press **Refresh now** in a moment.")
     st.stop()
@@ -326,6 +330,29 @@ for pk in ov.PARENT_KEYS:
     grp = [r for r in results if r["parent"] == pk]
     if grp:
         parents.append((pk, grp))
+
+
+def _alloc_area_fig(weights: pd.DataFrame, sata: pd.Series, title: str):
+    """Stacked-area figure of the replayed book's daily % allocation — one
+    band per asset (in its accent colour) plus the SATA idle-cash remainder;
+    every day stacks to 100%.  Used below both Growth charts."""
+    fig = go.Figure()
+    for c in [c for c in weights.columns if float(weights[c].max()) > 0.0005]:
+        fig.add_trace(go.Scatter(
+            x=weights.index, y=weights[c].to_numpy() * 100, name=c,
+            mode="lines", stackgroup="book",
+            line=dict(width=0.5, color=by_key.get(c, {}).get("accent", "#888")),
+            hovertemplate=f"{c}: %{{y:.1f}}%<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=sata.index, y=sata.to_numpy() * 100, name="SATA (idle)",
+        mode="lines", stackgroup="book", line=dict(width=0.5, color="#334155"),
+        hovertemplate="SATA: %{y:.1f}%<extra></extra>"))
+    fig.update_layout(height=380, margin=dict(t=30, b=10, l=10, r=10),
+                      yaxis=dict(title="% of book", range=[0, 100.5]),
+                      legend=dict(orientation="h", y=-0.12),
+                      hovermode="x unified",
+                      title=dict(text=title, font_size=13))
+    return fig
 
 # ── diagnostic: make a silently-dropped app VISIBLE ─────────────────────────
 # All apps' instruments should load. If one fails in a given environment
@@ -491,15 +518,15 @@ with tab_live:
                    "Audit** app for the full trail.")
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
-    pcomp = {r["name"]: r for r in get_profile_comparison(_bucket(), _use_fund)}
+    pcomp = {r["name"]: r for r in get_profile_comparison(_bucket())}
     rp = st.columns([1.15, 2])
     with rp[0]:
-        st.radio("⚙️ **Risk profile**", list(ov.RISK_PROFILES.keys()),
+        st.radio("⚙️ **Risk profile**", UI_PROFILES,
                  key="overall_risk_profile", horizontal=True)
         st.caption(ov.RISK_PROFILES[_profile]["blurb"])
     with rp[1]:
         cells = []
-        for name in ov.RISK_PROFILES:
+        for name in UI_PROFILES:
             r = pcomp.get(name)
             if not r:
                 continue
@@ -523,19 +550,6 @@ with tab_live:
         st.caption(f"📅 Figures computed over **{_per0.strftime('%b %d, %Y')} → "
                    f"{_per1.strftime('%b %d, %Y')}** — end date advances daily "
                    f"with each new close.")
-    st.checkbox("🔭 **Apply fundamental view** (mid-2026 sector outlook)",
-                key="overall_use_fundamental",
-                help=ov.FUNDAMENTAL_VIEW_NOTE + " Tilts TODAY'S anchor weights "
-                     "toward the strongest secular-growth sleeves (re-capped) and "
-                     "re-runs today's targets. The back-test is unaffected — the "
-                     "replay always excludes the overlay (it would be hindsight "
-                     "applied to history).")
-    if _use_fund:
-        st.caption(f"🔭 **Fundamental overlay ON** — {ov.FUNDAMENTAL_VIEW_NOTE}")
-        st.caption("Switching reruns today's targets on the chosen profile "
-                   "(the back-test excludes the overlay). β / 2× exposure rises "
-                   "Balanced → Aggressive: more return, deeper drawdowns, "
-                   "lower Sharpe.")
     st.markdown("")
 
     invested = 1.0 - gate["sata"]
@@ -1329,6 +1343,26 @@ with tab_live:
                        "no figure uses information from after the day it describes. "
                        "Not investment advice.")
 
+            # ── daily % allocation — the book behind the curve above ─────────
+            if st.toggle(f"📊 Daily % allocation by asset since "
+                         f"{_sm['start'].strftime('%b %d, %Y')} — every asset's "
+                         "share of the book through time (toggle on/off)",
+                         value=True, key="overall_alloc_history_pnl"):
+                st.plotly_chart(
+                    _alloc_area_fig(
+                        _wf["weights"].loc[pd.Timestamp(_start_sel):],
+                        _wf["sata"].loc[pd.Timestamp(_start_sel):],
+                        f"Daily % allocation since "
+                        f"{_sm['start'].strftime('%b %d, %Y')} — every asset "
+                        f"plus SATA (stacks to 100%)"),
+                    use_container_width=True)
+                st.caption("The exact book the P&L above compounds each day: "
+                           "walk-forward anchors × the as-of priority tilt, "
+                           "water-filled to the profile caps over the sleeves "
+                           "in the market; the remainder sits in **SATA**. "
+                           "Allocations shift daily as priorities move — even "
+                           "when no Action signal changes.")
+
             # ── per-asset breakdown — opt-in via toggle so the page stays clean
             # (a nested st.expander is not allowed inside the section expander)
             # (_pa computed above, alongside the blend-level trade stats)
@@ -1887,8 +1921,8 @@ with tab_hist:
                "bar's signals, the **Executed Playbook** section below shows "
                "it — the record of what actually traded. "
                "Follows the "
-               f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
-               "toggle selected on the Live tab.")
+               f"risk profile (currently **`{_profile}`**) selected on the "
+               "Live tab.")
 
     _h_curve = _PF["curves"][STRAT_CURVE]
     _h_d0, _h_d1 = _h_curve.index[0].date(), _h_curve.index[-1].date()
@@ -2228,18 +2262,11 @@ with tab_bt:
                "information from after the day it describes. Out-of-sample "
                f"from {_oos_span} depending on the instrument (staggered starts — "
                "newer sleeves like BTC begin ~2024); $100k start.")
-    if opt.get("fundamental"):
-        st.info("🔭 **Fundamental overlay** (mid-2026 sector view) tilts TODAY'S "
-                "live book only. It is deliberately **excluded from the "
-                "back-test** — the view was formed knowing how 2021→2026 played "
-                "out, so applying it retroactively would be hindsight. "
-                + ov.FUNDAMENTAL_VIEW_NOTE)
-
     # ── risk-profile trade-off: leaning on β / 2× proxies ───────────────
     st.markdown(f"**Risk profile: `{_profile}`** — "
                 f"{ov.RISK_PROFILES[_profile]['blurb']} "
                 f"_(change it in the sidebar.)_")
-    comp = get_profile_comparison(_bucket(), _use_fund)
+    comp = get_profile_comparison(_bucket())
     if comp:
         ch = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
               "<th style='padding:6px 10px'>Profile</th>"
@@ -2263,9 +2290,8 @@ with tab_bt:
                     unsafe_allow_html=True)
         st.caption("Loading the high-beta / leveraged proxies (β + 2× weight) "
                    "**boosts return but lowers Sharpe** — the drawdown deepens "
-                   "faster than the return. Growth roughly doubles the return of "
-                   "Balanced for a still-respectable Sharpe; Aggressive pushes "
-                   "return highest at the deepest drawdown.")
+                   "faster than the return. Growth leans harder on the β / 2× "
+                   "sleeves than Balanced inside a −22% drawdown budget.")
     st.markdown("")
 
     m = st.columns(4)
@@ -2334,27 +2360,11 @@ with tab_bt:
     if st.toggle("📊 Daily % allocation by asset — how the replayed book was "
                  "deployed through time (toggle on/off)",
                  value=True, key="overall_alloc_history"):
-        _aw = _wf_bt["weights"]
-        _alive = [c for c in _aw.columns if float(_aw[c].max()) > 0.0005]
-        fig_al = go.Figure()
-        for c in _alive:
-            fig_al.add_trace(go.Scatter(
-                x=_aw.index, y=_aw[c].to_numpy() * 100, name=c,
-                mode="lines", stackgroup="book", line=dict(width=0.5),
-                fillcolor=None, line_color=by_key.get(c, {}).get("accent", "#888"),
-                hovertemplate=f"{c}: %{{y:.1f}}%<extra></extra>"))
-        fig_al.add_trace(go.Scatter(
-            x=_aw.index, y=_wf_bt["sata"].to_numpy() * 100, name="SATA (idle)",
-            mode="lines", stackgroup="book", line=dict(width=0.5),
-            line_color="#334155",
-            hovertemplate="SATA: %{y:.1f}%<extra></extra>"))
-        fig_al.update_layout(
-            height=380, margin=dict(t=30, b=10, l=10, r=10),
-            yaxis=dict(title="% of book", range=[0, 100.5]),
-            legend=dict(orientation="h", y=-0.12), hovermode="x unified",
-            title=dict(text="Daily % allocation — every asset plus SATA "
-                            "(stacks to 100%)", font_size=13))
-        st.plotly_chart(fig_al, use_container_width=True)
+        st.plotly_chart(
+            _alloc_area_fig(_wf_bt["weights"], _wf_bt["sata"],
+                            "Daily % allocation — every asset plus SATA "
+                            "(stacks to 100%)"),
+            use_container_width=True)
         st.caption("The book the back-test compounds each day: anchors "
                    "(re-fit yearly on prior data) × the as-of priority tilt, "
                    "water-filled to the profile caps over the sleeves in the "
@@ -2563,19 +2573,19 @@ optimiser objective and a drawdown budget:
 |---|---|---|
 | **Balanced** (default) | 30% / 18% / 10% | Hold Sharpe near its max — best risk-adjusted blend |
 | **Growth** | 30% / 25% / 18% | Maximise return inside a **−22%** drawdown budget |
-| **Aggressive** | 35% / 40% / 35% | Maximise return inside a **−38%** budget — heavy β / 2× |
 
-β / 2× exposure rises Balanced → Aggressive: more return, deeper drawdowns,
-lower Sharpe. Every number on the Live and Backtesting tabs follows the
-selected profile.
+β / 2× exposure rises Balanced → Growth: more return, deeper drawdowns, lower
+Sharpe. Every number on the Live and Backtesting tabs follows the selected
+profile. (An *Aggressive* profile — 35/40/35 caps, −38% budget — exists in
+`overall_core` for the CLI tools but is retired from this UI: its drawdown
+budget was judged too deep to publish.)
 
-**Fundamental overlay.** The 🔭 toggle on the Live tab applies a **mid-2026
-sector forward-view**: a per-instrument conviction multiplier (overweight
-AI/semis, the crypto institutional era, the structural gold bull and
-electrification; underweight clean energy and oil services) that tilts the
-optimal anchor weights, re-water-fills to the same caps, then re-runs
-**today's allocation**. It never touches the back-test — the view was formed
-knowing how the history played out, so replaying it would be hindsight.
+**Fundamental overlay — retired.** Earlier builds offered a 🔭 toggle applying
+a mid-2026 sector forward-view multiplier to the anchor weights. It has been
+**removed everywhere** (app and the daily Target-Book publisher): the view was
+formed knowing how 2021→2026 played out, so any use of it — even for today's
+book — bakes a hindsight-formed conviction into the sizing. All allocations
+are now the pure quant optimum under the profile caps.
 
 **Entry priority.** When several instruments signal entry at once — or one fires
 while others are already held — a **priority score (0–1)** decides which get
@@ -2609,9 +2619,6 @@ the combined curve reflects cash working rather than sitting dead.
   not a market-tested series.
 - Leveraged sleeves (MSTU, UGL, NUGT, ERX 2× and SOXL 3×) and high-beta names
   compound decay and gap risk; the caps bound but don't remove that.
-- The fundamental overlay is a discretionary mid-2026 view, not a fitted
-  parameter — it tilts the quant optimum by conviction, so its figures are
-  neither purely historical nor purely systematic.
 - This is a **daily** engine. The BTC and Gold apps' canonical **hourly**
   Pure-Regime signals live in those apps — open them from the sidebar.
 - Nothing here is investment advice.
