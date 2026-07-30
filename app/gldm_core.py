@@ -97,11 +97,11 @@ MACRO_SYMS = {
 # routinely ranges 3-4%.  The GLDM daily H/L model is CAUSAL (features through
 # the prior close predict the next bar — see backtest_gldm.build_predictions),
 # so its regime-centered divergence error has a genuine forecast scale: 3-bar
-# err_hi std ≈ 0.55% OOS.  The config below is the tier-1 pick of the joint
-# GDX+UGL frontier sweep (backtest_gldm.py --sweep): it beats buy & hold on
-# BOTH return AND drawdown for GDX (+110%/−22% MDD/Sharpe 0.90 vs B&H
-# +104%/−46%/0.54) and beats B&H on drawdown and Sharpe for UGL (+124%/−19%/
-# 0.93 vs +161%/−49%/0.67).  See GLDM_TRADING_STRATEGY.md.
+# err_hi std ≈ 0.55% OOS.  The config below is the tier-0 pick of the joint
+# GDX+UGL frontier sweep (backtest_gldm.py --sweep) re-run 2026-07-25 on the
+# lagged (bias-free) divergence engine: GDX +110%/−24% MDD/Sharpe 0.84 vs B&H
+# +95%/−47%/0.51, NUGT +217%/−46%/0.77 vs B&H +45%/−74%/0.46.
+# See GLDM_TRADING_STRATEGY.md.
 STRATEGY_NAME = "Hybrid: Dual-MA Trend + Divergence Pure-Regime"
 # ── MIDDLE-PATH ENGINE SPLIT (2026-07) ───────────────────────────────────
 # The two engines are regime-complementary, so each sleeve gets the engine
@@ -112,9 +112,10 @@ STRATEGY_NAME = "Hybrid: Dual-MA Trend + Divergence Pure-Regime"
 #     return AND Sharpe for these two sleeves.
 #   • GDX & NUGT (miners) → Divergence Pure-Regime (below) — clearly better
 #     Sharpe/drawdown than dual-MA on the miners, and it carries the chop
-#     protection (2021-22: +12%/+11% while dual-MA sleeves were slightly down).
-# Combined equal-weight gold stack OOS: +214% / −19.8% MDD / Sharpe 1.15 vs
-# +134%/0.95 all-divergence and +237%/0.85 (−33.6% MDD) all-dual-MA.
+#     protection.  Post-2026-07-25 (bias-free engine + re-sweep):
+#     GDX +110%/−24%/0.84, NUGT +217%/−46%/0.77.
+# Combined equal-weight gold stack OOS: +203% / −29% MDD / Sharpe 1.07
+# (pre-fix +214%/−19.8%/1.15 figures are void — same-bar fill).
 ENGINE_BY_ASSET = {"GLDM": "dual_ma", "UGL": "dual_ma",
                    "GDX": "divergence", "NUGT": "divergence"}
 DUAL_MA_FAST = 25      # fast SMA of the GLDM parent close (SOXX-consistent)
@@ -126,11 +127,16 @@ def engine_for(asset: str) -> str:
 
 
 # ── Divergence engine thresholds (GDX & NUGT; also the signal cards) ─────
-U1_ERRHI_MIN =  0.15   # U1 entry:  3d-avg centered err_hi > +0.15%  (AND hi_breaks_3d ≥ 2)
-D2_ERRHI_MAX = -0.10   # D2 exit:   3d-avg centered err_hi < −0.10%
-D1_ERRLO_MIN =  0.15   # D1 exit:   3d-avg centered err_lo > +0.15%  (AND lo_breaks_3d ≥ 2)
+# 2026-07-25 post-look-ahead-fix retune: the divergence engine now decides at
+# close i−1 and fills at close i (see backtest_gldm.lag_signals), and the
+# joint GDX+UGL frontier sweep re-run on that lagged engine + fresh data picks
+# a looser D2 exit and stricter D1: U1 0.15→0.10, D2 −0.10→−0.20,
+# D1 0.15→0.45 (V unchanged at 1.0).
+U1_ERRHI_MIN =  0.10   # U1 entry:  3d-avg centered err_hi > +0.10%  (AND hi_breaks_3d ≥ 2)
+D2_ERRHI_MAX = -0.20   # D2 exit:   3d-avg centered err_hi < −0.20%
+D1_ERRLO_MIN =  0.45   # D1 exit:   3d-avg centered err_lo > +0.45%  (AND lo_breaks_3d ≥ 2)
 V_ERRLO_MIN  =  1.00   # V-reversal capitulation: single-bar low undershoot > 1.00%
-FIXED_STOP   =  0.03   # shared fixed stop (−3%) for both traded assets
+FIXED_STOP   =  0.03   # shared fixed stop (−3%) baseline (per-asset overrides below)
 TRADEABLE_ASSETS = ["GLDM", "GDX", "UGL", "NUGT"]   # GLDM (1x) = core traded sleeve
 
 # ── REFERENCE trend variant — price-vs-MA filter (not traded) ────────────
@@ -142,14 +148,18 @@ TRADEABLE_ASSETS = ["GLDM", "GDX", "UGL", "NUGT"]   # GLDM (1x) = core traded sl
 MA_WINDOW = 50                                   # default trend-filter window
 MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
 
-# Fixed stop per traded asset (per its middle-path engine):
-#   • GLDM (dual-MA) / GDX (divergence) → the tuned −3% stop.
-#   • UGL  (dual-MA, 2× gold) → −3%: under the dual-MA engine the stop slightly
-#     IMPROVES return, win-rate and Sharpe (+302%/55%/0.96 vs +263%/50%/0.90
-#     stop-less) — unlike the old divergence engine where it only whipsawed.
-#   • NUGT (divergence, 2× miners) → wider −5%: the sweet spot in the stop
-#     sweep (+276% / 0.90 Sharpe / −38% MDD vs B&H +41% / −74%).
-STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": FIXED_STOP, "UGL": FIXED_STOP, "NUGT": 0.05}
+# Fixed stop per traded asset (per its middle-path engine), re-swept
+# 2026-07-25 on the lagged divergence engine:
+#   • GLDM (dual-MA) → −3% (the −2/−3/−5/none plateau is flat; keep the tuned −3%).
+#   • UGL  (dual-MA, 2× gold) → −3%: still the frontier best (+302%/0.96 vs
+#     +264%/0.90 stop-less).
+#   • GDX  (divergence) → −5%: frontier best on the lagged engine
+#     (+110%/0.84 vs −3%'s +105%/0.83) — the plateau is flat, −5% whipsaws less.
+#   • NUGT (divergence, 2× miners) → −8%: the lagged-engine frontier prefers
+#     loose stops (none +226%/0.79 > −8% +217%/0.77 > −5% +207%/0.76); −8% is
+#     kept instead of stop-less to truncate the 2×-fund crash tail (same
+#     tail-protection convention as MSTU) at a cost of ~9 pp / 0.02 Sharpe.
+STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": 0.05, "UGL": FIXED_STOP, "NUGT": 0.08}
 
 
 def stop_for(asset: str) -> float:
@@ -257,6 +267,43 @@ def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:
     # forward-fill macro / analog columns across holidays (limit ~5 days)
     macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
     df[macro_cols] = df[macro_cols].ffill(limit=5)
+    # publisher mode: trim every US bar after the publish day's 7:15-AM-CT
+    # anchor basis session, so a published Target Book only ever sees the
+    # pre-anchor market close (see app/freshness.py).
+    import freshness as _fr
+    # See ticker_core.fetch_daily: Yahoo's daily feed can sit a session behind its
+    # hourly feed, stranding the gold apps one bar back and tripping the Overall
+    # STALE-SIGNALS alert. Rebuild the missing completed session from hourly.
+    try:
+        # "Behind" must be measured on COMPLETED sessions only — an in-progress
+        # *today* row otherwise masks a missing prior close and the backstops
+        # never fire (see ticker_core.fetch_daily / freshness.last_completed_session).
+        # In publisher mode the moment of record is the 7:15-AM-CT anchor.
+        _basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
+        _cut = _fr.expected_equity_asof(_basis_now)
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
+            _h = _merge(syms, "1h", range_="1mo")
+            df = _fr.backfill_sessions_from_hourly(df, _h, "gldm_close",
+                                                   now=_basis_now)
+            macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
+            df[macro_cols] = df[macro_cols].ffill(limit=5)
+        # Still behind? Yahoo is withholding the session on both its feeds, so
+        # fall back to an INDEPENDENT provider (Nasdaq's keyless quote API) for
+        # the listed tickers. Indices/futures aren't served there and stay
+        # ffilled. See app/market_fallback.py for why Yahoo remains primary.
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
+            import market_fallback as _mf
+            _start = _lc if _lc is not None else pd.DatetimeIndex(df.index).min()
+            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(_start).date()))
+            df = _fr.merge_missing_sessions(df, _alt, "gldm_close", now=_basis_now)
+            macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
+            df[macro_cols] = df[macro_cols].ffill(limit=5)
+    except Exception:
+        pass                    # best-effort; the audit still flags real staleness
+    if _fr.completed_bars_only():
+        df = _fr.drop_in_progress_us_bar(df, _fr.publish_anchor_ct())
     return df
 
 

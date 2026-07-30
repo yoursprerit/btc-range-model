@@ -5,7 +5,64 @@
 
 ---
 
-## ⭐ 2026-07e — Per-asset stop retune: MSTR stop-free · MSTU −3% → −6% (CURRENT LIVE)
+> ## ⚠️ 2026-07-25 look-ahead fix — MSTR/MSTU figures below pre-date it
+>
+> The deployed engines used to fill MSTR/MSTU (stock **and** options backtests)
+> at the US close of the signal-bar **date** — ~15 h (weekends: up to 2.5 days)
+> **before** the CT signal is knowable at 12:00 UTC the next day — banking the
+> correlated overnight/weekend gap on both entries and exits
+> (`ETH_BMNR_STRATEGY_EVAL.md` §5). Since 2026-07-25 they fill at the **first
+> exchange close at/after the signal moment** (next session), matching the live
+> procedure in `IBKR_PAPER_TRADING.md`. On the fix-date data vintage this moves
+> the full-CT-window headline **MSTR +296% → +184%** and **MSTU +685% → +402%**
+> config-unchanged; **BTC and ETH are unchanged**
+> (their 12:00-UTC bars fill exactly at signal availability). Every "same-bar /
+> after-hours" description of MSTR/MSTU execution below, and every MSTR/MSTU
+> table stamped before 2026-07-25, reflects the **old pre-signal fill** — treat
+> those numbers as upper bounds until re-published. The stops were then
+> **re-swept on the honest fill (2026-07-25)**: MSTR −3% (back on — its removal
+> was an artifact of the leaky fill), MSTU −6%, ETH −8%, BTC stop-less, giving
+> **BTC +58% · MSTR +245% · MSTU +677% · ETH +40%** on the fix-date vintage.
+> Also note: strategy gates/thresholds/stops are tuned over windows that
+> include the model-OOS period, so no displayed window is blind to the
+> strategy layer.
+
+---
+
+## ⭐ 2026-07f — ETH added as a fourth sleeve on the BTC signal (CURRENT LIVE)
+
+**Change.** **Spot ETH (Ethereum)** now trades off the same BTC CT signal as
+BTC/MSTR/MSTU, with the **MSTR treatment**: Standard-MA entry gate, regime-adaptive
+D2/D3 exits, **no fixed stop**. ETH bars use BTC's **12:00-UTC anchor**, so the
+sleeve's same-bar fill lands exactly at the signal bar's close, and its history spans
+the whole CT window (2024-03 → now, no staggered start). **Live orders route to the
+ETHA ETF**, exactly as the BTC sleeve is executed via IBIT — signal asset and traded
+vehicle are deliberately distinct. Surfaced as the **🔹 ETH Backtesting** tab in the
+₿ Bitcoin app and as a `core` instrument in the Overall portfolio.
+
+> ### ⚠️ ETH is the weakest sleeve — and this supersedes the earlier ETHA claims
+>
+> | ETH sleeve, full CT window | Return | MaxDD | Sharpe |
+> |---|--:|--:|--:|
+> | Buy & hold | −51.4% | −67.5% | — |
+> | **CT Standard-MA (shipped)** | **+8.8%** | **−39.5%** | **0.23** |
+>
+> It beats buy-&-hold by ~60pp at roughly half the drawdown, but Sharpe 0.23 is far
+> below BTC (0.84), MSTR (1.47) and MSTU (1.38); one −32.6% trade dominates the log;
+> and the result moves ±47pp if the fill shifts one bar. At portfolio level it
+> *lowers* Balanced Sharpe in every MC seed and costs the deterministic equal-weight
+> book 38pp, because it is **0.80-correlated to the BTC sleeve**.
+>
+> This **replaces** the previous ETHA-based figures (+264%/+101%, Sharpe 1.6/1.0),
+> which were inflated by (a) a fill ~16h ahead of signal availability and (b) a
+> window that skipped Mar–Jul 2024. **The same fill issue affects MSTR and MSTU more
+> severely — MSTR +338% → +184% (Sharpe 1.47 → 1.08) once the fill is moved past the
+> signal.** That is pre-existing and NOT fixed here.
+> See **[`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md)** §4–§5.
+
+---
+
+## ⭐ 2026-07e — Per-asset stop retune: MSTR stop-free · MSTU −3% → −6%
 
 **Change.** k-fold-cross-validated on history **and** 200 Monte-Carlo synthetic-OOS futures, the
 per-asset fixed stops were retuned. The old flat **−3%** was applied to instruments of very
@@ -286,7 +343,7 @@ Buy & Hold final NAV: **$66,929 (−33.1%)**.
 
 ### Entry Rule
 
-Buy at same-bar close (after-hours execution) when **all** of the following are true on the signal bar:
+Buy when **all** of the following are true on the signal bar (BTC/ETH: same-bar 12:00-UTC close = the signal moment; MSTR/MSTU since 2026-07-25: first exchange close *after* the signal moment):
 
 ```
 U1 is active:
@@ -305,7 +362,7 @@ OR the V-reversal gate fires (overrides the combined block):
 
 ### Exit Rule
 
-Sell at same-bar close (after-hours execution) when **either** of the following is true on the signal bar:
+Sell when **either** of the following is true on the signal bar (same fill convention as the entry rule — equity fills are post-signal since 2026-07-25):
 
 ```
 D2: err_hi_ma3 < −1.3%  (predicted highs not being reached)
@@ -607,7 +664,7 @@ TF2 automatically becomes TF1-equivalent.
 
 ## Four-Period Backtest Results — BTC, MSTR, MSTU (Jun 2024 – Jun 2026)
 
-> **Methodology:** Same-bar execution (signal on bar *i*, trade at bar *i* close — after-hours fill for MSTR/MSTU) · $100,000 starting capital · **Stop-losses triggered on daily close, filled at close price** · 60-day pre-period signal warmup · **Combined MA30+clean7d entry blocked (XOR filter)** · Run: 2026-06-12
+> **Methodology (pre-2026-07-25 fills — see banner at top; MSTR/MSTU figures are upper bounds):** Same-bar execution (signal on bar *i*, trade at bar *i* close — pre-signal after-hours fill for MSTR/MSTU) · $100,000 starting capital · **Stop-losses triggered on daily close, filled at close price** · 60-day pre-period signal warmup · **Combined MA30+clean7d entry blocked (XOR filter)** · Run: 2026-06-12
 
 > ⚠️ **In-sample warning:** CT model trained through Feb 28, 2026. OOS period (Mar 2026 → present) is fully blind.
 
@@ -880,8 +937,9 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
   rising), re-enter immediately on next valid TF2 signal; in BEAR/Neutral regime, wait 10 bars.
   For pre-inception dates (before Sep 18, 2024), the Sep 18 opening price ($25.52)
   is backward-filled — matching the research script price source.
-- All three backtests use **same-bar execution** (signal on bar i, trade at bar i close) — BTC trades
-  24/7; MSTR/MSTU are bought/sold in after-hours once the BTC daily signal is confirmed.
+- BTC trades 24/7 and fills at the 12:00-UTC signal-bar close (= the signal moment). Since
+  2026-07-25, MSTR/MSTU fill at the first exchange close after the signal moment (tables
+  stamped earlier used the old pre-signal fill).
 
 ---
 
@@ -899,9 +957,10 @@ The TF2 + V-Gate strategy with per-asset stop losses and re-entry criteria is li
 3. **No transaction costs modeled.** Exchange fees (typically 0.05–0.1% per side),
    slippage, and funding rates are not included. Real-world returns will be lower.
 
-4. **Execution at bar close.** The strategy assumes execution at the daily close on the same bar the
-   signal fires. BTC trades 24/7 so same-day execution is realistic. MSTR/MSTU are assumed to be
-   bought/sold in after-hours once the BTC daily signal is confirmed. After-hours spreads are wider
+4. **Execution at bar close.** BTC fills at the 12:00-UTC close of the signal bar — the exact
+   moment the signal becomes knowable (realistic on a 24/7 asset, zero-latency assumed).
+   MSTR/MSTU fill at the first exchange close after the signal moment (since the 2026-07-25
+   look-ahead fix; earlier tables used a pre-signal same-date fill). Equity spreads are wider
    than regular-session spreads — include this in cost estimates.
 
 5. **Backfitted exit rule.** The choice to use D2+D3 (not D1) as the exit was made after

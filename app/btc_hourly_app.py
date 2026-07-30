@@ -128,8 +128,27 @@ BTC_STRATEGY_GATE  = "above_ma30"
 MSTR_STRATEGY_LABEL = "Standard MA"
 MSTU_STRATEGY_LABEL = "Standard MA"
 BTC_STRATEGY_LABEL  = "Standard MA"
-MSTR_STOP_PCT = None   # MSTR: no fixed stop (signal exits only) — 2026-07e retune
-MSTU_STOP_PCT = 0.06   # MSTU fixed stop −6% (vol-matched to ~2× vol; was −3%) — 2026-07e
+# 2026-07-25 post-look-ahead-fix stop retune: with fills at the first exchange
+# close AFTER the signal moment (no more pre-signal gap capture), a −3% stop
+# HELPS MSTR (+245%/Sh 1.33/MDD −22.5% vs stop-less +184%/1.08/−27.5% on the
+# fix-date vintage) — the old "signal-exit-only" pick was an artifact of the
+# leaky fill. MSTU's −3..−8% plateau is flat (+677%/1.27); −6% kept (mid-plateau).
+MSTR_STOP_PCT = 0.03   # MSTR fixed stop −3% — 2026-07-25 retune (was None)
+MSTU_STOP_PCT = 0.06   # MSTU fixed stop −6% (vol-matched to ~2× vol) — 2026-07e
+# 2026-07f — ETH (spot Ethereum) added as a fourth sleeve on the same BTC signal
+# with the MSTR treatment: Standard MA gate, signal-exit-only, no fixed stop.
+# ETH bars share BTC's 12:00-UTC anchor, so the sleeve fills at the very close of
+# the signal bar and covers the whole CT window. ETH is the signal/backtest asset;
+# live execution runs through the ETHA ETF (cf. BTC→IBIT) — see ibkr_symbols.py.
+# Validated in ETH_BMNR_STRATEGY_EVAL.md (fixed stops ≤8% only hurt, as on MSTR).
+ETH_STRATEGY_GATE  = "above_ma30"
+ETH_STRATEGY_LABEL = "Standard MA"
+# 2026-07-25 retune: on the honest engine a −8% stop lifts ETH +8.8%→+40.0%
+# (Sharpe 0.23→0.52) and cuts MDD −39.5%→−22.9% by truncating the 2022-style
+# slides. CAVEAT: only 8 trades in the window — thin sample, treat as the
+# tail-protection convention (MSTU/NUGT) rather than a fitted edge.
+ETH_STOP_PCT = 0.08    # ETH fixed stop −8% — 2026-07-25 retune (was None)
+ETH_TRADE_VEHICLE = "ETHA"  # spot ETH is executed via the iShares Ethereum Trust
 # 2026-07 structural fix — post-stop re-entry override (STOPPED leveraged sleeve only).
 # Within this many bars of a fixed-stop exit, a fresh U1 above the MA30 re-admits
 # even when the XOR combined-block is on. Fixes the "stopped out at the
@@ -544,20 +563,27 @@ def fetch_live_spot():
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_equity_prices():
-    """Fetch live MSTR, MSTU, STRC and SATA prices via Yahoo Finance."""
+    """Fetch live MSTR, MSTU, ETH, STRC and SATA prices via Yahoo Finance.
+
+    NOTE the (key, yahoo-symbol) pairs: spot Ether is ``ETH-USD``. The bare
+    ticker ``ETH`` is Ethan Allen Interiors (a ~$18 furniture stock), so quoting
+    it here silently showed ~$18 in the ETH tile instead of ~$1,870.
+    """
     prices, changes = {}, {}
-    for ticker in ("MSTR", "MSTU", "STRC", "SATA"):
+    for key, ticker in (("MSTR", "MSTR"), ("MSTU", "MSTU"), ("ETH", "ETH-USD"),
+                        ("STRC", "STRC"), ("SATA", "SATA")):
         try:
             fi = yf.Ticker(ticker).fast_info
             price = float(fi.last_price)
             prev  = float(fi.previous_close)
-            prices[ticker] = price
-            changes[ticker] = (price - prev) / prev * 100 if prev else None
+            prices[key] = price
+            changes[key] = (price - prev) / prev * 100 if prev else None
         except Exception:
-            prices[ticker] = None
-            changes[ticker] = None
+            prices[key] = None
+            changes[key] = None
     return (prices.get("MSTR"), changes.get("MSTR"),
             prices.get("MSTU"), changes.get("MSTU"),
+            prices.get("ETH"), changes.get("ETH"),
             prices.get("STRC"), changes.get("STRC"),
             prices.get("SATA"), changes.get("SATA"))
 
@@ -2474,7 +2500,7 @@ if not valid_mask.any():
     st.stop()
 latest_t_global = F_filled.index[valid_mask][-1]
 live_spot, live_spot_ts = fetch_live_spot()
-mstr_price, mstr_chg, mstu_price, mstu_chg, strc_price, strc_chg, sata_price, sata_chg = fetch_equity_prices()
+mstr_price, mstr_chg, mstu_price, mstu_chg, eth_price, eth_chg, strc_price, strc_chg, sata_price, sata_chg = fetch_equity_prices()
 
 # ── signal-freshness caption + 🕵️ Daily Audit bookkeeping ──────────────────
 # Shared helpers (app/freshness.py) so the closing date/time shown here always
@@ -3736,6 +3762,53 @@ def _btc_daily_12utc_bars() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _eth_daily_12utc_bars() -> pd.DataFrame:
+    """ETH 12:00-UTC (7am-CT) daily OHLCV bars — the SAME anchor as the versioned
+    data/backtest/eth_usd_daily.csv and as the BTC signal bar.
+
+    The committed ETH series is deliberately on BTC's bar boundary so the sleeve's
+    fill coincides with the signal bar's close.  yfinance daily returns
+    MIDNIGHT-UTC bars, so extending the CSV with it would splice two different bar
+    conventions together (the same trap ``_btc_daily_12utc_bars`` exists to avoid).
+    This fetches ETHUSDT hourly klines straight from the Binance public API and
+    rebuckets them with the shared ``_rebucket_12utc``.  Deliberately independent
+    of ``_fetch_binance_hourly`` (which is BTC-specific, CSV-seeded and feeds the
+    forecast pipeline) so nothing here can perturb the BTC path.
+
+    Returns an EMPTY frame on any failure — the caller then leaves the CSV
+    unextended, which is strictly better than mixing anchors.
+    """
+    try:
+        rows, cursor = [], int((pd.Timestamp.utcnow().tz_localize(None)
+                                - pd.Timedelta(days=30)).timestamp() * 1000)
+        end_ms = int(pd.Timestamp.utcnow().tz_localize(None).timestamp() * 1000)
+        while cursor < end_ms:
+            batch = _binance_get("/api/v3/klines",
+                                 {"symbol": "ETHUSDT", "interval": "1h",
+                                  "startTime": cursor, "limit": 1000})
+            if not batch or not isinstance(batch, list):
+                break
+            rows.extend(batch)
+            cursor = int(batch[-1][0]) + 3_600_000
+        if not rows:
+            return pd.DataFrame()
+        h = pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close",
+                                        "volume", "close_time", "qv", "n", "tb",
+                                        "tq", "ig"])
+        # NB: pd.to_datetime on a Series returns a Series, so the tz strip needs
+        # `.dt.tz_convert` — a bare `.tz_convert` raises TypeError and (being
+        # swallowed by the except below) would silently disable this fetch.
+        h.index = pd.to_datetime(h["open_time"], unit="ms", utc=True).dt.tz_convert(None)
+        for c in ("open", "high", "low", "close", "volume"):
+            h[c] = h[c].astype(float)
+        h = h[["open", "high", "low", "close", "volume"]]
+        h = h[~h.index.duplicated(keep="last")].sort_index()
+        return _rebucket_12utc(h)
+    except Exception:
+        return pd.DataFrame()
+
+
 def _yf_extend_raw_features(df: pd.DataFrame, end_iso: str) -> pd.DataFrame:
     """Extend a stale raw-features DataFrame with fresh BTC + macro data.
 
@@ -3810,8 +3883,9 @@ def _yf_extend_price_df(df: pd.DataFrame, ticker: str, end_iso: str) -> pd.DataF
     # BTC-USD must extend on the 12:00-UTC (7am-CT) bar boundary to match the
     # model / live path — NOT yfinance's midnight-UTC daily bars. Equities
     # (MSTR/MSTU) keep exchange-session daily bars from yfinance.
-    if ticker == "BTC-USD":
-        _b12 = _btc_daily_12utc_bars()
+    if ticker in ("BTC-USD", "ETH-USD"):
+        _b12 = (_btc_daily_12utc_bars() if ticker == "BTC-USD"
+                else _eth_daily_12utc_bars())
         if _b12.empty:
             return df
         ext = _b12.rename(columns=str.lower)
@@ -4197,6 +4271,12 @@ def _load_mstu_prices() -> pd.DataFrame | None:
 
 
 @st.cache_data(ttl=86_400)
+def _load_eth_prices() -> pd.DataFrame | None:
+    """ETH-USD daily OHLCV on BTC's 12:00-UTC bars, from versioned CSV."""
+    return _read_price_csv("eth_usd_daily.csv")
+
+
+@st.cache_data(ttl=86_400)
 def _load_mstu_synthetic() -> pd.Series | None:
     """MSTU synthetic close series (OLS back-fill) from versioned CSV."""
     df = _read_price_csv("mstu_synthetic_daily.csv")
@@ -4219,6 +4299,26 @@ def _backtest_dataset_mtime() -> float:
         return float((_BACKTEST_DATA_DIR / "manifest.json").stat().st_mtime)
     except FileNotFoundError:
         return 0.0
+
+
+def _fill_after_signal(s: "pd.Series", dates) -> "np.ndarray":
+    """Align an exchange close series onto the CT signal bars WITHOUT look-ahead.
+
+    The CT bar labeled T closes at 12:00 UTC on calendar day T+1 — only then is
+    bar T's signal knowable.  The first price an equity trader can actually get
+    on that signal is the close of the first exchange session on or after day
+    T+1 (Monday for weekend bars) — the repo's own live procedure
+    (IBKR_PAPER_TRADING.md: act on the next bar, shortly after the US open).
+    The old ``reindex(dates).ffill()`` filled at day T's close — ~15 h (up to
+    2.5 days over weekends) BEFORE the signal existed — systematically banking
+    the correlated overnight/weekend gap (ETH_BMNR_STRATEGY_EVAL.md §5).
+
+    Trailing bars whose next session hasn't printed yet are marked at the last
+    available close (provisional; replaced by the true post-signal close on the
+    next data refresh)."""
+    want = pd.DatetimeIndex(dates) + pd.Timedelta(days=1)
+    out = s.reindex(s.index.union(want)).bfill().reindex(want)
+    return out.ffill().values.astype(float)
 
 
 @st.cache_data(show_spinner="Running MSTR backtest …")
@@ -4296,14 +4396,10 @@ def run_mstr_backtest(end_date_iso: str,
         _mstr_close = d_mstr["Close"].sort_index()
         _mstr_low   = d_mstr["Low"].sort_index() if "Low" in d_mstr.columns else _mstr_close
 
-    _mstr_all = _mstr_close.reindex(
-        pd.date_range(_mstr_close.index[0], max(_mstr_close.index[-1], end_dt), freq="D")
-    ).ffill()
-    _mstr_lo_all = _mstr_low.reindex(
-        pd.date_range(_mstr_low.index[0], max(_mstr_low.index[-1], end_dt), freq="D")
-    ).ffill()
-    mstr_px = _mstr_all.reindex(dates).ffill().bfill().values.astype(float)
-    mstr_lo = _mstr_lo_all.reindex(dates).ffill().bfill().values.astype(float)  # noqa: F841
+    # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+    # T+1 signal moment (see _fill_after_signal — kills the pre-signal gap capture)
+    mstr_px = _fill_after_signal(_mstr_close, dates)
+    mstr_lo = _fill_after_signal(_mstr_low, dates)  # noqa: F841
 
     # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
     c_asof  = comp["close_asof"].values.astype(float)
@@ -4387,10 +4483,10 @@ def run_mstr_backtest(end_date_iso: str,
         tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
 
     # ── Backtest loop — execute in MSTR ──────────────────────────────────────
-    # 2026-07e: MSTR runs SIGNAL-EXIT-ONLY (MSTR_STOP_PCT is None). With no fixed
-    # stop, `_has_stop` is False → the stop never fires, `from_sl` is never set,
-    # and the post-stop re-entry override / SL5 cooldown stay inert. Exits are the
-    # D2/D3 regime signals only.
+    # 2026-07-25 retune: MSTR carries a fixed stop again (MSTR_STOP_PCT) —
+    # on the honest post-signal fill the stop helps (see the constant's comment).
+    # If the constant is ever set back to None, `_has_stop` turns the stop, the
+    # SL5 cooldown and the re-entry override inert automatically.
     _has_stop = MSTR_STOP_PCT is not None
     nav      = initial_capital; pos = "CASH"; mstr_qty = 0.0
     e_price = e_nav = e_date = e_trigger = None
@@ -4431,7 +4527,8 @@ def run_mstr_backtest(end_date_iso: str,
                 pos = "CASH"; mstr_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                # Post-signal exit: bar i's signal is knowable at 12:00 UTC i+1;
+                # price[i] is already the NEXT exchange close (_fill_after_signal)
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
                 exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
@@ -4451,7 +4548,8 @@ def run_mstr_backtest(end_date_iso: str,
         else:
             if from_sl:
                 bars_since_sl += 1
-            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            # Bar i's signals fill at price[i] = the next exchange close after
+            # the signal moment (_fill_after_signal) — no pre-signal fills
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
@@ -4576,6 +4674,372 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, data_mtime=data_mtime,
                              entry_gate=entry_gate)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ETH Backtesting  (iShares Ethereum Trust — BTC signals · ETH execution; 2026-07f)
+# ═══════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner="Running ETH backtest …")
+def run_eth_backtest(end_date_iso: str,
+                      backtest_start_iso: str = "2024-06-01",
+                      initial_capital: float = 100_000.0,
+                      model_mtime: float = 0.0,
+                      data_end: str = "",
+                      logic_version: str = _BT_LOGIC_VERSION,
+                      data_mtime: float = 0.0,
+                      entry_gate: str = "above_ma30"):
+    """ETH (spot Ethereum) backtest driven by BTC TF2+V-Gate signals (2026-07f).
+
+    Execution prices come from the versioned data/backtest/eth_usd_daily.csv —
+    ETH-USD rebucketed to BTC's own 12:00-UTC bar boundary, so the sleeve's
+    same-bar fill lands exactly at the close of the signal bar (a 24/7 asset can
+    do this; a US-hours ETF cannot).  Signal generation uses the BTC CT model
+    predictions.  ETH trades with the MSTR treatment — Standard MA gate,
+    signal-exit-only, no fixed stop.  Live orders are routed to the ETHA ETF.
+    """
+    WARMUP = 35
+
+    end_dt   = pd.Timestamp(end_date_iso)
+    start_dt = pd.Timestamp(backtest_start_iso)
+    pre_dt   = start_dt - pd.Timedelta(days=60)
+    # 200 calendar days ensures dist_hi_90 is fully warm before start_dt.
+    fetch_start = (start_dt - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
+    fetch_end   = (end_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+
+    ext = _build_backtest_preds(fetch_start, fetch_end, model_mtime=model_mtime, data_mtime=data_mtime)
+    if ext is None:
+        return None
+    preds, raw_df = ext
+
+    btc_closes = raw_df["btc_close"]
+    btc_highs  = raw_df["btc_high"]
+    btc_lows   = raw_df["btc_low"]
+
+    preds = preds.loc[(preds.index >= pre_dt) & (preds.index <= end_dt)].copy()
+    if len(preds) < WARMUP + 3:
+        return None
+
+    preds["actual_high"]  = btc_highs.reindex(preds.index).values
+    preds["actual_low"]   = btc_lows.reindex(preds.index).values
+    preds["actual_close"] = btc_closes.reindex(preds.index).values
+
+    comp = preds.dropna(subset=["actual_high", "actual_low", "actual_close"]).reset_index()
+    N = len(comp)
+    if N < WARMUP + 3:
+        return None
+
+    dates = pd.DatetimeIndex(comp["target_date"])
+    _bt0  = max(WARMUP, int(dates.searchsorted(start_dt)))
+    if N - _bt0 < 3:
+        return None
+
+    # ── ETH prices: versioned CSV → fallback to live yfinance ──────────────
+    _eth_csv = _load_eth_prices()
+    if _eth_csv is not None and "close" in _eth_csv.columns:
+        # ETH-USD, NOT "ETH" (= Ethan Allen Interiors) — appending that ticker
+        # would splice ~$18 equity closes onto a ~$1,870 spot-ETH series.
+        _eth_csv   = _yf_extend_price_df(_eth_csv, "ETH-USD", end_date_iso)
+        _eth_close = _eth_csv["close"].sort_index()
+        _eth_low   = _eth_csv["low"].sort_index() if "low" in _eth_csv.columns else _eth_close
+    else:
+        try:
+            d_eth = yf.download(
+                "ETH-USD",
+                start=pre_dt.strftime("%Y-%m-%d"),
+                end=(end_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                progress=False, auto_adjust=True,
+            )
+            if isinstance(d_eth.columns, pd.MultiIndex):
+                d_eth.columns = [c[0] for c in d_eth.columns]
+            d_eth.index = pd.DatetimeIndex(d_eth.index).tz_localize(None).normalize()
+        except Exception:
+            return None
+        if d_eth.empty or "Close" not in d_eth.columns:
+            return None
+        _eth_close = d_eth["Close"].sort_index()
+        _eth_low   = d_eth["Low"].sort_index() if "Low" in d_eth.columns else _eth_close
+
+    _eth_all = _eth_close.reindex(
+        pd.date_range(_eth_close.index[0], max(_eth_close.index[-1], end_dt), freq="D")
+    ).ffill()
+    _eth_lo_all = _eth_low.reindex(
+        pd.date_range(_eth_low.index[0], max(_eth_low.index[-1], end_dt), freq="D")
+    ).ffill()
+    eth_px = _eth_all.reindex(dates).ffill().bfill().values.astype(float)
+    eth_lo = _eth_lo_all.reindex(dates).ffill().bfill().values.astype(float)  # noqa: F841
+
+    # ── BTC signal arrays (identical to run_full_period_backtest) ────────────
+    c_asof  = comp["close_asof"].values.astype(float)
+    pred_hi = comp["pred_high"].values.astype(float)
+    pred_lo = comp["pred_low"].values.astype(float)
+    act_hi  = comp["actual_high"].values.astype(float)
+    act_lo  = comp["actual_low"].values.astype(float)
+
+    err_hi = (act_hi - pred_hi) / c_asof * 100
+    err_lo = (pred_lo - act_lo) / c_asof * 100
+    hi_brk = (act_hi > pred_hi).astype(int)
+    lo_brk = (act_lo < pred_lo).astype(int)
+
+    ehma3 = np.zeros(N); elma3 = np.zeros(N)
+    hb3   = np.zeros(N, dtype=int); lb3 = np.zeros(N, dtype=int)
+    for i in range(N):
+        s = max(0, i-2)
+        ehma3[i] = np.mean(err_hi[s:i+1]); elma3[i] = np.mean(err_lo[s:i+1])
+        hb3[i]   = int(np.sum(hi_brk[s:i+1])); lb3[i] = int(np.sum(lo_brk[s:i+1]))
+
+    u1 = (ehma3 > U1_ERRHI_MIN) & (hb3 >= 2)
+    d1 = (lb3 >= 2)    & (elma3 > 0.5)
+    d2 = ehma3 < D2_ERRHI_MAX
+    d3 = np.zeros(N, dtype=bool)
+    for i in range(1, N):
+        consec = 0
+        for k in range(i-1, -1, -1):
+            if hi_brk[k]: consec += 1
+            else: break
+        if consec >= 3 and lo_brk[i]:
+            d3[i] = True
+
+    ma30 = np.full(N, np.nan)
+    for i in range(N):
+        w = min(30, i+1)
+        ma30[i] = np.mean(c_asof[max(0, i-w+1):i+1])
+    above_ma30     = c_asof > ma30
+    ma30_slope_pos = np.zeros(N, dtype=bool)
+    for i in range(N):
+        if i >= 5 and np.isfinite(ma30[i]) and np.isfinite(ma30[i-5]):
+            ma30_slope_pos[i] = ma30[i] > ma30[i-5]
+    bull_regime = above_ma30 & ma30_slope_pos
+
+    clean_10d = np.zeros(N, dtype=bool)
+    for i in range(N):
+        lo_i = max(0, i-7)
+        clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
+
+    _DN_NORM_W    = 30
+    roll_ehi_norm = np.array([
+        float(np.mean(err_hi[max(0, i-_DN_NORM_W+1):i+1])) for i in range(N)
+    ])
+    dn_score_arr = np.zeros(N)
+    for i in range(N):
+        norm = max(abs(roll_ehi_norm[i]), 0.01)
+        dn_score_arr[i] = (
+            (-ehma3[i] / norm)                           * 0.30 +
+            (lb3[i]    / 3.0)                            * 0.30 +
+            (elma3[i]  / max(abs(elma3[i]), 0.10))       * 0.20 +
+            float(lo_brk[i])                             * 0.20
+        )
+    v_rev_bar = (dn_score_arr > 0.8) & (err_lo > 3.0)
+    v_recent  = np.zeros(N, dtype=bool)
+    for i in range(N):
+        v_recent[i] = bool(np.any(v_rev_bar[max(0, i-(V_RECENT_WIN-1)):i+1]))
+
+    # SATA variant decode — a "<gate>_sata" variant reuses the identical entry
+    # signals of its base gate; the ONLY difference is that idle cash between
+    # positions is parked in SATA preferred (see backtest loop below). Signal
+    # generation is therefore completely unchanged from the base gate.
+    # "pure_regime_sata" → base gate "pure_regime" (the current SATA variant).
+    sata_cash = entry_gate.endswith("_sata")
+    _sig_gate = entry_gate[:-len("_sata")] if sata_cash else entry_gate
+
+    # Entry gate selection
+    if _sig_gate == "above_ma30":
+        tf1_entry = u1 & ((above_ma30 ^ clean_10d) | v_recent)
+    elif _sig_gate == "bull_regime":
+        tf1_entry = u1 & ((bull_regime ^ clean_10d) | v_recent)
+    else:  # pure_regime (default)
+        tf1_entry = u1 & (bull_regime | (clean_10d & ~above_ma30) | v_recent)
+
+    # ── Backtest loop — execute in ETH ──────────────────────────────────────
+    # 2026-07-25 retune: ETH carries a fixed stop again (ETH_STOP_PCT) —
+    # on the honest post-signal fill the stop helps (see the constant's comment).
+    # If the constant is ever set back to None, `_has_stop` turns the stop, the
+    # SL5 cooldown and the re-entry override inert automatically.
+    _has_stop = ETH_STOP_PCT is not None
+    nav      = initial_capital; pos = "CASH"; eth_qty = 0.0
+    e_price = e_nav = e_date = e_trigger = None
+    e_reentry = False   # True when current position was entered after an SL exit
+    stop_px  = 0.0
+    # SL5 regime-adaptive re-entry state (inert when _has_stop is False)
+    from_sl = False; bars_since_sl = 0
+    trades  = []; nav_arr = np.full(N, np.nan)
+
+    for i in range(N):
+        si    = i - 1
+        price = eth_px[i]
+        if i < _bt0:
+            nav_arr[i] = initial_capital; continue
+        # SATA idle-cash yield: cash held entering this bar earns SATA's daily
+        # dividend on business days (reinvested at par → daily compounding).
+        # Only bars that START in CASH accrue; exit bars are LONG at the open so
+        # the freed cash earns from the next bar onward (no double-count).
+        if sata_cash and pos == "CASH" and dates[i].weekday() < 5:
+            nav *= SATA_DAILY_FACTOR
+        if not np.isfinite(price) or price <= 0:
+            nav_arr[i] = eth_qty * eth_px[i-1] if pos == "LONG" and i > 0 else nav
+            continue
+        if pos == "LONG":
+            cur = eth_qty * price
+            if _has_stop and price <= stop_px:     # triggered on close (matches research evaluation)
+                exit_px  = price                   # fill at close price
+                exit_nav = eth_qty * exit_px
+                nav = exit_nav
+                trades.append(dict(
+                    entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
+                    entry_trigger=e_trigger, exit_date=dates[i], exit_price=exit_px,
+                    exit_nav=nav, pnl_pct=(exit_px/e_price-1)*100,
+                    pnl_abs=nav-e_nav,   exit_signal=f"SL-fixed-{int(ETH_STOP_PCT*100)}%",
+                    duration_days=(dates[i]-e_date).days, stop_triggered=True,
+                    was_reentry=e_reentry,
+                ))
+                pos = "CASH"; eth_qty = 0.0; stop_px = 0.0; e_reentry = False
+                from_sl = True; bars_since_sl = 0   # SL5: start cooldown
+            else:
+                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
+                exit_lbl    = "D3" if d3[i] else "D2 (bear)"
+                if should_exit:
+                    nav = cur
+                    trades.append(dict(
+                        entry_date=e_date,    entry_price=e_price, entry_nav=e_nav,
+                        entry_trigger=e_trigger, exit_date=dates[i], exit_price=price,
+                        exit_nav=nav, pnl_pct=(price/e_price-1)*100,
+                        pnl_abs=nav-e_nav,   exit_signal=exit_lbl,
+                        duration_days=(dates[i]-e_date).days, stop_triggered=False,
+                        was_reentry=e_reentry,
+                    ))
+                    pos = "CASH"; eth_qty = 0.0; stop_px = 0.0; e_reentry = False
+                    from_sl = False              # reset SL state on clean exit
+                else:
+                    nav = cur
+        else:
+            if from_sl:
+                bars_since_sl += 1
+            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
+            # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
+            _sl_reentry_ok = (not from_sl
+                              or bool(bull_regime[i])
+                              or bars_since_sl >= 10)
+            # Post-stop re-entry override (see REENTRY_OVERRIDE_BARS): within the
+            # window after a stop, a fresh U1 above the MA30 re-admits even when the
+            # XOR combined-block would otherwise veto. Recovers post-capitulation
+            # rallies (e.g. Apr 2025) that a fixed stop + XOR block would otherwise
+            # lock the sleeve out of. Fires only after a stop; never in normal state.
+            # Override is gated on _has_stop: it can only fire after a fixed-stop
+            # exit, so with ETH now stop-less (2026-07e) it is permanently inert here.
+            _reentry_override = bool(_has_stop and REENTRY_OVERRIDE_BARS and from_sl
+                                     and bars_since_sl <= REENTRY_OVERRIDE_BARS
+                                     and u1[i] and above_ma30[i] and not _exit_at_i)
+            # Post-SL re-entries bypass the _exit_at_i gate (D2 fires in bear market
+            # almost every bar; blocking on it would permanently prevent re-entry).
+            # Fresh entries still require no exit signal on the same bar.
+            if (tf1_entry[i] and _sl_reentry_ok and (from_sl or not _exit_at_i)) or _reentry_override:
+                e_reentry = bool(from_sl)              # mark if entering after SL
+                eth_qty = nav / price; e_price = price; e_date = dates[i]
+                e_nav = nav; pos = "LONG"
+                stop_px = price * (1 - ETH_STOP_PCT) if _has_stop else 0.0
+                from_sl = False; bars_since_sl = 0   # reset SL5 state on re-entry
+                if v_recent[i]:
+                    e_trigger = "U1 + V-reversal"
+                elif above_ma30[i]:
+                    e_trigger = "U1 + ↑MA30"
+                else:
+                    e_trigger = "U1 + Clean 7d"
+        nav_arr[i] = eth_qty * price if pos == "LONG" else nav
+
+    if pos == "LONG" and np.isfinite(eth_px[N-1]) and eth_px[N-1] > 0:
+        nav_arr[N-1] = eth_qty * eth_px[N-1]
+
+    nav_series = pd.Series(nav_arr[_bt0:], index=dates[_bt0:]).ffill()
+    bh_px0     = eth_px[_bt0]
+    bh_series  = pd.Series(
+        initial_capital * eth_px[_bt0:] / bh_px0, index=dates[_bt0:])
+
+    # ── Statistics ────────────────────────────────────────────────────────────
+    final_nav = float(nav_series.iloc[-1]); final_bh = float(bh_series.iloc[-1])
+    strat_ret = (final_nav/initial_capital - 1)*100
+    bh_ret    = (final_bh/initial_capital  - 1)*100
+    wins      = [t for t in trades if t["pnl_pct"] > 0]
+    losses    = [t for t in trades if t["pnl_pct"] <= 0]
+    win_rate  = 100*len(wins)/len(trades) if trades else 0.0
+    avg_pnl   = float(np.mean([t["pnl_pct"] for t in trades])) if trades else 0.0
+    best_t    = float(max([t["pnl_pct"] for t in trades])) if trades else 0.0
+    worst_t   = float(min([t["pnl_pct"] for t in trades])) if trades else 0.0
+    rm        = nav_series.cummax()
+    max_dd    = float(((nav_series - rm)/rm*100).min())
+    rm_bh     = bh_series.cummax()
+    bh_max_dd = float(((bh_series - rm_bh)/rm_bh*100).min())
+    days_in   = sum(t["duration_days"] for t in trades)
+    tot_days  = max(1, (dates[N-1] - dates[_bt0]).days)
+    rf_daily  = (1.045)**(1/252) - 1
+    dr_s      = nav_series.pct_change().fillna(0)
+    dr_b      = bh_series.pct_change().fillna(0)
+    exc_s     = dr_s - rf_daily; exc_b = dr_b - rf_daily
+    sharpe    = float(exc_s.mean()/exc_s.std()*np.sqrt(252)) if exc_s.std()>0 else 0.0
+    bh_sharpe = float(exc_b.mean()/exc_b.std()*np.sqrt(252)) if exc_b.std()>0 else 0.0
+    TAX_RATE = 0.35
+    _annual_net: dict = {}
+    for t in trades:
+        yr = pd.Timestamp(t["exit_date"]).year
+        _annual_net[yr] = _annual_net.get(yr, 0.0) + t["pnl_abs"]
+    total_tax_paid = sum(TAX_RATE * max(0.0, net) for net in _annual_net.values())
+    after_tax_nav  = final_nav - total_tax_paid
+    after_tax_ret  = (after_tax_nav/initial_capital - 1)*100
+
+    bull_regime_series = pd.Series(bull_regime[_bt0:].astype(bool), index=dates[_bt0:])
+
+    return _relabel_result_to_visible(dict(
+        strategy   = "TF2+V-Gate (ETH)",
+        trades     = trades,
+        nav_series = nav_series,
+        bh_series  = bh_series,
+        open_pos      = pos == "LONG",
+        last_price    = float(eth_px[N-1]) if N > 0 and np.isfinite(eth_px[N-1]) else None,
+        open_entry    = (dict(price=e_price, date=e_date, nav=e_nav,
+                             entry_trigger=e_trigger,
+                             stop_price=(round(stop_px, 4) if _has_stop else None)) if pos == "LONG" else None),
+        from_sl       = from_sl,
+        bars_since_sl = bars_since_sl,
+        bull_regime_series = bull_regime_series,
+        btc_price_series   = pd.Series(comp["actual_close"].values.astype(float)[_bt0:], index=dates[_bt0:]),
+        eth_price_series  = pd.Series(eth_px[_bt0:], index=dates[_bt0:]),
+        stats = dict(
+            strategy        = "TF2+V-Gate (ETH)",
+            entry_gate      = entry_gate,
+            sata_cash       = sata_cash,
+            initial_capital = initial_capital,
+            final_nav       = final_nav,      final_bh      = final_bh,
+            strat_ret       = strat_ret,      bh_ret        = bh_ret,
+            alpha_abs       = final_nav - final_bh,
+            n_trades        = len(trades),    n_stop_exits  = sum(1 for t in trades if t.get("stop_triggered")),
+            n_reentries     = sum(1 for t in trades if t.get("was_reentry")),
+            n_wins          = len(wins),      n_losses      = len(losses),
+            win_rate        = win_rate,       avg_pnl       = avg_pnl,
+            best_trade      = best_t,         worst_trade   = worst_t,
+            max_drawdown    = max_dd,         bh_max_dd     = bh_max_dd,
+            sharpe          = sharpe,         bh_sharpe     = bh_sharpe,
+            time_in_mkt     = 100*days_in/tot_days,
+            after_tax_nav   = after_tax_nav,  after_tax_ret = after_tax_ret,
+            total_tax_paid  = total_tax_paid,
+            start_date      = start_dt,
+            end_date        = dates[N-1],
+        ),
+    ))
+
+
+@st.cache_data(show_spinner="Loading fixed-period ETH backtest …")
+def _run_fixed_period_eth_backtest(end_date_iso: str, backtest_start_iso: str,
+                                    model_mtime: float = 0.0,
+                                    data_end: str = "",
+                                    logic_version: str = _BT_LOGIC_VERSION,
+                                    data_mtime: float = 0.0,
+                                    entry_gate: str = "above_ma30"):
+    """Cached wrapper for fixed-period ETH backtests."""
+    return run_eth_backtest(end_date_iso, backtest_start_iso,
+                             model_mtime=model_mtime, data_end=data_end,
+                             logic_version=logic_version, data_mtime=data_mtime,
+                             entry_gate=entry_gate)
+
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4923,14 +5387,16 @@ def run_mstu_backtest(end_date_iso: str,
 
     if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
         _mstu_syn_ext = _yf_extend_series(_mstu_syn_csv, "MSTU", end_date_iso)
-        mstu_px = _mstu_syn_ext.reindex(dates).ffill().bfill().values.astype(float)
+        # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+        # T+1 signal moment (see _fill_after_signal)
+        mstu_px = _fill_after_signal(_mstu_syn_ext, dates)
     else:
         _mstu_syn = _build_synthetic_mstu_prices(
             pre_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
         )
         if _mstu_syn is None or len(_mstu_syn) == 0:
             return None
-        mstu_px = _mstu_syn.reindex(dates).ffill().bfill().values.astype(float)
+        mstu_px = _fill_after_signal(_mstu_syn, dates)
 
     # MSTU intraday lows — versioned CSV → fallback to yfinance; display only
     if _mstu_act_csv is not None and "low" in _mstu_act_csv.columns:
@@ -5087,7 +5553,8 @@ def run_mstu_backtest(end_date_iso: str,
                 pos = "CASH"; mstu_qty = 0.0; stop_px = 0.0; e_reentry = False
                 from_sl = True; bars_since_sl = 0   # SL5: start cooldown
             else:
-                # Same-bar exit: signal and fill on the same daily close (after-hours execution)
+                # Post-signal exit: bar i's signal is knowable at 12:00 UTC i+1;
+                # price[i] is already the NEXT exchange close (_fill_after_signal)
                 should_exit = bool(d3[i] or (d2[i] and not bull_regime[i]))
                 exit_lbl    = "D3" if d3[i] else "D2 (bear)"
                 if should_exit:
@@ -5107,7 +5574,8 @@ def run_mstu_backtest(end_date_iso: str,
         else:
             if from_sl:
                 bars_since_sl += 1
-            # Same-bar signals: entry and exit both use current bar (after-hours execution)
+            # Bar i's signals fill at price[i] = the next exchange close after
+            # the signal moment (_fill_after_signal) — no pre-signal fills
             _exit_at_i = d3[i] or (d2[i] and not bull_regime[i])
             # SL5: in BULL regime re-enter immediately; in BEAR/neutral wait 10 bars
             _sl_reentry_ok = (not from_sl
@@ -5326,19 +5794,21 @@ def run_mstr_options_backtest(end_date_iso: str,
         if d_mstr.empty or "Close" not in d_mstr.columns:
             return None
         mstr_raw = d_mstr["Close"].sort_index()
-    mstr_all = mstr_raw.reindex(
-        pd.date_range(mstr_raw.index[0],
-                      max(mstr_raw.index[-1], end_dt), freq="D")
-    ).ffill()
-    mstr_px = mstr_all.reindex(dates).ffill().bfill().values.astype(float)
+    # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+    # T+1 signal moment (see _fill_after_signal)
+    mstr_px = _fill_after_signal(mstr_raw, dates)
 
     # ── 60-day rolling historical volatility of MSTR (annualised) ────────────
+    # Trailing only — no bfill: backfilling pre-window bars with later realized
+    # vol is future data in the pricing input.  Bars before the first
+    # computable HV use a fixed causal prior instead.
     mstr_log_ret = np.log(mstr_raw / mstr_raw.shift(1)).dropna()
-    hv_series = (mstr_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
+    hv_series = (mstr_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill()
     hv_all = hv_series.reindex(
         pd.date_range(mstr_raw.index[0], max(mstr_raw.index[-1], end_dt), freq="D")
-    ).ffill().bfill()
-    hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
+    ).ffill()
+    hv_arr = hv_all.reindex(dates).ffill().values.astype(float)
+    hv_arr = np.where(np.isfinite(hv_arr), hv_arr, 0.80)   # causal prior pre-HV
     # Clamp to [0.20, 4.00] to keep BS numerically well-behaved
     hv_arr = np.clip(hv_arr, 0.20, 4.00)
 
@@ -5658,7 +6128,9 @@ def run_mstu_options_backtest(end_date_iso: str,
     _mstu_act_csv = _load_mstu_prices()
     if _mstu_syn_csv is not None and len(_mstu_syn_csv) > 0:
         _mstu_syn_ext = _yf_extend_series(_mstu_syn_csv, "MSTU", end_date_iso)
-        mstu_px = _mstu_syn_ext.reindex(dates).ffill().bfill().values.astype(float)
+        # post-signal fills: first exchange close at/after the bar's 12:00-UTC
+        # T+1 signal moment (see _fill_after_signal)
+        mstu_px = _fill_after_signal(_mstu_syn_ext, dates)
     else:
         try:
             d_mstu = yf.download(
@@ -5675,10 +6147,7 @@ def run_mstu_options_backtest(end_date_iso: str,
         if d_mstu.empty or "Close" not in d_mstu.columns:
             return None
         mstu_raw_fb = d_mstu["Close"].sort_index()
-        mstu_all_fb = mstu_raw_fb.reindex(
-            pd.date_range(mstu_raw_fb.index[0], max(mstu_raw_fb.index[-1], end_dt), freq="D")
-        ).ffill()
-        mstu_px = mstu_all_fb.reindex(dates).ffill().bfill().values.astype(float)
+        mstu_px = _fill_after_signal(mstu_raw_fb, dates)
 
     # ── MSTU volatility: actual (post-inception) prices ───────────────────────
     if _mstu_act_csv is not None and "close" in _mstu_act_csv.columns:
@@ -5703,12 +6172,15 @@ def run_mstu_options_backtest(end_date_iso: str,
     if len(mstu_trading) < 2:
         hv_arr = np.full(N, 1.20)  # default 120% vol when history unavailable
     else:
+        # Trailing only — no bfill (future vol must not price earlier bars);
+        # bars before the first computable HV use the fixed causal prior.
         mstu_log_ret = np.log(mstu_trading / mstu_trading.shift(1)).dropna()
-        hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill().bfill()
+        hv_series = (mstu_log_ret.rolling(HV_WINDOW).std() * math.sqrt(252)).ffill()
         hv_all = hv_series.reindex(
             pd.date_range(mstu_trading.index[0], max(mstu_trading.index[-1], end_dt), freq="D")
-        ).ffill().bfill()
-        hv_arr = hv_all.reindex(dates).ffill().bfill().values.astype(float)
+        ).ffill()
+        hv_arr = hv_all.reindex(dates).ffill().values.astype(float)
+        hv_arr = np.where(np.isfinite(hv_arr), hv_arr, 1.20)   # causal prior pre-HV
     hv_arr = np.clip(hv_arr, 0.20, 5.00)  # MSTU is 2× leveraged — wider vol range
 
     # ── BTC signal arrays ─────────────────────────────────────────────────────
@@ -6818,7 +7290,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market Performance ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -7124,7 +7596,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_chart(
                     bt_oos,
-                    f"TF2+V-Gate vs B&H — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate vs B&H — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})"
                 )
@@ -7283,7 +7755,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
   </div>
   <div style='border-top:1px solid #c4b5fd; margin:10px 0;'></div>
   <div style='font-size:11px; color:#5b21b6; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the MSTR trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the MSTR trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -7654,7 +8126,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -7966,7 +8438,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_mstr_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTR) vs B&H MSTR — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (MSTR) vs B&H MSTR — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -8069,6 +8541,862 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                     caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
                 st.caption(caption)
             lt_idx += 1
+
+
+def render_eth_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
+                                           bt_full=None, key_suffix: str = "",
+                                           strategy_variant: str = "pure_regime") -> None:
+    """Render the ETH backtesting dashboard (BTC TF2+V-Gate signals → ETH execution).
+
+    Same four-period layout as render_mstr_trading_strategy_dashboard but with:
+      • Teal color scheme to distinguish from the BTC / ETH / MSTU results
+      • Spot ETH prices in the trade log (versioned dataset, 12:00-UTC bars)
+      • B&H comparison uses ETH rather than BTC
+    """
+    st.markdown("---")
+    st.subheader("🔹 ETH — BTC Signal-Driven Backtest (TF2 + V-Gate)")
+
+    if bt_bear is None and bt_bull is None:
+        st.info("⚙️ ETH backtest computing … fetching ETH data and building signals. "
+                "Refresh in a moment.")
+        return
+
+    # ── Strategy rules card (variant-aware) ──────────────────────────────────
+    _eth_footer = f"""
+  <div style='border-top:1px solid #5eead4; margin:10px 0;'></div>
+  <!-- EXIT -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#115e59; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📤 Exit — BTC signals trigger ETH sell</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#dcfce7; color:#166534; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐂 BULL regime</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          BTC above MA30 AND MA30 rising → exit ETH on <b>D3 only</b> (patient)
+        </td>
+      </tr>
+      <tr><td colspan='2' style='padding:4px 0;'></td></tr>
+      <tr>
+        <td style='width:110px; vertical-align:top; padding:3px 10px 3px 0;'>
+          <span style='background:#fee2e2; color:#991b1b; font-weight:700; border-radius:5px;
+               padding:2px 8px; font-size:11px;'>🐻 BEAR / Neutral</span>
+        </td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          BTC below MA30 or MA30 flat → exit ETH on <b>D2 or D3</b> (defensive)
+        </td>
+      </tr>
+    </table>
+  </div>
+  <div style='border-top:1px solid #5eead4; margin:10px 0;'></div>
+  <!-- NO STOP-LOSS (2026-07e: ETH signal-exit-only) -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#115e59; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>🔒 Position Management (no fixed stop)</div>
+    <div style='font-size:12px; color:#134e4a;'>
+      <b>No stop-loss</b> — ETH positions are closed <b>only</b> by the shared D2/D3 regime
+      exit signals (the MSTR treatment; 2026-07f add). A 1× spot asset has no wipeout tail,
+      and in the ETH/BMNR evaluation every fixed stop ≤8% only reduced return and Sharpe —
+      the signal exits already cap intra-trade pain. With no stop there is no post-stop
+      override or SL cooldown — the V-reversal entry and shared D2/D3 exits carry the sleeve.
+      See <b>ETH_BMNR_STRATEGY_EVAL.md</b> for the full validation.
+    </div>
+  </div>
+  <div style='border-top:1px solid #5eead4; margin:10px 0;'></div>
+  <div style='font-size:11px; color:#115e59; line-height:1.8;'>
+    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the ETH trade at that same bar's close (after-hours fill)
+    &nbsp;·&nbsp;
+    💰 <b>Capital:</b> $100,000 initial
+    &nbsp;·&nbsp;
+    📅 <b>ETH prices:</b> ETH-USD on BTC's 12:00-UTC bars (versioned dataset) — traded live as <b>ETHA</b>
+    &nbsp;·&nbsp;
+    ⚠️ Pre-{_oos_cut_str("%b %Y")} data is <b>in-sample</b> for the BTC CT model
+  </div>
+</div>"""
+
+    if strategy_variant == "pure_regime":
+        st.markdown("""
+<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📊 TF2 + V-Gate on ETH &nbsp;—&nbsp; <span style='color:#0d9488;'>Pure Regime Entry</span>
+    &nbsp;·&nbsp; BTC Signals · ETH Execution
+  </div>
+  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>spot ETH</b> instead of BTC. Ether is a high-beta crypto
+    sibling steered by Bitcoin's cleaner regime read. ETH bars share BTC's 12:00-UTC
+    anchor, so the fill lands at the signal bar's close; live orders route to the
+    <b>ETHA</b> ETF, exactly as the BTC sleeve is executed via IBIT.
+  </div>
+  <div style='background:#ccfbf1; border:1px solid #0d9488; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#134e4a;'>
+    🎯 <b>Pure Regime Entry:</b> Two clean, non-overlapping entry paths replace the XOR gate.
+    Entry requires <b>either</b> a confirmed bull regime (price above rising MA30)
+    <b>or</b> a clean breakout approach from below MA30 — the ambiguous
+    <i>no-man's-land</i> zone (price above a declining MA30) is blocked entirely.
+  </div>
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#115e59; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger ETH buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0d9488; font-size:11px;'>
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>One of three independent paths must be active</b> (no XOR overlap zone):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px; font-weight:700;'>🐂 Bull Regime</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime)
+            <br>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>📈 Clean Breakout</span>
+            &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
+            <br>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 5 bars
+            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>""" + _eth_footer, unsafe_allow_html=True)
+    elif strategy_variant == "above_ma30":
+        st.markdown("""
+<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📊 TF2 + V-Gate on ETH &nbsp;—&nbsp; BTC Signals · ETH Execution
+  </div>
+  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>spot ETH</b> instead of BTC. Ether is a high-beta crypto
+    sibling steered by Bitcoin's cleaner regime read. ETH bars share BTC's 12:00-UTC
+    anchor, so the fill lands at the signal bar's close; live orders route to the
+    <b>ETHA</b> ETF, exactly as the BTC sleeve is executed via IBIT.
+  </div>
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#115e59; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger ETH buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0d9488; font-size:11px;'>
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>Exactly one BTC trend gate passes</b> (↑ MA30 or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>↑ MA30</span>
+            &nbsp; BTC close above its 30-day moving average
+            <br>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 5 bars
+            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>""" + _eth_footer, unsafe_allow_html=True)
+    else:  # bull_regime
+        st.markdown("""
+<div style='background:#f0fdfa; border:2px solid #0d9488; border-radius:12px;
+     padding:16px 20px; margin:4px 0 16px 0; font-family:sans-serif;'>
+  <div style='font-size:14px; font-weight:700; color:#134e4a; margin-bottom:14px;
+       letter-spacing:0.3px;'>
+    📊 TF2 + V-Gate on ETH &nbsp;—&nbsp; <span style='color:#0d9488;'>Confirmed Uptrend Entry</span>
+    &nbsp;·&nbsp; BTC Signals · ETH Execution
+  </div>
+  <div style='background:#ccfbf1; border-radius:8px; padding:10px 14px;
+       margin-bottom:12px; font-size:12px; color:#134e4a; font-weight:600;'>
+    🔁 <b>Core idea:</b> Use Bitcoin's trend signatures (U1, D2, D3, V-Gate) as the signal
+    engine, but buy and sell <b>spot ETH</b> instead of BTC. Ether is a high-beta crypto
+    sibling steered by Bitcoin's cleaner regime read. ETH bars share BTC's 12:00-UTC
+    anchor, so the fill lands at the signal bar's close; live orders route to the
+    <b>ETHA</b> ETF, exactly as the BTC sleeve is executed via IBIT.
+  </div>
+  <div style='background:#ccfbf1; border:1px solid #14b8a6; border-radius:7px;
+       padding:8px 13px; margin-bottom:12px; font-size:12px; color:#0f766e;'>
+    ✨ <b>Confirmed Uptrend Entry:</b> The trend gate now requires BTC to be in a
+    <b>confirmed uptrend</b> — price above the 30-day MA <i>and</i> the MA itself rising
+    (<code>bull_regime</code>). This filters out dead-cat bounce entries where price
+    briefly climbs above a still-declining MA30.
+  </div>
+  <!-- ENTRY -->
+  <div style='margin-bottom:12px;'>
+    <div style='font-size:11px; font-weight:700; color:#115e59; text-transform:uppercase;
+         letter-spacing:0.8px; margin-bottom:6px;'>📥 Entry — BTC signals trigger ETH buy</div>
+    <table style='width:100%; border-collapse:collapse; font-size:12px; color:#134e4a;'>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>①</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>U1 signal active on BTC</b> — BTC's predicted highs consistently beaten<br>
+          <span style='color:#0d9488; font-size:11px;'>
+            err_hi_ma3 &gt; +1.3% &nbsp;&amp;&amp;&nbsp; hi_breaks_3d ≥ 2
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td style='width:36px; vertical-align:top; padding:3px 6px 3px 0; font-weight:700;
+             color:#0d9488;'>②</td>
+        <td style='vertical-align:top; padding:3px 0;'>
+          <b>Exactly one BTC trend gate passes</b> (Confirmed Uptrend or Clean 7d — not both; or ⚡ V-reversal):
+          <div style='margin:5px 0 0 4px; line-height:2.1;'>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px; font-weight:700;'>🔒 Confirmed Uptrend</span>
+            &nbsp; BTC <b>above MA30 AND MA30 rising</b> (bull_regime = above_ma30 &amp; ma30_slope↑)
+            <br>
+            <span style='background:#ccfbf1; border-radius:4px; padding:1px 7px;'>Clean 7d</span>
+            &nbsp; No D1 or D2 on BTC in prior 7 bars
+            <br>
+            <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
+            &nbsp; BTC capitulation spike within last 5 bars
+            <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
+            <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>""" + _eth_footer, unsafe_allow_html=True)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _cell(val, ref, fmt_fn, higher_is_better=True, na=False):
+        if na:
+            return "<td style='text-align:center; color:#94a3b8;'>—</td>"
+        fv = fmt_fn(val)
+        if higher_is_better:
+            bg = "#dcfce7" if val > ref else ("#fee2e2" if val < ref else "#f8fafc")
+        else:
+            bg = "#dcfce7" if val < ref else ("#fee2e2" if val > ref else "#f8fafc")
+        return (f"<td style='text-align:center; background:{bg}; "
+                f"font-weight:600; padding:7px 10px;'>{fv}</td>")
+
+    def _plain(val, fmt_fn):
+        return f"<td style='text-align:center; padding:7px 10px;'>{fmt_fn(val)}</td>"
+
+    def _tag(txt, bg, fg="#1e293b"):
+        return (f"<td style='text-align:center; background:{bg}; "
+                f"color:{fg}; font-weight:600; padding:7px 10px;'>{txt}</td>")
+
+    fmt_nav   = lambda v: f"${v:,.0f}"
+    fmt_pct   = lambda v: f"{v:+.1f}%"
+    fmt_dd    = lambda v: f"{v:.1f}%"
+    fmt_ratio = lambda v: f"{v:.2f}"
+    fmt_time  = lambda v: f"{v:.0f}%"
+    fmt_tax   = lambda v: f"${v:,.0f}"
+
+    def _period_cells(s):
+        """4-cell group: TF2+V-Gate | TF2+V-Gate (35% STCG) | B&H (0%) | B&H (15% LTCG)."""
+        _na4 = "".join(["<td style='text-align:center; color:#94a3b8;'>n/a</td>"] * 4)
+        if s is None:
+            return {k: _na4 for k in ("nav", "ret", "dd", "sh", "tim", "tax", "taxpd", "wr")}
+        tf2  = s["final_nav"];       tax = s["after_tax_nav"];  bh  = s["final_bh"]
+        r2   = s["strat_ret"];       rt  = s["after_tax_ret"];  rb  = s["bh_ret"]
+        dd2  = s["max_drawdown"];    ddb = s["bh_max_dd"]
+        sh2  = s["sharpe"];          shb = s["bh_sharpe"]
+        tim  = s["time_in_mkt"];     txp = s["total_tax_paid"]
+        wr   = s["win_rate"];        nw  = s["n_wins"];          nl  = s["n_losses"]
+        nsl  = s.get("n_stop_exits", 0); nre = s.get("n_reentries", 0)
+        ic   = s["initial_capital"]
+        bh_ltcg_tax = 0.15 * max(0.0, bh - ic)
+        bh_ltcg     = bh - bh_ltcg_tax
+        bh_ltcg_ret = (bh_ltcg / ic - 1) * 100
+        _sl_re_str = f"🛑{nsl} SL · ♻{nre} re-entry" if (nsl or nre) else ""
+        return {
+            "nav":  (_cell(tf2, bh, fmt_nav) +
+                     _cell(tax, bh_ltcg, fmt_nav) +
+                     _plain(bh,  fmt_nav) +
+                     _plain(bh_ltcg, fmt_nav)),
+            "ret":  (_cell(r2, rb, fmt_pct) +
+                     _cell(rt, bh_ltcg_ret, fmt_pct) +
+                     _plain(rb, fmt_pct) +
+                     _plain(bh_ltcg_ret, fmt_pct)),
+            "dd":   (_cell(dd2, ddb, fmt_dd, higher_is_better=False) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd) +
+                     _plain(ddb, fmt_dd) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_dd)),
+            "sh":   (_cell(sh2, shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio) +
+                     _plain(shb, fmt_ratio) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_ratio)),
+            "tim":  (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
+                     f"{fmt_time(tim)}</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_time) +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>" +
+                     "<td style='text-align:center; padding:7px 10px;'>100%</td>"),
+            "tax":  (_tag("0% pre-tax", "#f1f5f9") +
+                     _tag("35% STCG/yr", "#fef3c7") +
+                     _tag("0% unrealised", "#dcfce7") +
+                     _tag("15% LTCG exit", "#ecfdf5", fg="#065f46")),
+            "taxpd": (_cell(na=True, val=0, ref=0, fmt_fn=fmt_tax) +
+                      _tag(f"${txp:,.0f}", "#fef3c7") +
+                      _tag("$0", "#dcfce7") +
+                      _tag(f"${bh_ltcg_tax:,.0f}", "#ecfdf5", fg="#065f46")),
+            "wr":   (f"<td style='text-align:center; font-weight:600; padding:7px 10px;'>"
+                     f"{wr:.0f}% ({nw}W/{nl}L)"
+                     + (f"<br><span style='font-size:11px;color:#6b7280;'>{_sl_re_str}</span>" if _sl_re_str else "")
+                     + "</td>" +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct) +
+                     _cell(na=True, val=0, ref=0, fmt_fn=fmt_pct)),
+        }
+
+    s_r = bt_bear["stats"] if bt_bear else None
+    s_f = bt_bull["stats"] if bt_bull else None
+
+    cutoffs   = _cutoffs()
+    ct_cutoff = cutoffs.get("daily H/L")
+    ct_str    = ct_cutoff.strftime("%b %d, %Y") if ct_cutoff else "Feb 27, 2026"
+    _oos_ts   = cutoffs.get("daily H/L test_start")
+    OOS_START = _oos_ts if _oos_ts is not None else pd.Timestamp("2026-03-01")
+    s_oos = None; bt_oos = None
+
+    if bt_full_oos is not None:
+        _fnav = bt_full_oos["nav_series"]; _fbh = bt_full_oos["bh_series"]
+        _ftr  = bt_full_oos["trades"];     ic   = bt_full_oos["stats"]["initial_capital"]
+        _onav_raw = _fnav[_fnav.index >= OOS_START]
+        _obh_raw  = _fbh[_fbh.index  >= OOS_START]
+        if len(_onav_raw) > 1:
+            _osn  = float(_fnav.asof(OOS_START)) or ic
+            _osb  = float(_fbh.asof(OOS_START))  or ic
+            _onav = _onav_raw / _osn * ic
+            _obh  = _obh_raw  / _osb  * ic
+            _of   = float(_onav.iloc[-1]);  _obf = float(_obh.iloc[-1])
+            _otr  = [t for t in _ftr if pd.Timestamp(t["entry_date"]) >= OOS_START]
+            _ow   = [t for t in _otr if t["pnl_pct"] > 0]
+            _ol   = [t for t in _otr if t["pnl_pct"] <= 0]
+            _rf   = (1.045)**(1/252) - 1
+            _odr  = _onav.pct_change().fillna(0)
+            _osh  = (float((_odr-_rf).mean()/(_odr-_rf).std()*np.sqrt(252))
+                     if (_odr-_rf).std() > 0 else 0.0)
+            _bdr  = _obh.pct_change().fillna(0)
+            _bsh  = (float((_bdr-_rf).mean()/(_bdr-_rf).std()*np.sqrt(252))
+                     if (_bdr-_rf).std() > 0 else 0.0)
+            _opk  = _onav.cummax()
+            _odd  = float(((_onav-_opk)/_opk*100).min())
+            _bpk  = _obh.cummax()
+            _bdd  = float(((_obh-_bpk)/_bpk*100).min())
+            # _norm rescales all dollar amounts from the full-run capital base to
+            # the $100k OOS baseline.  Must be applied to pnl_abs before computing
+            # tax so that tax and final_nav are in the same (normalised) scale.
+            _norm = ic / _osn
+            _oys: dict = {}
+            for t in _otr:
+                yr = pd.Timestamp(t["exit_date"]).year
+                _oys[yr] = _oys.get(yr, 0.0) + t["pnl_abs"] * _norm
+            _otax = sum(0.35*max(0.0, v) for v in _oys.values())
+            _oat  = _of - _otax
+            _oday = (int(_onav.index[-1].value) - int(OOS_START.value))//86_400_000_000_000
+            _odin = sum(t["duration_days"] for t in _otr)
+            s_oos = dict(
+                initial_capital = ic,
+                final_nav=_of,   final_bh=_obf,
+                strat_ret=(_of/ic-1)*100,   bh_ret=(_obf/ic-1)*100,
+                after_tax_nav=_oat, after_tax_ret=(_oat/ic-1)*100,
+                alpha_abs=_of - _obf,
+                max_drawdown=_odd, bh_max_dd=_bdd,
+                sharpe=_osh, bh_sharpe=_bsh,
+                time_in_mkt=100*_odin/max(_oday, 1),
+                total_tax_paid=_otax,
+                win_rate=100*len(_ow)/len(_otr) if _otr else 0.0,
+                n_wins=len(_ow), n_losses=len(_ol),
+                start_date=OOS_START, end_date=_onav.index[-1],
+            )
+            _otr_scaled = [dict(t, exit_nav=t["exit_nav"]*_norm) for t in _otr]
+            _oos_open = False; _oos_oe = None
+            if bt_full_oos.get("open_pos") and bt_full_oos.get("open_entry"):
+                _oe = bt_full_oos["open_entry"]
+                if pd.Timestamp(_oe["date"]) >= OOS_START:
+                    _oos_open = True
+                    _oos_oe   = dict(price=_oe["price"], date=_oe["date"],
+                                     nav=_oe["nav"] * _norm,
+                                     stop_price=_oe.get("stop_price"))
+            _full_reg = bt_full_oos.get("bull_regime_series")
+            _oos_reg  = (_full_reg[_full_reg.index >= OOS_START]
+                         if _full_reg is not None else None)
+            bt_oos = dict(
+                nav_series=_onav, bh_series=_obh,
+                open_pos=_oos_open, open_entry=_oos_oe,
+                trades=_otr_scaled, stats=s_oos,
+                bull_regime_series=_oos_reg,
+                **{
+                    _pk: bt_full_oos[_pk][bt_full_oos[_pk].index >= OOS_START]
+                    for _pk in ("btc_price_series", "eth_price_series")
+                    if bt_full_oos.get(_pk) is not None
+                },
+            )
+
+    s_full = bt_full["stats"] if bt_full else None
+
+    pr     = _period_cells(s_r)
+    pf     = _period_cells(s_f)
+    p_oos  = _period_cells(s_oos)
+    p_full = _period_cells(s_full)
+
+    if s_r:
+        lbl_r = (f"🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS<br>"
+                 f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                 f"{pd.Timestamp(s_r['start_date']).strftime('%b %d, %Y')} → "
+                 f"{pd.Timestamp(s_r['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_r = "🐻 Bear Market (Jun 2025 – May 2026) ⚠️ Mixed IS/OOS"
+
+    if s_f:
+        lbl_f = (f"🐂 Bull Market ⚠️ IS<br>"
+                 f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                 f"{pd.Timestamp(s_f['start_date']).strftime('%b %d, %Y')} → "
+                 f"{pd.Timestamp(s_f['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_f = "🐂 Bull Market ⚠️ IS"
+
+    if s_oos:
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
+                   f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                   f"{OOS_START.strftime('%b %d, %Y')} → "
+                   f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
+                   f"</span><br>"
+                   f"<span style='font-size:9px; font-weight:400; opacity:0.75;'>"
+                   f"CT model trained to {ct_str}</span>")
+    else:
+        lbl_oos = "🔬 OOS Only"
+
+    if s_full:
+        lbl_full = (f"🌐 Full Market (Jun 2024 – May 2026) ⚠️ Mixed IS/OOS<br>"
+                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
+                    f"{pd.Timestamp(s_full['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(s_full['end_date']).strftime('%b %d, %Y')}</span>")
+    else:
+        lbl_full = "🌐 Full Market (Jun 2024 – May 2026)"
+
+    _sub4 = ("<th style='padding:5px 8px; text-align:center;'>📊 TF2+V-Gate (ETH)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🧾 TF2+V-Gate (35% STCG)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>🏦 B&amp;H ETH (0% unrealised)</th>"
+             "<th style='padding:5px 8px; text-align:center;'>💼 B&amp;H ETH (15% LTCG)</th>")
+    sub_hdr = (
+        "<tr style='background:#334155; color:white; font-size:11px;'>"
+        "<th style='padding:5px 12px;'></th>"
+        + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
+        + "<th style='width:6px; padding:0;'></th>"
+        + _sub4
+        + "</tr>"
+    )
+
+    metric_rows = [
+        ("Final NAV ($)",          "nav"),
+        ("Total Return",           "ret"),
+        ("Max Drawdown",           "dd"),
+        ("Sharpe Ratio (RF 4.5%)", "sh"),
+        ("Time in Market",         "tim"),
+        ("Tax Treatment",          "tax"),
+        ("Tax Paid",               "taxpd"),
+        ("Win Rate",               "wr"),
+    ]
+
+    tbody = ""
+    _sep = "<td style='width:6px; padding:0; border-left:3px solid #cbd5e1;'></td>"
+    for i, (lbl, key) in enumerate(metric_rows):
+        bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+        tbody += (
+            f"<tr style='background:{bg};'>"
+            f"<td style='padding:7px 12px; font-weight:500; white-space:nowrap; "
+            f"color:#334155;'>{lbl}</td>"
+            f"{pr[key]}{_sep}{pf[key]}{_sep}{p_oos[key]}{_sep}{p_full[key]}"
+            f"</tr>"
+        )
+
+    st.markdown(
+        f"""
+        <div style="overflow-x:auto; margin:10px 0 6px 0;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;
+                      border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+          <thead>
+            <tr style="background:#134e4a; color:white;">
+              <th style="padding:10px 12px; text-align:left; font-weight:600; min-width:160px;">
+                Metric</th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  border-right:3px solid #0d9488;">
+                {lbl_r}</th>
+              <th style="width:6px; padding:0; background:#134e4a;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  border-right:3px solid #0d9488;">
+                {lbl_f}</th>
+              <th style="width:6px; padding:0; background:#134e4a;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#14532d; border-right:3px solid #166534;">
+                {lbl_oos}</th>
+              <th style="width:6px; padding:0; background:#134e4a;"></th>
+              <th colspan="4" style="padding:10px 8px; text-align:center; font-weight:600;
+                  background:#0f766e;">
+                {lbl_full}</th>
+            </tr>
+            {sub_hdr}
+          </thead>
+          <tbody>
+            {tbody}
+          </tbody>
+        </table>
+        </div>
+        <p style="font-size:11px; color:#64748b; margin:2px 0 14px 0;">
+        🟢 Green = better for investor vs B&amp;H benchmark &nbsp;|&nbsp;
+        🔴 Red = worse &nbsp;|&nbsp;
+        💡 Col 1 vs B&amp;H (0%); Col 2 (35% STCG/yr) vs B&amp;H (15% LTCG) — fair after-tax comparison.
+        💼 B&amp;H 15% LTCG: single tax event at period end on total gain.
+        ⚠️ Pre-{_oos_cut_str("%b %Y")} dates are <b>in-sample</b> for the BTC CT model.
+        🔬 OOS: NAV normalised to $100k at {OOS_START.strftime("%b %d, %Y")};
+        CT model last trained {ct_str}.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Open-position badge ───────────────────────────────────────────────────
+    if bt_bear and bt_bear["open_pos"] and bt_bear["open_entry"]:
+        oe  = bt_bear["open_entry"]
+        unr = (float(bt_bear["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+        oe_col = "#16a34a" if unr >= 0 else "#dc2626"
+        _sl_px = oe.get("stop_price")
+        _sl_str = f" · Fixed stop: <b>${_sl_px:,.2f}</b>" if _sl_px else ""
+        st.markdown(
+            f"<div style='background:#f0fdfa; border:1px solid #0d9488; border-radius:8px; "
+            f"padding:8px 14px; margin:0 0 10px 0; font-size:13px; color:#134e4a;'>"
+            f"📍 <b>Open ETH position</b> — bought "
+            f"{pd.Timestamp(oe['date']).strftime('%b %d, %Y')} "
+            f"@ ${oe['price']:,.2f} · "
+            f"unrealized: <span style='color:{oe_col}; font-weight:700;'>"
+            f"{unr:+.1f}%</span>{_sl_str}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    def _make_eth_chart(bt, title):
+        if bt is None:
+            return None
+        s     = bt["stats"]
+        nav_s = bt["nav_series"]
+        bh_s  = bt["bh_series"]
+        has_p = bt["open_pos"]
+
+        fig = go.Figure()
+
+        regime = bt.get("bull_regime_series")
+        if regime is not None and len(regime) > 0:
+            arr     = regime.values.astype(bool)
+            idx     = regime.index
+            changes = np.where(np.diff(arr.astype(int)) != 0)[0] + 1
+            starts  = np.concatenate([[0], changes])
+            ends    = np.concatenate([changes, [len(arr)]])
+            bull_leg = bear_leg = False
+            for s_i, e_i in zip(starts, ends):
+                is_bull  = bool(arr[s_i])
+                color    = "rgba(34,197,94,0.10)" if is_bull else "rgba(239,68,68,0.07)"
+                lname    = "🐂 Bull Regime (BTC)" if is_bull else "🐻 Bear/Neutral (BTC)"
+                show_leg = (is_bull and not bull_leg) or (not is_bull and not bear_leg)
+                e_idx    = min(e_i, len(idx) - 1)
+                fig.add_vrect(
+                    x0=idx[s_i], x1=idx[e_idx],
+                    fillcolor=color, line_width=0,
+                    name=lname, showlegend=show_leg,
+                )
+                if is_bull: bull_leg = True
+                else:       bear_leg = True
+
+        fig.add_trace(go.Scatter(
+            x=bh_s.index, y=bh_s.values, name="Buy & Hold ETH",
+            line=dict(color="#94a3b8", width=1.5, dash="dot"),
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>Buy & Hold ETH</extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=nav_s.index, y=nav_s.values, name="TF2+V-Gate (ETH)",
+            line=dict(color="#0d9488", width=2.5),
+            hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>TF2+V-Gate (ETH)</extra>",
+        ))
+        btc_price = bt.get("btc_price_series")
+        if btc_price is not None and len(btc_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=btc_price.index, y=btc_price.values, name="BTC Price",
+                line=dict(color="#2563eb", width=1.2), yaxis="y2", opacity=0.7,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.0f}<extra>BTC Price</extra>",
+            ))
+        eth_price = bt.get("eth_price_series")
+        if eth_price is not None and len(eth_price) > 0:
+            fig.add_trace(go.Scatter(
+                x=eth_price.index, y=eth_price.values, name="ETH Price",
+                line=dict(color="#6366f1", width=1.2, dash="dot"), yaxis="y3",
+                opacity=0.8,
+                hovertemplate="%{x|%b %d, %Y}: $%{y:,.2f}<extra>ETH Price</extra>",
+            ))
+        fig.add_hline(
+            y=s["initial_capital"], line_dash="dash",
+            line_color="#64748b", line_width=1, opacity=0.4,
+            annotation_text="  $100k start", annotation_position="bottom right",
+        )
+        for t in bt["trades"]:
+            entry_y = float(nav_s.asof(t["entry_date"])) if t["entry_date"] >= nav_s.index[0] else s["initial_capital"]
+            exit_y  = float(t["exit_nav"])
+            win_col = "#16a34a" if t["pnl_pct"] > 0 else "#dc2626"
+            fig.add_trace(go.Scatter(
+                x=[t["entry_date"]], y=[entry_y], mode="markers",
+                marker=dict(symbol="triangle-up", size=13, color="#16a34a",
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>BUY ETH</b> {pd.Timestamp(t['entry_date']).strftime('%b %d')}"
+                    f" @ ${t['entry_price']:,.2f}<br>{t['entry_trigger']}<extra></extra>"
+                ),
+            ))
+            fig.add_trace(go.Scatter(
+                x=[t["exit_date"]], y=[exit_y], mode="markers",
+                marker=dict(symbol="triangle-down", size=13, color=win_col,
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>SELL ETH</b> {pd.Timestamp(t['exit_date']).strftime('%b %d')}"
+                    f" @ ${t['exit_price']:,.2f} "
+                    f"({t['pnl_pct']:+.1f}%) — {t['exit_signal']}<extra></extra>"
+                ),
+            ))
+        if has_p and bt["open_entry"]:
+            oe   = bt["open_entry"]
+            oe_y = float(nav_s.asof(oe["date"])) if oe["date"] >= nav_s.index[0] else s["initial_capital"]
+            fig.add_trace(go.Scatter(
+                x=[oe["date"]], y=[oe_y], mode="markers",
+                marker=dict(symbol="triangle-up", size=13, color="#f59e0b",
+                            line=dict(width=1.5, color="white")),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>BUY ETH (OPEN)</b> {pd.Timestamp(oe['date']).strftime('%b %d')}"
+                    f" @ ${oe['price']:,.2f}<extra></extra>"
+                ),
+            ))
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=13), x=0, xanchor="left",
+                       y=0.97, yref="container", yanchor="top"),
+            xaxis_title=None,
+            yaxis_title="Portfolio Value ($)",
+            yaxis_tickprefix="$", yaxis_tickformat=",.0f",
+            height=360,
+            legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+            margin=dict(l=0, r=70, t=70, b=0),
+            hovermode="x unified",
+            plot_bgcolor="#f8fafc", paper_bgcolor="#ffffff",
+            xaxis=dict(domain=[0.0, 0.88], showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis=dict(showgrid=True, gridcolor="#e2e8f0", zeroline=False),
+            yaxis2=dict(
+                title="BTC Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="x",
+                tickprefix="$", tickformat=",.0f", color="#2563eb",
+            ),
+            yaxis3=dict(
+                title="ETH Price ($)", overlaying="y", side="right",
+                showgrid=False, zeroline=False, anchor="free", position=1.0,
+                tickprefix="$", tickformat=",.0f", color="#6366f1",
+            ),
+        )
+        return fig
+
+    tab_labels = []
+    if bt_bear:
+        sr = bt_bear["stats"]
+        tab_labels.append(
+            f"🐻 Bear Market  "
+            f"({pd.Timestamp(sr['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sr['end_date']).strftime('%b %Y')})"
+        )
+    if bt_bull:
+        sf = bt_bull["stats"]
+        tab_labels.append(
+            f"🐂 Bull Market  "
+            f"({pd.Timestamp(sf['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sf['end_date']).strftime('%b %Y')})"
+        )
+    if bt_oos:
+        so = bt_oos["stats"]
+        tab_labels.append(
+            f"🔬 OOS Only  "
+            f"({pd.Timestamp(so['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(so['end_date']).strftime('%b %Y')})"
+        )
+    if bt_full:
+        sfl = bt_full["stats"]
+        tab_labels.append(
+            f"🌐 Full Market  "
+            f"({pd.Timestamp(sfl['start_date']).strftime('%b %Y')} → "
+            f"{pd.Timestamp(sfl['end_date']).strftime('%b %Y')})"
+        )
+
+    if tab_labels:
+        tabs = st.tabs(tab_labels)
+        tab_idx = 0
+        if bt_bear:
+            with tabs[tab_idx]:
+                sr = bt_bear["stats"]
+                fig_r = _make_eth_chart(
+                    bt_bear,
+                    f"TF2+V-Gate (ETH) vs B&H ETH — Bear Market  "
+                    f"({pd.Timestamp(sr['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sr['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_r:
+                    st.plotly_chart(fig_r, use_container_width=True,
+                                    key=f"eth_chart_bear_{key_suffix}")
+            tab_idx += 1
+        if bt_bull:
+            with tabs[tab_idx]:
+                sf = bt_bull["stats"]
+                fig_f = _make_eth_chart(
+                    bt_bull,
+                    f"TF2+V-Gate (ETH) vs B&H ETH — Bull Market  "
+                    f"({pd.Timestamp(sf['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sf['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_f:
+                    st.plotly_chart(fig_f, use_container_width=True,
+                                    key=f"eth_chart_bull_{key_suffix}")
+            tab_idx += 1
+        if bt_oos:
+            with tabs[tab_idx]:
+                so = bt_oos["stats"]
+                fig_o = _make_eth_chart(
+                    bt_oos,
+                    f"TF2+V-Gate (ETH) vs B&H ETH — Model-OOS Period (strategy params tuned in-window 2026-07)  "
+                    f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_o:
+                    st.plotly_chart(fig_o, use_container_width=True,
+                                    key=f"eth_chart_oos_{key_suffix}")
+            tab_idx += 1
+        if bt_full:
+            with tabs[tab_idx]:
+                sfl = bt_full["stats"]
+                fig_fl = _make_eth_chart(
+                    bt_full,
+                    f"TF2+V-Gate (ETH) vs B&H ETH — Full Market  "
+                    f"({pd.Timestamp(sfl['start_date']).strftime('%b %d, %Y')} → "
+                    f"{pd.Timestamp(sfl['end_date']).strftime('%b %d, %Y')})",
+                )
+                if fig_fl:
+                    st.plotly_chart(fig_fl, use_container_width=True,
+                                    key=f"eth_chart_full_{key_suffix}")
+
+    # ── Trade log ─────────────────────────────────────────────────────────────
+    def _eth_trade_log_rows(bt):
+        if bt is None:
+            return [], False, None
+        s     = bt["stats"]
+        has_p = bt["open_pos"]
+        rows  = []
+        for i, t in enumerate(bt["trades"], 1):
+            if t.get("stop_triggered"):
+                result = "🛑 SL EXIT"
+            elif t.get("was_reentry") and t["pnl_pct"] > 0:
+                result = "♻ RE-ENTRY ✓"
+            elif t.get("was_reentry"):
+                result = "♻ RE-ENTRY ✗"
+            elif t["pnl_pct"] > 0:
+                result = "✓ WIN"
+            else:
+                result = "✗ LOSS"
+            rows.append({
+                "#":           i,
+                "Entry":       pd.Timestamp(t["entry_date"]).strftime("%b %d, %Y"),
+                "Buy ETH @":  f"${t['entry_price']:,.2f}",
+                "BTC Trigger": t["entry_trigger"],
+                "Exit":        pd.Timestamp(t["exit_date"]).strftime("%b %d, %Y"),
+                "Sell ETH @": f"${t['exit_price']:,.2f}",
+                "P&L":         f"{t['pnl_pct']:+.1f}%",
+                "Result":      result,
+                "Days":        t["duration_days"],
+                "BTC Signal":  t["exit_signal"],
+                "NAV After":   f"${t['exit_nav']:,.0f}",
+            })
+        if has_p and bt["open_entry"]:
+            oe = bt["open_entry"]
+            _period_end = bt["nav_series"].index[-1]
+            unr_pct = (float(bt["nav_series"].iloc[-1]) / float(oe["nav"]) - 1) * 100
+            rows.append({
+                "#":           len(bt["trades"]) + 1,
+                "Entry":       pd.Timestamp(oe["date"]).strftime("%b %d, %Y"),
+                "Buy ETH @":  f"${oe['price']:,.2f}",
+                "BTC Trigger": "—",
+                "Exit":        f"⏳ OPEN at {_period_end.strftime('%b %d, %Y')}",
+                "Sell ETH @": "—",
+                "P&L":         f"{unr_pct:+.1f}% (unrlzd at period end)",
+                "Result":      "🟡 OPEN",
+                "Days":        (_period_end - pd.Timestamp(oe["date"])).days,
+                "BTC Signal":  "—",
+                "NAV After":   "—",
+            })
+        return rows, has_p, s
+
+    log_tabs = []
+    if bt_bear: log_tabs.append("📋 Bear Market Trade Log")
+    if bt_bull: log_tabs.append("📋 Bull Market Trade Log")
+    if bt_oos:  log_tabs.append("📋 OOS Trade Log")
+    if bt_full: log_tabs.append("📋 Full Market Trade Log")
+
+    if log_tabs:
+        ltabs = st.tabs(log_tabs)
+        lt_idx = 0
+        for bt_src, lbl in [(bt_bear, "bear"), (bt_bull, "bull"),
+                             (bt_oos, "oos"), (bt_full, "full")]:
+            if bt_src is None:
+                continue
+            rows, has_p, s = _eth_trade_log_rows(bt_src)
+            with ltabs[lt_idx]:
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True,
+                                 use_container_width=True)
+                else:
+                    st.info("No trades in this period — strategy was in cash throughout.")
+                caption = (
+                    "💡 P&L at ETH execution prices (same-day fill on the BTC signal bar). "
+                    "Entry/exit triggered by BTC TF2+V-Gate. ETH-USD prices on BTC's 12:00-UTC bars; "
+                    "live orders route to ETHA. "
+                )
+                if lbl == "oos":
+                    caption += "✅ Fully OOS — BTC CT model never saw this data."
+                elif lbl == "full":
+                    caption += f"⚠️ Mixed IS/OOS — pre-{_oos_cut_str('%b %Y')} trades are in-sample."
+                else:
+                    caption += f"⚠️ pre-{_oos_cut_str('%b %Y')} = in-sample for BTC CT model."
+                st.caption(caption)
+            lt_idx += 1
+
 
 
 def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=None,
@@ -8175,7 +9503,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
   </div>
   <div style='border-top:1px solid #99f6e4; margin:10px 0;'></div>
   <div style='font-size:11px; color:#0f766e; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the MSTU trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the MSTU trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -8543,7 +9871,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
         lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -8856,7 +10184,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
                 so = bt_oos["stats"]
                 fig_o = _make_mstu_chart(
                     bt_oos,
-                    f"TF2+V-Gate (MSTU) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (MSTU) vs B&H MSTU — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9384,7 +10712,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -9683,7 +11011,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
                 so = bt_oos["stats"]
                 fig_o = _make_btc_chart(
                     bt_oos,
-                    f"TF2+V-Gate (BTC) vs B&H BTC — OOS Period (Fully Blind)  "
+                    f"TF2+V-Gate (BTC) vs B&H BTC — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -9860,7 +11188,7 @@ def render_mstr_options_trading_strategy_dashboard(
   <div style='border-top:1px solid #fcd34d; margin:10px 0;'></div>
 
   <div style='font-size:11px; color:#b45309; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the option trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the option trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -10170,7 +11498,7 @@ def render_mstr_options_trading_strategy_dashboard(
         lbl_f = "🐂 Bull Market ⚠️ IS"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -10461,7 +11789,7 @@ def render_mstr_options_trading_strategy_dashboard(
                 so = bt_oos["stats"]
                 fig_o = _make_opts_chart(
                     bt_oos,
-                    f"CU (MSTR Calls) vs B&H MSTR — OOS Period (Fully Blind)  "
+                    f"CU (MSTR Calls) vs B&H MSTR — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -10636,7 +11964,7 @@ def render_mstu_options_trading_strategy_dashboard(
   <div style='border-top:1px solid #7dd3fc; margin:10px 0;'></div>
 
   <div style='font-size:11px; color:#0369a1; line-height:1.8;'>
-    ⏱ <b>Execution:</b> Same-day — the BTC 12:00-UTC signal on bar <i>i</i> triggers the option trade at that same bar's close (after-hours fill)
+    ⏱ <b>Execution:</b> Post-signal — bar <i>i</i>'s BTC signal is knowable at 12:00 UTC on day i+1; the option trade fills at the FIRST exchange close after that moment (next session — no pre-signal fills)
     &nbsp;·&nbsp;
     💰 <b>Capital:</b> $100,000 initial
     &nbsp;·&nbsp;
@@ -10946,7 +12274,7 @@ def render_mstu_options_trading_strategy_dashboard(
         lbl_bull = "🐂 Bull Market (Jun 2024 – May 2025) 🧪 Synthetic"
 
     if s_oos:
-        lbl_oos = (f"🔬 OOS Only — Fully Blind<br>"
+        lbl_oos = (f"🔬 Model-OOS ⚠️ Strategy Tuned In-Window<br>"
                    f"<span style='font-size:10px; font-weight:400; opacity:0.85;'>"
                    f"{OOS_START.strftime('%b %d, %Y')} → "
                    f"{pd.Timestamp(s_oos['end_date']).strftime('%b %d, %Y')}"
@@ -11238,7 +12566,7 @@ def render_mstu_options_trading_strategy_dashboard(
                 so = bt_oos["stats"]
                 fig_o = _make_mstu_opts_chart(
                     bt_oos,
-                    f"CU (MSTU Calls) vs B&H MSTU — OOS Period (Fully Blind)  "
+                    f"CU (MSTU Calls) vs B&H MSTU — Model-OOS Period (strategy params tuned in-window 2026-07)  "
                     f"({pd.Timestamp(so['start_date']).strftime('%b %d, %Y')} → "
                     f"{pd.Timestamp(so['end_date']).strftime('%b %d, %Y')})",
                 )
@@ -11349,7 +12677,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     Organized as:
       • Composite alert banner (color-coded overall level)
       • Four signature cards in 2×2 grid (D1, D2, D3, U1)
-      • Standard MA full-width card (live strategy — BTC/MSTR/MSTU)
+      • Standard MA full-width card (live strategy — BTC/MSTR/MSTU/ETH)
       • V-reversal special signal
       • LIVE INTRADAY strip (current bar vs predictions, updates every ~10 min)
       • Last-5-bars mini-table with signal sparklines
@@ -11401,7 +12729,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                     bull_regime={'✓' if sigs.get('bull_regime') else '✗'}
                     clean7d={'✓' if sigs['clean_10d'] else '✗'}
                     V-rev={'✓' if sigs.get('v_recent_gate') else '✗'})
-                    <span style="color:#64748b;">· MSTR/MSTU entries shown below (asset-specific gates)</span>
+                    <span style="color:#64748b;">· MSTR/MSTU/ETH entries shown below (asset-specific gates)</span>
                     · as-of: <b>{as_of_str}</b>
                     · <b>{sigs['n_bars']}</b> bars
                 </span>
@@ -11411,7 +12739,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         unsafe_allow_html=True,
     )
 
-    # ── ACTION SIGNAL banners — Row 1: BTC  /  Row 2: MSTR & MSTU ───────────
+    # ── ACTION SIGNAL banners — Row 1: BTC  /  Row 2: MSTR, MSTU & ETH ─────
     # 2026-07 retune: all three assets use the Standard MA entry gate —
     #   U1 AND ((above_MA30 XOR Clean 7d) OR V-rev)
     _bull_regime  = sigs.get("bull_regime", False)
@@ -11421,8 +12749,9 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _clean_7d     = sigs["clean_10d"]
     _trend_ok     = (bool(_above_ma30) != bool(_clean_7d)) or _v_gate_ok  # (above_MA30 XOR Clean 7d) OR V
     _entry_signal = sigs["u1_triggered"] and _trend_ok               # BTC — Standard MA gate
-    _entry_mstr   = _entry_signal                                    # MSTR/MSTU — same Standard MA gate
+    _entry_mstr   = _entry_signal                                    # MSTR/MSTU/ETH — same Standard MA gate
     _entry_mstu   = _entry_signal
+    _entry_eth   = _entry_signal
     _exit_d3      = sigs.get("exhaustion_active", False)
     _exit_d2      = (sigs.get("err_hi_ma3", 0) < D2_ERRHI_MAX) and not _bull_regime
     _exit_signal  = _exit_d3 or _exit_d2
@@ -11506,12 +12835,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         unsafe_allow_html=True,
     )
 
-    # ── Row 2: MSTR / MSTU with SL5 cooldown awareness ───────────────────
+    # ── Row 2: MSTR / MSTU / ETH with SL5 cooldown awareness ────────────
     if open_positions:
         def _sl5_chip(pos_data: dict, entry_ok: bool, gate_blocked: bool):
             """Return (label, note, bg, brd, col) for one asset's current gate state.
 
-            entry_ok     = the asset's entry gate (Standard MA for MSTR/MSTU) fires today.
+            entry_ok     = the asset's entry gate (Standard MA for MSTR/MSTU/ETH) fires today.
                            gate_blocked = U1 active but the trend gate not met.
             """
             is_open  = pos_data.get("open_pos", False)
@@ -11542,9 +12871,11 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             open_positions.get("mstr", {}), _entry_mstr, sigs["u1_triggered"] and not _entry_mstr)
         _mstu_lbl, _mstu_note, _mstu_bg, _mstu_brd, _mstu_col = _sl5_chip(
             open_positions.get("mstu", {}), _entry_mstu, sigs["u1_triggered"] and not _entry_mstu)
+        _eth_lbl, _eth_note, _eth_bg, _eth_brd, _eth_col = _sl5_chip(
+            open_positions.get("eth", {}), _entry_eth, sigs["u1_triggered"] and not _entry_eth)
 
-        # Overall panel border: driven by the most urgent state across both assets
-        _both = {_mstr_lbl, _mstu_lbl}
+        # Overall panel border: driven by the most urgent state across the assets
+        _both = {_mstr_lbl, _mstu_lbl, _eth_lbl}
         if any("ENTRY" in s or "LONG" in s for s in _both):
             _eq_bg, _eq_brd = "#f0fdf4", "#16a34a"
         elif any("COOLDOWN" in s for s in _both):
@@ -11564,7 +12895,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         _exit_txt = "🔴 EXIT active" if _exit_signal else "none"
         _eq_sub = (
             f"Entry today → <b>📊 Standard MA:</b> {_entry_state(_entry_mstr)} "
-            f"(same signal as BTC; MSTU −6% stop, MSTR signal-exit-only)"
+            f"(same signal as BTC; MSTU −6% stop, MSTR & ETH signal-exit-only)"
             f" &nbsp;|&nbsp; Exit (regime-adaptive D2/D3): {_exit_txt}"
             f" &nbsp;|&nbsp; Regime: {_regime_label}"
         )
@@ -11588,11 +12919,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 border-radius:12px; padding:14px 20px; margin:2px 0 4px 0;">
               <div style="font-size:10px; font-weight:700; color:#64748b;
                   text-transform:uppercase; letter-spacing:0.9px; margin-bottom:8px;">
-                📈 MSTR &amp; MSTU (📊 Standard MA — MSTR signal-exit-only · MSTU fixed −6% + SL5 re-entry) — shared regime-adaptive D2/D3 exit
+                📈 MSTR · MSTU · ETH (📊 Standard MA — MSTR &amp; ETH signal-exit-only · MSTU fixed −6% + SL5 re-entry) — shared regime-adaptive D2/D3 exit
               </div>
               <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:7px; align-items:flex-start;">
                 {_chip_html(_mstr_lbl, _mstr_note, _mstr_bg, _mstr_brd, _mstr_col, "MSTR", "Standard MA")}
                 {_chip_html(_mstu_lbl, _mstu_note, _mstu_bg, _mstu_brd, _mstu_col, "MSTU", "Standard MA")}
+                {_chip_html(_eth_lbl, _eth_note, _eth_bg, _eth_brd, _eth_col, "ETH", "Standard MA")}
               </div>
               <div style="font-size:12px; color:#334155; line-height:1.5;">{_eq_sub}</div>
             </div>
@@ -11600,7 +12932,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             unsafe_allow_html=True,
         )
 
-    # ── Live Position Panel — always rendered for all 3 assets ─────────────
+    # ── Live Position Panel — always rendered for all 4 assets ─────────────
     if open_positions:
         _lp_cards  = []
         _panel_aod = open_positions.get("as_of_date") or pd.Timestamp("today")
@@ -11617,7 +12949,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             "D2 (bear)":   ("📉", "D2 + Bear Regime Exit",         "#fff7ed", "#ea580c", "#9a3412"),
         }
 
-        for _asset_key in ("btc", "mstr", "mstu"):
+        for _asset_key in ("btc", "mstr", "mstu", "eth"):
             _pos      = open_positions.get(_asset_key, {})
             _is_open  = bool(_pos.get("open_pos", False))
             _oe       = _pos.get("entry") or {}
@@ -12122,13 +13454,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     ]
     st.markdown(
         _sig_card(
-            title="📊 Standard MA Strategy (BTC · MSTR · MSTU) — U1 + (Above MA30 XOR Clean Breakout) / V-reversal · Regime-Adaptive Exit",
+            title="📊 Standard MA Strategy (BTC · MSTR · MSTU · ETH) — U1 + (Above MA30 XOR Clean Breakout) / V-reversal · Regime-Adaptive Exit",
             icon="📊",
             color="#2563eb",
             triggered=sigs["tf1_triggered"],
             signal_rows=tf1_rows,
             interpretation=(
-                "<b>All three assets — BTC, MSTR and MSTU — trade the same Standard MA gate</b> "
+                "<b>All four assets — BTC, MSTR, MSTU and ETH — trade the same Standard MA gate</b> "
                 "off the BTC-derived signals; only the fixed stop differs. "
                 "Entry: <b>U1</b> (hi-band persistence) AND the <b>Standard MA gate</b>, which passes on "
                 "<b>exactly one</b> of two non-overlapping trend paths — "
@@ -12141,7 +13473,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "Per-asset fixed stop (2026-07e): MSTU −6% (vol-matched to its ~2× vol; "
                 "SL5 re-entry + post-stop re-entry override — a fresh U1 above MA30 re-admits "
                 "within 12 bars of a stop, so MSTU recovers post-capitulation rallies); "
-                "MSTR & BTC are signal-exit-only (no fixed stop)."
+                "MSTR, BTC and ETH are signal-exit-only (no fixed stop)."
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
@@ -12155,7 +13487,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "<b>BTC +86%</b> (B&amp;H +6%) · <b>MSTR +266%</b> (B&amp;H +4%) · "
                 "<b>MSTU +524%</b> (B&amp;H −76%). "
                 "Bear period: MSTR +57% · MSTU +101% · BTC +13% — all positive vs deeply-negative B&amp;H. "
-                "Bull (Jun 2024–May 2025): BTC +36% · MSTR +142% · MSTU +229%."
+                "Bull (Jun 2024–May 2025): BTC +36% · MSTR +142% · MSTU +229%. "
+                "ETH (added 2026-07f, from its Jul-2024 inception) is reported on its own "
+                "🔹 ETH Backtesting tab — the CT engine turns its deeply negative buy-&amp;-hold "
+                "into a strong positive at roughly a quarter of the drawdown."
             ),
             conf_txt=(
                 "⚠️ Heavy in-sample optimization: bull window is in-sample for the CT model, "
@@ -12293,9 +13628,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 - **Entry (all assets — 📊 Standard MA):** U1 (`err_hi_ma3 > +1.3%` AND `hi_breaks_3d ≥ 2`) AND
   ((above-MA30 **XOR** Clean 7d) **OR** ⚡ V-reversal) — the most profitable and most stable gate on the current data
 - **Exit (shared, regime-adaptive):** BULL regime → D3 only (patient); BEAR/Neutral → D2 (`err_hi_ma3 < −1.3%`) or D3 (defensive)
-- **Stops (per-asset · 2026-07e):** MSTU −6% (vol-matched to its ~2× vol; was −3%) with SL5 regime-adaptive re-entry + post-stop re-entry override · MSTR & BTC signal-exit-only (no fixed stop)
+- **Stops (per-asset · 2026-07e/f):** MSTU −6% (vol-matched to its ~2× vol; was −3%) with SL5 regime-adaptive re-entry + post-stop re-entry override · MSTR, BTC & ETH signal-exit-only (no fixed stop)
 - **Full period** (Jun 2024–May 2026): **BTC +86%** · **MSTR +266%** · **MSTU +524%** (vs B&H +6% / +4% / −76%)
 - **Bear period:** MSTR +57% · MSTU +101% · BTC +13% — all positive while B&H is deeply negative (MSTR −57%, MSTU −92%, BTC −30%)
+- **ETH** (added 2026-07f — spot Ethereum on BTC's 12:00-UTC bars, same gate, executed live as **ETHA**): see the 🔹 **ETH Backtesting** tab for its own four-period results. It beats ETH buy-&-hold by a wide margin at roughly half the drawdown, but it is the *weakest* of the four sleeves on risk-adjusted terms — see `ETH_BMNR_STRATEGY_EVAL.md`
 
 **Probability context:**
 The hit rates above are from a 241-bar out-of-sample test window (Sep 2025 – May 2026).
@@ -12498,25 +13834,29 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         f3.metric("Daily Low — Predicted / Realized", "—")
         f3.caption("Realized: —")
 
-    # ─────────── MSTR / MSTU prices + 743d ATM call ─────────────────────
+    # ─────────── MSTR / MSTU / ETH prices + 743d ATM call ──────────────
     # In live mode: use real-time prices from fetch_equity_prices().
     # In historical mode: use versioned CSV close for target_date so prices
     # reflect the selected day rather than the current live price.
     if is_live:
         _disp_mstr_px  = mstr_price
         _disp_mstu_px  = mstu_price
+        _disp_eth_px  = eth_price
         _disp_strc_px  = strc_price
         _disp_sata_px  = sata_price
         _disp_mstr_chg = mstr_chg
         _disp_mstu_chg = mstu_chg
+        _disp_eth_chg = eth_chg
         _disp_strc_chg = strc_chg
         _disp_sata_chg = sata_chg
         _mstr_lbl = "MSTR (MicroStrategy)"
         _mstu_lbl = "MSTU (2× Long MSTR)"
+        _eth_lbl = "ETH (Ethereum spot)"
         _strc_lbl = "STRC (Stretch)"
         _sata_lbl = "SATA (Strive Pref)"
         _mstr_delta_sfx = "today"
         _mstu_delta_sfx = "today"
+        _eth_delta_sfx = "today"
         _strc_delta_sfx = "today"
         _sata_delta_sfx = "today"
     else:
@@ -12535,20 +13875,23 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             return _px, _chg
         _disp_mstr_px,  _disp_mstr_chg = _csv_price_and_chg(_load_mstr_prices())
         _disp_mstu_px,  _disp_mstu_chg = _csv_price_and_chg(_load_mstu_prices())
+        _disp_eth_px,  _disp_eth_chg = _csv_price_and_chg(_load_eth_prices())
         _disp_strc_px,  _disp_strc_chg = None, None  # no versioned STRC history
         _disp_sata_px,  _disp_sata_chg = None, None  # no versioned SATA history
         _mstr_lbl = f"MSTR @ {_date_sfx}"
         _mstu_lbl = f"MSTU @ {_date_sfx}"
+        _eth_lbl = f"ETH @ {_date_sfx}"
         _strc_lbl = "STRC (Stretch)"
         _sata_lbl = "SATA (Strive Pref)"
         _mstr_delta_sfx = "vs prev day"
         _mstu_delta_sfx = "vs prev day"
+        _eth_delta_sfx = "vs prev day"
         _strc_delta_sfx = "vs prev day"
         _sata_delta_sfx = "vs prev day"
 
     _mstr_spot_key = round(_disp_mstr_px) if _disp_mstr_px else None
     mstr_call_px, mstr_hv, mstr_call_strike = fetch_mstr_atm_call(_mstr_spot_key)
-    e1, e2, e3, e4, e5 = st.columns(5)
+    e1, e2, e3, e4, e5, e6 = st.columns(6)
     e1.metric(
         _mstr_lbl,
         f"${_disp_mstr_px:,.2f}" if _disp_mstr_px is not None else "—",
@@ -12560,16 +13903,21 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         delta=(f"{_disp_mstu_chg:+.2f}% {_mstu_delta_sfx}" if _disp_mstu_chg is not None else None),
     )
     e3.metric(
+        _eth_lbl,
+        f"${_disp_eth_px:,.2f}" if _disp_eth_px is not None else "—",
+        delta=(f"{_disp_eth_chg:+.2f}% {_eth_delta_sfx}" if _disp_eth_chg is not None else None),
+    )
+    e4.metric(
         _strc_lbl,
         f"${_disp_strc_px:,.2f}" if _disp_strc_px is not None else "—",
         delta=(f"{_disp_strc_chg:+.2f}% {_strc_delta_sfx}" if _disp_strc_chg is not None else None),
     )
-    e4.metric(
+    e5.metric(
         _sata_lbl,
         f"${_disp_sata_px:,.2f}" if _disp_sata_px is not None else "—",
         delta=(f"{_disp_sata_chg:+.2f}% {_sata_delta_sfx}" if _disp_sata_chg is not None else None),
     )
-    e5.metric(
+    e6.metric(
         "MSTR 743d ATM Call (BS)",
         f"${mstr_call_px:,.2f}" if mstr_call_px is not None else "—",
         delta=(f"K=${mstr_call_strike:,.0f} · σ={mstr_hv*100:.0f}%"
@@ -12585,11 +13933,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     # ─────────────── TF2 + V-Gate Signal Watch Dashboard ─────────────────
     _bt_mstr_oos = None
     _bt_mstu_oos = None
+    _bt_eth_oos = None
     if sigs is not None:
         # _intra_raw already fetched above for the top-panel realized H/L metrics
         _intra_sig = _compute_intraday_signal(_intra_raw, daily) if _intra_raw else None
 
-        # Compute MSTR/MSTU OOS positions for the live position tracker.
+        # Compute MSTR/MSTU/ETH OOS positions for the live position tracker.
         # Uses _bt_oos_end — the last COMPLETED bar (yesterday in live mode,
         # selected-date − 1 in historical mode) — so open_pos/last_price reflect
         # the same "as of last closed bar" state the Live tab showed on that date.
@@ -12604,6 +13953,8 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         _ds_mtime    = _backtest_dataset_mtime()
         _bt_mstr_oos = run_mstr_backtest(_bt_oos_end, backtest_start_iso="2024-06-01", model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTR_STRATEGY_GATE)
         _bt_mstu_oos = run_mstu_backtest(_bt_oos_end, backtest_start_iso="2024-06-01", model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=MSTU_STRATEGY_GATE)
+        # ETH starts at its 2024-07-23 inception (run_eth_backtest clamps internally).
+        _bt_eth_oos = run_eth_backtest(_bt_oos_end, backtest_start_iso="2024-06-01", model_mtime=_model_mtime, data_end=_data_end or "", data_mtime=_ds_mtime, entry_gate=ETH_STRATEGY_GATE)
 
         def _last_closed_trade(bt: dict | None) -> dict | None:
             _tl = (bt or {}).get("trades") or []
@@ -12640,6 +13991,7 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
             _btc_panel_px  = live_spot
             _mstr_panel_px = mstr_price
             _mstu_panel_px = mstu_price
+            _eth_panel_px = eth_price
         else:
             # Days-Held anchor = viewing date D (the "visible today").  Trade entry
             # dates are now on the visible convention (bar close = signal bar + 1),
@@ -12660,8 +14012,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                               else _bt_mark(_bt_full_oos, "btc_price_series"))
             _mstr_panel_px = _bt_mark(_bt_mstr_oos, "mstr_price_series")
             _mstu_panel_px = _bt_mark(_bt_mstu_oos, "mstu_price_series")
+            _eth_panel_px = _bt_mark(_bt_eth_oos, "eth_price_series")
 
-        # Always populate all 3 assets so the panel renders in both open and cash states.
+        # Always populate all 4 assets so the panel renders in both open and cash states.
         _open_positions: dict = {
             "as_of_date": _panel_as_of,
             "btc": dict(
@@ -12694,6 +14047,17 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                 last_trade    = _last_closed_trade(_bt_mstu_oos),
                 from_sl       = (_bt_mstu_oos or {}).get("from_sl", False),
                 bars_since_sl = (_bt_mstu_oos or {}).get("bars_since_sl", 0),
+            ),
+            "eth": dict(
+                open_pos      = bool(_bt_eth_oos and _bt_eth_oos.get("open_pos")),
+                entry         = (_bt_eth_oos or {}).get("open_entry"),
+                live_price    = _eth_panel_px,
+                asset_label   = "ETH",
+                stop_type     = (f"fixed-{int(round(ETH_STOP_PCT*100))}%" if ETH_STOP_PCT is not None else "none"),
+                nav           = (_bt_eth_oos or {}).get("stats", {}).get("final_nav"),
+                last_trade    = _last_closed_trade(_bt_eth_oos),
+                from_sl       = (_bt_eth_oos or {}).get("from_sl", False),
+                bars_since_sl = (_bt_eth_oos or {}).get("bars_since_sl", 0),
             ),
         }
         render_trend_signatures(sigs, intraday=_intra_sig, open_positions=_open_positions)
@@ -15376,12 +16740,13 @@ def render_explainability_dashboard():
 # ════════════════════════════════════════════════════════════════════════
 # Tabs: Live | Historical | MSTR | MSTU | MSTR Options | MSTU Options | Explainability | Leading Indicators | Retrain Status
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_btc, tab_mstr, tab_mstu, tab_mstr_opts, tab_mstu_opts, tab_explain, tab_leading, tab_retrain = st.tabs([
+tab_live, tab_hist, tab_btc, tab_mstr, tab_mstu, tab_eth, tab_mstr_opts, tab_mstu_opts, tab_explain, tab_leading, tab_retrain = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
     "₿ BTC Backtesting",
     "📊 MSTR Backtesting",
     "📈 MSTU Backtesting",
+    "🔹 ETH Backtesting",
     "📋 MSTR Options",
     "🔷 MSTU Options",
     "🧠 Explainability",
@@ -15817,6 +17182,90 @@ with tab_mstu:
         bt_full=_mstu_full,
         key_suffix="mstu_tab",
         strategy_variant=_mstu_variant,
+    )
+
+with tab_eth:
+    st.markdown("## 🔹 ETH — BTC Signal-Driven Backtesting")
+    st.markdown(
+        "Trades **spot ETH (Ethereum)** off the BTC CT-model signals, on BTC's own "
+        "**12:00-UTC bar boundary** — so the sleeve's same-bar fill lands exactly when the "
+        "signal bar closes (a 24/7 asset can do this; a US-hours ETF cannot). "
+        "**⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) with "
+        "**no fixed stop** — the MSTR treatment, applied to the fourth sleeve on the shared "
+        "BTC signal (2026-07f). **Live orders route to the ETHA ETF**, exactly as the BTC "
+        "sleeve is executed via IBIT. Switch gates with the radio below."
+    )
+    _ds_ver_eth = _backtest_dataset_version()
+    _ds_mtime_eth = _backtest_dataset_mtime()
+    st.caption(f"📦 Price dataset {_ds_ver_eth} · pulled via `scripts/pull_backtest_data.py` · all QC checks passed")
+    st.warning(
+        "⚠️ **This is the weakest of the four sleeves — read the eval before relying on it.** "
+        "Over the full CT window (Mar 2024 → now) ETH returns **+8.8%** at **−39.5%** "
+        "drawdown, **Sharpe 0.23** — it does beat ETH buy-&-hold (**−51.4%**, −67.5% DD) by "
+        "~60pp, but it is far below BTC (0.84), MSTR (1.47) and MSTU (1.38), one −32.6% trade "
+        "dominates the log, and the result swings **±47pp** if the fill shifts by a single "
+        "bar. At portfolio level it **lowers** Balanced Sharpe in every MC seed tested and "
+        "costs the deterministic equal-weight book 38pp of return, because it is "
+        "**0.80-correlated to the BTC sleeve** — it duplicates exposure rather than "
+        "diversifying it. Earlier ETHA-based figures (+101%, Sharpe 1.04) were inflated by a "
+        "fill that preceded the signal by ~16h and by a shorter window. "
+        "See **ETH_BMNR_STRATEGY_EVAL.md** §4–§5."
+    )
+    st.info(
+        "🔒 **ETH is signal-exit-only (2026-07f):** positions close only on the shared "
+        "regime-adaptive D2/D3 exits — no fixed stop, so there is no SL cooldown or "
+        "post-stop override. Entries use the same U1 + Standard-MA gate and **5-bar "
+        "V-reversal window** as MSTR/MSTU."
+    )
+    _eth_variant = st.radio(
+        "Entry gate variant",
+        options=["above_ma30", "pure_regime", "bull_regime", "pure_regime_sata"],
+        index=0,   # ⭐ ETH default = Standard MA (2026-07f add; MSTR treatment, no stop)
+        format_func=lambda x: (
+            "📊 Standard MA — Above rising MA30  ⭐ ETH STRATEGY"
+            if x == "above_ma30" else
+            "🎯 Pure Regime — Bull Regime or Clean Breakout"
+            if x == "pure_regime" else
+            "🔒 Confirmed Uptrend — Bull Regime (XOR)"
+            if x == "bull_regime" else
+            "🪙 Pure Regime + SATA Daily Dividend (idle cash)"
+        ),
+        horizontal=True,
+        key="eth_variant_radio",
+    )
+    if _eth_variant == "pure_regime_sata":
+        st.caption(
+            "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
+            "entry/exit signals; the **only** difference is that capital sitting in **cash "
+            "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
+            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
+            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "same daily dividend across every backtest period."
+        )
+    _eth_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
+                         if os.path.exists(str(DAILY_MODEL_CT)) else 0.0)
+    _eth_oos_end     = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1)).normalize().strftime("%Y-%m-%d")
+    _eth_raw      = _fetch_daily_raw()
+    _eth_data_end = _eth_raw.index.max().strftime("%Y-%m-%d") if not _eth_raw.empty else ""
+    _eth_bear     = _run_fixed_period_eth_backtest(
+        "2026-05-31", "2025-06-01", _eth_model_mtime, data_end=_eth_data_end,
+        data_mtime=_ds_mtime_eth, entry_gate=_eth_variant)    # locked Jun 2025–May 2026
+    _eth_bull     = _run_fixed_period_eth_backtest(
+        "2025-05-31", "2024-06-01", _eth_model_mtime, data_end=_eth_data_end,
+        data_mtime=_ds_mtime_eth, entry_gate=_eth_variant)    # Bull: clamped Jul 23 2024–May 31 2025
+    _eth_full_oos = run_eth_backtest(
+        _eth_oos_end, model_mtime=_eth_model_mtime, data_end=_eth_data_end,
+        data_mtime=_ds_mtime_eth, entry_gate=_eth_variant)    # OOS ends prior day (rolling)
+    _eth_full     = _run_fixed_period_eth_backtest(
+        "2026-05-31", "2024-06-01", _eth_model_mtime, data_end=_eth_data_end,
+        data_mtime=_ds_mtime_eth, entry_gate=_eth_variant)    # Full: clamped Jul 23 2024–May 2026
+    render_eth_trading_strategy_dashboard(
+        _eth_bear, _eth_bull,
+        bt_full_oos=_eth_full_oos,
+        bt_full=_eth_full,
+        key_suffix="eth_tab",
+        strategy_variant=_eth_variant,
     )
 
 with tab_mstu_opts:

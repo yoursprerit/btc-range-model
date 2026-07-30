@@ -740,11 +740,12 @@ def render_strategy_card():
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
-    📈 <b>Out-of-sample 2021→now:</b>
-    GDX <b>+103%</b> · MDD −22% · Sharpe 0.85 (B&amp;H +92% / −46% / 0.51) &nbsp;|&nbsp;
-    NUGT <b>+276%</b> · MDD −38% · Sharpe 0.90 (B&amp;H +41% / −74% / 0.45).
-    Combined gold middle-path stack (both apps, equal-weight): <b>+214%</b> ·
-    MDD −20% · Sharpe <b>1.15</b>.
+    📈 <b>Model-OOS 2021→now</b> (post-signal fills + thresholds re-swept on the
+    bias-free engine, 2026-07-25; tuned on this window):
+    GDX <b>+110%</b> · MDD −24% · Sharpe 0.84 (B&amp;H +95% / −47% / 0.51) &nbsp;|&nbsp;
+    NUGT <b>+217%</b> · MDD −46% · Sharpe 0.77 (B&amp;H +45% / −74% / 0.46).
+    Combined gold middle-path stack (both apps, equal-weight daily-rebalanced):
+    <b>+203%</b> · MDD −29% · Sharpe <b>1.07</b>.
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -1474,9 +1475,11 @@ def render_prediction_plots(d_df, key_prefix, is_live=True, as_of_date=None, sig
 # ════════════════════════════════════════════════════════════════════════
 # Backtesting dashboard (mirrors BTC/MSTR backtesting tabs)
 # ════════════════════════════════════════════════════════════════════════
-# Four periods, mirroring the BTC/MSTR tabs.  NOTE: the daily H/L signal model
-# is fit only on pre-2021 data, so EVERY window below is genuinely out-of-sample
-# — the "OOS — Recent" tab simply isolates the most recent fully-blind slice.
+# Four periods, mirroring the BTC/MSTR tabs.  NOTE: only the daily H/L signal
+# MODEL is out-of-sample here (fit on pre-2021 data).  The strategy layer on
+# top — U1/D2/D1/V thresholds, stops, MA windows and the per-sleeve engine
+# split — was selected by sweeps run over these same windows (2026-07 retune),
+# so no period below is blind to the strategy's hyperparameters.
 _PERIODS = [
     ("🐻 Choppy / Bear (2021–2022)", "2021-01-01", "2022-12-31"),
     ("🐂 Bull Market (2023 → now)", "2023-01-01", None),
@@ -1672,7 +1675,9 @@ def _metrics_table_html(asset):
             f"<thead>{hdr}{sub}</thead><tbody>{body}</tbody></table></div>"
             f"<p style='font-size:11px;color:#64748b;margin:2px 0 10px;'>"
             f"🟢 green = Strategy beats Buy&amp;Hold on that metric · 🔴 red = worse · "
-            f"Max Drawdown closer to 0 is better. All windows are out-of-sample.</p>")
+            f"Max Drawdown closer to 0 is better. The H/L model is out-of-sample "
+            f"(fit pre-2021); thresholds/stops/engine split were tuned on these "
+            f"windows (2026-07), so treat levels as in-sample-selected.</p>")
 
 
 def render_backtest_dashboard(asset):
@@ -1691,9 +1696,13 @@ def render_backtest_dashboard(asset):
                 f"{gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} trend engine with a "
                 f"−{gc.stop_for('GLDM')*100:.0f}% stop, while its predicted-vs-actual "
                 "H/L divergences drive the GDX / NUGT miners sleeves.")
-    st.caption("All trades are out-of-sample: the GLDM daily H/L signal model is fit once "
-               "on the pre-2021 window and predicts every later bar, so all four periods "
-               "below are genuinely blind. NAV starts at $100k; costs/slippage not modelled.")
+    st.caption("The GLDM daily H/L signal model is fit once on the pre-2021 window and "
+               "predicts every later bar (model-OOS). The strategy layer on top — "
+               "thresholds, stops and the per-sleeve engine split — was tuned on these "
+               "same windows (2026-07 sweeps), so the levels shown are in-sample-selected, "
+               "not blind. Divergence fills are post-signal (decide at close i−1, fill at "
+               "close i) since the 2026-07-25 look-ahead fix. NAV starts at $100k; "
+               "costs/slippage not modelled.")
 
     # ── colored period × Strategy/B&H metrics table (BTC-style) ──
     st.markdown(_metrics_table_html(asset), unsafe_allow_html=True)
@@ -1932,19 +1941,25 @@ divergence error is regime-centered (60-bar rolling median, identical to the
 backtest), and the daily H/L model is **causal** (features through the prior
 close predict the next bar — fixed & re-tuned 2026-07).
 
-**Out-of-sample results (2021→now, middle path):**
+**Model-OOS results (2021→now, middle path).** The H/L *model* is blind here
+(fit pre-2021); the *strategy* thresholds/stops/engine split were tuned on this
+same window, so read levels as in-sample-selected. Divergence fills are
+post-signal (decide close i−1 → fill close i) since the 2026-07-25 look-ahead
+fix, and the thresholds/stops below are the 2026-07-25 re-sweep on that
+bias-free engine (U1 +0.10 / D2 −0.20 / D1 +0.45 / V 1.0; GDX −5%, NUGT −8%):
 
 | Asset | Engine | Strategy | Buy & Hold | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---|---|---|---|---|
-| GLDM | dual-MA | **+137%** | +108% | **−19%** | −26% | **1.08 / 0.83** |
-| UGL | dual-MA | **+302%** | +151% | **−38%** | −50% | **0.96 / 0.64** |
-| GDX | divergence | **+103%** | +92% | **−22%** | −46% | **0.85 / 0.51** |
-| NUGT | divergence | **+276%** | +41% | **−38%** | −74% | **0.90 / 0.45** |
+| GLDM | dual-MA | **+137%** | +107% | **−19%** | −26% | **1.08 / 0.82** |
+| UGL | dual-MA | **+302%** | +149% | **−38%** | −50% | **0.96 / 0.64** |
+| GDX | divergence | **+110%** | +95% | **−24%** | −47% | **0.84 / 0.51** |
+| NUGT | divergence | **+217%** | +45% | **−46%** | −74% | **0.77 / 0.46** |
 
-Combined equal-weight gold stack: **+214% / −19.8% MDD / Sharpe 1.15** — vs
-+134%/0.95 all-divergence and +237%/0.85 (−33.6% MDD) all-dual-MA. The mix
-stays positive in the 2021-22 chop (+4%) because the divergence miners sleeves
-hedge the trend sleeves' dips.
+Combined equal-weight gold stack: **+203% / −29% MDD / Sharpe 1.07**. The mix
+still cushions the 2021-22 chop because the divergence miners sleeves hedge
+the trend sleeves' dips. (Figures published before 2026-07-25 — GDX +103% /
+NUGT +276% / stack +214% — included a same-bar fill on a signal needing that
+bar's realized high/low, and are void.)
 
 **Honest framing.** Intraday gold direction is ~coin-flip (like BTC); the hourly
 model's value is a tight CI, not a directional bet. The edge is in the trend

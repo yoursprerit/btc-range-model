@@ -32,7 +32,7 @@ model and backtest machinery.
 | App | Module | What it does |
 |---|---|---|
 | 🧭 **Overall Trading** | `app/overall_app.py` | The combined cross-asset **decision cockpit** — fuses every signal, position and backtest into one portfolio and answers *"where should capital go today?"* |
-| ₿ **Bitcoin (BTC)** | `app/btc_hourly_app.py` | Four-model BTC forecaster (hourly close, daily H/L, 7-day cone, day-type) + the BTC divergence strategy (BTC · MSTR · MSTU). See **[`BTC_README.md`](BTC_README.md)**. |
+| ₿ **Bitcoin (BTC)** | `app/btc_hourly_app.py` | Four-model BTC forecaster (hourly close, daily H/L, 7-day cone, day-type) + the BTC divergence strategy (BTC · MSTR · MSTU · ETH). See **[`BTC_README.md`](BTC_README.md)**. |
 | 🥇 **Gold Trend (GLDM)** | `app/gldm_hourly_app.py` | Gold forecaster + dual-MA 25/100 strategy (GLDM · UGL). See **[`GLDM_README.md`](GLDM_README.md)**. |
 | ⛏️ **Gold Miners (GDXM)** | `app/gldm_hourly_app.py` | Gold-miners divergence strategy off the GLDM signal (GDX · NUGT) — same file, second app mode. |
 | 🖥️ **SOXX** · ⚡ **GRID** · 🛢️ **XLE** · 🧲 **REMX** · ⛏️ **WGMI** · ☀️ **PBW** · 🤖 **ARTY** | `app/ticker_app.py` | Seven config-driven ETF apps — one engine, one `TickerConfig` per asset. See **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**. |
@@ -102,6 +102,13 @@ instrument through one unified daily engine (`overall_core` → `ticker_core` +
 `backtest_ticker`, with BTC/Gold via their own CT/gold engines) so all
 strategies are directly comparable and blendable.
 
+**Price-feed resilience.** Daily bars come from Yahoo, but the app no longer
+depends on it alone: if Yahoo withholds the newest completed session (its daily
+feed lags its intraday one, and shared-egress IPs get rate-limited), the fetchers
+rebuild that session from Yahoo hourly and, failing that, from **Nasdaq's keyless
+quote API** — an independent provider. See `app/market_fallback.py` for why Yahoo
+stays primary (macro index/futures coverage, history depth, adjustment provenance).
+
 ---
 
 ## Trading strategy
@@ -123,7 +130,7 @@ out-of-sample over multiple periods **and** the full bull+bear cycle.
 **Common rules across every app:**
 
 - The signal is executed in **higher-beta / leveraged proxies**, not always the
-  1× underlying (BTC→MSTR/MSTU, Gold→UGL & GDX/NUGT, XLE→OIH/ERX, SOXX→SOXL).
+  1× underlying (BTC→MSTR/MSTU/ETH, Gold→UGL & GDX/NUGT, XLE→OIH/ERX, SOXX→SOXL).
 - Strategies are **long/flat** — when flat, idle capital is parked in **SATA**
   (a ~13 %-yield preferred), not dead cash.
 - **Portfolio blend (Overall):** a Monte-Carlo optimiser searches long-only
@@ -142,7 +149,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 
 | Strategy | Signal(s) | Current strategy doc → additional |
 |---|---|---|
-| BTC Divergence Pure-Regime | BTC · MSTR · MSTU | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
+| BTC Divergence Pure-Regime | BTC · MSTR · MSTU · ETH (traded as ETHA) | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) (ETH add + a look-ahead finding) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
 | Gold middle path (dual-MA + divergence) | GLDM · UGL & GDX · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
 | Semis Dual-MA 25/100 | SOXX · SOXL | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
 | Grid MACD 10/20/9 | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
@@ -277,9 +284,14 @@ Full analysis: **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** (live config),
 - **Some MSTU history is synthetic.** The long-window MSTU series is an
   **OLS-synthetic** reconstruction, cross-checked against the real fund only from
   2024-09-18 — the earlier leveraged path is modelled, not traded.
-- **Execution optimism.** The deployed CT engine executes **same-bar** and stops
-  **intrabar**, which modestly flatters it versus the conservative next-bar fills
-  used for the comparison rules.
+- **Execution timing (fixed 2026-07-25).** BTC/ETH fill at the 12:00-UTC bar
+  close — the exact moment their signal becomes knowable (zero-latency
+  assumption, feasible on a 24/7 asset). The equity sleeves (MSTR/MSTU) used to
+  fill at the *prior* US close — ~15 h **before** the signal existed — banking
+  the correlated overnight/weekend gap; they now fill at the first exchange
+  close after the signal moment (config-unchanged: MSTR +296%→+184%, MSTU
+  +685%→+402%; after the 2026-07-25 stop re-sweep on the honest fill: MSTR
+  +245%, MSTU +677%). Stops trigger and fill on closes, not intraday.
 - **Daily-rebuild caveat.** The divergence thresholds are tuned for the app's
   **hourly** CT model; re-run daily inside the Overall engine the H/L predictions
   are noisier, so BTC/MSTR/MSTU earn ~0 weight in the *daily* blend — the

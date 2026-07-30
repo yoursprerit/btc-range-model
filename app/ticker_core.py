@@ -153,6 +153,51 @@ def fetch_daily(cfg: TickerConfig, start: str | None = None) -> pd.DataFrame:
     df = df.dropna(subset=["px_close"])
     macro_cols = [c for c in df.columns if not c.startswith("px_")]
     df[macro_cols] = df[macro_cols].ffill(limit=5)
+    # publisher mode: a published Target Book's basis is pinned to the publish
+    # day's 7:15-AM-CT anchor — trim every US bar after the pre-anchor session
+    # (the in-progress *today* bar during market hours AND the just-completed
+    # *today* close after 4 PM ET; post-close changes belong only to the live
+    # view). The live apps keep everything; only the publisher sets the flag.
+    import freshness as _fr
+    # Yahoo's DAILY feed lags its intraday feed (and is rate-limited/cached on
+    # shared egress such as Streamlit Community Cloud), so the newest completed
+    # session can be missing here for hours — which strands every equity app one
+    # bar behind and trips the Overall cockpit's STALE-SIGNALS alert. Rebuild any
+    # missing COMPLETED session from the hourly series, which usually still has
+    # it. Only pays the extra fetch when the daily frame is actually behind.
+    try:
+        # "Behind" must be measured on COMPLETED sessions only: during market
+        # hours Yahoo's daily feed serves an in-progress *today* row even while
+        # a prior session's close is still missing, so index.max() masks the
+        # gap (observed 2026-07-27: Mon partial bar present, Fri Jul 24 absent
+        # — the backstops never fired and the publish audit failed all day).
+        # In publisher mode the moment of record is the 7:15-AM-CT anchor, so
+        # a post-close catch-up run still repairs the anchor's basis session.
+        _basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
+        _cut = _fr.expected_equity_asof(_basis_now)
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
+            _h = _merge(syms, "1h", range_="1mo")
+            df = _fr.backfill_sessions_from_hourly(df, _h, "px_close",
+                                                   now=_basis_now)
+            macro_cols = [c for c in df.columns if not c.startswith("px_")]
+            df[macro_cols] = df[macro_cols].ffill(limit=5)
+        # Still behind? Yahoo is withholding the session on both its feeds, so
+        # fall back to an INDEPENDENT provider (Nasdaq's keyless quote API) for
+        # the listed tickers. Indices/futures aren't served there and stay
+        # ffilled. See app/market_fallback.py for why Yahoo remains primary.
+        _lc = _fr.last_completed_session(df.index, _basis_now)
+        if _lc is None or _lc < _cut:
+            import market_fallback as _mf
+            _start = _lc if _lc is not None else pd.DatetimeIndex(df.index).min()
+            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(_start).date()))
+            df = _fr.merge_missing_sessions(df, _alt, "px_close", now=_basis_now)
+            macro_cols = [c for c in df.columns if not c.startswith("px_")]
+            df[macro_cols] = df[macro_cols].ffill(limit=5)
+    except Exception:
+        pass                    # backstop is best-effort; audit still catches it
+    if _fr.completed_bars_only():
+        df = _fr.drop_in_progress_us_bar(df, _fr.publish_anchor_ct())
     return df
 
 

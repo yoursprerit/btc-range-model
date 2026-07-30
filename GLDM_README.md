@@ -83,18 +83,19 @@ character, because the two engines are regime-complementary:
 - **GLDM** — 1× core sleeve → **dual-MA 25/100** crossover on the GLDM close
   (SOXX-consistent), −3% stop
 - **UGL** — ProShares Ultra Gold 2× → **dual-MA 25/100** (same parent signal), −3% stop
-- **GDX** — VanEck Gold Miners → **Divergence Pure-Regime** (U1 +0.15 / D2 −0.10,
-  causal signal), −3% stop
-- **NUGT** — Direxion Gold Miners 2× → **Divergence Pure-Regime**, −5% stop
+- **GDX** — VanEck Gold Miners → **Divergence Pure-Regime** (U1 +0.10 / D2 −0.20,
+  causal signal, 2026-07-25 re-sweep), −5% stop
+- **NUGT** — Direxion Gold Miners 2× → **Divergence Pure-Regime**, −8% stop
 
-Out-of-sample (2021→now): **GLDM +137%** (B&H +108%; MDD −19% vs −26%, Sharpe
-1.08 vs 0.83), **UGL +302%** (B&H +151%; MDD −38% vs −50%, Sharpe 0.96 vs 0.64),
-**GDX +103%** (B&H +92%; MDD −22% vs −46%, Sharpe 0.85 vs 0.51), **NUGT +276%**
-(B&H +41%; MDD −38% vs −74%, Sharpe 0.90 vs 0.45). Combined equal-weight stack:
-**+214% / −19.8% MDD / Sharpe 1.15** — more return AND higher Sharpe than
-all-divergence (+134%/0.95), far shallower drawdown than all-dual-MA
-(−20% vs −34%), and still positive (+4%) through the 2021–22 chop because the
-divergence miners sleeves hedge the trend sleeves' dips.
+Model-OOS (2021→now; post-signal divergence fills + thresholds re-swept on
+the bias-free engine 2026-07-25; tuned on this window): **GLDM +137%** (B&H
++107%; MDD −19% vs −26%, Sharpe 1.08 vs 0.82), **UGL +302%** (B&H +149%; MDD
+−38% vs −50%, Sharpe 0.96 vs 0.64), **GDX +110%** (B&H +95%; MDD −24% vs −47%,
+Sharpe 0.84 vs 0.51), **NUGT +217%** (B&H +45%; MDD −46% vs −74%, Sharpe 0.77
+vs 0.46). Combined equal-weight stack: **+203% / −29% MDD / Sharpe 1.07**. The
+divergence miners sleeves still hedge the trend sleeves' dips through the
+2021–22 chop. (Pre-fix figures — GDX +103%, NUGT +276%, stack +214% — included
+a same-bar fill on a signal needing that bar's realized high/low and are void.)
 
 Full methodology, parameter choice and per-period results:
 **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)**.

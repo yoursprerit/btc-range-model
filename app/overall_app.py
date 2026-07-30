@@ -3,11 +3,14 @@
 One screen that fuses the live signals, positions and back-tests of every other
 app into a single portfolio view built for one question: *where do I put money to
 work today?*  Each signal app trades its 1× primary plus higher-beta / leveraged
-siblings (BTC→MSTR/MSTU, Gold→GDX/UGL, XLE→OIH), all steered off the parent
+siblings (BTC→MSTR/MSTU/ETH, Gold→GDX/UGL, XLE→OIH), all steered off the parent
 signal, so the combined book spans every instrument across all apps.
 
   🔴 Live — Decision Cockpit   what to CLOSE / OPEN / HOLD today, the optimal %
                                 allocation, and the strategy's current book.
+  🕰️ Historical View            the same overall view reconstructed for any
+                                calendar date — the book, positions and open/
+                                close events as they stood at that day's close.
   📊 Combined Backtesting       the historically-optimal blend of all the
                                 instruments' signal-driven strategies vs the
                                 obvious benchmarks, per-window and per-instrument.
@@ -78,6 +81,8 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "overall_trade_stats"):
             return True
+        if not hasattr(mod, "snapshot_asof"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -111,6 +116,17 @@ for _k, _c in ticker_config.CONFIGS.items():
 
 st.set_page_config(page_title="Overall Trading", page_icon="🧭",
                    layout="wide", initial_sidebar_state="expanded")
+
+# Trim the wide-layout gutter: Streamlit's default side padding leaves a wide
+# dead strip between the sidebar and the content on large screens, while wide
+# tables (e.g. the action-plan table) still had no room to breathe on the
+# right — hence the overflow-x:auto wrapper used on every raw <table> below.
+st.markdown(
+    "<style>"
+    "[data-testid='stMainBlockContainer'], .main .block-container, .block-container"
+    "{padding-left:2rem;padding-right:2rem;max-width:100%;}"
+    "</style>",
+    unsafe_allow_html=True)
 
 # colour tokens
 C_BUY = "#16a34a"; C_HOLD = "#0ea5e9"; C_EXIT = "#dc2626"
@@ -356,7 +372,7 @@ fr.record_refresh("OVERALL", kind="overall",
 
 # ── live spot prices — overlay onto the display (not the signals/back-test) ──
 # Signals run on completed daily bars (some cached, so a few days stale for
-# BTC/MSTR/MSTU); the action-plan price and open-position P&L must show the
+# BTC/MSTR/MSTU/ETH); the action-plan price and open-position P&L must show the
 # current spot, so fetch each instrument's live quote and overlay it.
 _spot_ts = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M")
 _spot = {}
@@ -405,9 +421,9 @@ def _pct(x, digits=1):
     return "—" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{x:+.{digits}f}%"
 
 
-tab_live, tab_bt, tab_explain = st.tabs(
-    ["🔴 Live — Decision Cockpit", "📊 Combined Backtesting",
-     "🧠 Strategy & Methodology"])
+tab_live, tab_hist, tab_bt, tab_explain = st.tabs(
+    ["🔴 Live — Decision Cockpit", "🕰️ Historical View",
+     "📊 Combined Backtesting", "🧠 Strategy & Methodology"])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -446,11 +462,12 @@ with tab_live:
                     "Status": "✅ Fresh" if r["fresh"] else f"🚨 STALE ({r['age_days']}d behind)"})
             for r in _AUDIT["rows"]])
         st.dataframe(_adf, use_container_width=True, hide_index=True)
-        st.caption("The same audit gates the scheduled twice-daily publish: the "
-                   "Overall strategy recomputes only after every app's signals "
-                   "pass this check, then the Target Book is published "
-                   "immediately. See the 🕵️ **Daily Audit** app for the full "
-                   "trail.")
+        st.caption("The same audit gates the scheduled once-daily publish "
+                   "(≈7:15 AM CT): the audit runs ONCE, the Overall strategy "
+                   "recomputes only after every app's signals pass this check, "
+                   "and the Target Book is then published immediately — and "
+                   "stays frozen until the next morning. See the 🕵️ **Daily "
+                   "Audit** app for the full trail.")
 
     # ── risk-profile switch — decide and trade accordingly ──────────────
     pcomp = {r["name"]: r for r in get_profile_comparison(_bucket(), _use_fund)}
@@ -512,7 +529,8 @@ with tab_live:
 
     # live-adjusted allocation (drops MA instruments whose live price is below the
     # trend filter → they exit next bar) — used by the action table's Live target
-    # columns and by the "Recommended now" pie below. include_entries flags fresh
+    # columns and by the "Recommended Live Possible Targetbook" pie below.
+    # include_entries flags fresh
     # buys that would open into an already-broken trend as well as current holds.
     _live_exits = ov.live_exit_keys(results, _spot, include_entries=True)
     try:
@@ -522,28 +540,41 @@ with tab_live:
     except Exception:
         gate_live = gate
 
-    # ── 1. OPTIMAL ALLOCATION TODAY vs CURRENT BOOK ─────────────────────
-    st.markdown("### 📐 Optimal allocation for today")
-    st.caption("**Current book** = what the strategy holds right now. "
-               "**Recommended today** = the book after today's *committed* "
-               "(last-close) signals — risk assets sized by the optimal weights "
-               "tilted by entry priority (caps: 30% core, 18% high-beta, 10% "
-               "leveraged); the remainder sits in **SATA**. **Recommended now "
-               "(live-adjusted)** additionally drops any position whose *live* "
-               "price has fallen below its trend filter — it still holds today "
-               "but exits on the next bar — and reallocates that capital to the "
-               "survivors and SATA.")
+    # ── 1. TARGETBOOKS — previous & current (as published) vs live view ──
+    st.markdown("### 📐 Targetbooks — published vs live recommendation")
+    st.caption("**Previous Targetbook** = **yesterday's** published book — "
+               "BTC · MSTR · MSTU · ETH from *yesterday's* 7:00 AM CT bar close, all "
+               "other tickers from the market close of the **day before "
+               "yesterday**. An intraday re-publish never replaces it: the prev "
+               "slot only rolls forward at the first publish of a new day. "
+               "**Current Targetbook** = the *officially published* book the "
+               "IBKR executor trades — its data basis is pinned to the "
+               "morning **7:15 AM CT anchor**: all tickers as of the market "
+               "close **before** that anchor (yesterday's 4:00 PM ET close) "
+               "and BTC · MSTR · MSTU · ETH as of the day's **7:00 AM CT bar "
+               "close** (each donut's caption shows the exact dates). Signal "
+               "changes after today's market close appear ONLY in the "
+               "Recommended Live Possible Targetbook until tomorrow's "
+               "7:15 AM CT publish — the Current Targetbook never moves on "
+               "them, even on a manual 🚀 re-publish. It is published **once** daily at "
+               "≈7:15 AM CT (right after the daily audit) and does **not** "
+               "change during the day — only the 🚀 **Publish new target "
+               "book** button in the 📋 Target Book app (or a manual workflow "
+               "run) replaces it. **Recommended Live Possible Targetbook** = "
+               "what today's committed signals plus *live* prices recommend "
+               "right now; it can drift through the day because today's market "
+               "bar and BTC bar have not closed yet.")
     # (_live_exits / gate_live computed above, before the action table)
-    ac = st.columns([1, 1, 1])
 
     def _alloc_donut(alloc: dict, sata: float, title: str):
         labels, vals, colors = [], [], []
         for kk, vv in sorted(alloc.items(), key=lambda x: -x[1]):
             if vv <= 0.0005:
                 continue
-            tag = {"lev": " 2×", "beta": " β"}.get(by_key[kk]["kind"], "")
+            meta = by_key.get(kk) or ov.ASSET_META.get(kk, {})
+            tag = {"lev": " 2×", "beta": " β"}.get(meta.get("kind"), "")
             labels.append(f"{kk}{tag}"); vals.append(vv * 100)
-            colors.append(by_key[kk]["accent"])
+            colors.append(meta.get("accent") or "#94a3b8")
         if sata > 0.005:
             labels.append("SATA"); vals.append(sata * 100); colors.append("#334155")
         if not vals:
@@ -557,14 +588,110 @@ with tab_live:
                           height=320, margin=dict(t=40, b=10, l=10, r=10))
         return fig
 
-    _live_title = ("Recommended now (live-adjusted)" if _live_exits
-                   else "Recommended now (live) — no pending exits")
-    ac[0].plotly_chart(_alloc_donut(gate["current"], gate["sata_now"],
-                                    "Current book"), use_container_width=True)
-    ac[1].plotly_chart(_alloc_donut(gate["target"], gate["sata"],
-                                    "Recommended today"), use_container_width=True)
-    ac[2].plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
-                                    _live_title), use_container_width=True)
+    def _load_published_book(*paths: Path) -> dict | None:
+        """First readable published-book payload among *paths* (None if none)."""
+        import json as _json
+        for _p in paths:
+            try:
+                if _p.exists():
+                    return _json.loads(_p.read_text())
+            except Exception:
+                continue
+        return None
+
+    def _book_alloc(payload: dict) -> tuple[dict, float]:
+        """(risk_weights, idle_weight) from a published book — LIVE books park
+        idle capital as a SATA weight, PAPER books as cash_weight."""
+        w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
+        idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
+        return w, idle
+
+    def _book_close_caption(payload: dict) -> str:
+        """Explicit close DATES a published book is built from.  Prefers the
+        book's own signature-covered ``signal_basis`` stamp (written by the
+        publisher); legacy books fall back to deriving the basis from their
+        publish day's 7:15-AM-CT anchor — NOT from the wall-clock publish
+        moment, since the basis is pinned to the anchor even for a late or
+        manual publish."""
+        try:
+            basis = payload.get("signal_basis") or {}
+            if basis.get("equity_close") and basis.get("btc_bar_close_utc"):
+                eq_d = pd.Timestamp(basis["equity_close"])
+                btc_cm = pd.Timestamp(basis["btc_bar_close_utc"])
+            else:
+                gen = payload.get("generated_at_utc")
+                if not gen:
+                    return ""
+                anchor = fr.publish_anchor_ct(gen)
+                eq_d = fr.expected_equity_asof(anchor)
+                btc_cm = fr.close_moment("crypto", fr.expected_crypto_asof(anchor))
+            eq = eq_d.strftime("%b %d, %Y")
+            btc = (btc_cm.tz_convert("America/Chicago")
+                   .strftime("%b %d, %Y, %I:%M %p %Z").replace(" 0", " "))
+        except Exception:
+            return ""
+        return (f"Other tickers as of market close **{eq}** · BTC · MSTR · "
+                f"MSTU · ETH as of bar close **{btc}**")
+
+    _TB_DIR = _REPO_ROOT / "data" / "overall"
+    _prev_book = _load_published_book(_TB_DIR / "target_book_live_prev.json",
+                                      _TB_DIR / "target_book_prev.json")
+    _cur_book = _load_published_book(_TB_DIR / "target_book_live.json",
+                                     _TB_DIR / "target_book.json")
+
+    # Today's-publish-pending notice: past the 7:15-AM-CT anchor but the newest
+    # published book still predates it (GitHub cron fires routinely arrive
+    # late), the donuts below are necessarily YESTERDAY's books — say so
+    # instead of letting them read as silently stuck.
+    if _cur_book and fr.publish_pending(_cur_book.get("generated_at_utc")):
+        st.warning(
+            "⏳ **Today's ≈7:15 AM CT publish hasn't landed yet** — the "
+            "Previous / Current Targetbooks below are still **yesterday's** "
+            "books. GitHub's scheduler often delivers the publish cycle late; "
+            "the donuts roll forward automatically once today's book commits. "
+            "To publish right now, use the 🚀 button in the 📋 Target Book "
+            "app (or run the *Publish target book* workflow manually).")
+
+    ac = st.columns([1, 1, 1])
+    with ac[0]:
+        if _prev_book:
+            _pw, _pidle = _book_alloc(_prev_book)
+            st.plotly_chart(_alloc_donut(_pw, _pidle, "Previous Targetbook"),
+                            use_container_width=True)
+            st.caption(f"Yesterday's published book — "
+                       f"{_book_close_caption(_prev_book)} · profile "
+                       f"**{_prev_book.get('profile', '—')}** · published "
+                       f"**{fr.fmt_ct(_prev_book.get('generated_at_utc'))}**")
+        else:
+            st.info("**Previous Targetbook** — none recorded yet. It appears "
+                    "after the next publish rotates the current book out "
+                    "(`target_book*_prev.json`).")
+    with ac[1]:
+        if _cur_book:
+            _cw, _cidle = _book_alloc(_cur_book)
+            st.plotly_chart(_alloc_donut(_cw, _cidle, "Current Targetbook"),
+                            use_container_width=True)
+            st.caption(f"{_book_close_caption(_cur_book)} — committed closes "
+                       f"only, matching the action plan's last-close targets · "
+                       f"profile **{_cur_book.get('profile', '—')}** · published "
+                       f"**{fr.fmt_ct(_cur_book.get('generated_at_utc'))}** · "
+                       f"frozen until the next 7:15 AM CT publish (or a manual "
+                       f"🚀 publish).")
+        else:
+            st.info("**Current Targetbook** — no published book found "
+                    "(`data/overall/target_book*.json`). Run the **Publish "
+                    "target book** workflow or the 🚀 button in the 📋 Target "
+                    "Book app.")
+    with ac[2]:
+        st.plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
+                                     "Recommended Live Possible Targetbook"),
+                        use_container_width=True)
+        st.caption("⚡ Live recommendation — **could change** until today's "
+                   "market-day bar (4:00 PM ET) and BTC bar (7:00 AM CT "
+                   "tomorrow) close; it becomes official only when published "
+                   "as a Targetbook."
+                   + (" **Live-adjusted:** pending exits removed." if _live_exits
+                      else " No pending live exits."))
     if _live_exits:
         st.warning("⚠️ **Live-adjusted:** " + ", ".join(sorted(_live_exits)) +
                    " " + ("is" if len(_live_exits) == 1 else "are") +
@@ -573,12 +700,14 @@ with tab_live:
                    ("it" if len(_live_exits) == 1 else "they") +
                    " won't hold — " + ("it exits" if len(_live_exits) == 1
                                         else "they exit") +
-                   " on the next bar. The **Recommended now** pie removes "
+                   " on the next bar. The **Recommended Live Possible "
+                   "Targetbook** pie removes "
                    + ("it" if len(_live_exits) == 1 else "them") +
                    " and reallocates to the survivors and SATA.")
     else:
         st.caption("No held position's live price is below its trend filter — the "
-                   "live-adjusted book matches **Recommended today**.")
+                   "**Recommended Live Possible Targetbook** matches the book "
+                   "today's committed signals would publish.")
 
     # ── 1b. USER INCLUDE / EXCLUDE overlay on the live-adjusted book ─────
     # Same control as the 📋 Target Book viewer: untick a position and its weight
@@ -614,40 +743,120 @@ with tab_live:
                 f"Deployed {_adj_dep*100:.0f}% · SATA {_adj_sata*100:.0f}%.")
         ac2 = st.columns([1, 1, 1])
         ac2[1].plotly_chart(_alloc_donut(_adj_target, _adj_sata,
-                            "Recommended now (your selection)"),
+                            "Recommended Live (your selection)"),
                             use_container_width=True)
 
-    _moves_label = ("current book → your selection" if _excluded
-                    else "current book → live-adjusted target")
+    # ── BASELINE — the book actually in force ────────────────────────────
+    # These moves must be the trades that take you from what you HOLD to the
+    # recommended target, so the "from" side has to be the *published* Current
+    # Targetbook — the artifact the IBKR executor trades and the middle donut
+    # draws.  It used to be ``gate["current"]``, which is a different thing: the
+    # engine's synthetic "what we hold now" (optimal base weights over the
+    # in-position names, water-filled to caps, with NO priority tilt).  That
+    # construct is neither what was published nor what is held, so the line
+    # contradicted the donut right above it — e.g. it showed REMX 17% and OIH 15%
+    # while the published book held REMX 0.3% and OIH 18.0%.
+    # Fall back to the synthetic book only when nothing has been published yet.
+    if _cur_book:
+        _base_w, _base_idle = _book_alloc(_cur_book)
+        _base_src = "published Current Targetbook"
+    else:
+        _base_w, _base_idle = dict(gate["current"]), gate["sata_now"]
+        _base_src = "current holdings (nothing published yet)"
+    _moves_label = (f"{_base_src} → your selection" if _excluded
+                    else f"{_base_src} → live-adjusted target")
     st.markdown(f"**Rebalancing moves** — {_moves_label}")
     moves = []
-    for kk in sorted(set(gate["current"]) | set(_adj_target),
-                     key=lambda x: -(_adj_target.get(x, 0))):
-        cur = gate["current"].get(kk, 0.0); tg = _adj_target.get(kk, 0.0)
-        d = tg - cur
-        if abs(d) < 0.005:
-            continue
-        col = C_BUY if d > 0 else C_EXIT
-        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-                     f"<b>{kk}</b>{_kind_badge(by_key[kk]['kind'])} "
-                     f"{cur*100:.0f}% → {tg*100:.0f}% "
-                     f"<span style='color:{col};font-weight:700'>"
-                     f"{'▲' if d>0 else '▼'}{abs(d)*100:.0f}pt</span></span>")
-    dsata = _adj_sata - gate["sata_now"]
-    if abs(dsata) >= 0.005:
-        col = C_EXIT if dsata > 0 else C_BUY
-        moves.append(f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-                     f"💵 <b>SATA</b> "
-                     f"{gate['sata_now']*100:.0f}% → {_adj_sata*100:.0f}% "
-                     f"<span style='color:{col};font-weight:700'>"
-                     f"{'▲' if dsata>0 else '▼'}{abs(dsata)*100:.0f}pt</span></span>")
+
+    # Rounding-consistent deltas + retired-key handling live in the core so they
+    # are unit-tested; this loop only renders them.
+    for _mv in ov.rebalancing_moves(_base_w, _base_idle, _adj_target, _adj_sata):
+        _kk, _d = _mv["key"], _mv["delta_pct"]
+        if _kk == "SATA":
+            _label, _badge = "💵 <b>SATA</b>", ""
+            _col = C_EXIT if _d > 0 else C_BUY      # more idle cash = de-risking
+        else:
+            # A book published before a universe change can name an instrument
+            # the live universe no longer trades (an ETHA-era book after the ETH
+            # swap); it still belongs here, since the action is to sell it to 0.
+            _meta = by_key.get(_kk)
+            _badge = _kind_badge(_meta["kind"]) if _meta else ""
+            _label = (f"<b>{_kk}</b>" if _meta else
+                      f"<b>{_kk}</b><span style='font-size:10px;color:#94a3b8'>"
+                      f" (retired)</span>")
+            _col = C_BUY if _d > 0 else C_EXIT
+        moves.append(
+            f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
+            f"{_label}{_badge} {_mv['from_pct']:.0f}% → {_mv['to_pct']:.0f}% "
+            f"<span style='color:{_col};font-weight:700'>"
+            f"{'▲' if _d > 0 else '▼'}{abs(_d):.0f}pt</span></span>")
     st.markdown("".join(moves) if moves
                 else "_Book already at target — no rebalancing needed._",
                 unsafe_allow_html=True)
 
+    # ── prev → current published books: what changed at the last publish & why
+    # Same donut-to-donut comparison the two left pies invite, with the
+    # optimizer's rationale spelled out per move. Reasons come from the two
+    # published payloads themselves (recorded decisions + priority scores),
+    # not a live recomputation — see ov.book_move_reasons.
+    if _prev_book and _cur_book:
+        _bm_hdr = (f"🔁 **Rebalancing moves — Previous → Current Targetbook** "
+                   f"(as-of {_prev_book.get('as_of', '—')} → "
+                   f"{_cur_book.get('as_of', '—')}: why the optimizer moved)")
+        with st.expander(_bm_hdr, expanded=False):
+            st.caption("Each published book's weights are the optimal base "
+                       "blend tilted by that morning's **entry-priority** score "
+                       "(live momentum · macro sentiment · back-tested win-rate "
+                       "· risk-adjusted edge), then **water-filled** to the "
+                       "per-instrument caps, with the undeployable residual "
+                       "parked in **SATA**. So a weight only moves between two "
+                       "publishes because a **signal fired** (fresh entry), a "
+                       "**signal died** (exit / trend break / retired from the "
+                       "universe), or the **priority tilt drifted** and the "
+                       "water-fill re-spread the difference across the uncapped "
+                       "names. Sub-point moves are omitted, matching the moves "
+                       "line above.")
+            _bm_rows = []
+            for _mv in ov.book_move_reasons(_prev_book, _cur_book):
+                _kk, _d = _mv["key"], _mv["delta_pct"]
+                if _kk == "SATA":
+                    _label, _badge = "💵 <b>SATA</b>", ""
+                    _col = C_EXIT if _d > 0 else C_BUY
+                else:
+                    _meta = by_key.get(_kk)
+                    _badge = _kind_badge(_meta["kind"]) if _meta else ""
+                    _label = (f"<b>{_kk}</b>" if _meta else
+                              f"<b>{_kk}</b><span style='font-size:10px;"
+                              f"color:#94a3b8'> (retired)</span>")
+                    _col = C_BUY if _d > 0 else C_EXIT
+                _bm_rows.append(
+                    f"<div style='font-size:13px;margin:4px 0'>"
+                    f"{_label}{_badge} {_mv['from_pct']:.0f}% → "
+                    f"{_mv['to_pct']:.0f}% "
+                    f"<span style='color:{_col};font-weight:700'>"
+                    f"{'▲' if _d > 0 else '▼'}{abs(_d):.0f}pt</span>"
+                    f"<span style='color:#64748b'> — {_mv['reason']}</span>"
+                    f"</div>")
+            st.markdown("".join(_bm_rows) if _bm_rows else
+                        "_No whole-point moves — the optimizer kept the "
+                        "current book essentially unchanged from the previous "
+                        "one (signals and priority tilts barely drifted)._",
+                        unsafe_allow_html=True)
+
     st.markdown("---")
 
     # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
+    # The "Target % / $ (Last bar)" columns must show the SAME committed
+    # allocation the Current Targetbook donut draws — the *published* book.
+    # They used to show ``gate["target"]``, the engine's re-run of the
+    # committed signals: its priority tilt blends live momentum/sentiment, so
+    # the column drifted through the day and contradicted the frozen donut
+    # above it.  Fall back to the engine's committed target only when nothing
+    # has been published yet (same rule as the rebalancing-moves baseline).
+    if _cur_book:
+        _committed_w, _committed_idle = _book_alloc(_cur_book)
+    else:
+        _committed_w, _committed_idle = None, None
     with st.expander("🎯 **Today's action plan**", expanded=False):
         st.caption("What to do now, ranked: **close** exits first, then **open** / "
                    "**hold**, ordered by entry priority. β = higher-beta sibling · "
@@ -665,7 +874,9 @@ with tab_live:
                    "that close). **Unreal. P&L** is measured "
                    "against each position's real cost basis — the official close on its "
                    "entry bar. **Target % / $ (Last bar)** is the committed allocation "
-                   "from the last-close signals; **Target % / $ (Live)** re-runs it "
+                   "of the **published Current Targetbook** — the same values as the "
+                   "donut above (falling back to the engine's last-close targets only "
+                   "when nothing has been published yet); **Target % / $ (Live)** re-runs it "
                    "against the current live price, dropping any position exiting next "
                    "bar and reallocating to the survivors and SATA (differences are "
                    "coloured green/red).")
@@ -689,7 +900,10 @@ with tab_live:
         rows = []
         for a in gate["actions"]:
             ac = _ACTION_COL[a["action"]]
-            tgt = a["target"]                                    # last-bar (committed)
+            # last-bar (committed) — the published book's weight, so the column
+            # matches the Current Targetbook donut slice for slice
+            tgt = (_committed_w.get(a["key"], 0.0) if _committed_w is not None
+                   else a["target"])
             # live-adjusted target, further reduced by the user's include/exclude
             # selection (an excluded position shows 0 here, its weight in SATA).
             tgt_live = _adj_target.get(a["key"], 0.0)
@@ -777,8 +991,12 @@ with tab_live:
                 f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{amt_s}</td>"
                 f"<td style='text-align:right;font-weight:700;color:{_live_col}'>{tgt_live_s}{bar_live}</td>"
                 f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:{_live_col}'>{amt_live_s}</td></tr>")
-        # SATA row — the idle-cash park absorbing whatever risk assets can't hold
-        si = gate["sata_info"]; sata_pct = gate["sata"]; sata_live = gate_live["sata"]
+        # SATA row — the idle-cash park absorbing whatever risk assets can't hold;
+        # the last-bar cell shows the published book's idle weight (the donut's
+        # SATA slice), falling back to the engine's committed SATA when unpublished.
+        si = gate["sata_info"]
+        sata_pct = _committed_idle if _committed_idle is not None else gate["sata"]
+        sata_live = gate_live["sata"]
 
         def _sata_bar(t):
             return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
@@ -816,7 +1034,8 @@ with tab_live:
             f"<td style='text-align:right;font-weight:800;color:{_sata_col}'>{sata_live*100:.1f}%{sbar_live}</td>"
             f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_sata_col}'>"
             f"${sata_live*portfolio_value:,.0f}</td></tr>")
-        st.markdown(f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table>",
+        st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                    f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table></div>",
                     unsafe_allow_html=True)
         if gate["n_active"] == 0:
             st.warning("**No open positions today** — no instrument is signalling long, "
@@ -908,7 +1127,7 @@ with tab_live:
                     st.markdown("".join(body), unsafe_allow_html=True)
 
         st.info("Unified **daily** reads. For the canonical hourly Pure-Regime view of "
-                "BTC (BTC/MSTR/MSTU) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
+                "BTC (BTC/MSTR/MSTU/ETH) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
                 "**🥇 Gold** app in the sidebar.")
 
     st.markdown("---")
@@ -1013,7 +1232,8 @@ with tab_live:
                         f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
                         f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
                         f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
-                st.markdown(f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table>",
+                st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                            f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table></div>",
                             unsafe_allow_html=True)
 
             # equity curve re-based to the portfolio value at the chosen start
@@ -1159,8 +1379,9 @@ with tab_live:
                             f"<td style='text-align:right'>100%</td>"
                             f"<td style='text-align:right'>100%</td>"
                             f"<td style='text-align:right;color:#94a3b8'>idle bal.</td></tr>")
-                    st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                                f"{pah}{''.join(par)}</table>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{pah}{''.join(par)}</table></div>", unsafe_allow_html=True)
                     st.caption("🏆 = the sleeve's strategy beat buying & holding it "
                                "over this window. **Trades** counts round-trips open "
                                "at any point since the start date (open positions "
@@ -1250,8 +1471,9 @@ with tab_live:
                             f"{_pct(_ret * 100 if _ret is not None else None)}{_unreal}</td>"
                             f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_imp_s}</td>"
                             f"<td style='padding-left:10px;font-size:11px;color:#64748b'>{_reason}</td></tr>")
-                    st.markdown(f"<table style='width:100%;border-collapse:collapse'>"
-                                f"{tlh}{''.join(tlr)}</table>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{tlh}{''.join(tlr)}</table></div>", unsafe_allow_html=True)
 
             # ── capital traded by asset — where the strategy put the money ─────
             if st.toggle(
@@ -1591,7 +1813,336 @@ with tab_live:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# TAB 2 — COMBINED BACKTESTING
+# TAB 2 — HISTORICAL VIEW (the strategy as it stood on a chosen date)
+# ══════════════════════════════════════════════════════════════════════════
+with tab_hist:
+    st.markdown("### 🕰️ Historical View — the strategy as it stood on a chosen date")
+    st.caption("Pick any date from the calendar and see the overall strategy "
+               "exactly as it stood at that day's completed close — the positions "
+               "it held (with entry, days held and unrealised P&L **marked at that "
+               "bar**, not at today's price), what it opened and closed on that "
+               "bar, the book it was holding and its performance up to that point. "
+               "Everything is read off the committed back-test series — the same "
+               "engines the 🔴 Live tab runs — so the positions and trades shown are "
+               "the engine's genuine bar-by-bar decisions. Caveat: the blend "
+               "weights and per-sleeve strategy parameters are TODAY'S (fit on the "
+               "full sample), not the ones that existed on that date — the book "
+               "percentages are a current-weights projection, not the as-of record. "
+               "Where a Targetbook was actually **published** from the chosen "
+               "bar's signals, the **Executed Playbook** section below shows "
+               "it — the record of what actually traded. "
+               "Follows the "
+               f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
+               "toggle selected on the Live tab.")
+
+    _h_curve = _PF["curves"]["Optimal blend"]
+    _h_d0, _h_d1 = _h_curve.index[0].date(), _h_curve.index[-1].date()
+    _h_top = st.columns([1, 1, 2])
+    with _h_top[0]:
+        _h_sel = st.date_input(
+            "📅 View date", value=_h_d1, min_value=_h_d0, max_value=_h_d1,
+            key="overall_hist_date",
+            help="Weekends and holidays roll back to each instrument's last "
+                 "completed bar on or before this date. Data runs "
+                 f"{_h_d0} → {_h_d1}.")
+    with _h_top[1]:
+        _h_pv = st.number_input(
+            "💼 Portfolio value ($)", min_value=0.0,
+            value=float(st.session_state.get("overall_portfolio_value", 100000.0)),
+            step=1000.0, format="%.0f", key="overall_hist_pv",
+            help="Book $ per instrument = book % × this value.")
+
+    _snap = ov.snapshot_asof(results, _h_sel)
+    if _snap is None:
+        st.warning(f"No instrument has any strategy history on or before "
+                   f"**{_h_sel}** — pick a later date (data runs "
+                   f"{_h_d0} → {_h_d1}).")
+    else:
+        _h_bar = _snap["asof"]
+        _h_alloc = ov.historical_allocation(_snap, opt["optimal"]["weights"],
+                                            caps=ov.caps_for(_profile))
+        _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
+        with _h_top[2]:
+            st.markdown(
+                f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
+                f"Signals bar used: <b>{_h_bar.strftime('%b %d, %Y')}</b> (daily "
+                f"close) · {len(_snap['rows'])} instruments live · profile "
+                f"<code>{_profile}</code></div>", unsafe_allow_html=True)
+        if _snap["not_live"]:
+            st.caption("⏳ Not yet live on that date (history starts later): "
+                       + ", ".join(sorted(_snap["not_live"])) +
+                       " — the strategy could not have traded "
+                       + ("it" if len(_snap["not_live"]) == 1 else "them")
+                       + ", so the book below excludes "
+                       + ("it" if len(_snap["not_live"]) == 1 else "them") + ".")
+
+        _h_k = st.columns(5)
+        _h_k[0].metric("Positions open", f"{_snap['n_active']}")
+        _h_k[1].metric("Opened that day", f"{_snap['n_open']}",
+                       delta="new entries" if _snap["n_open"] else None)
+        _h_k[2].metric("Closed that day", f"{_snap['n_close']}",
+                       delta="exit signal" if _snap["n_close"] else None,
+                       delta_color="inverse")
+        _h_k[3].metric("In risk assets", f"{(1 - _h_sata)*100:.0f}%")
+        _h_k[4].metric("In SATA", f"{_h_sata*100:.0f}%",
+                       help=f"{ov.SATA['name']} — idle cash parked at "
+                            f"~{ov.SATA['annual_rate']*100:.0f}% yield.")
+
+        # ── the book on that date + the blend's record up to it ────────────
+        # this donut stays the CURRENT strategy's view of that day; the as-of
+        # RECORD (the book actually published from this bar's committed
+        # signals, data/overall/book_archive/<as_of>.json) is rendered in the
+        # Executed Playbook section below.
+        _h_arch_dir = _TB_DIR / "book_archive"
+        _h_pub = _load_published_book(_h_arch_dir / f"{_h_bar.date()}.json")
+        _h_cols = st.columns([1, 1.4])
+        with _h_cols[0]:
+            st.plotly_chart(
+                _alloc_donut(_h_book, _h_sata,
+                             f"Strategy book — {_h_bar.strftime('%b %d, %Y')}"),
+                use_container_width=True)
+            st.caption("What the **currently implemented** strategy would have "
+                       "traded on that bar: today's optimal-blend weights "
+                       "water-filled over the sleeves in position at that "
+                       "close; undeployed capital in **SATA**. Same "
+                       "construction as the Live tab's current book (the "
+                       "entry-priority tilt needs live-only inputs, so it "
+                       "isn't applied retrospectively)."
+                       + (" What was **actually traded** that day is in the "
+                          "🧾 Executed Playbook below." if _h_pub else ""))
+        with _h_cols[1]:
+            _h_cm = ov.curve_metrics(_h_curve.loc[:_h_bar])
+            _h_m = st.columns(4)
+            _h_m[0].metric("Blend return to date", f"{_h_cm['total_ret']*100:+,.0f}%",
+                           delta=f"CAGR {_h_cm['cagr']*100:+.0f}%")
+            _h_m[1].metric("Max DD to date", f"{_h_cm['mdd']*100:.1f}%")
+            _h_m[2].metric("Sharpe to date", f"{_h_cm['sharpe']:.2f}")
+            _h_fwd = ov.slice_metrics(_h_curve, _h_bar)
+            _h_m[3].metric("Since then → today",
+                           "—" if _h_fwd is None else f"{_h_fwd['total_ret']*100:+.1f}%",
+                           delta=(None if _h_fwd is None
+                                  else f"${_h_fwd['total_ret']*_h_pv:+,.0f} on ${_h_pv:,.0f}"),
+                           delta_color=("off" if _h_fwd is None else
+                                        "normal" if _h_fwd["total_ret"] >= 0 else "inverse"),
+                           help="What the optimal blend went on to return from "
+                                "this date to the latest close — the one "
+                                "forward-looking figure on this page.")
+            _h_fig = go.Figure()
+            _h_styles = {"Optimal blend": ("#111827", 3),
+                         "Equal-weight strategies": ("#0ea5e9", 1.5),
+                         "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
+            for _h_nm, _h_cv in _PF["curves"].items():
+                _h_sub = _h_cv.loc[:_h_bar]
+                if len(_h_sub) < 2:
+                    continue
+                _h_c, _h_w = _h_styles.get(_h_nm, ("#888", 1.5))
+                _h_fig.add_trace(go.Scatter(x=_h_sub.index, y=_h_sub.to_numpy() * 100000,
+                                            name=_h_nm, line=dict(color=_h_c, width=_h_w)))
+            _h_fig.add_vline(x=_h_bar, line_dash="dot", line_color="#dc2626")
+            _h_fig.update_layout(
+                height=300, margin=dict(t=30, b=10, l=10, r=10),
+                yaxis_title="Growth of $100k", yaxis_type="log",
+                hovermode="x unified", legend=dict(orientation="h", y=1.12),
+                title=dict(text=f"The record as known on {_h_bar.strftime('%b %d, %Y')}",
+                           font_size=13))
+            st.plotly_chart(_h_fig, use_container_width=True)
+
+        # ── that day's action plan — what the strategy did on the bar ──────
+        st.markdown(f"### 🎯 Action plan on {_h_bar.strftime('%b %d, %Y')}")
+        st.caption("What the strategy did at that day's close, ranked: **closes** "
+                   "first (with the trade's realised return and exit reason), then "
+                   "fresh **opens**, **holds** and the flat sleeves. β = higher-beta "
+                   "sibling · 2× = leveraged (traded off the parent signal). "
+                   "**Close** is the official close of that instrument's bar on "
+                   "the chosen date; **P&L** marks each open position at that bar. "
+                   "**Book % / $** is the allocation shown in the donut above.")
+        _h_order = {"CLOSE": 0, "OPEN": 1, "HOLD": 2, "STAND ASIDE": 3}
+        _h_rows_sorted = sorted(
+            _snap["rows"],
+            key=lambda r: (_h_order[r["action"]], -_h_book.get(r["key"], 0.0)))
+        _h_hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                  "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
+                  "<th style='text-align:right'>Bar</th>"
+                  "<th style='text-align:right'>Close</th>"
+                  "<th style='text-align:right'>Chg %</th>"
+                  "<th>Position</th>"
+                  "<th style='text-align:right'>P&amp;L at date</th>"
+                  "<th style='text-align:right'>Book %</th>"
+                  "<th style='text-align:right'>Book $</th></tr>")
+        _h_tr = []
+        for r in _h_rows_sorted:
+            _h_ac = _ACTION_COL.get(r["action"], C_FLAT)
+            _h_tgt = _h_book.get(r["key"], 0.0)
+            _h_tgt_s = f"{_h_tgt*100:.1f}%" if _h_tgt > 0.0005 else "—"
+            _h_amt_s = f"${_h_tgt*_h_pv:,.0f}" if _h_tgt > 0.0005 else "—"
+            _h_bar_note = ("" if r["bar"] == _h_bar else
+                           "<div style='font-size:10px;color:#d97706'>older bar</div>")
+            if r["dchg"] is None:
+                _h_chg_s, _h_chg_c = "—", "#94a3b8"
+            else:
+                _h_chg_s = f"{r['dchg']:+.2f}%"
+                _h_chg_c = C_BUY if r["dchg"] >= 0 else C_EXIT
+            if r["in_pos"]:
+                _h_e_px = (f" @ ${r['entry_px']:,.2f}" if r["entry_px"] else "")
+                _h_pos_s = (f"📍 LONG since {pd.Timestamp(r['entry_date']).strftime('%b %d, %Y')}"
+                            f"{_h_e_px} · {r['days']}d")
+                _h_pnl, _h_pnl_sub = r["upnl"], ""
+            elif r["trade"]:
+                t = r["trade"]
+                _h_pos_s = (f"↩︎ closed — entered "
+                            f"{t['entry_date'].strftime('%b %d, %Y')}"
+                            + (f" @ ${t['entry_px']:,.2f}" if t["entry_px"] else ""))
+                _h_pnl = t["ret"] * 100
+                _h_pnl_sub = (f"<div style='font-size:10px;color:#94a3b8'>"
+                              f"realised · {t['reason']}</div>")
+            else:
+                _h_pos_s = "<span style='color:#94a3b8'>⚪ flat</span>"
+                _h_pnl, _h_pnl_sub = None, ""
+            _h_pnl_s = _pct(_h_pnl)
+            _h_pnl_c = ("#94a3b8" if _h_pnl is None
+                        else C_BUY if _h_pnl >= 0 else C_EXIT)
+            _h_tr.append(
+                f"<tr style='border-bottom:1px solid #eef2f7'>"
+                f"<td style='padding:8px 10px'>{_pill(r['action'], _h_ac)}</td>"
+                f"<td style='font-weight:700'>{r['emoji']} {r['key']}{_kind_badge(r['kind'])}"
+                f"<div style='font-size:11px;color:#64748b;font-weight:400'>{r['name']}"
+                f"{'' if r['key'] == r['parent'] else ' · off ' + r['parent'] + ' signal'}</div></td>"
+                f"<td style='text-align:right;font-size:12px;color:#64748b'>"
+                f"{pd.Timestamp(r['bar']).strftime('%b %d')}{_h_bar_note}</td>"
+                f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${r['close']:,.2f}</td>"
+                f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;"
+                f"color:{_h_chg_c}'>{_h_chg_s}</td>"
+                f"<td style='font-size:12px'>{_h_pos_s}</td>"
+                f"<td style='text-align:right;font-weight:600;color:{_h_pnl_c}'>{_h_pnl_s}{_h_pnl_sub}</td>"
+                f"<td style='text-align:right;font-weight:700'>{_h_tgt_s}</td>"
+                f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums'>{_h_amt_s}</td></tr>")
+        # SATA row — whatever the risk sleeves left undeployed that day
+        _h_tr.append(
+            f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+            f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
+            f"<td style='font-weight:700'>💵 SATA"
+            f"<div style='font-size:11px;color:#64748b;font-weight:400'>{ov.SATA['name']}</div></td>"
+            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${ov.SATA['par']:,.2f}</td>"
+            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+            f"<td style='font-size:12px;color:#334155'>Idle cash → SATA "
+            f"(~{ov.SATA['annual_rate']*100:.0f}%/yr daily dividend)</td>"
+            f"<td style='text-align:right;color:#94a3b8'>—</td>"
+            f"<td style='text-align:right;font-weight:800'>{_h_sata*100:.1f}%</td>"
+            f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
+            f"${_h_sata*_h_pv:,.0f}</td></tr>")
+        st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                    f"<table style='width:100%;border-collapse:collapse'>"
+                    f"{_h_hdr}{''.join(_h_tr)}</table></div>", unsafe_allow_html=True)
+        if _snap["n_active"] == 0:
+            st.info("**No open positions on that date** — no instrument was "
+                    "signalling long, so the entire book sat in **SATA** earning "
+                    "its idle-cash yield.")
+        st.caption("⚠️ Reconstructed from the committed back-test series: bars, "
+                   "fills and exits are exactly what the engines decided on that "
+                   "date, but the **book weights use the current optimal blend** "
+                   "(fit on the full history, in-sample) water-filled over that "
+                   "day's positions — the allocation the *current* strategy "
+                   "would have held, not a live record of a book published that "
+                   "day. Prices are official daily closes (no live-spot "
+                   "overlay). Not investment advice.")
+
+        # ── EXECUTED PLAYBOOK — the book actually published & traded ───────
+        st.markdown(f"### 🧾 Executed Playbook — {_h_bar.strftime('%b %d, %Y')}")
+        if not _h_pub:
+            _h_first = min((p.stem for p in _h_arch_dir.glob("*.json")),
+                           default=None)
+            st.info("No published Targetbook was recorded for this bar, so the "
+                    "Strategy book above is the only view."
+                    + (f" Records start **{_h_first}** — the daily 7:15 AM CT "
+                       f"publisher archives every book it hands to the "
+                       f"executor." if _h_first else ""))
+        else:
+            st.caption("The **as-of record**: the Targetbook actually published "
+                       "from this bar's committed signals and handed to the "
+                       "IBKR executor — built with the blend weights and "
+                       "entry-priority tilt of **that day**, unlike the "
+                       "current-weights Strategy book above · "
+                       f"{_book_close_caption(_h_pub)} · profile "
+                       f"**{_h_pub.get('profile', '—')}** · published "
+                       f"**{fr.fmt_ct(_h_pub.get('generated_at_utc'))}**")
+            _ep_cols = st.columns([1, 1.4])
+            _epw, _epidle = _book_alloc(_h_pub)
+            with _ep_cols[0]:
+                st.plotly_chart(
+                    _alloc_donut(_epw, _epidle,
+                                 f"Executed book — {_h_bar.strftime('%b %d, %Y')}"),
+                    use_container_width=True)
+            with _ep_cols[1]:
+                _ep_px = _h_pub.get("exec_price") or {}
+                _ep_order = {"CLOSE": 0, "OPEN": 1, "HOLD": 2, "WATCH": 3,
+                             "STAND ASIDE": 4}
+                _ep_acts = sorted(
+                    (a for a in (_h_pub.get("actions") or []) if a.get("key")),
+                    key=lambda a: (_ep_order.get(a.get("action"), 9),
+                                   -float(a.get("target") or 0.0)))
+                _ep_hdr = ("<tr style='background:#f1f5f9;font-size:12px;"
+                           "text-align:left'>"
+                           "<th style='padding:7px 10px'>Action</th>"
+                           "<th>Instrument</th><th>Published decision</th>"
+                           "<th style='text-align:right'>Priority</th>"
+                           "<th style='text-align:right'>Exec px</th>"
+                           "<th style='text-align:right'>Book %</th>"
+                           "<th style='text-align:right'>Book $</th></tr>")
+                _ep_tr = []
+                for a in _ep_acts:
+                    k = a["key"]
+                    meta = by_key.get(k) or ov.ASSET_META.get(k, {})
+                    _ep_w = float(a.get("target") or 0.0)
+                    _ep_w_s = f"{_ep_w*100:.1f}%" if _ep_w > 0.0005 else "—"
+                    _ep_amt = f"${_ep_w*_h_pv:,.0f}" if _ep_w > 0.0005 else "—"
+                    _ep_p = a.get("priority")
+                    _ep_p_s = f"{_ep_p:.2f}" if _ep_p is not None else "—"
+                    _ep_x = _ep_px.get(k)
+                    _ep_x_s = f"${_ep_x:,.2f}" if _ep_x else "—"
+                    _ep_tr.append(
+                        f"<tr style='border-bottom:1px solid #eef2f7'>"
+                        f"<td style='padding:8px 10px'>"
+                        f"{_pill(a.get('action') or '—', _ACTION_COL.get(a.get('action'), C_FLAT))}</td>"
+                        f"<td style='font-weight:700'>{meta.get('emoji', '')} {k}"
+                        f"{_kind_badge(meta.get('kind'))}"
+                        f"<div style='font-size:11px;color:#64748b;font-weight:400'>"
+                        f"{meta.get('name', '')}</div></td>"
+                        f"<td style='font-size:12px'>{a.get('decision') or '—'}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_ep_p_s}</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_ep_x_s}</td>"
+                        f"<td style='text-align:right;font-weight:700'>{_ep_w_s}</td>"
+                        f"<td style='text-align:right;font-weight:700;"
+                        f"font-variant-numeric:tabular-nums'>{_ep_amt}</td></tr>")
+                if _epidle > 0.0005:
+                    _ep_sata_px = _ep_px.get("SATA")
+                    _ep_tr.append(
+                        f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
+                        f"<td style='padding:8px 10px'>{_pill('PARK', '#334155')}</td>"
+                        f"<td style='font-weight:700'>💵 SATA"
+                        f"<div style='font-size:11px;color:#64748b;font-weight:400'>"
+                        f"{ov.SATA['name']}</div></td>"
+                        f"<td style='font-size:12px;color:#334155'>Idle capital "
+                        f"parked (~{ov.SATA['annual_rate']*100:.0f}%/yr)</td>"
+                        f"<td style='text-align:right;color:#94a3b8'>—</td>"
+                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"{f'${_ep_sata_px:,.2f}' if _ep_sata_px else '—'}</td>"
+                        f"<td style='text-align:right;font-weight:800'>{_epidle*100:.1f}%</td>"
+                        f"<td style='text-align:right;font-weight:800;"
+                        f"font-variant-numeric:tabular-nums'>${_epidle*_h_pv:,.0f}</td></tr>")
+                st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                            f"<table style='width:100%;border-collapse:collapse'>"
+                            f"{_ep_hdr}{''.join(_ep_tr)}</table></div>",
+                            unsafe_allow_html=True)
+                st.caption("Published decisions, entry-priority scores and "
+                           "execution prices exactly as archived at publish "
+                           "time (`data/overall/book_archive/`) — signature-"
+                           "covered, never recomputed. **Book $** applies the "
+                           "portfolio value above to the published weights.")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 3 — COMBINED BACKTESTING
 # ══════════════════════════════════════════════════════════════════════════
 with tab_bt:
     o = opt["optimal"]
@@ -1610,6 +2161,11 @@ with tab_bt:
         _pt = opt["optimal_pretilt"]
         st.info(f"🔭 **Fundamental overlay applied** — these figures tilt the quant "
                 f"optimum toward the mid-2026 sector view (toggle on the Live tab). "
+                f"⚠️ The view was formed *knowing* how 2021→2026 played out, and the "
+                f"tilt is applied retroactively to that same history — so the "
+                f"overlay-ON historical curves are hindsight-tilted and were not "
+                f"achievable ex-ante (the weights themselves are full-sample-fit "
+                f"either way; see Methodology). "
                 f"This profile: **{o['total_ret']*100:,.0f}%** return / "
                 f"Sharpe **{o['sharpe']:.2f}** *with* the overlay vs "
                 f"**{_pt['total_ret']*100:,.0f}%** / **{_pt['sharpe']:.2f}** without. "
@@ -1638,7 +2194,8 @@ with tab_bt:
                 f"<td style='text-align:right;color:{C_EXIT}'>{row['mdd']*100:.0f}%</td>"
                 f"<td style='text-align:right;font-weight:600'>{row['sharpe']:.2f}</td>"
                 f"<td style='text-align:right'>{row['betalev']*100:.0f}%</td></tr>")
-        st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ch}{''.join(crows)}</table>",
+        st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                    f"<table style='width:100%;border-collapse:collapse'>{ch}{''.join(crows)}</table></div>",
                     unsafe_allow_html=True)
         st.caption("Loading the high-beta / leveraged proxies (β + 2× weight) "
                    "**boosts return but lowers Sharpe** — the drawdown deepens "
@@ -1681,10 +2238,11 @@ with tab_bt:
                             f"<td style='text-align:right'>{d['mdd']*100:.0f}%</td>"
                             f"<td style='text-align:right'>{d['sharpe']:.2f}</td></tr>")
         st.markdown(
+            "<div style='overflow-x:auto;margin:8px 0;'>"
             "<table style='width:100%;font-size:13px;border-collapse:collapse'>"
             "<tr style='background:#f1f5f9'><th style='text-align:left;padding:4px 6px'>Scheme</th>"
             "<th style='text-align:right'>Ret</th><th style='text-align:right'>MDD</th>"
-            "<th style='text-align:right'>Sharpe</th></tr>" + "".join(cmp_rows) + "</table>",
+            "<th style='text-align:right'>Sharpe</th></tr>" + "".join(cmp_rows) + "</table></div>",
             unsafe_allow_html=True)
         st.caption("Leveraged sleeves capped at 10%, high-beta at 18%, core at "
                    "30% — so the optimiser only leans on the 2× / β names when "
@@ -1725,18 +2283,20 @@ with tab_bt:
                   f"<td style='text-align:right'>{row['cagr']*100:.0f}%</td>"
                   f"<td style='text-align:right;color:{C_EXIT}'>{row['mdd']*100:.0f}%</td>"
                   f"<td style='text-align:right;font-weight:600'>{row['sharpe']:.2f}</td></tr>")
-    st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ph}{''.join(pr)}</table>",
+    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                f"<table style='width:100%;border-collapse:collapse'>{ph}{''.join(pr)}</table></div>",
                 unsafe_allow_html=True)
 
-    st.markdown("#### Per-instrument strategy (standalone, out-of-sample)")
+    st.markdown("#### Per-instrument strategy (standalone, model-OOS — "
+                "strategy parameters tuned in-window)")
     st.caption("Each instrument's signal-driven strategy vs buy-&-hold, and its "
                "weight in the optimal blend. Grouped by signal — β = high-beta "
                "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
-               "parent's signal**, not their own: MSTR/MSTU enter and exit on "
+               "parent's signal**, not their own: MSTR/MSTU/ETH enter and exit on "
                "BTC's divergence signal, GDX/UGL on gold's, OIH on XLE's — the "
                "higher-beta name executes on its own price but is steered by the "
                "cleaner parent read. Every asset here runs its **own app's actual "
-               "engine** — BTC/MSTR/MSTU via the BTC app's trained CT model, "
+               "engine** — BTC/MSTR/MSTU/ETH via the BTC app's trained CT model, "
                "GLDM/GDX/UGL via the Gold app's Divergence Pure-Regime, the ETFs "
                "via their tuned configs — so these numbers match each source app. "
                "(BTC's CT features begin ~2024, so its sleeve covers a shorter "
@@ -1771,7 +2331,8 @@ with tab_bt:
                       f"<td style='text-align:right'>{res['win_rate']:.0f}%</td>"
                       f"<td style='text-align:right;font-weight:700'>"
                       f"{o['weights'].get(res['key'],0)*100:.1f}%</td></tr>")
-    st.markdown(f"<table style='width:100%;border-collapse:collapse'>{ah}{''.join(ar)}</table>",
+    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                f"<table style='width:100%;border-collapse:collapse'>{ah}{''.join(ar)}</table></div>",
                 unsafe_allow_html=True)
 
     st.success(
@@ -1792,7 +2353,7 @@ with tab_bt:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# TAB 3 — METHODOLOGY
+# TAB 4 — METHODOLOGY
 # ══════════════════════════════════════════════════════════════════════════
 with tab_explain:
     st.markdown("## 🧠 How Overall Trading works")
@@ -1835,17 +2396,26 @@ signals, positions and back-tests match each source app:
   (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
   premium) with the app's live **Standard MA (above-MA30) entry gate** (U1>+1.3%
   + ≥2 high-breaks, regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL
-  re-entry) — all three assets share the same gate. With the 2026-07 per-asset
-  stop retune (BTC & MSTR signal-exit-only, MSTU −6%) this reproduces the BTC
-  app's headline **BTC +86% / MSTR +266% / MSTU +524%**. The CT feature data
+  re-entry) — all three assets share the same gate. Since the **2026-07-25
+  look-ahead fix**, MSTR/MSTU fills land at the first exchange close *after*
+  the 12:00-UTC signal moment (the old same-date fill preceded the signal by
+  ~15 h and banked the overnight gap; config-unchanged the fix moved MSTR
+  +296%→+184% and MSTU +685%→+402% — BTC/ETH unchanged). Stops were then
+  re-swept on the honest fill (MSTR −3%, MSTU −6%, ETH −8%; BTC stop-less),
+  giving **BTC +58% · MSTR +245% · MSTU +677% · ETH +40%** on the 2026-07-25
+  vintage. Figures drift with data-vintage refreshes. The CT feature data
   begins ~2023-11, so the BTC sleeve covers ~2024→now (the combined engine
-  handles the staggered start).
-- **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** Divergence
-  Pure-Regime with its per-asset regime windows (GLDM 50 / UGL 40 / GDX 100) and
-  per-asset stops — GLDM/GDX −3%, but the leveraged siblings are looser (**UGL
-  signal-only**, **NUGT −5%**), since a tight 1× stop whipsaws a 2× ETF. OOS
-  2021→now: **GLDM +73% · GDX +156% · UGL (stop-less) +247% · NUGT +1183%**
-  (see LEV_SIBLINGS_STOP_EVAL.md).
+  handles the staggered start), and the CT model's training window extends
+  into the displayed period — only bars after its `train_end` are model-blind.
+- **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** middle-path
+  split — dual-MA 25/100 for GLDM/UGL, Divergence Pure-Regime for GDX/NUGT —
+  with per-asset stops (GLDM/UGL −3%, GDX −5%, NUGT −8% after the 2026-07-25
+  re-sweep). Since the 2026-07-25 look-ahead fix the divergence engine decides
+  at close i−1 and fills at close i (its signal needs bar i's realized
+  high/low). Model-OOS 2021→now on the fix-date vintage: **GLDM +137% ·
+  UGL +302% · GDX +110% · NUGT +217%** (strategy thresholds tuned on this
+  window; older LEV_SIBLINGS_STOP_EVAL.md figures pre-date the causal H/L fix
+  and are historical).
 - **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
   `ticker_config`** entries through the same `backtest_ticker` engine their apps
   use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,

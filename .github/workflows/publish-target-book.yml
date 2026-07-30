@@ -7,27 +7,38 @@ name: Publish target book (IBKR Option C)
 # executor next to IB Gateway can `git pull` (or fetch the raw URL) and
 # rebalance an IBKR account without running the model itself.
 #
-# SCHEDULE — two publish cycles per day, every day (Bitcoin trades — and
+# SCHEDULE — ONE publish cycle per day, every day (Bitcoin trades — and
 # BTC-driven signals move — on weekends and US market holidays too; the
 # weekend/holiday guard lives ONLY on the executor side):
 #
-#   * MORNING cycle — starts 12:15 UTC, 15 minutes after the Bitcoin daily bar
-#     closes (12:00 UTC), so the Overall strategy sees BTC's fresh bar AND every
-#     equity app's prior 4:00-PM-ET close. This is the book the 09:45-ET
-#     executor trades (09:45 EDT = 13:45 UTC, 09:45 EST = 14:45 UTC).
-#   * EVENING cycle — starts 16:15 America/New_York (≈4:15 PM ET), 15 minutes
-#     after the US market close, so equity signals are recomputed on their own
-#     intended schedule (the fresh 4-PM-ET bar) instead of waiting for the next
-#     morning, and the audit trail / Daily Audit tab stay current overnight.
+#   * DAILY cycle — starts 7:15 AM US Central (America/Chicago), 15 minutes
+#     after the Bitcoin daily bar closes (12:00 UTC = 7:00 AM CDT), so the
+#     Overall strategy sees BTC's fresh 7:00-AM-CT bar AND every equity app's
+#     prior 4:00-PM-ET close. The DAILY AUDIT runs ONCE, first — and only a
+#     passing audit lets the Target Book publish. This is the book the
+#     09:45-ET executor trades.
+#
+# The book is published ONCE per day by this workflow and then stays frozen
+# until the next morning's cycle — it must NOT update again during the day.
+# The only way to publish a new book intraday is an explicit user action: the
+# 🚀 "Publish new target book" button in the Target Book app (or a manual
+# workflow_dispatch from the Actions tab), both of which bypass the guard.
 #
 # GitHub's `on: schedule` is BEST-EFFORT: fires are routinely delayed 1–2 h and
 # are sometimes dropped entirely (observed: no scheduled fire at all on some
-# days). So each cycle gets SEVERAL cron slots, and the guard below is purely
-# idempotent — every slot asks "has the current cycle's book been published
-# yet?" and publishes if not, no matter the wall-clock hour. A day can only be
-# missed if EVERY slot of both cycles is dropped. Cron is UTC-only (no DST), so
-# the evening slots cover both 4:15 PM EDT (20:15 UTC) and 4:15 PM EST
-# (21:15 UTC); the guard resolves the true cycle start via America/New_York.
+# days). So the cycle gets SEVERAL cron slots, and the guard below is purely
+# idempotent — every slot asks "has today's book been published yet?" and
+# publishes if not, no matter the wall-clock hour. A day can only be missed if
+# EVERY slot is dropped. Cron is UTC-only (no DST), so the slots cover both
+# 7:15 AM CDT (12:15 UTC) and 7:15 AM CST (13:15 UTC); the guard resolves the
+# true cycle start via America/Chicago.
+#
+# 2026-07-25: the slot window was widened 12–17 → 12–23 UTC. A transient upstream
+# feed lag (Yahoo had not yet served Friday's daily bar for the ETF universe on the
+# first-ever weekend run) made the audit fail; with only six slots the day risked
+# ending unpublished. The guard is idempotent and the book's basis is pinned to the
+# 7:15-AM-CT anchor, so a later slot publishes exactly the book the morning run
+# would have — extra slots cost nothing on a day that already published.
 #
 # For an EXACTLY-on-time fire (optional hardening), point any external
 # scheduler (cron-job.org, Cloud Scheduler, the executor VM's crontab) at the
@@ -43,12 +54,24 @@ name: Publish target book (IBKR Option C)
 on:
   workflow_dispatch: {}   # manual run (Actions tab → Run workflow)
   schedule:
-    # MORNING cycle (starts 12:15 UTC) — primary slot + catch-up retries.
-    - cron: "15 12-16 * * *"   # 12:15, 13:15, 14:15, 15:15, 16:15 UTC
+    # DAILY cycle (starts 7:15 AM America/Chicago) — primary slot + catch-up
+    # retries. 12:15 UTC = 7:15 CDT primary (13:15 UTC covers 7:15 CST); later
+    # slots only fire if the day's book still isn't published (guard-skipped
+    # otherwise).
+    - cron: "15 12-23 * * *"   # 12:15 … 23:15 UTC hourly (was 12-17)
     - cron: "45 12,13 * * *"   # 12:45, 13:45 UTC (dense early retries)
-    # EVENING cycle (starts 16:15 ET) — covers EDT (20:15 UTC) and EST
-    # (21:15 UTC) primaries plus one retry each.
-    - cron: "15 20-22 * * *"   # 20:15, 21:15, 22:15 UTC
+    # 2026-07-30: pre-anchor LEAD slots. Every publish since this workflow was
+    # created landed 13:54–17:07 UTC: GitHub delivered each cron fire ~1 h late
+    # (often more) and dropped the day's first slots outright, so with the
+    # earliest slot sitting exactly AT the 12:15 UTC anchor the day's book was
+    # chronically 1.5–3 h late and the app showed yesterday's Targetbooks all
+    # morning. These slots fire BEFORE the anchor so that, after GitHub's
+    # routine delivery delay, they arrive shortly AFTER it and publish on time.
+    # Risk-free by construction: the guard below skips any fire that arrives
+    # before the day's 7:15-AM-CT anchor, and the book's data basis is pinned
+    # to that anchor — so a lead fire can neither publish early nor publish a
+    # different book than the 12:15 slot would have.
+    - cron: "5,25,45 11 * * *" # 11:05/11:25/11:45 UTC → typically land ≥12:15
 
 # contents: write to push the artifacts back to the branch; issues: write so a
 # failed run can open / update a tracking issue (see the "Report failure" step).
@@ -68,37 +91,37 @@ jobs:
       - name: Checkout (this branch)
         uses: actions/checkout@v4
 
-      - name: Publish-cycle guard (idempotent — run until published)
+      - name: Publish-cycle guard (idempotent — once per day, run until published)
         id: guard
-        # Every cron slot asks the same question: "has the CURRENT cycle's book
-        # been published yet?" — and runs only if not. The morning cycle starts
-        # at 12:15 UTC (Bitcoin bar close + 15 min); the evening cycle starts at
-        # 16:15 America/New_York (US market close + 15 min). No wall-clock
-        # whitelist: an arbitrarily delayed cron fire still publishes if the
-        # cycle's book is missing, instead of silently skipping the day.
+        # Every cron slot asks the same question: "has TODAY's book been
+        # published yet?" — and runs only if not. The single daily cycle starts
+        # at 7:15 AM America/Chicago (Bitcoin bar close 7:00 AM CT + 15 min).
+        # Once a book is published for the day, every later scheduled fire
+        # skips — the book stays frozen until tomorrow's cycle. Only a manual
+        # dispatch (the UI's 🚀 publish button / the Actions tab) bypasses this.
+        # No wall-clock whitelist: an arbitrarily delayed cron fire still
+        # publishes if today's book is missing, instead of silently skipping
+        # the day.
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "Manual dispatch — always runs."
+            echo "Manual dispatch (user-requested publish) — always runs."
             echo "run=true"    >> "$GITHUB_OUTPUT"
             echo "slot=manual" >> "$GITHUB_OUTPUT"; exit 0
           fi
           NOW="$(date -u +%s)"
-          MORNING_START="$(date -u -d "$(date -u +%F) 12:15" +%s)"
-          EVENING_START="$(TZ=America/New_York date -d "$(TZ=America/New_York date +%F) 16:15" +%s)"
-          if [ "$NOW" -lt "$MORNING_START" ]; then
-            echo "Before today's 12:15-UTC morning cycle (a fire delayed past "
-            echo "midnight UTC) — yesterday's cycles are done; skipping."
+          CYCLE_START="$(TZ=America/Chicago date -d "$(TZ=America/Chicago date +%F) 07:15" +%s)"
+          if [ "$NOW" -lt "$CYCLE_START" ]; then
+            echo "Before today's 7:15-AM-CT daily cycle (a UTC fire ahead of the"
+            echo "Central-time anchor) — yesterday's cycle is done; skipping."
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "slot=none" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if [ "$NOW" -ge "$EVENING_START" ]; then
-            CYCLE_START="$EVENING_START"; SLOT="evening"
-          else
-            CYCLE_START="$MORNING_START"; SLOT="morning"
-          fi
+          SLOT="daily"
           echo "Current cycle: $SLOT (started $(date -u -d "@$CYCLE_START" -Iseconds))."
-          # Was this cycle's book already published? (jq is preinstalled.)
+          # Was today's book already published? (jq is preinstalled.) A manual
+          # user publish after 7:15 CT counts too — the day's book then stays
+          # as the user published it.
           PUBLISHED="false"
           if [ -f data/overall/daily_audit.json ]; then
             GEN_UTC="$(jq -r '.generated_at_utc // empty' data/overall/daily_audit.json || true)"
@@ -109,10 +132,10 @@ jobs:
             fi
           fi
           if [ "$PUBLISHED" = "true" ]; then
-            echo "This cycle's book is already published (at $GEN_UTC) — skipping."
+            echo "Today's book is already published (at $GEN_UTC) — skipping."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "No published book for this cycle yet — running."
+            echo "No published book for today yet — running."
             echo "run=true"  >> "$GITHUB_OUTPUT"
           fi
           echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
@@ -134,9 +157,9 @@ jobs:
       - name: Refresh BTC feature data (synchronous, guarded)
         if: steps.guard.outputs.run == 'true'
         # The BTC/MSTR/MSTU sleeve reads data/backtest/raw_features_daily.csv.
-        # Pull it fresh RIGHT NOW (the newest BTC bar closed at 12:00 UTC —
-        # minutes before the morning cycle, earlier today for the evening one)
-        # so the freshness audit sees today's completed bar. The validation
+        # Pull it fresh RIGHT NOW (the newest BTC bar closed at 12:00 UTC =
+        # 7:00 AM CDT — minutes before the daily cycle) so the freshness audit
+        # sees today's completed bar. The validation
         # guard restores the committed CSV on any regression, so a failed pull
         # can never poison the engine run — worst case the audit (correctly)
         # flags BTC stale and the publish is withheld.
@@ -155,9 +178,12 @@ jobs:
       - name: Publish target book (audited)
         if: steps.guard.outputs.run == 'true'
         id: publish
-        # Never publishes from stale signals: publish_target_book.py audits every
-        # app's freshness first, retries once after a refresh, and exits 2
-        # (writing the audit trail but NO book) if anything is still stale.
+        # The DAILY AUDIT runs exactly once here, BEFORE the book is written:
+        # publish_target_book.py audits every app's freshness first, retries
+        # once after a refresh, and exits 2 (writing the audit trail but NO
+        # book) if anything is still stale — stale signals never publish.
+        # It also rotates the outgoing book to target_book*_prev.json so the
+        # UI can show the "Previous Targetbook" donut.
         # continue-on-error lets the commit step push that audit trail; the job
         # is then failed loudly by the "Fail if publish failed" step below.
         continue-on-error: true
@@ -184,6 +210,8 @@ jobs:
           # are committed EVEN when the audit failed and no book was written, so
           # the 🕵️ Daily Audit tab shows the stale-run record.
           git add data/overall/target_book.json data/overall/target_book_live.json \
+                  data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
+                  data/overall/book_archive/ \
                   data/overall/daily_audit.json data/backtest/ || true
           if git diff --cached --quiet; then
             echo "No changes — nothing to commit."
@@ -203,12 +231,56 @@ jobs:
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
-      - name: Fail if publish failed or was refused (stale signals)
+      - name: Classify + record the failure (stale-withheld vs engine error)
+        id: classify
         if: steps.guard.outputs.run == 'true' && steps.publish.outcome != 'success'
+        # publish_target_book.py exits 2 when the freshness audit failed and the
+        # book was deliberately WITHHELD (a designed, safe outcome — the executor
+        # keeps the previous verified book); any other non-zero exit is a real
+        # engine/data error. Surface which, plus the stale app list, into the job
+        # summary so the cause is visible WITHOUT relying on Issues being enabled
+        # (they are disabled on this repo — see the "Report failure" step).
         run: |
-          echo "Publish step outcome: ${{ steps.publish.outcome }}."
-          echo "Either the engine errored, or the signal-freshness audit failed and"
-          echo "the book was withheld (see data/overall/daily_audit.json)."
+          set -uo pipefail
+          KIND="error"; STALE="unknown"; ASOF="unknown"; REASON=""
+          if [ -f data/overall/daily_audit.json ]; then
+            ASOF="$(jq -r '.overall.as_of // "unknown"' data/overall/daily_audit.json)"
+            STALE="$(jq -r '(.audit.stale_apps // []) | join(", ")' data/overall/daily_audit.json)"
+            REASON="$(jq -r '.target_book.skip_reason // ""' data/overall/daily_audit.json)"
+            # NB: jq's `//` treats `false` as empty, so `.audit.passed // "unknown"`
+            # would report "unknown" for a genuinely FAILED audit and misclassify a
+            # withheld book as an engine error. Test for the key, then stringify.
+            PASSED="$(jq -r 'if (.audit | has("passed")) then (.audit.passed | tostring) else "unknown" end' data/overall/daily_audit.json)"
+            [ "$PASSED" = "false" ] && KIND="withheld"
+          fi
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          {
+            if [ "$KIND" = "withheld" ]; then
+              echo "### ⏸️ Target book WITHHELD (signal-freshness audit failed)"
+              echo ""
+              echo "This is the **designed safe path**, not a crash: stale signals are never"
+              echo "published. The IBKR executor keeps the previous verified book and its own"
+              echo "freshness guard skips trading if that book ages out — so no bad orders."
+              echo ""
+              echo "- Stale apps: \`${STALE:-none}\`"
+              echo "- Engine as-of: \`${ASOF}\`"
+              [ -n "$REASON" ] && echo "- Reason: \`${REASON}\`"
+              echo ""
+              echo "A later catch-up slot re-runs automatically and publishes once the feeds"
+              echo "catch up (the guard is idempotent, and the book's basis stays pinned to"
+              echo "today's 7:15 AM CT anchor, so a later publish yields the same book)."
+            else
+              echo "### ❌ Target-book publish ERRORED"
+              echo ""
+              echo "The publish step exited non-zero for a reason other than a failed"
+              echo "freshness audit (engine, data feed, or dependency error). See the step log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$KIND" = "withheld" ]; then
+            echo "::warning title=Target book withheld::Freshness audit failed (stale: ${STALE:-none}) — book not published; a catch-up slot will retry."
+          else
+            echo "::error title=Target-book publish errored::Publish step outcome ${{ steps.publish.outcome }} (not an audit refusal) — see log."
+          fi
           exit 1
 
       # Make a broken publish loud: on any failure above, open a tracking issue
@@ -217,6 +289,15 @@ jobs:
       # it to anyone watching issues / notifications too.
       - name: Report failure
         if: failure()
+        # MUST NOT throw. This repo has Issues DISABLED, so the create/comment
+        # calls return HTTP 410 ("Issues has been disabled in this repository")
+        # and an unguarded script fails the step with an "Unhandled error" that
+        # buries the real cause (observed 2026-07-25). Every API call is wrapped:
+        # if issue reporting is unavailable we fall back to the job summary +
+        # an annotation, which the "Classify" step above has already written.
+        # continue-on-error is belt-and-braces so the reporter can never be the
+        # thing that decides the job's status.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -236,28 +317,46 @@ jobs:
               `rather than act on a stale book, so no bad orders result — but today's book `,
               `was not published. Check the run log above.`,
             ].join('\n');
-            // find an existing open failure issue to avoid one-per-day spam
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: label, per_page: 1,
-            });
-            if (existing.data.length) {
-              await github.rest.issues.createComment({
+            // Issues may be DISABLED on this repo (HTTP 410) or the token may
+            // lack scope — either way, reporting must degrade, never throw.
+            const disabled = (e) =>
+              e?.status === 410 || e?.status === 404 || e?.status === 403;
+            try {
+              // find an existing open failure issue to avoid one-per-day spam
+              const existing = await github.rest.issues.listForRepo({
                 owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: existing.data[0].number, body,
+                state: 'open', labels: label, per_page: 1,
               });
-            } else {
-              // ensure the label exists (ignore error if it already does)
-              try {
-                await github.rest.issues.createLabel({
+              if (existing.data.length) {
+                await github.rest.issues.createComment({
                   owner: context.repo.owner, repo: context.repo.repo,
-                  name: label, color: 'd24444',
-                  description: 'Automated: target-book publish failed',
+                  issue_number: existing.data[0].number, body,
                 });
-              } catch (e) { /* label already exists */ }
-              await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title: '⚠️ Target-book publish failed',
-                body, labels: [label],
-              });
+              } else {
+                // ensure the label exists (ignore error if it already does)
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    name: label, color: 'd24444',
+                    description: 'Automated: target-book publish failed',
+                  });
+                } catch (e) { /* label already exists */ }
+                await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: '⚠️ Target-book publish failed',
+                  body, labels: [label],
+                });
+              }
+              core.info('Failure reported to Issues.');
+            } catch (e) {
+              const why = disabled(e)
+                ? `Issues are unavailable on this repository (HTTP ${e.status}) — ` +
+                  `falling back to the job summary.`
+                : `Issue reporting failed (${e?.status ?? '?'}: ${e?.message ?? e}) — ` +
+                  `falling back to the job summary.`;
+              core.warning(why);
+              await core.summary
+                .addRaw(`\n\n> ℹ️ ${why}\n\n`)
+                .addRaw(body)
+                .write();
             }

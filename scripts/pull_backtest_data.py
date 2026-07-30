@@ -8,6 +8,8 @@ Pull ALL data used by the CT model for backtesting:
   - MSTR OHLCV               (yfinance)
   - MSTU OHLCV               (yfinance, post-inception Sep 18 2024)
   - MSTU synthetic prices    (OLS on MSTR log-returns)
+  - ETH-USD OHLCV            (Binance, 12:00-UTC bars — the spot-ETH sleeve
+                              traded off the BTC CT signal; executed as ETHA)
 
 Saves versioned CSVs to data/backtest/ and updates manifest.json.
 
@@ -53,12 +55,13 @@ ANCHOR_HOUR_UTC = 12  # 7am CDT / 6am CST — the daily model's bar boundary
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
-def _binance_klines(start_ms: int, limit: int = 1000, timeout: int = 30):
+def _binance_klines(start_ms: int, limit: int = 1000, timeout: int = 30,
+                    symbol: str = "BTCUSDT"):
     """GET /api/v3/klines from the first Binance host that answers 200."""
     for host in _BINANCE_HOSTS:
         try:
             r = requests.get(host + "/api/v3/klines",
-                             params=dict(symbol="BTCUSDT", interval="1h",
+                             params=dict(symbol=symbol, interval="1h",
                                          startTime=start_ms, limit=limit),
                              timeout=timeout)
             if r.status_code == 200:
@@ -70,27 +73,32 @@ def _binance_klines(start_ms: int, limit: int = 1000, timeout: int = 30):
     return None
 
 
-def fetch_btc_12utc(start_iso: str) -> pd.DataFrame:
-    """BTC daily OHLCV anchored at 12:00 UTC (7am CT), rebucketed from Binance
+def fetch_12utc(start_iso: str, symbol: str = "BTCUSDT") -> pd.DataFrame:
+    """Daily OHLCV anchored at 12:00 UTC (7am CT), rebucketed from Binance
     hourly klines — the SAME bar boundary as the live app (_rebucket_12utc) and
     the daily H/L model. Replaces yfinance's midnight-UTC daily bars so the
     versioned dataset is consistent with the Live and Historical views.
 
-    Volume is the summed Binance base-asset (BTC) volume; every volume feature
+    Used for BTC (the signal asset) and ETH (the spot-ETH sleeve): trading the
+    ETH sleeve off a 12:00-UTC bar means its fill happens at the very moment the
+    BTC signal bar closes — a genuine same-bar fill, which a US-hours ETF price
+    could only approximate.
+
+    Volume is the summed Binance base-asset volume; every volume feature
     downstream (log-diff, z-score, MA ratio) is scale-invariant.
     """
     start_ms = int(pd.Timestamp(start_iso, tz="UTC").timestamp() * 1000)
     end_ms   = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
     cursor, rows = start_ms, []
     while cursor < end_ms:
-        batch = _binance_klines(cursor)
+        batch = _binance_klines(cursor, symbol=symbol)
         if not batch or not isinstance(batch[-1], (list, tuple)):
             break
         rows.extend(batch)
         cursor = int(batch[-1][0]) + 3600_000
         time.sleep(0.05)
     if not rows:
-        raise RuntimeError("Binance hourly klines unavailable (all hosts failed)")
+        raise RuntimeError(f"Binance hourly klines unavailable for {symbol} (all hosts failed)")
     cols = ["open_time", "open", "high", "low", "close", "volume",
             "close_time", "qv", "n", "tb", "tq", "ig"]
     h = pd.DataFrame(rows, columns=cols)
@@ -280,7 +288,7 @@ def main() -> int:
 
     # ── 1. BTC-USD OHLCV (12:00-UTC bars from Binance hourly) ─────────────────
     print("Downloading BTC-USD (Binance hourly → 12:00-UTC daily bars) …")
-    btc = fetch_btc_12utc(FETCH_FROM)[["open","high","low","close","volume"]].ffill()
+    btc = fetch_12utc(FETCH_FROM)[["open","high","low","close","volume"]].ffill()
 
     # ── 2. Macro series ───────────────────────────────────────────────────────
     print("Downloading macro series …")
@@ -375,6 +383,13 @@ def main() -> int:
     print("Synthesising MSTU pre-inception (OLS) …")
     mstu_syn = synthesise_mstu(mstr, mstu).to_frame("close")
 
+    # ETH spot on the SAME 12:00-UTC bar boundary as BTC, so the ETH sleeve's
+    # fill lands exactly when the BTC signal bar closes.  ETH is the traded
+    # *signal* asset; live execution goes through the ETHA ETF (see
+    # scripts/ibkr_symbols.py), exactly as the BTC sleeve executes via IBIT.
+    print("Downloading ETH-USD (Binance hourly → 12:00-UTC daily bars) …")
+    eth = fetch_12utc(FETCH_FROM, symbol="ETHUSDT")[["open","high","low","close","volume"]].ffill()
+
     # ── 7. Quality checks ─────────────────────────────────────────────────────
     print("\nQuality checks:")
     rf_ok   = validate_raw("raw_features", df)
@@ -382,8 +397,9 @@ def main() -> int:
     mstr_ok = validate("MSTR",              mstr,     min_rows=200)
     mstu_ok = validate("MSTU (actual)",     mstu,     min_rows=50)
     msyn_ok = validate("MSTU (synthetic)",  mstu_syn, min_rows=100)
+    eth_ok  = validate("ETH-USD",           eth,      min_rows=300)
 
-    all_ok = all([rf_ok, btc_ok, mstr_ok, mstu_ok, msyn_ok])
+    all_ok = all([rf_ok, btc_ok, mstr_ok, mstu_ok, msyn_ok, eth_ok])
     if not all_ok:
         print("\n⚠  One or more QC checks failed — data saved with warnings.")
     else:
@@ -396,6 +412,7 @@ def main() -> int:
     mstr.to_csv(     DATA_DIR / "mstr_daily.csv")
     mstu.to_csv(     DATA_DIR / "mstu_daily.csv")
     mstu_syn.to_csv( DATA_DIR / "mstu_synthetic_daily.csv")
+    eth.to_csv(      DATA_DIR / "eth_usd_daily.csv")
 
     # ── 9. Manifest ───────────────────────────────────────────────────────────
     manifest = {
@@ -455,6 +472,19 @@ def main() -> int:
                 "date_to":         str(mstu_syn.index[-1].date()),
                 "checksum_sha256": _checksum(mstu_syn),
                 "qc_passed":       msyn_ok,
+            },
+            "eth_usd_daily": {
+                "file":            "eth_usd_daily.csv",
+                "ticker":          "ETH-USD (Binance ETHUSDT, 12:00-UTC bars)",
+                "note":            ("spot-ETH sleeve traded off the BTC CT signal; same bar "
+                                    "anchor as BTC so the fill lands on the signal bar's close. "
+                                    "Live execution is via the ETHA ETF (cf. BTC→IBIT). "
+                                    "Volume is in ETH (base asset); volume features are scale-invariant."),
+                "rows":            len(eth),
+                "date_from":       str(eth.index[0].date()),
+                "date_to":         str(eth.index[-1].date()),
+                "checksum_sha256": _checksum(eth),
+                "qc_passed":       eth_ok,
             },
         },
     }

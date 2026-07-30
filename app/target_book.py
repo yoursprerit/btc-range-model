@@ -27,11 +27,93 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
 SCHEMA = "overall-target-book/v1"
 SIG_ALG = "HMAC-SHA256"
+
+
+def prev_path(path: Path) -> Path:
+    """``target_book.json`` → ``target_book_prev.json`` (same directory)."""
+    path = Path(path)
+    return path.with_name(path.stem + "_prev" + path.suffix)
+
+
+# ── dated as-of archive ──────────────────────────────────────────────────────
+# One JSON per signal day (keyed by the book's ``as_of``), so the UI's
+# Historical View can show the book that was ACTUALLY published from a past
+# bar's committed signals — the as-of record — instead of only a current-
+# weights projection.  An intraday re-publish for the same ``as_of`` replaces
+# that day's record: last publish wins, matching what the executor traded.
+ARCHIVE_DIRNAME = "book_archive"
+
+
+def archive_path(book_path: Path, as_of) -> Path:
+    """``…/target_book_live.json`` + as_of → ``…/book_archive/<as_of>.json``."""
+    return (Path(book_path).parent / ARCHIVE_DIRNAME
+            / f"{pd.Timestamp(as_of).date()}.json")
+
+
+def archive_book(payload: dict, book_path: Path,
+                 secret: str | None = None) -> Path | None:
+    """Persist *payload* as the dated as-of record next to *book_path*.
+
+    Signed with *secret* when given (same HMAC as the live book), so archived
+    records stay verifiable.  Best-effort: a failure to archive never blocks a
+    publish.  Returns the path written, or None."""
+    try:
+        as_of = payload.get("as_of")
+        if not as_of:
+            return None
+        p = archive_path(book_path, as_of)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(dumps(payload, secret))
+        return p
+    except Exception:
+        return None
+
+
+_ROTATE_TZ = "America/Chicago"     # the publish cycle's anchor timezone
+
+
+def rotate_prev(path: Path, now=None) -> bool:
+    """Preserve the outgoing book at *path* as ``*_prev.json`` before a new one
+    lands, so the UI's *Previous Targetbook* always shows **yesterday's** book.
+
+    Day-aware (America/Chicago, the 7:15-AM-CT publish anchor): the outgoing
+    book is rotated only when it was generated on an EARLIER Central-time day
+    than *now*.  An intraday re-publish (the UI's 🚀 button) therefore replaces
+    today's book WITHOUT clobbering the previous-day book in the prev slot —
+    "Previous Targetbook" keeps meaning yesterday's, not "an hour ago's".
+
+    Returns True when the prev file was (re)written.  Best-effort: a
+    missing/unreadable old book never blocks a publish."""
+    path = Path(path)
+    try:
+        if not path.exists():
+            return False
+        text = path.read_text()
+        try:
+            gen = json.loads(text).get("generated_at_utc")
+            gen_ts = pd.Timestamp(gen)
+            if gen_ts.tzinfo is None:
+                gen_ts = gen_ts.tz_localize("UTC")
+            now_ts = pd.Timestamp(now) if now is not None else \
+                pd.Timestamp(datetime.now(timezone.utc))
+            if now_ts.tzinfo is None:
+                now_ts = now_ts.tz_localize("UTC")
+            if gen_ts.tz_convert(_ROTATE_TZ).date() >= \
+                    now_ts.tz_convert(_ROTATE_TZ).date():
+                return False               # same-day re-publish — keep yesterday's prev
+        except Exception:
+            pass                           # unparsable stamp → rotate (old behaviour)
+        prev_path(path).write_text(text)
+        return True
+    except Exception:
+        pass
+    return False
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -113,8 +195,14 @@ def verify_signature(payload: dict, secret: str | None) -> tuple[bool, str]:
 
 
 def validate(payload: dict, today: pd.Timestamp, *, max_bar_age_days: int = 4,
-             max_gen_age_hours: float = 12.0) -> tuple[bool, str]:
+             max_gen_age_hours: float = 30.0) -> tuple[bool, str]:
     """(ok, reason) structural + freshness checks, independent of the broker.
+
+    The book is published ONCE daily (≈7:15 AM CT) and intentionally frozen
+    until the next morning, so the generation-age window must span a full
+    publish cycle plus slack: 30 h accepts yesterday's book when today's
+    publish was withheld by a failed audit (the documented fallback), while
+    still rejecting anything older.
 
     Rejects a wrong schema, a stale signal bar (dead feed), a book generated
     too long ago (so a forgotten/queued artifact can't trade an old decision),

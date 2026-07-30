@@ -3,7 +3,7 @@
 Pushes the Overall app's *live-adjusted* target book into an Interactive Brokers
 paper account and reconciles it against the account's current positions, once per
 trading day.  It reuses the exact same computation the Streamlit app renders — so
-the paper account mirrors the "Recommended now (live-adjusted)" allocation you
+the paper account mirrors the "Recommended Live Possible Targetbook" allocation you
 see on screen — and never re-implements any signal logic:
 
     results   = overall_core.run_universe()                     # every strategy, live
@@ -74,14 +74,21 @@ class TargetBook:
     actions: list[dict]              # the gate's per-asset action rows (for logging)
 
 
-def compute_target_book(profile: str = None, results: list | None = None) -> TargetBook:
-    """Run the full engine and return today's live-adjusted target weights.
+def compute_target_book(profile: str = None, results: list | None = None,
+                        live_adjust: bool = True) -> TargetBook:
+    """Run the full engine and return today's target weights.
 
-    Mirrors ``app/overall_app.py``'s live path exactly: optimise for the chosen
+    With ``live_adjust=True`` (default — the interactive rebalancer) this
+    mirrors ``app/overall_app.py``'s live path exactly: optimise for the chosen
     risk profile (default = the app's ``DEFAULT_PROFILE``), overlay live spot,
     then gate the allocation with the live-exit override
     (``include_entries=True``) so a name whose live price has already broken its
     trend is dropped before we trade it.
+
+    With ``live_adjust=False`` (the once-daily PUBLISHER) the book is built
+    from the COMMITTED last-close signals only — no live-spot overlay, no
+    live-exit override — so the published Target Book is exactly the committed
+    allocation the Overall app's action plan shows, reproducible all day.
 
     ``results`` — an already-computed ``oc.run_universe()`` output may be passed
     in (the publisher runs the universe once, audits its freshness, and only
@@ -103,12 +110,17 @@ def compute_target_book(profile: str = None, results: list | None = None) -> Tar
                               mdd_floor=prof["mdd_floor"], objective=prof["objective"],
                               fundamental=True)
 
-    # live spot overlay + live-exit override — identical to the app.
-    spot = oc.fetch_spot()
-    oc.apply_spot(results, spot)
-    live_exits = oc.live_exit_keys(results, spot, include_entries=True)
-    gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
-                                      caps=caps, force_exit=live_exits)
+    if live_adjust:
+        # live spot overlay + live-exit override — identical to the app.
+        spot = oc.fetch_spot()
+        oc.apply_spot(results, spot)
+        live_exits = oc.live_exit_keys(results, spot, include_entries=True)
+        gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
+                                          caps=caps, force_exit=live_exits)
+    else:
+        # committed signals only — the frozen published book.
+        gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
+                                          caps=caps)
 
     targets = {k: float(w) for k, w in gate["target"].items() if w and w > 0}
 
