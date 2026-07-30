@@ -333,23 +333,66 @@ for pk in ov.PARENT_KEYS:
 
 
 def _alloc_area_fig(weights: pd.DataFrame, sata: pd.Series, title: str):
-    """Stacked-area figure of the replayed book's daily % allocation — one
-    band per asset (in its accent colour) plus the SATA idle-cash remainder;
-    every day stacks to 100%.  Used below both Growth charts."""
+    """Stacked-area figure of the replayed book's daily % allocation, kept
+    deliberately simple to read: ONE band per **signal group** (each app's
+    family of instruments — e.g. BTC·MSTR·MSTU·ETH — summed and drawn in the
+    parent's accent colour, so every band has a distinct colour), largest
+    group first, groups that never matter folded into a single *Other* band,
+    and the SATA idle-cash remainder in light grey on top.  Every day stacks
+    to 100%; hovering a band shows its per-asset split that day.  Used below
+    both Growth charts."""
+    fam: dict[str, list[str]] = {}                 # parent signal → member cols
+    for c in weights.columns:
+        if float(weights[c].max()) > 0.0005:
+            fam.setdefault(by_key.get(c, {}).get("parent", c), []).append(c)
+    groups = sorted(((p, mem, weights[mem].sum(axis=1)) for p, mem in fam.items()),
+                    key=lambda g: -float(g[2].mean()))
+    # a group that never exceeds 5% and averages <1% is visual noise — fold it
+    small = [g for g in groups if g[2].mean() < 0.01 and g[2].max() < 0.05]
+    big = [g for g in groups if g not in small]
+
+    def _split(mem):                               # per-day member breakdown
+        arr = weights[mem].to_numpy()
+        return [" · ".join(f"{k} {v * 100:.1f}%" for k, v in zip(mem, row)
+                           if v > 0.001) or "—" for row in arr]
+
     fig = go.Figure()
-    for c in [c for c in weights.columns if float(weights[c].max()) > 0.0005]:
+    # two apps can share an accent (GLDM and GDXM are both gold) — give any
+    # repeat a fallback colour so no two bands ever look identical
+    alt = iter(["#78350f", "#db2777", "#0ea5e9", "#84cc16", "#64748b"])
+    used: set = set()
+    for p, mem, g in big:
+        meta = by_key.get(mem[0], {})
+        label = f"{meta.get('emoji', '')} {p}".strip() + \
+                (f" +{len(mem) - 1}" if len(mem) > 1 else "")
+        color = meta.get("accent", "#888")
+        if color in used:
+            color = next(alt, "#334155")
+        used.add(color)
         fig.add_trace(go.Scatter(
-            x=weights.index, y=weights[c].to_numpy() * 100, name=c,
+            x=g.index, y=g.to_numpy() * 100, name=label,
             mode="lines", stackgroup="book",
-            line=dict(width=0.5, color=by_key.get(c, {}).get("accent", "#888")),
-            hovertemplate=f"{c}: %{{y:.1f}}%<extra></extra>"))
+            line=dict(width=0, color=color),
+            customdata=_split(mem),
+            hovertemplate="%{fullData.name}: <b>%{y:.1f}%</b><br>"
+                          "%{customdata}<extra></extra>"))
+    if small:
+        gs = sum(g[2] for g in small)
+        mems = [c for g in small for c in g[1]]
+        fig.add_trace(go.Scatter(
+            x=gs.index, y=gs.to_numpy() * 100,
+            name=f"Other ({len(mems)} small sleeves)",
+            mode="lines", stackgroup="book", line=dict(width=0, color="#94a3b8"),
+            customdata=_split(mems),
+            hovertemplate="Other: <b>%{y:.1f}%</b><br>"
+                          "%{customdata}<extra></extra>"))
     fig.add_trace(go.Scatter(
-        x=sata.index, y=sata.to_numpy() * 100, name="SATA (idle)",
-        mode="lines", stackgroup="book", line=dict(width=0.5, color="#334155"),
-        hovertemplate="SATA: %{y:.1f}%<extra></extra>"))
+        x=sata.index, y=sata.to_numpy() * 100, name="💵 SATA (idle cash)",
+        mode="lines", stackgroup="book", line=dict(width=0, color="#cbd5e1"),
+        hovertemplate="SATA idle cash: <b>%{y:.1f}%</b><extra></extra>"))
     fig.update_layout(height=380, margin=dict(t=30, b=10, l=10, r=10),
                       yaxis=dict(title="% of book", range=[0, 100.5]),
-                      legend=dict(orientation="h", y=-0.12),
+                      legend=dict(orientation="h", y=-0.14),
                       hovermode="x unified",
                       title=dict(text=title, font_size=13))
     return fig
@@ -1356,12 +1399,13 @@ with tab_live:
                         f"{_sm['start'].strftime('%b %d, %Y')} — every asset "
                         f"plus SATA (stacks to 100%)"),
                     use_container_width=True)
-                st.caption("The exact book the P&L above compounds each day: "
-                           "walk-forward anchors × the as-of priority tilt, "
-                           "water-filled to the profile caps over the sleeves "
-                           "in the market; the remainder sits in **SATA**. "
-                           "Allocations shift daily as priorities move — even "
-                           "when no Action signal changes.")
+                st.caption("The exact book the P&L above compounds each day, "
+                           "**one colour per signal group** (e.g. ₿ BTC covers "
+                           "BTC·MSTR·MSTU·ETH — hover any band for that day's "
+                           "per-asset split); grey on top is idle cash in "
+                           "**SATA**. Bands widen and narrow daily as "
+                           "priorities move — even when no Action signal "
+                           "changes.")
 
             # ── per-asset breakdown — opt-in via toggle so the page stays clean
             # (a nested st.expander is not allowed inside the section expander)
@@ -2365,10 +2409,10 @@ with tab_bt:
                             "Daily % allocation — every asset plus SATA "
                             "(stacks to 100%)"),
             use_container_width=True)
-        st.caption("The book the back-test compounds each day: anchors "
-                   "(re-fit yearly on prior data) × the as-of priority tilt, "
-                   "water-filled to the profile caps over the sleeves in the "
-                   "market; the remainder sits in **SATA**. Allocations shift "
+        st.caption("The book the back-test compounds each day, **one colour "
+                   "per signal group** (e.g. ₿ BTC covers BTC·MSTR·MSTU·ETH — "
+                   "hover any band for that day's per-asset split); grey on "
+                   "top is idle cash in **SATA**. Bands widen and narrow "
                    "daily as priorities move — even when no Action signal "
                    "changes — exactly like the live book.")
 
