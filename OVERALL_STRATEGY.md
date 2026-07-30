@@ -127,15 +127,21 @@ metrics, profile comparison, Growth-of-$100k curve, period breakdown, the
 in which
 
 * the **funded set** each day is the sleeves the engines actually held (decided
-  at the previous close),
+  at the previous close), with position state **carried across non-trading
+  days** — the crypto sleeves put weekends into the calendar, and a carried
+  equity position keeps its weight while contributing 0 return until its next
+  bar, instead of looking "sold" into a phantom crypto/SATA weekend book,
 * each sleeve is sized by **anchor weights × (0.5 + entry-priority)**, priority
   rebuilt daily from as-of inputs (momentum vs SMA50, the rolling sentiment
   gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime rule), lagged one
   bar and water-filled to the profile caps,
 * the **anchor weights are re-fit each Jan 1 on data strictly before that date**
   (cap-normalised equal weight during the first-year warm-up), with the
-  fundamental overlay **excluded** (it is a mid-2026 view — hindsight relative
-  to history; it tilts today's live book only).
+  (now fully retired) fundamental overlay excluded,
+* **SATA accrues on weekday bars only** — its coupon is 0.13/250 per *business*
+  day, so crediting the crypto calendar's weekend bars would compound the cash
+  yield to ~19%/yr instead of ~13% (US market holidays still credit under the
+  weekday rule — a ≲0.7%/yr residual on the cash slice, noted, not modelled).
 
 Nothing in the published curve uses information from after the day it
 describes; `scripts/check_lookahead.py` enforces this by truncation

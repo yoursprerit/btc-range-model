@@ -8,10 +8,10 @@ The app's per-profile back-test PREVIOUSLY held the optimiser's full-history wei
 
 ## Method
 
-* **Funded set (gate)** on day *t* = sleeves in the market on *t* per the engines' own `pos_series` (decided at the close of *t−1*; causal, next-bar execution as always).
+* **Funded set (gate)** on day *t* = sleeves in the market on *t* per the engines' own `pos_series` (decided at the close of *t−1*; causal, next-bar execution as always). Position state is **carried across non-trading days**: the crypto sleeves put weekends into the calendar, and without the carry every equity position looked sold each Friday — water-filling weekend books into crypto or 100% SATA. Carried sleeves keep their weight and contribute 0 return until their next bar.
 * **Priority components**, all as-of and lagged one bar, min-max ranked across each day's funded set exactly like `compute_priorities`: momentum = parent close vs 50-day SMA; sentiment = `macro_sentiment` (a causal rolling series by construction); win-rate = expanding fraction of the sleeve's closed winning trades; Sharpe = expanding annualised Sharpe of the sleeve's strategy returns (≥60 bars); regime = close > MA20 with MA20 rising (the `bull_regime` rule).
 * **Anchors**: the first three variants deliberately share the full-history optimal weights (per profile, fundamental overlay ON) so their gaps isolate the daily gate/tilt effects; the **walk-forward row re-fits anchors each Jan 1 on prior data only** (equal-weight warm-up, overlay OFF) — the app's published construction, prefix-invariance-verified by `scripts/check_lookahead.py`.
-* **Idle capital** earns the SATA daily yield in every variant.
+* **Idle capital** earns the SATA daily yield in every variant — credited on weekday bars only (the coupon is 0.13/250 per BUSINESS day; crediting weekend bars would compound to ~19%/yr).
 * `gate only` water-fills the plain anchors over the funded set (no tilt) — separating the *concentration* effect from the *priority-tilt* effect.
 
 ## Results
@@ -23,21 +23,21 @@ The app's per-profile back-test PREVIOUSLY held the optimiser's full-history wei
 | Fixed-weight (in-sample anchors) | full | +864.3% | +50.3% | -10.5% | 2.46 |
 | Fixed-weight (in-sample anchors) | since 2025 | +195.7% | +99.1% | -10.1% | 3.14 |
 | Fixed-weight (in-sample anchors) | since Mar 2026 | +28.1% | +82.0% | -10.1% | 2.51 |
-| Gate only (no tilt) | full | +2174.0% | +75.3% | -24.2% | 1.91 |
-| Gate only (no tilt) | since 2025 | +340.8% | +156.6% | -23.8% | 2.49 |
-| Gate only (no tilt) | since Mar 2026 | +38.3% | +119.0% | -23.8% | 1.67 |
-| Gate + priority tilt | full | +2223.8% | +76.0% | -24.2% | 1.92 |
-| Gate + priority tilt | since 2025 | +349.8% | +159.9% | -22.7% | 2.52 |
-| Gate + priority tilt | since Mar 2026 | +41.4% | +131.3% | -22.7% | 1.78 |
-| Walk-forward gate + tilt (published) | full | +1400.3% | +62.7% | -24.2% | 1.75 |
-| Walk-forward gate + tilt (published) | since 2025 | +313.0% | +146.2% | -22.4% | 2.45 |
-| Walk-forward gate + tilt (published) | since Mar 2026 | +41.7% | +132.2% | -22.4% | 1.81 |
+| Gate only (no tilt) | full | +1754.8% | +69.0% | -24.2% | 1.81 |
+| Gate only (no tilt) | since 2025 | +290.9% | +137.7% | -24.2% | 2.32 |
+| Gate only (no tilt) | since Mar 2026 | +36.1% | +110.7% | -24.2% | 1.60 |
+| Gate + priority tilt | full | +1793.2% | +69.7% | -24.2% | 1.81 |
+| Gate + priority tilt | since 2025 | +297.5% | +140.3% | -23.1% | 2.35 |
+| Gate + priority tilt | since Mar 2026 | +39.1% | +122.3% | -23.1% | 1.71 |
+| Walk-forward gate + tilt (published) | full | +1107.7% | +56.5% | -24.2% | 1.63 |
+| Walk-forward gate + tilt (published) | since 2025 | +264.6% | +127.4% | -22.8% | 2.27 |
+| Walk-forward gate + tilt (published) | since Mar 2026 | +39.6% | +124.2% | -22.8% | 1.75 |
 
-**Full-period deltas** — gate-only vs fixed: CAGR +25.1pt, Sharpe -0.54, maxDD -13.7pt · gate+tilt vs fixed: CAGR +25.7pt, Sharpe -0.53, maxDD -13.7pt · tilt alone (vs gate-only): CAGR +0.7pt, Sharpe +0.01 · walk-forward anchors vs in-sample anchors: CAGR -13.3pt — the size of the weight-level look-ahead the published numbers no longer carry.
+**Full-period deltas** — gate-only vs fixed: CAGR +18.8pt, Sharpe -0.65, maxDD -13.7pt · gate+tilt vs fixed: CAGR +19.4pt, Sharpe -0.64, maxDD -13.7pt · tilt alone (vs gate-only): CAGR +0.6pt, Sharpe +0.01 · walk-forward anchors vs in-sample anchors: CAGR -13.2pt — the size of the weight-level look-ahead the published numbers no longer carry.
 
-*Gate only*: mean daily one-way turnover 23.7% (p95 100.0%), a >0.5% rebalance on 47% of days, average SATA weight 15%.
-*Gate + tilt*: mean daily one-way turnover 23.9% (p95 100.0%), a >0.5% rebalance on 64% of days, average SATA weight 15%.
-*Walk-forward (published)*: mean daily one-way turnover 23.7% (p95 100.0%), a >0.5% rebalance on 69% of days, average SATA weight 15%.
+*Gate only*: mean daily one-way turnover 9.4% (p95 36.4%), a >0.5% rebalance on 35% of days, average SATA weight 2%.
+*Gate + tilt*: mean daily one-way turnover 9.7% (p95 35.7%), a >0.5% rebalance on 55% of days, average SATA weight 2%.
+*Walk-forward (published)*: mean daily one-way turnover 9.5% (p95 38.3%), a >0.5% rebalance on 61% of days, average SATA weight 2%.
 
 ### Growth
 
@@ -46,21 +46,21 @@ The app's per-profile back-test PREVIOUSLY held the optimiser's full-history wei
 | Fixed-weight (in-sample anchors) | full | +1710.9% | +68.3% | -21.2% | 1.79 |
 | Fixed-weight (in-sample anchors) | since 2025 | +293.2% | +138.6% | -21.2% | 2.65 |
 | Fixed-weight (in-sample anchors) | since Mar 2026 | +49.5% | +164.5% | -21.2% | 2.16 |
-| Gate only (no tilt) | full | +2904.4% | +84.3% | -30.1% | 1.79 |
-| Gate only (no tilt) | since 2025 | +441.1% | +192.3% | -30.1% | 2.45 |
-| Gate only (no tilt) | since Mar 2026 | +35.8% | +109.5% | -30.1% | 1.40 |
-| Gate + priority tilt | full | +2994.1% | +85.3% | -30.0% | 1.79 |
-| Gate + priority tilt | since 2025 | +445.6% | +193.8% | -29.2% | 2.44 |
-| Gate + priority tilt | since Mar 2026 | +40.2% | +126.4% | -29.2% | 1.52 |
-| Walk-forward gate + tilt (published) | full | +1746.7% | +68.9% | -30.5% | 1.58 |
-| Walk-forward gate + tilt (published) | since 2025 | +439.6% | +191.7% | -28.2% | 2.44 |
-| Walk-forward gate + tilt (published) | since Mar 2026 | +41.3% | +130.9% | -28.2% | 1.57 |
+| Gate only (no tilt) | full | +2363.3% | +77.9% | -30.5% | 1.70 |
+| Gate only (no tilt) | since 2025 | +382.9% | +171.9% | -30.5% | 2.31 |
+| Gate only (no tilt) | since Mar 2026 | +34.4% | +104.3% | -30.5% | 1.36 |
+| Gate + priority tilt | full | +2427.9% | +78.7% | -30.0% | 1.70 |
+| Gate + priority tilt | since 2025 | +384.5% | +172.5% | -29.6% | 2.29 |
+| Gate + priority tilt | since Mar 2026 | +38.7% | +120.5% | -29.6% | 1.48 |
+| Walk-forward gate + tilt (published) | full | +1421.1% | +63.1% | -30.5% | 1.49 |
+| Walk-forward gate + tilt (published) | since 2025 | +375.9% | +169.4% | -28.6% | 2.29 |
+| Walk-forward gate + tilt (published) | since Mar 2026 | +39.9% | +125.4% | -28.6% | 1.54 |
 
-**Full-period deltas** — gate-only vs fixed: CAGR +16.0pt, Sharpe -0.00, maxDD -8.9pt · gate+tilt vs fixed: CAGR +17.0pt, Sharpe -0.00, maxDD -8.8pt · tilt alone (vs gate-only): CAGR +1.0pt, Sharpe -0.00 · walk-forward anchors vs in-sample anchors: CAGR -16.4pt — the size of the weight-level look-ahead the published numbers no longer carry.
+**Full-period deltas** — gate-only vs fixed: CAGR +9.6pt, Sharpe -0.09, maxDD -9.3pt · gate+tilt vs fixed: CAGR +10.4pt, Sharpe -0.09, maxDD -8.8pt · tilt alone (vs gate-only): CAGR +0.8pt, Sharpe -0.00 · walk-forward anchors vs in-sample anchors: CAGR -15.6pt — the size of the weight-level look-ahead the published numbers no longer carry.
 
-*Gate only*: mean daily one-way turnover 20.9% (p95 100.0%), a >0.5% rebalance on 47% of days, average SATA weight 14%.
-*Gate + tilt*: mean daily one-way turnover 21.4% (p95 100.0%), a >0.5% rebalance on 77% of days, average SATA weight 14%.
-*Walk-forward (published)*: mean daily one-way turnover 22.1% (p95 100.0%), a >0.5% rebalance on 72% of days, average SATA weight 14%.
+*Gate only*: mean daily one-way turnover 6.4% (p95 30.0%), a >0.5% rebalance on 35% of days, average SATA weight 1%.
+*Gate + tilt*: mean daily one-way turnover 7.0% (p95 30.0%), a >0.5% rebalance on 71% of days, average SATA weight 1%.
+*Walk-forward (published)*: mean daily one-way turnover 7.8% (p95 32.9%), a >0.5% rebalance on 64% of days, average SATA weight 1%.
 
 ### Aggressive
 
@@ -69,27 +69,27 @@ The app's per-profile back-test PREVIOUSLY held the optimiser's full-history wei
 | Fixed-weight (in-sample anchors) | full | +2127.5% | +74.7% | -32.8% | 1.48 |
 | Fixed-weight (in-sample anchors) | since 2025 | +340.4% | +156.5% | -26.5% | 2.27 |
 | Fixed-weight (in-sample anchors) | since Mar 2026 | +75.4% | +289.3% | -26.5% | 2.24 |
-| Gate only (no tilt) | full | +4454.3% | +98.7% | -41.4% | 1.53 |
-| Gate only (no tilt) | since 2025 | +581.7% | +238.5% | -40.4% | 2.08 |
-| Gate only (no tilt) | since Mar 2026 | +65.5% | +238.3% | -40.4% | 1.61 |
-| Gate + priority tilt | full | +4725.6% | +100.7% | -41.2% | 1.54 |
-| Gate + priority tilt | since 2025 | +593.0% | +242.0% | -39.7% | 2.08 |
-| Gate + priority tilt | since Mar 2026 | +71.0% | +266.0% | -39.7% | 1.68 |
-| Walk-forward gate + tilt (published) | full | +1227.8% | +59.2% | -44.5% | 1.29 |
-| Walk-forward gate + tilt (published) | since 2025 | +334.5% | +154.3% | -33.3% | 1.99 |
-| Walk-forward gate + tilt (published) | since Mar 2026 | +27.8% | +81.0% | -33.3% | 1.07 |
+| Gate only (no tilt) | full | +3756.8% | +92.8% | -41.4% | 1.47 |
+| Gate only (no tilt) | since 2025 | +517.6% | +217.9% | -40.7% | 1.99 |
+| Gate only (no tilt) | since Mar 2026 | +62.6% | +224.3% | -40.7% | 1.57 |
+| Gate + priority tilt | full | +3983.8% | +94.8% | -41.2% | 1.48 |
+| Gate + priority tilt | since 2025 | +525.7% | +220.5% | -40.0% | 1.99 |
+| Gate + priority tilt | since Mar 2026 | +68.0% | +250.9% | -40.0% | 1.65 |
+| Walk-forward gate + tilt (published) | full | +987.5% | +53.6% | -44.5% | 1.21 |
+| Walk-forward gate + tilt (published) | since 2025 | +287.9% | +136.6% | -33.7% | 1.85 |
+| Walk-forward gate + tilt (published) | since Mar 2026 | +25.7% | +73.9% | -33.7% | 1.02 |
 
-**Full-period deltas** — gate-only vs fixed: CAGR +24.0pt, Sharpe +0.05, maxDD -8.7pt · gate+tilt vs fixed: CAGR +26.0pt, Sharpe +0.06, maxDD -8.4pt · tilt alone (vs gate-only): CAGR +2.1pt, Sharpe +0.01 · walk-forward anchors vs in-sample anchors: CAGR -41.6pt — the size of the weight-level look-ahead the published numbers no longer carry.
+**Full-period deltas** — gate-only vs fixed: CAGR +18.1pt, Sharpe -0.01, maxDD -8.7pt · gate+tilt vs fixed: CAGR +20.1pt, Sharpe +0.00, maxDD -8.4pt · tilt alone (vs gate-only): CAGR +2.0pt, Sharpe +0.01 · walk-forward anchors vs in-sample anchors: CAGR -41.2pt — the size of the weight-level look-ahead the published numbers no longer carry.
 
-*Gate only*: mean daily one-way turnover 19.2% (p95 100.0%), a >0.5% rebalance on 45% of days, average SATA weight 14%.
-*Gate + tilt*: mean daily one-way turnover 19.8% (p95 100.0%), a >0.5% rebalance on 76% of days, average SATA weight 14%.
-*Walk-forward (published)*: mean daily one-way turnover 20.0% (p95 100.0%), a >0.5% rebalance on 74% of days, average SATA weight 14%.
+*Gate only*: mean daily one-way turnover 5.3% (p95 28.1%), a >0.5% rebalance on 32% of days, average SATA weight 0%.
+*Gate + tilt*: mean daily one-way turnover 5.9% (p95 27.4%), a >0.5% rebalance on 70% of days, average SATA weight 0%.
+*Walk-forward (published)*: mean daily one-way turnover 5.3% (p95 27.5%), a >0.5% rebalance on 67% of days, average SATA weight 0%.
 
 ## Findings
 
-* **The gate (concentration onto live longs) is the dominant daily-adjustment effect**: vs the old fixed-weight numbers it adds **+16.0 to +25.1 CAGR points** across the profiles, at the price of **-13.7 to -8.4 points of max drawdown** and a Sharpe change of -0.53 to +0.06.
-* **The priority tilt itself is a small increment on top of the gate**: +0.7 to +2.1 CAGR points vs gate-only, with essentially unchanged Sharpe and drawdown.
-* **In-sample anchors flattered every variant**: re-fitting the anchor weights walk-forward (prior data only, no fundamental overlay) costs -41.6 to -13.3 CAGR points vs the same gate+tilt logic on full-history anchors — that gap IS the weight-level look-ahead. The app now publishes the walk-forward numbers.
+* **The gate (concentration onto live longs) is the dominant daily-adjustment effect**: vs the old fixed-weight numbers it adds **+9.6 to +18.8 CAGR points** across the profiles, at the price of **-13.7 to -8.4 points of max drawdown** and a Sharpe change of -0.64 to +0.00.
+* **The priority tilt itself is a small increment on top of the gate**: +0.6 to +2.0 CAGR points vs gate-only, with essentially unchanged Sharpe and drawdown.
+* **In-sample anchors flattered every variant**: re-fitting the anchor weights walk-forward (prior data only, no fundamental overlay) costs -41.2 to -13.2 CAGR points vs the same gate+tilt logic on full-history anchors — that gap IS the weight-level look-ahead. The app now publishes the walk-forward numbers.
 * Net: the old fixed-weight back-test mis-stated both the return and the risk of what the live daily-adjusted book actually does; the daily adjustments mostly re-shape the risk/return point (more return, deeper drawdowns) rather than adding risk-adjusted edge.
 
 ## Caveats

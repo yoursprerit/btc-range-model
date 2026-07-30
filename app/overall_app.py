@@ -2607,8 +2607,12 @@ remainder in SATA. Anchor weights are **re-fit every Jan 1 on the data before
 that date** (cap-normalised equal weight before enough history exists), the
 priority inputs are their as-of analogues (momentum vs the 50-day SMA, the
 rolling sentiment gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime
-rule) lagged one bar, and the fundamental overlay is excluded throughout. The
-📊 tab's daily-allocation chart shows this replayed book through time.
+rule) lagged one bar, and the fundamental overlay is excluded throughout.
+Position state **carries across non-trading days** (the crypto sleeves put
+weekends into the calendar; a carried equity position keeps its weight and
+contributes 0 return until its next bar), and **SATA accrues on weekday bars
+only** (its coupon is 0.13/250 per *business* day). The 📊 tab's
+daily-allocation chart shows this replayed book through time.
 
 **Risk profiles.** The ⚙️ switch on the Live tab bundles the per-kind caps, the
 optimiser objective and a drawdown budget:

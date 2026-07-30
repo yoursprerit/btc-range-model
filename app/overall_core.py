@@ -616,11 +616,23 @@ def returns_matrix(results: list[dict]) -> pd.DataFrame:
     return pd.DataFrame({res["key"]: res["ret"] for res in results}).sort_index()
 
 
-def position_matrix(results: list[dict], index: pd.Index) -> pd.DataFrame:
+def position_matrix(results: list[dict], index: pd.Index,
+                    carry: bool = False) -> pd.DataFrame:
     """0/1 in-market flag per instrument, aligned to ``index`` (0 where flat or
-    no data)."""
+    no data).
+
+    ``carry=True`` forward-fills each sleeve's state across its NON-trading
+    days on a union calendar (weekends/holidays for equities once the crypto
+    sleeves put Saturdays into the index): a position held at a sleeve's last
+    bar is still *held* on days its market is shut — it merely has no return —
+    rather than counted as sold.  Inception gaps stay 0 either way (ffill
+    starts at each sleeve's first bar).  The default (``carry=False``) keeps
+    the raw own-calendar view used by the optimiser and benchmarks."""
     cols = {res["key"]: res["pos_series"] for res in results}
-    return pd.DataFrame(cols).reindex(index).fillna(0.0)
+    df = pd.DataFrame(cols).reindex(index)
+    if carry:
+        df = df.ffill()
+    return df.fillna(0.0)
 
 
 def _combine(returns: pd.DataFrame, weights: np.ndarray,
@@ -837,11 +849,14 @@ def trade_log_since(results: list[dict], weights: dict, start,
 def sata_slice_metrics(index: pd.Index, start) -> dict | None:
     """The SATA idle-cash sleeve since ``start`` on the blend's calendar: a
     constant ``SATA_DAILY`` yield on a flat $100 par — so no drawdown, every
-    day a (tiny) win, and Sharpe/vol meaningless (returned as ``None``/0)."""
+    day a (tiny) win, and Sharpe/vol meaningless (returned as ``None``/0).
+    The coupon is per BUSINESS day (0.13/250), so weekend bars on the crypto
+    calendar accrue nothing — matching the replay."""
     sub = index[index >= pd.Timestamp(start)]
     if len(sub) < 2:
         return None
-    total = float((1 + SATA_DAILY) ** (len(sub) - 1) - 1)
+    n_biz = int((sub[1:].dayofweek < 5).sum())      # anchor bar = cost basis
+    total = float((1 + SATA_DAILY) ** n_biz - 1)
     yrs = max((sub[-1] - sub[0]).days / 365.25, 1e-9)
     return dict(start=sub[0], end=sub[-1], days=len(sub), total_ret=total,
                 cagr=float((1 + total) ** (1 / yrs) - 1), mdd=0.0, sharpe=None,
@@ -1573,7 +1588,15 @@ def replay_gated_allocation(results: list[dict],
       * the funded set on day *t* is the sleeves the engines hold IN THE
         MARKET on day *t* (``pos_series`` — position on *t* was decided by
         signals at the close of *t−1*, so the set is causal and already
-        encodes next-bar execution, committed exits and fresh entries);
+        encodes next-bar execution, committed exits and fresh entries).
+        Position state is CARRIED across a sleeve's non-trading days
+        (``position_matrix(carry=True)``): on the union calendar the crypto
+        sleeves put weekends into the index, and without the carry every
+        equity position looked "sold" each Friday close — water-filling the
+        whole weekend book into crypto (≈84% vs ≈35% on weekdays) or 100%
+        SATA, and manufacturing ~46% phantom turnover into weekend bars.
+        Carried sleeves keep their weight and contribute 0 return until
+        their next bar — exactly what holding through a closed market is;
       * each funded sleeve's raw weight is its optimal anchor ×
         ``(0.5 + priority)``, priority scored by ``PRIORITY_WEIGHTS`` over the
         as-of components of ``priority_component_history`` **lagged one bar**
@@ -1583,7 +1606,10 @@ def replay_gated_allocation(results: list[dict],
         ``historical_allocation``'s per-snapshot book);
       * raw weights are water-filled to the profile caps (deployed book sums
         to 1 when the caps allow), the remainder — and every fully-flat day —
-        earns the SATA daily yield.
+        earns the SATA daily yield.  SATA's coupon is ``0.13/250`` per
+        BUSINESS day, so it accrues only on weekday bars — crediting it on
+        the crypto calendar's weekend bars would compound ~13%/250 × 365
+        ≈ 19%/yr instead of the intended ~13%.
 
     No transaction costs are modelled; ``turnover`` (mean and total daily
     one-way weight movement, SATA leg included) is reported so the cost
@@ -1599,6 +1625,7 @@ def replay_gated_allocation(results: list[dict],
     rets = returns_matrix(results)
     idx = rets.index
     keys = list(rets.columns)
+    biz = np.asarray(idx.dayofweek < 5)       # SATA pays on business days only
     if (base_weights is None) == (anchors is None):
         raise ValueError("supply exactly one of base_weights / anchors")
     if anchors:
@@ -1607,7 +1634,7 @@ def replay_gated_allocation(results: list[dict],
         day_anchor = [anchors[i][1] for i in a_pick]
     else:
         day_anchor = None
-    pos = position_matrix(results, idx)
+    pos = position_matrix(results, idx, carry=True)
     comp = priority_component_history(results, idx)
     # decision at close t−1 drives the book that earns day t's return
     lag = {k: comp[k].shift(1) for k in keys}
@@ -1627,7 +1654,7 @@ def replay_gated_allocation(results: list[dict],
     for t in range(len(idx)):
         act = [j for j in range(len(keys)) if P[t, j] > 0]
         if not act:
-            port[t] = sata_daily
+            port[t] = sata_daily if biz[t] else 0.0
             sata_w[t] = 1.0
             continue
         bw = day_anchor[t] if day_anchor is not None else base_weights
@@ -1652,7 +1679,8 @@ def replay_gated_allocation(results: list[dict],
             W[t, j] = w
             dep += w
         sata_w[t] = max(1.0 - dep, 0.0)
-        port[t] = float(np.dot(W[t], R[t])) + sata_w[t] * sata_daily
+        port[t] = float(np.dot(W[t], R[t])) + \
+            (sata_w[t] * sata_daily if biz[t] else 0.0)
 
     daily = pd.Series(port, index=idx)
     eq = _equity(daily)
@@ -1718,7 +1746,11 @@ def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
         return None
     W = weights.reindex(sub.index).fillna(0.0).to_numpy(float)
     contrib = W * np.nan_to_num(sub.to_numpy(float))
-    sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float) * sata_daily)
+    # same business-day-only SATA accrual as the replay, or the parts stop
+    # summing to the curve
+    biz = np.asarray(sub.index.dayofweek < 5)
+    sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float)
+                 * sata_daily * biz)
     contrib[0, :] = 0.0
     sata_term[0] = 0.0
     port = contrib.sum(axis=1) + sata_term
