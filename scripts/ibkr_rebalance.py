@@ -106,9 +106,12 @@ def compute_target_book(profile: str = None, results: list | None = None,
 
     rets = oc.returns_matrix(results)
     pos = oc.position_matrix(results, rets.index)
+    # fundamental=False — the mid-2026 forward-view overlay is retired (a
+    # hindsight-formed conviction; removed from the app UI and here together
+    # so the published book keeps matching the app's live targets).
     opt = oc.optimize_weights(rets, caps=caps, pos=pos, sata_daily=oc.SATA_DAILY,
                               mdd_floor=prof["mdd_floor"], objective=prof["objective"],
-                              fundamental=True)
+                              fundamental=False)
 
     if live_adjust:
         # live spot overlay + live-exit override — identical to the app.
