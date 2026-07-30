@@ -857,13 +857,36 @@ with tab_live:
         _committed_w, _committed_idle = _book_alloc(_cur_book)
     else:
         _committed_w, _committed_idle = None, None
+    # Action / Signal / Priority must be pinned to the published book for the
+    # same reason: ``gate["actions"]`` is the cockpit's ~30-min engine re-run,
+    # whose entry-priority tilt blends LIVE momentum and sentiment — so those
+    # cells (and the priority ranking) drifted through the day alongside the
+    # Recommended Live Possible Targetbook and contradicted the frozen book.
+    # The published payload records each instrument's action, decision and
+    # priority at publish time; keys the book doesn't carry (an instrument
+    # added since the last publish) fall back to the live engine's cells.
+    _book_actions = {a["key"]: a
+                     for a in ((_cur_book.get("actions") or []) if _cur_book else [])
+                     if a.get("key")}
+    _plan_actions = gate["actions"]
+    if _book_actions:
+        _book_rank = {k: i for i, k in enumerate(_book_actions)}
+        _plan_actions = sorted(gate["actions"],
+                               key=lambda a: _book_rank.get(a["key"], len(_book_rank)))
     with st.expander("🎯 **Today's action plan**", expanded=False):
         st.caption("What to do now, ranked: **close** exits first, then **open** / "
                    "**hold**, ordered by entry priority. β = higher-beta sibling · "
                    "2× = leveraged (traded off the parent signal). The **priority** "
-                   "score (0–1) blends live momentum, macro sentiment, the strategy's "
+                   "score (0–1) blends momentum, macro sentiment, the strategy's "
                    "back-tested win-rate and its risk-adjusted edge — it decides which "
-                   "signals get funded and how much. Held/opened risk assets total "
+                   "signals get funded and how much. **Action**, **Signal** and "
+                   "**Priority** (and the row order) are the **published Current "
+                   "Targetbook's** recorded decisions — frozen at the morning publish, "
+                   "matching the donut above, never drifting intraday with the live "
+                   "engine (they fall back to the live engine's values only when "
+                   "nothing has been published yet, or for an instrument added since "
+                   "the last publish). Intraday drift shows up only in the live "
+                   "columns and the red ⚠️ flags. Held/opened risk assets total "
                    "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
                    "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
                    "the live price — they still **hold/open today** but **exit on the "
@@ -888,7 +911,7 @@ with tab_live:
                 help="Target $ per instrument = target % × this value.")
         hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
                "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
-               "<th>Live signal</th><th style='text-align:center'>Priority</th>"
+               "<th>Signal</th><th style='text-align:center'>Priority</th>"
                "<th style='text-align:right'>Price (Close of Last Bar)</th>"
                "<th style='text-align:right'>Live Price</th>"
                "<th style='text-align:right'>Chg %</th>"
@@ -898,8 +921,18 @@ with tab_live:
                "<th style='text-align:right'>Target % (Live)</th>"
                "<th style='text-align:right'>Target $ (Live)</th></tr>")
         rows = []
-        for a in gate["actions"]:
-            ac = _ACTION_COL[a["action"]]
+        for a in _plan_actions:
+            # published-book cells (frozen at publish) with live-engine fallback
+            _ba = _book_actions.get(a["key"])
+            _act = (_ba.get("action") or a["action"]) if _ba else a["action"]
+            _dec = (_ba.get("decision") or a["decision"]) if _ba else a["decision"]
+            _prio = _ba["priority"] if _ba else a["priority"]
+            # colour the decision by the (possibly book-sourced) action so the
+            # two cells never contradict; the action→colour map mirrors the
+            # live tone map state for state.
+            _dec_col = (_ACTION_COL.get(_act, C_FLAT) if _ba
+                        else _TONE_COL.get(a["tone"], C_FLAT))
+            ac = _ACTION_COL.get(_act, C_FLAT)
             # last-bar (committed) — the published book's weight, so the column
             # matches the Current Targetbook donut slice for slice
             tgt = (_committed_w.get(a["key"], 0.0) if _committed_w is not None
@@ -917,8 +950,8 @@ with tab_live:
                 sub = f"{a['parent']} close {dist:+.1f}% vs {_r.get('engine_label', 'trend')}{off}"
             else:
                 sub = f"{a['parent']} alert: {a['alert']}{off}"
-            if a["priority"] is not None:
-                p = a["priority"]; pcolor = C_BUY if p >= 0.6 else C_WATCH if p >= 0.4 else C_FLAT
+            if _prio is not None:
+                p = _prio; pcolor = C_BUY if p >= 0.6 else C_WATCH if p >= 0.4 else C_FLAT
                 prio_cell = (f"<span style='font-weight:700;color:{pcolor}'>{p:.2f}</span>"
                              f"<div style='height:5px;background:#e2e8f0;border-radius:3px;margin-top:2px'>"
                              f"<div style='height:5px;width:{p*100:.0f}%;background:{pcolor};border-radius:3px'></div></div>")
@@ -977,10 +1010,10 @@ with tab_live:
                         "⚠️ live px below trend — exits next bar</div>")
             rows.append(
                 f"<tr style='{row_style}'>"
-                f"<td style='padding:8px 10px'>{_pill(a['action'], ac)}{warn}</td>"
+                f"<td style='padding:8px 10px'>{_pill(_act, ac)}{warn}</td>"
                 f"<td style='font-weight:700'>{a['emoji']} {a['key']}{_kind_badge(a['kind'])}"
                 f"<div style='font-size:11px;color:#64748b;font-weight:400'>{a['name']}</div></td>"
-                f"<td style='font-size:12px;color:{_TONE_COL.get(a['tone'], C_FLAT)}'>{a['decision']}"
+                f"<td style='font-size:12px;color:{_dec_col}'>{_dec}"
                 f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
                 f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
                 f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
