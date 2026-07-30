@@ -11,8 +11,8 @@ signal, so the combined book spans every instrument across all apps.
   🕰️ Historical View            the same overall view reconstructed for any
                                 calendar date — the book, positions and open/
                                 close events as they stood at that day's close.
-  📊 Combined Backtesting       the historically-optimal blend of all the
-                                instruments' signal-driven strategies vs the
+  📊 Combined Backtesting       the walk-forward replay of the daily gated,
+                                priority-tilted book (look-ahead-free) vs the
                                 obvious benchmarks, per-window and per-instrument.
   🧠 Strategy & Methodology     how every number here is produced.
 
@@ -82,6 +82,10 @@ def _stale_core(mod) -> bool:
         if not hasattr(mod, "overall_trade_stats"):
             return True
         if not hasattr(mod, "snapshot_asof"):
+            return True
+        if not hasattr(mod, "walkforward_gated_replay"):
+            return True
+        if not hasattr(mod, "pnl_attribution_replay"):
             return True
         return False
     except (ValueError, TypeError, AttributeError):
@@ -215,11 +219,23 @@ def get_entry_closes(positions: tuple):
         return {k: v for k, v in ex.map(_one, positions) if v}
 
 
+# display name of the combined back-test curve — the walk-forward gated replay
+# (the daily gate/tilt book, look-ahead-free anchors), NOT a fixed-weight blend.
+STRAT_CURVE = "Overall strategy (gated replay)"
+
+
 @st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
 def get_all_profiles(bucket: str, fundamental: bool = True):
     """Compute the full portfolio for EVERY risk profile once, so switching
     profiles (and rendering the comparison table) is instant — no recompute.
-    ``fundamental`` applies the mid-2026 sector forward-view overlay."""
+
+    ``opt``/``gate`` power TODAY'S live book (full-history optimal weights,
+    optionally tilted by the ``fundamental`` mid-2026 forward view — all data
+    to date is legitimately known when sizing today).  Every BACK-TEST number
+    (``wf``/``per``/``curves[STRAT_CURVE]``) instead comes from the
+    walk-forward gated replay: daily gate/tilt/water-fill with expanding-
+    window anchor refits and as-of priority inputs, fundamental overlay OFF —
+    no look-ahead anywhere in the history."""
     res = get_results(bucket)
     results, computed_at = res["results"], res["computed_at"]
     if not results:
@@ -237,11 +253,15 @@ def get_all_profiles(bucket: str, fundamental: bool = True):
                                   mdd_floor=prof["mdd_floor"], objective=prof["objective"],
                                   fundamental=fundamental)
         w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
-        per = ov.period_breakdown(rets, w_opt, ov.COMBINED_PERIODS, pos=pos, sata_daily=sata)
-        curves = {"Optimal blend": ov._equity(ov._combine(rets, w_opt, pos, sata)),
-                  **base_curves}
+        wf = ov.walkforward_gated_replay(results, caps=caps,
+                                         mdd_floor=prof["mdd_floor"],
+                                         objective=prof["objective"],
+                                         sata_daily=sata, tilt=True)
+        per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
+        curves = {STRAT_CURVE: wf["equity"], **base_curves}
         gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps)
-        profiles[name] = dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt)
+        profiles[name] = dict(opt=opt, per=per, curves=curves, gate=gate,
+                              w_opt=w_opt, wf=wf)
     return dict(results=results, computed_at=computed_at, rets=rets, bm=bm,
                 profiles=profiles)
 
@@ -262,11 +282,12 @@ def get_profile_comparison(bucket: str, fundamental: bool = True):
         return []
     rows = []
     for name, prof in ov.RISK_PROFILES.items():
-        o = allp["profiles"][name]["opt"]["optimal"]
+        o = allp["profiles"][name]["opt"]["optimal"]     # live anchors → β/2× posture
+        wm = allp["profiles"][name]["wf"]["metrics"]     # back-test = gated replay
         bl = sum(v for k, v in o["weights"].items()
                  if ov.ASSET_META.get(k, {}).get("kind") in ("beta", "lev"))
         rows.append(dict(name=name, blurb=prof["blurb"], betalev=bl, **{
-            k: o[k] for k in ("total_ret", "cagr", "mdd", "sharpe")}))
+            k: wm[k] for k in ("total_ret", "cagr", "mdd", "sharpe")}))
     return rows
 
 
@@ -504,15 +525,17 @@ with tab_live:
                    f"with each new close.")
     st.checkbox("🔭 **Apply fundamental view** (mid-2026 sector outlook)",
                 key="overall_use_fundamental",
-                help=ov.FUNDAMENTAL_VIEW_NOTE + " Tilts each profile's optimal blend "
-                     "toward the strongest secular-growth sleeves (re-capped), then "
-                     "re-runs the allocation and back-test. Uncheck for the pure "
-                     "historical quant optimum.")
+                help=ov.FUNDAMENTAL_VIEW_NOTE + " Tilts TODAY'S anchor weights "
+                     "toward the strongest secular-growth sleeves (re-capped) and "
+                     "re-runs today's targets. The back-test is unaffected — the "
+                     "replay always excludes the overlay (it would be hindsight "
+                     "applied to history).")
     if _use_fund:
         st.caption(f"🔭 **Fundamental overlay ON** — {ov.FUNDAMENTAL_VIEW_NOTE}")
-        st.caption("Switching reruns today's targets and the back-test on the "
-                   "chosen profile. β / 2× exposure rises Balanced → Aggressive: "
-                   "more return, deeper drawdowns, lower Sharpe.")
+        st.caption("Switching reruns today's targets on the chosen profile "
+                   "(the back-test excludes the overlay). β / 2× exposure rises "
+                   "Balanced → Aggressive: more return, deeper drawdowns, "
+                   "lower Sharpe.")
     st.markdown("")
 
     invested = 1.0 - gate["sata"]
@@ -1167,19 +1190,24 @@ with tab_live:
 
     # ── 4. OVERALL STRATEGY P&L SINCE A USER-CHOSEN START DATE ──────────
     # What has the combined strategy actually delivered for someone who put
-    # capital in on a given date?  Re-bases the active profile's optimal-blend
-    # equity curve at the chosen date and reads P&L / performance / risk off
-    # the slice — so drawdown, Sharpe etc. are measured from the entry point,
-    # not from back-test inception.  Follows the risk profile selected above
-    # (Balanced by default) and the fundamental-overlay toggle.
+    # capital in on a given date?  Re-bases the active profile's WALK-FORWARD
+    # GATED REPLAY equity curve (the daily gate/tilt book, look-ahead-free)
+    # at the chosen date and reads P&L / performance / risk off the slice —
+    # so drawdown, Sharpe etc. are measured from the entry point, not from
+    # back-test inception.  Follows the risk profile selected above.
     with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
-        st.caption(f"P&L, performance and risk of the **combined optimal-blend "
-                   f"strategy** measured from the start date below, under the risk "
-                   f"profile selected above (currently **`{_profile}`**"
-                   f"{' · 🔭 fundamental overlay ON' if _use_fund else ''}). "
-                   "Change the profile or the date and every figure recomputes. "
-                   "Dollar figures scale the 💼 portfolio value entered above.")
-        _curve_all = _PF["curves"]["Optimal blend"]
+        st.caption(f"P&L, performance and risk of the **daily-gated Overall "
+                   f"strategy** (walk-forward replay — the same gate/tilt "
+                   f"logic the live book runs, anchors re-fit each year on "
+                   f"prior data only) measured from the start date below, "
+                   f"under the risk profile selected above (currently "
+                   f"**`{_profile}`**). Change the profile or the date and "
+                   "every figure recomputes. Dollar figures scale the 💼 "
+                   "portfolio value entered above.")
+        _wf = _PF["wf"]
+        # sleeve-inclusion gate + per-trade notionals under a daily-weight book
+        _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
+        _curve_all = _PF["curves"][STRAT_CURVE]
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
         _default_start = pd.Timestamp("2026-03-01").date()
         pnl_cols = st.columns([1, 3])
@@ -1217,7 +1245,7 @@ with tab_live:
                          delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
             # per-asset since-start reads (also feed the blend-level trade stats)
             _pa = ov.per_asset_slice_metrics(results, _start_sel)
-            _ots = ov.overall_trade_stats(_pa, opt["optimal"]["weights"])
+            _ots = ov.overall_trade_stats(_pa, _wmax)
             pm2 = st.columns(6)
             pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
             pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
@@ -1253,12 +1281,12 @@ with tab_live:
                       "<th style='text-align:right'>Sharpe</th></tr>")
                 br = []
                 for _nm, _m in _bench_rows:
-                    _hi = "background:#eff6ff;font-weight:700;" if _nm == "Optimal blend" else ""
+                    _hi = "background:#eff6ff;font-weight:700;" if _nm == STRAT_CURVE else ""
                     _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
                     br.append(
                         f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
                         f"<td style='padding:6px 10px'>{_nm}"
-                        f"{' ◄ this strategy' if _nm == 'Optimal blend' else ''}</td>"
+                        f"{' ◄ this strategy' if _nm == STRAT_CURVE else ''}</td>"
                         f"<td style='text-align:right;color:{_pc};font-weight:600'>"
                         f"{_m['total_ret']*100:+.1f}%</td>"
                         f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
@@ -1271,7 +1299,7 @@ with tab_live:
 
             # equity curve re-based to the portfolio value at the chosen start
             _fig_pnl = go.Figure()
-            _pnl_styles = {"Optimal blend": ("#111827", 3),
+            _pnl_styles = {STRAT_CURVE: ("#111827", 3),
                            "Equal-weight strategies": ("#0ea5e9", 1.5),
                            "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
             for _nm, _cv in _PF["curves"].items():
@@ -1293,10 +1321,13 @@ with tab_live:
                                 f"{_sm['start'].strftime('%b %d, %Y')} — `{_profile}` profile",
                            font_size=13))
             st.plotly_chart(_fig_pnl, use_container_width=True)
-            st.caption("⚠️ Simulated performance of the optimal blend under the "
-                       "selected risk profile (idle capital earning SATA), assuming "
-                       "entry at the close of the anchor bar — the blend weights are "
-                       "fit on the full history (in-sample). Not investment advice.")
+            st.caption("⚠️ Simulated performance of the daily-gated strategy under "
+                       "the selected risk profile (idle capital earning SATA), "
+                       "assuming entry at the close of the anchor bar. The replay is "
+                       "walk-forward — anchor weights re-fit each Jan 1 on prior "
+                       "data only, priorities from as-of inputs lagged one bar — so "
+                       "no figure uses information from after the day it describes. "
+                       "Not investment advice.")
 
             # ── per-asset breakdown — opt-in via toggle so the page stays clean
             # (a nested st.expander is not allowed inside the section expander)
@@ -1309,9 +1340,10 @@ with tab_live:
                            "simply buying & holding it, both measured from the same "
                            "start date. **In mkt** = share of days the sleeve was "
                            "actually long (it earns SATA when flat inside the blend); "
-                           "**Opt. wt** = its weight in the active profile's optimal "
-                           "blend. Sleeves whose data begins after the start date "
-                           "are measured from their own first bar (noted inline).")
+                           "**Peak wt** = the largest daily allocation the replayed "
+                           "book ever gave it. Sleeves whose data begins after the "
+                           "start date are measured from their own first bar "
+                           "(noted inline).")
                 if not _pa:
                     st.info("No instrument has enough history after that date.")
                 else:
@@ -1350,9 +1382,9 @@ with tab_live:
                            "<th style='text-align:right'>Win rate</th>"
                            "<th style='text-align:right'>Win days</th>"
                            "<th style='text-align:right'>In mkt</th>"
-                           "<th style='text-align:right'>Opt. wt</th></tr>")
+                           "<th style='text-align:right'>Peak wt</th></tr>")
                     par = []
-                    _wts = opt["optimal"]["weights"]
+                    _wts = _wmax
                     _pa_by_key = {p["key"]: p for p in _pa}
                     for pk, grp in parents:
                         for res in grp:
@@ -1430,14 +1462,15 @@ with tab_live:
                                "sum to the blend P&L.")
 
             # ── trade log — the individual trades behind the counts above ──────
-            _tl = ov.trade_log_since(results, opt["optimal"]["weights"], _start_sel)
+            _tl = ov.trade_log_since(results, _wmax, _start_sel,
+                                     weight_matrix=_wf["weights"])
             _n_open_tl = sum(1 for t in _tl if t["open"])
             if st.toggle(
                     f"📜 Trade log since {_sm['start'].strftime('%b %d, %Y')} — "
                     f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
                     f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (toggle to show)",
                     key="overall_trade_log"):
-                st.caption("Every round-trip across the sleeves the optimal blend "
+                st.caption("Every round-trip across the sleeves the replayed book "
                            "holds (weight > 0) that was open at any point since the "
                            "start date — including trades entered before it — plus "
                            "any **currently-open position** (highlighted; its return "
@@ -1541,7 +1574,7 @@ with tab_live:
                     _lbls = [f"{_tl_meta[k]['emoji']} {k}" for k in _big]
                     _vals = [_cap[k] for k in _big]
                     _cols = [_tl_meta[k]["accent"] for k in _big]
-                    _hov = [f"{_cnt[k]} trade{'s' if _cnt[k] != 1 else ''} · blend wt "
+                    _hov = [f"{_cnt[k]} trade{'s' if _cnt[k] != 1 else ''} · peak wt "
                             f"{_tl_meta[k]['weight']*100:.1f}%" for k in _big]
                     if _small:
                         _lbls.append(f"Other ({len(_small)} sleeves)")
@@ -1585,11 +1618,8 @@ with tab_live:
                            "net total. (This is exact attribution off the blend "
                            "curve — unlike the trade log's **≈ $ on blend** "
                            "column, which is a per-trade approximation.)")
-                _w_arr = np.array([opt["optimal"]["weights"].get(c, 0.0)
-                                   for c in _PF["rets"].columns])
-                _att = ov.pnl_attribution_since(
-                    _PF["rets"], _w_arr, _start_sel,
-                    pos=ov.position_matrix(results, _PF["rets"].index),
+                _att = ov.pnl_attribution_replay(
+                    _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
                 if _att is None:
                     st.info("Not enough blend history after that date — "
@@ -1608,8 +1638,8 @@ with tab_live:
                     _bars = [(f"{by_key[k]['emoji']} {k}", v,
                               C_BUY if v >= 0 else C_EXIT,
                               f"{_pcnt.get(k, 0)} trade"
-                              f"{'s' if _pcnt.get(k, 0) != 1 else ''} · blend wt "
-                              f"{opt['optimal']['weights'].get(k, 0)*100:.1f}%")
+                              f"{'s' if _pcnt.get(k, 0) != 1 else ''} · peak wt "
+                              f"{_wmax.get(k, 0)*100:.1f}%")
                              for k, v in _pnl_by.items()]
                     if _att["sata"]:
                         _bars.append(("💵 SATA", _att["sata"] * portfolio_value,
@@ -1664,12 +1694,8 @@ with tab_live:
                            "is independent of the portfolio value entered. "
                            "**SATA** isn't shown — its yield accrues on idle "
                            "cash, not traded capital.")
-                _eff_att = ov.pnl_attribution_since(
-                    _PF["rets"],
-                    np.array([opt["optimal"]["weights"].get(c, 0.0)
-                              for c in _PF["rets"].columns]),
-                    _start_sel,
-                    pos=ov.position_matrix(results, _PF["rets"].index),
+                _eff_att = ov.pnl_attribution_replay(
+                    _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
                 if not _tl or _eff_att is None:
                     st.info("No sleeve the blend holds traded in this window — "
@@ -1728,7 +1754,7 @@ with tab_live:
                            "trade or two can sit at 0% or 100% on tiny evidence "
                            "— the label shows the wins/trades count behind each "
                            "bar.")
-                _wts_wr = opt["optimal"]["weights"]
+                _wts_wr = _wmax
                 _wr_bars = []
                 for p in _pa:
                     tr = p["trades"]
@@ -1788,14 +1814,10 @@ with tab_live:
                            "the ratio is independent of the 💼 portfolio value. "
                            "**SATA** isn't shown — its yield accrues daily on "
                            "idle cash, not from trades.")
-                _pe_att = ov.pnl_attribution_since(
-                    _PF["rets"],
-                    np.array([opt["optimal"]["weights"].get(c, 0.0)
-                              for c in _PF["rets"].columns]),
-                    _start_sel,
-                    pos=ov.position_matrix(results, _PF["rets"].index),
+                _pe_att = ov.pnl_attribution_replay(
+                    _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
-                _wts_pe = opt["optimal"]["weights"]
+                _wts_pe = _wmax
                 _pe_bars = []
                 if _pe_att and _pe_att["total"] > 0:
                     for p in _pa:
@@ -1857,10 +1879,10 @@ with tab_hist:
                "bar, the book it was holding and its performance up to that point. "
                "Everything is read off the committed back-test series — the same "
                "engines the 🔴 Live tab runs — so the positions and trades shown are "
-               "the engine's genuine bar-by-bar decisions. Caveat: the blend "
-               "weights and per-sleeve strategy parameters are TODAY'S (fit on the "
-               "full sample), not the ones that existed on that date — the book "
-               "percentages are a current-weights projection, not the as-of record. "
+               "the engine's genuine bar-by-bar decisions. The book percentages come "
+               "from the **walk-forward gated replay**: anchors fit only on data "
+               "before that date, priority tilt from as-of inputs — an honest as-of "
+               "reconstruction (per-sleeve strategy parameters remain today's). "
                "Where a Targetbook was actually **published** from the chosen "
                "bar's signals, the **Executed Playbook** section below shows "
                "it — the record of what actually traded. "
@@ -1868,7 +1890,7 @@ with tab_hist:
                f"risk profile (currently **`{_profile}`**) and fundamental-overlay "
                "toggle selected on the Live tab.")
 
-    _h_curve = _PF["curves"]["Optimal blend"]
+    _h_curve = _PF["curves"][STRAT_CURVE]
     _h_d0, _h_d1 = _h_curve.index[0].date(), _h_curve.index[-1].date()
     _h_top = st.columns([1, 1, 2])
     with _h_top[0]:
@@ -1892,9 +1914,18 @@ with tab_hist:
                    f"{_h_d0} → {_h_d1}).")
     else:
         _h_bar = _snap["asof"]
-        _h_alloc = ov.historical_allocation(_snap, opt["optimal"]["weights"],
-                                            caps=ov.caps_for(_profile))
-        _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
+        # the replayed book ON that bar — walk-forward anchors + as-of priority
+        # tilt (falls back to the untilted water-fill for a bar the replay
+        # doesn't cover, e.g. an instrument-only calendar day)
+        _h_wf = _PF["wf"]
+        if _h_bar in _h_wf["weights"].index:
+            _h_wrow = _h_wf["weights"].loc[_h_bar]
+            _h_book = {k: float(v) for k, v in _h_wrow.items() if v > 0.0005}
+            _h_sata = float(_h_wf["sata"].loc[_h_bar])
+        else:
+            _h_alloc = ov.historical_allocation(_snap, opt["optimal"]["weights"],
+                                                caps=ov.caps_for(_profile))
+            _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
         with _h_top[2]:
             st.markdown(
                 f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
@@ -1934,13 +1965,13 @@ with tab_hist:
                 _alloc_donut(_h_book, _h_sata,
                              f"Strategy book — {_h_bar.strftime('%b %d, %Y')}"),
                 use_container_width=True)
-            st.caption("What the **currently implemented** strategy would have "
-                       "traded on that bar: today's optimal-blend weights "
-                       "water-filled over the sleeves in position at that "
-                       "close; undeployed capital in **SATA**. Same "
-                       "construction as the Live tab's current book (the "
-                       "entry-priority tilt needs live-only inputs, so it "
-                       "isn't applied retrospectively)."
+            st.caption("The **replayed book on that bar**: anchor weights fit "
+                       "only on data before that date, water-filled over the "
+                       "sleeves in position at that close and tilted by the "
+                       "as-of entry-priority read (momentum, sentiment, "
+                       "expanding win-rate/Sharpe, regime — all lagged one "
+                       "bar); undeployed capital in **SATA**. The same daily "
+                       "book the combined back-test compounds."
                        + (" What was **actually traded** that day is in the "
                           "🧾 Executed Playbook below." if _h_pub else ""))
         with _h_cols[1]:
@@ -1957,11 +1988,11 @@ with tab_hist:
                                   else f"${_h_fwd['total_ret']*_h_pv:+,.0f} on ${_h_pv:,.0f}"),
                            delta_color=("off" if _h_fwd is None else
                                         "normal" if _h_fwd["total_ret"] >= 0 else "inverse"),
-                           help="What the optimal blend went on to return from "
+                           help="What the strategy went on to return from "
                                 "this date to the latest close — the one "
                                 "forward-looking figure on this page.")
             _h_fig = go.Figure()
-            _h_styles = {"Optimal blend": ("#111827", 3),
+            _h_styles = {STRAT_CURVE: ("#111827", 3),
                          "Equal-weight strategies": ("#0ea5e9", 1.5),
                          "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
             for _h_nm, _h_cv in _PF["curves"].items():
@@ -2073,12 +2104,13 @@ with tab_hist:
                     "its idle-cash yield.")
         st.caption("⚠️ Reconstructed from the committed back-test series: bars, "
                    "fills and exits are exactly what the engines decided on that "
-                   "date, but the **book weights use the current optimal blend** "
-                   "(fit on the full history, in-sample) water-filled over that "
-                   "day's positions — the allocation the *current* strategy "
-                   "would have held, not a live record of a book published that "
-                   "day. Prices are official daily closes (no live-spot "
-                   "overlay). Not investment advice.")
+                   "date, and the **book weights are the walk-forward replay's** "
+                   "— anchors fit only on data before that date, priority tilt "
+                   "from as-of inputs — water-filled over that day's positions. "
+                   "An as-of reconstruction, not a live record of a book "
+                   "published that day (the 🧾 Executed Playbook below is the "
+                   "record where one exists). Prices are official daily closes "
+                   "(no live-spot overlay). Not investment advice.")
 
         # ── EXECUTED PLAYBOOK — the book actually published & traded ───────
         st.markdown(f"### 🧾 Executed Playbook — {_h_bar.strftime('%b %d, %Y')}")
@@ -2179,30 +2211,29 @@ with tab_hist:
 # ══════════════════════════════════════════════════════════════════════════
 with tab_bt:
     o = opt["optimal"]
+    _wf_bt = _PF["wf"]
+    _wfm = _wf_bt["metrics"]
     _oos_lo, _oos_hi = ov.oos_start_span()
     _oos_span = _oos_lo if _oos_lo == _oos_hi else f"{_oos_lo}–{_oos_hi}"
-    st.markdown("## 📊 The optimal combined strategy")
+    st.markdown("## 📊 The combined strategy — walk-forward gated replay")
     st.caption("Each instrument's signal-driven strategy produces a daily return "
                "stream (long when its parent signal is on, otherwise **idle "
-               "capital earns the SATA yield ~13%/yr**). We search long-only "
-               f"blends of all {N_ALL} — leveraged sleeves capped tighter — for the mix "
-               "that **maximises return while keeping the drawdown shallow** "
-               "(highest raw return among near-max-Sharpe blends). Out-of-sample "
+               "capital earns the SATA yield ~13%/yr**). The back-test replays "
+               "the SAME daily logic the live book runs: capital deployed only "
+               "to the sleeves in the market, sized by anchor weights **tilted "
+               "by the as-of entry-priority read** and water-filled to the "
+               "profile caps. Anchors are **re-fit each Jan 1 on prior data "
+               "only** (equal-weight before enough history exists), priority "
+               "inputs are lagged one bar — nothing in the curve uses "
+               "information from after the day it describes. Out-of-sample "
                f"from {_oos_span} depending on the instrument (staggered starts — "
                "newer sleeves like BTC begin ~2024); $100k start.")
-    if opt.get("fundamental") and "optimal_pretilt" in opt:
-        _pt = opt["optimal_pretilt"]
-        st.info(f"🔭 **Fundamental overlay applied** — these figures tilt the quant "
-                f"optimum toward the mid-2026 sector view (toggle on the Live tab). "
-                f"⚠️ The view was formed *knowing* how 2021→2026 played out, and the "
-                f"tilt is applied retroactively to that same history — so the "
-                f"overlay-ON historical curves are hindsight-tilted and were not "
-                f"achievable ex-ante (the weights themselves are full-sample-fit "
-                f"either way; see Methodology). "
-                f"This profile: **{o['total_ret']*100:,.0f}%** return / "
-                f"Sharpe **{o['sharpe']:.2f}** *with* the overlay vs "
-                f"**{_pt['total_ret']*100:,.0f}%** / **{_pt['sharpe']:.2f}** without. "
-                f"{ov.FUNDAMENTAL_VIEW_NOTE}")
+    if opt.get("fundamental"):
+        st.info("🔭 **Fundamental overlay** (mid-2026 sector view) tilts TODAY'S "
+                "live book only. It is deliberately **excluded from the "
+                "back-test** — the view was formed knowing how 2021→2026 played "
+                "out, so applying it retroactively would be hindsight. "
+                + ov.FUNDAMENTAL_VIEW_NOTE)
 
     # ── risk-profile trade-off: leaning on β / 2× proxies ───────────────
     st.markdown(f"**Risk profile: `{_profile}`** — "
@@ -2238,15 +2269,15 @@ with tab_bt:
     st.markdown("")
 
     m = st.columns(4)
-    m[0].metric("Optimal blend — total return", f"{o['total_ret']*100:,.0f}%",
-                delta=f"CAGR {o['cagr']*100:.0f}%")
-    m[1].metric("Max drawdown", f"{o['mdd']*100:.0f}%",
+    m[0].metric("Overall strategy — total return", f"{_wfm['total_ret']*100:,.0f}%",
+                delta=f"CAGR {_wfm['cagr']*100:.0f}%")
+    m[1].metric("Max drawdown", f"{_wfm['mdd']*100:.0f}%",
                 delta=f"vs {bm['bh_equal']['mdd']*100:.0f}% buy&hold", delta_color="inverse")
-    m[2].metric("Sharpe", f"{o['sharpe']:.2f}",
+    m[2].metric("Sharpe", f"{_wfm['sharpe']:.2f}",
                 delta=f"vs {bm['bh_equal']['sharpe']:.2f} buy&hold")
-    m[3].metric("Volatility (ann.)", f"{o['vol']*100:.0f}%")
+    m[3].metric("Volatility (ann.)", f"{_wfm['vol']*100:.0f}%")
 
-    st.markdown("#### Optimal weights")
+    st.markdown("#### Today's anchor weights (live book)")
     wc = st.columns([2, 1])
     with wc[0]:
         wk = [(c, o["weights"][c]) for c in opt["cols"] if o["weights"][c] > 0.002]
@@ -2279,11 +2310,15 @@ with tab_bt:
             unsafe_allow_html=True)
         st.caption("Leveraged sleeves capped at 10%, high-beta at 18%, core at "
                    "30% — so the optimiser only leans on the 2× / β names when "
-                   "they improve risk-adjusted return.")
+                   "they improve risk-adjusted return. These weights anchor "
+                   "**today's live book**; the back-test above re-fits its own "
+                   "anchors each year on prior data only (this scheme table is "
+                   "a static-blend diagnostic of the current fit, not the "
+                   "back-test).")
 
     st.markdown("#### Growth of $100k — combined vs benchmarks")
     fig = go.Figure()
-    styles = {"Optimal blend": ("#111827", 3),
+    styles = {STRAT_CURVE: ("#111827", 3),
               "Equal-weight strategies": ("#0ea5e9", 1.7),
               "Equal-weight Buy & Hold": ("#94a3b8", 1.7)}
     for name, curve in _PF["curves"].items():
@@ -2295,13 +2330,45 @@ with tab_bt:
                       legend=dict(orientation="h", y=1.08), hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-    opt_curve = _PF["curves"]["Optimal blend"]
+    # ── daily % allocation through time — the replayed book, day by day ────
+    if st.toggle("📊 Daily % allocation by asset — how the replayed book was "
+                 "deployed through time (toggle on/off)",
+                 value=True, key="overall_alloc_history"):
+        _aw = _wf_bt["weights"]
+        _alive = [c for c in _aw.columns if float(_aw[c].max()) > 0.0005]
+        fig_al = go.Figure()
+        for c in _alive:
+            fig_al.add_trace(go.Scatter(
+                x=_aw.index, y=_aw[c].to_numpy() * 100, name=c,
+                mode="lines", stackgroup="book", line=dict(width=0.5),
+                fillcolor=None, line_color=by_key.get(c, {}).get("accent", "#888"),
+                hovertemplate=f"{c}: %{{y:.1f}}%<extra></extra>"))
+        fig_al.add_trace(go.Scatter(
+            x=_aw.index, y=_wf_bt["sata"].to_numpy() * 100, name="SATA (idle)",
+            mode="lines", stackgroup="book", line=dict(width=0.5),
+            line_color="#334155",
+            hovertemplate="SATA: %{y:.1f}%<extra></extra>"))
+        fig_al.update_layout(
+            height=380, margin=dict(t=30, b=10, l=10, r=10),
+            yaxis=dict(title="% of book", range=[0, 100.5]),
+            legend=dict(orientation="h", y=-0.12), hovermode="x unified",
+            title=dict(text="Daily % allocation — every asset plus SATA "
+                            "(stacks to 100%)", font_size=13))
+        st.plotly_chart(fig_al, use_container_width=True)
+        st.caption("The book the back-test compounds each day: anchors "
+                   "(re-fit yearly on prior data) × the as-of priority tilt, "
+                   "water-filled to the profile caps over the sleeves in the "
+                   "market; the remainder sits in **SATA**. Allocations shift "
+                   "daily as priorities move — even when no Action signal "
+                   "changes — exactly like the live book.")
+
+    opt_curve = _PF["curves"][STRAT_CURVE]
     dd = opt_curve / opt_curve.cummax() - 1
     figd = go.Figure(go.Scatter(x=dd.index, y=dd.to_numpy() * 100, fill="tozeroy",
                                 line=dict(color=C_EXIT, width=1)))
     figd.update_layout(height=230, margin=dict(t=10, b=10, l=10, r=10),
                        yaxis_title="drawdown %",
-                       title=dict(text="Optimal blend — drawdown", font_size=13))
+                       title=dict(text="Overall strategy — drawdown", font_size=13))
     st.plotly_chart(figd, use_container_width=True)
 
     st.markdown("#### Performance by market regime")
@@ -2323,7 +2390,7 @@ with tab_bt:
     st.markdown("#### Per-instrument strategy (standalone, model-OOS — "
                 "strategy parameters tuned in-window)")
     st.caption("Each instrument's signal-driven strategy vs buy-&-hold, and its "
-               "weight in the optimal blend. Grouped by signal — β = high-beta "
+               "anchor weight in today's live book. Grouped by signal — β = high-beta "
                "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
                "parent's signal**, not their own: MSTR/MSTU/ETH enter and exit on "
                "BTC's divergence signal, GDX/UGL on gold's, OIH on XLE's — the "
@@ -2338,7 +2405,7 @@ with tab_bt:
           "<th>Signal / engine</th><th style='text-align:right'>Strat</th>"
           "<th style='text-align:right'>Buy&amp;Hold</th><th style='text-align:right'>Max DD</th>"
           "<th style='text-align:right'>Sharpe</th><th style='text-align:right'>Win%</th>"
-          "<th style='text-align:right'>Opt. wt</th></tr>")
+          "<th style='text-align:right'>Anchor wt</th></tr>")
     ar = []
     for pk, grp in parents:
         for res in grp:
@@ -2369,20 +2436,22 @@ with tab_bt:
                 unsafe_allow_html=True)
 
     st.success(
-        f"**Bottom line.** Blending signal-driven, cash-when-out strategies across "
+        f"**Bottom line.** Replaying the daily gate/tilt book across "
         f"{N_ALL} instruments — including the higher-beta MSTR/MSTU, GDX/UGL and OIH "
-        f"sleeves, used only when they earn their capped slots — the optimal blend "
-        f"returned **{o['total_ret']*100:,.0f}%** at just **{o['mdd']*100:.0f}%** "
-        f"max drawdown (Sharpe **{o['sharpe']:.2f}**), versus an equal-weight "
+        f"sleeves, used only when they earn their capped slots — the strategy "
+        f"returned **{_wfm['total_ret']*100:,.0f}%** at **{_wfm['mdd']*100:.0f}%** "
+        f"max drawdown (Sharpe **{_wfm['sharpe']:.2f}**), versus an equal-weight "
         f"buy-&-hold of the same instruments at **{bm['bh_equal']['total_ret']*100:,.0f}%** "
-        f"but a punishing **{bm['bh_equal']['mdd']*100:.0f}%** drawdown "
+        f"but a **{bm['bh_equal']['mdd']*100:.0f}%** drawdown "
         f"(Sharpe **{bm['bh_equal']['sharpe']:.2f}**).")
-    st.caption("⚠️ Optimal weights are fit on this same history (in-sample) — the "
-               "best *historical* blend, not a guarantee. Strategy curves park "
-               "idle capital in SATA (~13%/yr, an assumed-constant series); the "
-               "buy-&-hold benchmark is always fully invested with no SATA. "
-               "Equal-weight and risk-parity need no fitting and are shown for "
-               "comparison. Not investment advice.")
+    st.caption("⚠️ The replay is walk-forward (anchors re-fit each Jan 1 on prior "
+               "data only, priority inputs lagged a bar, no fundamental overlay), "
+               "but per-sleeve strategy *parameters* were tuned on history and "
+               "no transaction costs are charged — a daily-rebalanced book "
+               "trades often. Strategy curves park idle capital in SATA "
+               "(~13%/yr, an assumed-constant series applied over the whole "
+               "history); the buy-&-hold benchmark is always fully invested "
+               "with no SATA. Not investment advice.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2472,7 +2541,20 @@ stream. We Monte-Carlo long-only blends (sum = 100%) with **per-instrument caps
 set by the active risk profile** (see below) and pick the winner by that
 profile's objective, so returns are maximised while drawdown stays inside the
 budget. The tight caps mean the 2× / β sleeves only get weight when they
-genuinely improve the risk-adjusted result.
+genuinely improve the risk-adjusted result. These full-history weights anchor
+**today's live book only**.
+
+**The combined back-test = walk-forward gated replay.** Historical performance
+is NOT a fixed-weight blend. Every day of the back-test rebuilds the book the
+live logic would have held **using only information available at the previous
+close**: the sleeves in the market that day get capital, sized by anchor
+weights × (0.5 + entry-priority) and water-filled to the profile caps, with the
+remainder in SATA. Anchor weights are **re-fit every Jan 1 on the data before
+that date** (cap-normalised equal weight before enough history exists), the
+priority inputs are their as-of analogues (momentum vs the 50-day SMA, the
+rolling sentiment gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime
+rule) lagged one bar, and the fundamental overlay is excluded throughout. The
+📊 tab's daily-allocation chart shows this replayed book through time.
 
 **Risk profiles.** The ⚙️ switch on the Live tab bundles the per-kind caps, the
 optimiser objective and a drawdown budget:
@@ -2491,8 +2573,9 @@ selected profile.
 sector forward-view**: a per-instrument conviction multiplier (overweight
 AI/semis, the crypto institutional era, the structural gold bull and
 electrification; underweight clean energy and oil services) that tilts the
-historically-optimal blend, re-water-fills to the same caps, then re-runs the
-allocation and back-test. Untick it for the pure historical quant optimum.
+optimal anchor weights, re-water-fills to the same caps, then re-runs
+**today's allocation**. It never touches the back-test — the view was formed
+knowing how the history played out, so replaying it would be hindsight.
 
 **Entry priority.** When several instruments signal entry at once — or one fires
 while others are already held — a **priority score (0–1)** decides which get
@@ -2514,7 +2597,13 @@ that yield until a signal fires. Idle capital earns SATA in the back-test too, s
 the combined curve reflects cash working rather than sitting dead.
 
 **Honest caveats.**
-- Optimal weights are in-sample — the best *historical* blend, not a promise.
+- The back-test's *allocation layer* is walk-forward (anchors fit on prior data
+  only, as-of priority inputs, no overlay), but each sleeve's **strategy
+  parameters** (thresholds, stops, MA windows) were tuned on history, and the
+  BTC CT model's training window extends into the displayed period — the
+  replay removes the weight-level look-ahead, not parameter-tuning bias.
+- No transaction costs or slippage are charged, and the daily-rebalanced book
+  trades far more often than a fixed blend.
 - SATA is modelled (per the BTC app's framing) as always having existed, flat at
   $100 par, paying its ~13% daily dividend across every period — an assumption,
   not a market-tested series.
