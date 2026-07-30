@@ -1,50 +1,70 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-07-29T14:30:11+00:00",
- "as_of": "2026-07-28",
+ "generated_at_utc": "2026-07-30T14:30:05+00:00",
+ "as_of": "2026-07-29",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
-  "SOXX": 0.3,
+  "SOXX": 0.15793643298806204,
   "SOXL": 0.1,
-  "XLE": 0.2235910066373108,
-  "OIH": 0.17865825934201632,
-  "ERX": 0.1,
-  "REMX": 0.09775073402067282
+  "XLE": 0.3,
+  "OIH": 0.08401046100964432,
+  "ERX": 0.05281035060463068,
+  "REMX": 0.025242755397662905,
+  "GDX": 0.18,
+  "NUGT": 0.1
  },
  "cash_weight": 1.1102230246251565e-16,
  "exec_price": {
-  "SOXX": 474.58,
-  "SOXL": 98.34,
-  "XLE": 59.14,
-  "OIH": 373.18,
-  "ERX": 93.33,
-  "REMX": 64.85
+  "SOXX": 508.707,
+  "SOXL": 117.226,
+  "XLE": 58.17,
+  "OIH": 371.26,
+  "ERX": 90.44,
+  "REMX": 65.915,
+  "GDX": 75.25,
+  "NUGT": 114.3
  },
  "actions": [
+  {
+   "key": "GDX",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 PURE-REGIME BUY",
+   "target": 0.18,
+   "in_pos": false,
+   "priority": 0.5427909477968264
+  },
+  {
+   "key": "NUGT",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 PURE-REGIME BUY",
+   "target": 0.1,
+   "in_pos": false,
+   "priority": 0.5191049334165931
+  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.2235910066373108,
+   "target": 0.3,
    "in_pos": true,
-   "priority": 0.828955605312341
+   "priority": 0.8713353976356791
   },
   {
    "key": "ERX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1,
+   "target": 0.05281035060463068,
    "in_pos": true,
-   "priority": 0.8275132820439624
+   "priority": 0.8698544761492026
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.17865825934201632,
+   "target": 0.08401046100964432,
    "in_pos": true,
-   "priority": 0.7423769815820631
+   "priority": 0.7758877072315704
   },
   {
    "key": "SOXL",
@@ -52,21 +72,21 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.4364957343363418
+   "priority": 0.3863853944563522
   },
   {
    "key": "SOXX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
+   "target": 0.15793643298806204,
    "in_pos": true,
-   "priority": 0.4018464337109675
+   "priority": 0.35274888201248794
   },
   {
    "key": "REMX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.09775073402067282,
+   "target": 0.025242755397662905,
    "in_pos": true,
    "priority": 0.09619047619047617
   },
@@ -119,22 +139,6 @@
    "priority": null
   },
   {
-   "key": "GDX",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
-  },
-  {
-   "key": "NUGT",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null
-  },
-  {
    "key": "GRID",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 BELOW TREND",
@@ -169,16 +173,16 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-07-29T14:30:10+00:00",
+  "checked_at_utc": "2026-07-30T14:30:04+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Jul 29, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-07-28",
-  "btc_bar_close_utc": "2026-07-29T12:00:00+00:00"
+  "anchor_ct": "Jul 30, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-07-29",
+  "btc_bar_close_utc": "2026-07-30T12:00:00+00:00"
  },
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "fb86c112ae1b6727cdfac52dcdcecd82042b461c5482787ea5c1f919981c6460"
+  "value": "0c40e818fd465aa9b3cb1e67f727f601fee73efa7798c1ea6b38f4a8c3ff368b"
  }
 }
