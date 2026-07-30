@@ -149,7 +149,12 @@ def _write_md(profiles: dict, asof, n_sleeves: int, n_bars: int) -> None:
     L.append("## Method\n")
     L.append("* **Funded set (gate)** on day *t* = sleeves in the market on *t* "
              "per the engines' own `pos_series` (decided at the close of *t−1*; "
-             "causal, next-bar execution as always).")
+             "causal, next-bar execution as always). Position state is "
+             "**carried across non-trading days**: the crypto sleeves put "
+             "weekends into the calendar, and without the carry every equity "
+             "position looked sold each Friday — water-filling weekend books "
+             "into crypto or 100% SATA. Carried sleeves keep their weight and "
+             "contribute 0 return until their next bar.")
     L.append("* **Priority components**, all as-of and lagged one bar, min-max "
              "ranked across each day's funded set exactly like "
              "`compute_priorities`: momentum = parent close vs 50-day SMA; "
@@ -165,7 +170,9 @@ def _write_md(profiles: dict, asof, n_sleeves: int, n_bars: int) -> None:
              "(equal-weight warm-up, overlay OFF) — the app's published "
              "construction, prefix-invariance-verified by "
              "`scripts/check_lookahead.py`.")
-    L.append("* **Idle capital** earns the SATA daily yield in every variant.")
+    L.append("* **Idle capital** earns the SATA daily yield in every variant — "
+             "credited on weekday bars only (the coupon is 0.13/250 per "
+             "BUSINESS day; crediting weekend bars would compound to ~19%/yr).")
     L.append("* `gate only` water-fills the plain anchors over the funded set "
              "(no tilt) — separating the *concentration* effect from the "
              "*priority-tilt* effect.\n")
