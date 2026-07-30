@@ -1415,6 +1415,183 @@ def historical_allocation(snap: dict, base_weights: dict,
     return dict(book=book, sata=max(1.0 - sum(book.values()), 0.0))
 
 
+# ── historical replay of the signal-gated, priority-tilted allocation ──────
+def priority_component_history(results: list[dict],
+                               index: pd.Index) -> dict[str, pd.DataFrame]:
+    """Causal daily history of every ``compute_priorities`` input, per key.
+
+    The live gate scores candidates on five components; each has an exact
+    as-of-that-day analogue reconstructable from data available at that bar's
+    close (no look-ahead):
+
+      momentum   parent signal close vs its 50-day SMA — the same read
+                 ``run_asset`` takes live, computed on the parent group's
+                 primary price path (``r['bh']`` is proportional to price, and
+                 close/SMA is scale-invariant, so no fill anchor is needed).
+      sentiment  ``tc.macro_sentiment`` is already a causal rolling series
+                 (252-day rolling z-scores → rolling percentile rank); the
+                 live gate just reads its last value, so the historical value
+                 IS the series at that bar.  Parent config resolved via
+                 ``overall_config``; sleeves whose macro data can't be loaded
+                 fall back to the 0.5 neutral the live scorer uses for NaN.
+      win_rate   expanding win fraction over the sleeve's CLOSED trades as of
+                 each bar (the live gate uses the full-sample win rate, which
+                 an investor mid-history could not have known).  Neutral 0.5
+                 before the first closed trade.
+      sharpe     expanding annualised Sharpe of the sleeve's strategy returns
+                 (≥60 bars; NaN before that → 0.5 via ``_minmax``).  Raw value
+                 — min-max across the day's candidates happens at replay time,
+                 exactly like ``compute_priorities``.
+      regime     close > 20-day SMA and SMA rising vs 5 bars ago — the same
+                 ``bull_regime`` rule ``compute_trend_signatures`` applies,
+                 evaluated on the parent's daily closes.
+
+    Returns ``{key: DataFrame(mom, sent, wr, sharpe_raw, regime)}`` reindexed
+    and forward-filled onto ``index`` (each value stands until the next bar of
+    that sleeve's own calendar).  NOT shifted — the caller decides the
+    information lag."""
+    # parent-level reads (momentum / sentiment / regime), shared by siblings
+    groups: dict[str, list[dict]] = {}
+    for res in results:
+        groups.setdefault(res["parent"], []).append(res)
+    parent_comp: dict[str, dict[str, pd.Series]] = {}
+    for parent, members in groups.items():
+        prim = next((m for m in members if m["key"] == parent), members[0])
+        px = pd.Series(np.asarray(prim["r"]["bh"], float),
+                       index=pd.DatetimeIndex(pd.Series(prim["dates"])))
+        sma50 = px.rolling(50, min_periods=20).mean()
+        mom = px / sma50 - 1.0
+        sma20 = px.rolling(20, min_periods=5).mean()
+        reg = ((px > sma20) & (sma20 > sma20.shift(5))).astype(float)
+        try:
+            cfg = overall_config(parent)
+            import ticker_core as _tc
+            s = _tc.macro_sentiment(cfg, _load_daily(cfg))
+            sent = (s / 100.0).clip(0.0, 1.0)
+        except Exception:
+            sent = pd.Series(0.5, index=px.index)
+        parent_comp[parent] = dict(mom=mom, sent=sent, reg=reg)
+
+    out = {}
+    for res in results:
+        pc = parent_comp[res["parent"]]
+        # expanding win rate stepped at each closed trade's exit bar
+        log = [t for t in (res["r"].get("trade_log") or res["r"].get("trades") or [])
+               if isinstance(t, dict) and t.get("exit_date") is not None]
+        if log:
+            ex = pd.Series([float(t["ret"]) > 0 for t in log],
+                           index=pd.DatetimeIndex([pd.Timestamp(t["exit_date"])
+                                                   for t in log])).sort_index()
+            wr = ex.astype(float).groupby(level=0).sum().cumsum() / \
+                 ex.groupby(level=0).size().cumsum()   # same-day exits → one bar
+        else:
+            wr = pd.Series(dtype=float)
+        r = res["ret"]
+        shp = (r.expanding(60).mean() / r.expanding(60).std()) * np.sqrt(TRADING_DAYS)
+        df = pd.DataFrame(dict(
+            mom=pc["mom"].reindex(index).ffill(),
+            sent=pc["sent"].reindex(index).ffill().fillna(0.5),
+            wr=wr.reindex(index).ffill().fillna(0.5),
+            sharpe_raw=shp.reindex(index).ffill(),
+            regime=pc["reg"].reindex(index).ffill().fillna(0.0),
+        ))
+        out[res["key"]] = df
+    return out
+
+
+def replay_gated_allocation(results: list[dict], base_weights: dict[str, float],
+                            caps: dict | None = None,
+                            sata_daily: float = SATA_DAILY,
+                            tilt: bool = True) -> dict:
+    """Historical replay of ``signal_gated_allocation`` — what the daily
+    gate/tilt/water-fill book would have earned, decided each day from data
+    available at the PREVIOUS bar's close.
+
+    Construction, mirroring the live gate:
+      * the funded set on day *t* is the sleeves the engines hold IN THE
+        MARKET on day *t* (``pos_series`` — position on *t* was decided by
+        signals at the close of *t−1*, so the set is causal and already
+        encodes next-bar execution, committed exits and fresh entries);
+      * each funded sleeve's raw weight is its optimal anchor ×
+        ``(0.5 + priority)``, priority scored by ``PRIORITY_WEIGHTS`` over the
+        as-of components of ``priority_component_history`` **lagged one bar**
+        and min-max normalised across that day's funded set — exactly
+        ``compute_priorities``;  ``tilt=False`` skips the tilt (anchor × 1.0),
+        isolating the pure gate/concentration effect (the same construction as
+        ``historical_allocation``'s per-snapshot book);
+      * raw weights are water-filled to the profile caps (deployed book sums
+        to 1 when the caps allow), the remainder — and every fully-flat day —
+        earns the SATA daily yield.
+
+    No transaction costs are modelled; ``turnover`` (mean and total daily
+    one-way weight movement, SATA leg included) is reported so the cost
+    surface is visible.  Returns daily returns/equity/metrics plus the full
+    daily weight matrix (``weights`` columns = instruments, ``sata`` series).
+    """
+    caps = caps or CAP_BY_KEY
+    rets = returns_matrix(results)
+    idx = rets.index
+    keys = list(rets.columns)
+    pos = position_matrix(results, idx)
+    comp = priority_component_history(results, idx)
+    # decision at close t−1 drives the book that earns day t's return
+    lag = {k: comp[k].shift(1) for k in keys}
+
+    R = np.nan_to_num(rets.to_numpy(float))
+    P = pos.to_numpy(float)
+    mom_m = np.column_stack([lag[k]["mom"].to_numpy(float) for k in keys])
+    sent_m = np.column_stack([lag[k]["sent"].to_numpy(float) for k in keys])
+    wr_m = np.column_stack([lag[k]["wr"].to_numpy(float) for k in keys])
+    shp_m = np.column_stack([lag[k]["sharpe_raw"].to_numpy(float) for k in keys])
+    reg_m = np.column_stack([lag[k]["regime"].to_numpy(float) for k in keys])
+    pw = PRIORITY_WEIGHTS
+
+    port = np.zeros(len(idx))
+    W = np.zeros((len(idx), len(keys)))
+    sata_w = np.zeros(len(idx))
+    for t in range(len(idx)):
+        act = [j for j in range(len(keys)) if P[t, j] > 0]
+        if not act:
+            port[t] = sata_daily
+            sata_w[t] = 1.0
+            continue
+        if tilt:
+            mom = _minmax({j: mom_m[t, j] for j in act})
+            shp = _minmax({j: shp_m[t, j] for j in act})
+            raw = {}
+            for j in act:
+                s01 = sent_m[t, j]
+                s01 = 0.5 if s01 != s01 else s01
+                w01 = wr_m[t, j]
+                w01 = 0.5 if w01 != w01 else w01
+                score = (pw["momentum"] * mom[j] + pw["sentiment"] * s01 +
+                         pw["win_rate"] * w01 + pw["sharpe"] * shp[j] +
+                         pw["regime"] * (reg_m[t, j] if reg_m[t, j] == reg_m[t, j] else 0.0))
+                raw[j] = max(base_weights.get(keys[j], 0.0), 1e-6) * (0.5 + score)
+        else:
+            raw = {j: max(base_weights.get(keys[j], 0.0), 1e-6) for j in act}
+        target = _waterfill(raw, {j: caps.get(keys[j], 0.30) for j in raw})
+        dep = 0.0
+        for j, w in target.items():
+            W[t, j] = w
+            dep += w
+        sata_w[t] = max(1.0 - dep, 0.0)
+        port[t] = float(np.dot(W[t], R[t])) + sata_w[t] * sata_daily
+
+    daily = pd.Series(port, index=idx)
+    eq = _equity(daily)
+    full = np.column_stack([W, sata_w])
+    turno = 0.5 * np.abs(np.diff(full, axis=0)).sum(axis=1)
+    return dict(
+        ret=daily, equity=eq, metrics=curve_metrics(eq),
+        weights=pd.DataFrame(W, index=idx, columns=keys),
+        sata=pd.Series(sata_w, index=idx),
+        turnover=dict(mean=float(turno.mean()) if len(turno) else 0.0,
+                      p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
+                      days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
+        tilt=tilt)
+
+
 def benchmarks(returns: pd.DataFrame, results: list[dict],
                pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
     """Reference curves: equal-weight buy&hold of the underlyings (always
