@@ -761,7 +761,8 @@ def overall_trade_stats(pa_rows: list[dict], weights: dict,
 
 
 def trade_log_since(results: list[dict], weights: dict, start,
-                    min_w: float = 0.002) -> list[dict]:
+                    min_w: float = 0.002,
+                    weight_matrix: pd.DataFrame | None = None) -> list[dict]:
     """The individual trades behind ``overall_trade_stats``: every round-trip
     across the sleeves the optimal blend holds (weight > ``min_w``) that was
     open at any point on/after ``start`` — closed trades whose exit lands on/
@@ -769,7 +770,13 @@ def trade_log_since(results: list[dict], weights: dict, start,
     date, ``ret`` = its unrealised P&L at the latest price incl. any live-spot
     overlay).  Engines disagree on price key names (``entry_px``/``exit_px``
     vs the BTC CT engine's ``entry_price``/``exit_price``) — normalised here.
-    Rows come back newest-first: open positions, then closed by exit date."""
+    Rows come back newest-first: open positions, then closed by exit date.
+
+    ``weights`` gates which sleeves count (weight > ``min_w``) and is each
+    row's default ``weight``.  With a ``weight_matrix`` (the replay's daily
+    weight frame) each trade instead carries the PEAK weight the book gave
+    that sleeve while the trade was open — the honest deployed notional under
+    a daily-rebalanced book."""
     start = pd.Timestamp(start)
 
     def _px(t: dict, *keys):
@@ -778,6 +785,12 @@ def trade_log_since(results: list[dict], weights: dict, start,
             if v is not None and np.isfinite(v):
                 return float(v)
         return None
+
+    def _trade_w(key: str, default: float, entry_d, exit_d) -> float:
+        if weight_matrix is None or key not in weight_matrix.columns:
+            return float(default)
+        col = weight_matrix[key].loc[entry_d:(exit_d if exit_d is not None else None)]
+        return float(col.max()) if len(col) and np.isfinite(col.max()) else float(default)
 
     rows = []
     for res in results:
@@ -795,6 +808,7 @@ def trade_log_since(results: list[dict], weights: dict, start,
             if exit_d < start:
                 continue
             entry_d = pd.Timestamp(t["entry_date"])
+            base["weight"] = _trade_w(res["key"], w, entry_d, exit_d)
             rows.append(dict(base, open=False, entry_date=entry_d, exit_date=exit_d,
                              entry_px=_px(t, "entry_px", "entry_price"),
                              exit_px=_px(t, "exit_px", "exit_price"),
@@ -805,6 +819,7 @@ def trade_log_since(results: list[dict], weights: dict, start,
             e_dt = pd.Timestamp(pos["entry_date"]) if pos.get("entry_date") else None
             upnl = pos.get("upnl")             # % — refreshed by apply_spot
             last_px = res.get("last_close")
+            base["weight"] = _trade_w(res["key"], w, e_dt, None)
             rows.append(dict(base, open=True, entry_date=e_dt, exit_date=None,
                              entry_px=_px(pos, "entry_px"),
                              exit_px=(float(last_px) if last_px is not None
@@ -1499,10 +1514,57 @@ def priority_component_history(results: list[dict],
     return out
 
 
-def replay_gated_allocation(results: list[dict], base_weights: dict[str, float],
+def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
+                        caps: dict | None = None, mdd_floor: float = -0.35,
+                        objective: str = "balanced",
+                        sata_daily: float = SATA_DAILY, min_hist: int = 250,
+                        n_samples: int = 8000, seed: int = 7) -> list[tuple]:
+    """Expanding-window anchor-weight schedule with NO look-ahead.
+
+    The live gate anchors position sizes on the optimiser's weights; fitting
+    those on the full history and applying them retroactively is exactly the
+    look-ahead the fixed-weight back-test carried.  This schedule removes it:
+
+      * from inception until ``min_hist`` bars exist, the anchors are the
+        cap-normalised EQUAL weights — a constant that uses no return data;
+      * each January 1 thereafter the optimiser is re-fit on the data strictly
+        BEFORE that date (same caps / drawdown budget / objective as the
+        profile, ``fundamental=False`` — the mid-2026 forward view is
+        hindsight relative to history, so it must not tilt the replay), and
+        those weights anchor the book until the next refit.
+
+    Returns ``[(effective_date, weights_dict), …]`` sorted ascending; entry 0
+    covers the warm-up.  A sleeve with little or no data inside a fit window
+    may carry an arbitrary anchor — harmless, since the replay water-fills
+    over the sleeves actually in the market and the anchor only sets relative
+    size once the sleeve is live."""
+    caps = caps or CAP_BY_KEY
+    idx = rets.index
+    cols = list(rets.columns)
+    cap_vec = np.array([caps.get(c, 0.30) for c in cols])
+    ew = _cap_normalise(np.full(len(cols), 1.0 / len(cols)), cap_vec)
+    sched = [(idx[0], {c: float(w) for c, w in zip(cols, ew)})]
+    for y in range(idx[0].year + 1, idx[-1].year + 1):
+        d = pd.Timestamp(f"{y}-01-01")
+        prior = idx[idx < d]
+        if len(prior) < min_hist:
+            continue
+        fit_end = prior[-1]
+        o = optimize_weights(rets.loc[:fit_end], caps=caps, n_samples=n_samples,
+                             seed=seed, mdd_floor=mdd_floor,
+                             pos=(pos.loc[:fit_end] if pos is not None else None),
+                             sata_daily=sata_daily, objective=objective,
+                             fundamental=False)
+        sched.append((d, o["optimal"]["weights"]))
+    return sched
+
+
+def replay_gated_allocation(results: list[dict],
+                            base_weights: dict[str, float] | None = None,
                             caps: dict | None = None,
                             sata_daily: float = SATA_DAILY,
-                            tilt: bool = True) -> dict:
+                            tilt: bool = True,
+                            anchors: list[tuple] | None = None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -1527,11 +1589,24 @@ def replay_gated_allocation(results: list[dict], base_weights: dict[str, float],
     one-way weight movement, SATA leg included) is reported so the cost
     surface is visible.  Returns daily returns/equity/metrics plus the full
     daily weight matrix (``weights`` columns = instruments, ``sata`` series).
+
+    Anchors come from ``base_weights`` (one static dict — carries whatever
+    fitting bias produced it) OR ``anchors`` (a ``walkforward_anchors``
+    schedule; each day uses the latest entry effective on/before it, so the
+    anchors are look-ahead-free too).  Exactly one must be supplied.
     """
     caps = caps or CAP_BY_KEY
     rets = returns_matrix(results)
     idx = rets.index
     keys = list(rets.columns)
+    if (base_weights is None) == (anchors is None):
+        raise ValueError("supply exactly one of base_weights / anchors")
+    if anchors:
+        a_dates = np.array([pd.Timestamp(d).to_datetime64() for d, _ in anchors])
+        a_pick = np.maximum(np.searchsorted(a_dates, idx.values, side="right") - 1, 0)
+        day_anchor = [anchors[i][1] for i in a_pick]
+    else:
+        day_anchor = None
     pos = position_matrix(results, idx)
     comp = priority_component_history(results, idx)
     # decision at close t−1 drives the book that earns day t's return
@@ -1555,6 +1630,7 @@ def replay_gated_allocation(results: list[dict], base_weights: dict[str, float],
             port[t] = sata_daily
             sata_w[t] = 1.0
             continue
+        bw = day_anchor[t] if day_anchor is not None else base_weights
         if tilt:
             mom = _minmax({j: mom_m[t, j] for j in act})
             shp = _minmax({j: shp_m[t, j] for j in act})
@@ -1567,9 +1643,9 @@ def replay_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 score = (pw["momentum"] * mom[j] + pw["sentiment"] * s01 +
                          pw["win_rate"] * w01 + pw["sharpe"] * shp[j] +
                          pw["regime"] * (reg_m[t, j] if reg_m[t, j] == reg_m[t, j] else 0.0))
-                raw[j] = max(base_weights.get(keys[j], 0.0), 1e-6) * (0.5 + score)
+                raw[j] = max(bw.get(keys[j], 0.0), 1e-6) * (0.5 + score)
         else:
-            raw = {j: max(base_weights.get(keys[j], 0.0), 1e-6) for j in act}
+            raw = {j: max(bw.get(keys[j], 0.0), 1e-6) for j in act}
         target = _waterfill(raw, {j: caps.get(keys[j], 0.30) for j in raw})
         dep = 0.0
         for j, w in target.items():
@@ -1590,6 +1666,68 @@ def replay_gated_allocation(results: list[dict], base_weights: dict[str, float],
                       p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
                       days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
         tilt=tilt)
+
+
+def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
+                             mdd_floor: float = -0.35,
+                             objective: str = "balanced",
+                             sata_daily: float = SATA_DAILY, tilt: bool = True,
+                             min_hist: int = 250, n_samples: int = 8000,
+                             seed: int = 7) -> dict:
+    """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
+    on a ``walkforward_anchors`` schedule.  Every input to a given day's book —
+    anchor weights, funded set, priority components — is computable from data
+    available at the previous close.  This is what the app publishes as the
+    combined back-test; the full-sample optimiser weights remain in use only
+    for TODAY'S live book, where all history to date is legitimately known.
+    The schedule is attached as ``anchors``."""
+    rets = returns_matrix(results)
+    pos = position_matrix(results, rets.index)
+    anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
+                                  objective=objective, sata_daily=sata_daily,
+                                  min_hist=min_hist, n_samples=n_samples, seed=seed)
+    rep = replay_gated_allocation(results, caps=caps, sata_daily=sata_daily,
+                                  tilt=tilt, anchors=anchors)
+    rep["anchors"] = anchors
+    return rep
+
+
+def period_metrics_from_ret(daily_ret: pd.Series, periods: list[tuple]) -> list[dict]:
+    """``period_breakdown`` for an already-built daily return stream (the
+    replay's) — same row shape, sliced instead of recombined."""
+    rows = []
+    for lbl, s, e in periods:
+        sub = daily_ret.loc[pd.Timestamp(s):(pd.Timestamp(e) if e else None)]
+        if len(sub) < 5:
+            continue
+        rows.append(dict(label=lbl, start=s, end=e, **curve_metrics(_equity(sub))))
+    return rows
+
+
+def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
+                           sata_w: pd.Series, start,
+                           sata_daily: float = SATA_DAILY) -> dict | None:
+    """Exact per-sleeve attribution of the REPLAYED book's P&L since ``start``
+    — the daily-weight analogue of ``pnl_attribution_since`` (same output
+    shape, same to-float-precision additivity: per-key dollars + SATA = the
+    replay curve's re-based total return).  ``weights``/``sata_w`` are the
+    matrices ``replay_gated_allocation`` returns; the anchor bar is the cost
+    basis, so its return is not counted."""
+    sub = returns.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return None
+    W = weights.reindex(sub.index).fillna(0.0).to_numpy(float)
+    contrib = W * np.nan_to_num(sub.to_numpy(float))
+    sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float) * sata_daily)
+    contrib[0, :] = 0.0
+    sata_term[0] = 0.0
+    port = contrib.sum(axis=1) + sata_term
+    v_prev = np.concatenate([[1.0], np.cumprod(1.0 + port)[:-1]])
+    dollars = (contrib * v_prev[:, None]).sum(axis=0)
+    return dict(per_key={c: float(v) for c, v in zip(sub.columns, dollars)},
+                sata=float((sata_term * v_prev).sum()),
+                total=float(np.prod(1.0 + port) - 1.0),
+                start=sub.index[0], end=sub.index[-1])
 
 
 def benchmarks(returns: pd.DataFrame, results: list[dict],

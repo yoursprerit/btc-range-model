@@ -121,6 +121,34 @@ that actually have data each day (staggered inception — BTC's CT features begi
 back-test reflects cash *working*, and the live book's undeployed remainder goes
 to SATA too.
 
+### The published back-test is the walk-forward gated replay
+
+`_combine` (fixed weights held over the whole history) remains the optimiser's
+internal scoring engine, but the **numbers the app publishes** — headline
+metrics, profile comparison, Growth-of-$100k curve, period breakdown, the
+"P&L from your start date" section and its attribution charts — come from
+`walkforward_gated_replay()`: a day-by-day replay of `signal_gated_allocation`
+in which
+
+* the **funded set** each day is the sleeves the engines actually held (decided
+  at the previous close),
+* each sleeve is sized by **anchor weights × (0.5 + entry-priority)**, priority
+  rebuilt daily from as-of inputs (momentum vs SMA50, the rolling sentiment
+  gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime rule), lagged one
+  bar and water-filled to the profile caps,
+* the **anchor weights are re-fit each Jan 1 on data strictly before that date**
+  (cap-normalised equal weight during the first-year warm-up), with the
+  fundamental overlay **excluded** (it is a mid-2026 view — hindsight relative
+  to history; it tilts today's live book only).
+
+Nothing in the published curve uses information from after the day it
+describes; `scripts/check_lookahead.py` enforces this by truncation
+(prefix-invariance) at multiple cutoffs, and `OVERALL_GATED_REPLAY_EVAL.md`
+quantifies each layer's effect. Remaining honest limits: per-sleeve strategy
+*parameters* are tuned on history, the BTC CT model's training window extends
+into the displayed period, no transaction costs are charged, and SATA's yield
+is assumed constant across the whole history.
+
 ---
 
 ## 5. How the allocation mix is determined & optimised
