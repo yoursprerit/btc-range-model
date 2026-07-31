@@ -15,6 +15,13 @@ re-exports the constant for the engine/publisher side.
 """
 STRATEGY_VERSION = "v1"
 
+# First signal day (as_of) counted into the current version's as-published
+# record.  BUMP TOGETHER with STRATEGY_VERSION — set it to the day of the
+# bump.  The Overall P&L's as-published view only admits books stamped with
+# the current version on/after this date, so a same-day re-publish of an
+# older bar under new code can never pull old-strategy days into the record.
+STRATEGY_VERSION_START = "2026-07-31"
+
 BADGE_COLOR = "#7c3aed"        # the logic-provenance purple, used app-wide
 
 

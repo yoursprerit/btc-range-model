@@ -1879,7 +1879,8 @@ BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
 # never silently conflated.  Books published before stamping existed are
 # labelled from the committed side-car ``data/overall/book_versions.json``
 # (see ``scripts/backfill_book_versions.py``) as ``pre-v1``.
-from strategy_version import STRATEGY_VERSION  # noqa: E402,F401
+from strategy_version import (STRATEGY_VERSION,        # noqa: E402,F401
+                              STRATEGY_VERSION_START)  # noqa: E402,F401
 BOOK_VERSIONS_JSON = _REPO_ROOT / "data" / "overall" / "book_versions.json"
 
 
@@ -1915,7 +1916,8 @@ def load_published_books(archive_dir: Path | None = None) -> list[dict]:
 def published_book_replay(returns: pd.DataFrame, books: list[dict],
                           sata_daily: float = SATA_DAILY,
                           version_map: dict | None = None,
-                          only_version: str | None = None) -> dict | None:
+                          only_version: str | None = None,
+                          min_as_of=None) -> dict | None:
     """Compound the ACTUALLY-PUBLISHED daily books — the exact historical
     record, daily optimiser trims included — into the same shapes the
     walk-forward replay returns (``ret``/``equity``/``weights``/``sata``), so
@@ -1944,7 +1946,9 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     every point where the record switches strategy generations.
     ``only_version`` restricts the replay to books carrying that label — the
     "current-logic books only" view, guaranteed free of old-logic
-    conflation.
+    conflation — and ``min_as_of`` additionally drops books from earlier
+    signal days (``STRATEGY_VERSION_START``: a same-day re-publish of an
+    older bar under new code stays out of the current version's record).
 
     Extras beyond the replay shape: ``books`` — one record per archived
     publish (as_of / profile / book_mode / version / code_sha / weights /
@@ -1976,6 +1980,8 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     parsed.sort(key=lambda r: r["as_of"])
     if only_version is not None:
         parsed = [r for r in parsed if r["version"] == only_version]
+    if min_as_of is not None:
+        parsed = [r for r in parsed if r["as_of"] >= pd.Timestamp(min_as_of)]
     if not parsed or returns is None or returns.empty:
         return None
     idx = returns.index[returns.index >= parsed[0]["as_of"]]
