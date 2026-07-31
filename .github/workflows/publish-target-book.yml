@@ -196,6 +196,16 @@ jobs:
         # the profile the Overall app defaults to.
         run: python scripts/publish_target_book.py
 
+      - name: Build strategy-health snapshot (best-effort)
+        if: steps.guard.outputs.run == 'true'
+        # 🩺 The decay monitor (STRATEGY_HEALTH.md): re-runs the universe plus
+        # the walk-forward replay per monitored profile and writes
+        # data/overall/strategy_health.json + health_history.csv, which the
+        # Strategy Health app renders read-only. Best-effort by design — a
+        # health-build failure must never block or unpublish the day's book.
+        continue-on-error: true
+        run: python scripts/build_strategy_health.py
+
       - name: Commit & push the artifacts (this branch only)
         if: steps.guard.outputs.run == 'true'
         run: |
@@ -212,6 +222,7 @@ jobs:
           git add data/overall/target_book.json data/overall/target_book_live.json \
                   data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
                   data/overall/book_archive/ \
+                  data/overall/strategy_health.json data/overall/health_history.csv \
                   data/overall/daily_audit.json data/backtest/ || true
           if git diff --cached --quiet; then
             echo "No changes — nothing to commit."

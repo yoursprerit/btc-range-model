@@ -52,9 +52,10 @@ except Exception:
 
 # ── sidebar Application selector (same widget/key as every other app) ─────────
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading", "BTC": "₿  Bitcoin (BTC)",
                "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)", "DAILYAUDIT": "🕵️  Daily Audit",
+               "HEALTH": "🩺  Strategy Health",
                "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():
@@ -303,6 +304,26 @@ for (_lbl, _p), _col in zip(_books, bc):
             st.markdown(f"**{_lbl}** — _not published yet_")
 st.caption("_Open the 📋 Target Book app for the full allocation, signature "
            "verification and downloads._")
+
+# ════════════════════════════════════════════════════════════════════════════
+# 5 · Strategy Health — the decay monitor's verdict (cross-link)
+# ════════════════════════════════════════════════════════════════════════════
+st.markdown("### 5 · Strategy Health")
+try:
+    _hp = json.loads((_REPO_ROOT / "data" / "overall"
+                      / "strategy_health.json").read_text())
+    _hv, _hi = _hp["verdict"], {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    st.markdown(f"{_hi.get(_hv['status'], '⬜')} **{_hv['headline']}** — "
+                f"as-of **{_hp['as_of']}** · {_hv['n_sleeves']} sleeves "
+                f"({_hv['n_warming']} ⬜ warming up) · snapshot generated "
+                f"{fr.fmt_ct(_hp.get('generated_at_utc'))}")
+except Exception:
+    st.markdown("_No health snapshot yet — the nightly publish workflow seeds "
+                "it (`python scripts/build_strategy_health.py`)._")
+st.caption("_This page answers “did everything run?”; the 🩺 **Strategy "
+           "Health** app (sidebar) answers “is it still working?” — book-vs-"
+           "replay tracking, drawdown tripwires, edge vs B&H and trade "
+           "expectancy per sleeve._")
 
 # record this page's own render, like every other app
 fr.record_refresh("DAILYAUDIT", kind="audit", app_label="🕵️ Daily Audit")
