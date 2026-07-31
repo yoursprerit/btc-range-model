@@ -849,7 +849,8 @@ with tab_live:
     # One collapsible box holds both rebalancing views: the trades that take the
     # book in force to the recommended target, and the prev → current published
     # comparison with the optimizer's rationale.
-    with st.expander(f"🔁 **Rebalancing moves** — {_moves_label}", expanded=False):
+    with st.expander("🔁 **Rebalancing moves**", expanded=False):
+        st.markdown(f"**{_moves_label}**")
         moves = []
 
         # Rounding-consistent deltas + retired-key handling live in the core so
@@ -1309,7 +1310,11 @@ with tab_live:
             _pa = ov.per_asset_slice_metrics(results, _start_sel)
             _ots = ov.overall_trade_stats(_pa, _wmax)
             pm2 = st.columns(6)
-            pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%")
+            pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%",
+                          help="Share of trading days since the start date on "
+                               "which the whole-portfolio strategy curve closed "
+                               "up — days the blend made money, out of all "
+                               "trading days measured.")
             pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
             pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
             pm2[3].metric("Trading days", f"{_sm['days']}")
