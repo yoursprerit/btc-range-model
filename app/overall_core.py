@@ -2109,3 +2109,44 @@ def live_exit_keys(results: list[dict], spot: dict,
             if ma is not None and plive < ma:
                 out.add(r["key"])
     return out
+
+
+def live_entry_keys(results: list[dict], spot: dict) -> set:
+    """Mirror of :func:`live_exit_keys` for FRESH ENTRIES: keys of trend
+    instruments that are flat off the last close (no committed buy signal) but
+    whose *live* price satisfies the mode's REAL long condition — if it holds
+    into the close, the signal fires today and the position **opens next bar**.
+    The condition is re-evaluated with the live price as the newest close (via
+    ``trend_long_now_live``): for ``ma``/``ma_vol`` that's close-vs-SMA (plus
+    the vol gate), and for ``dual_ma`` the fast/slow SMA cross — NOT a naive
+    price-vs-line read (so a name whose price merely pops above its slow SMA is
+    not mis-flagged before a golden cross).  Instruments already signalling buy
+    off the last close (committed entries, action OPEN) are excluded — they are
+    flagged separately as certain, not "likely", entries.  MACD (oscillator)
+    and divergence entries are signal-triggered, not simple price-crossings, so
+    they're not included."""
+    out = set()
+    for r in results:
+        mode = r.get("mode")
+        if mode not in ("ma", "dual_ma", "ma_vol"):
+            continue
+        p = r.get("pos") or {}
+        if p.get("in_pos"):
+            continue
+        if (r.get("decision") or {}).get("tone") == "buy":
+            continue                    # committed entry — not a live "likely"
+        plive = (spot.get(r.get("parent")) or {}).get("price")
+        if plive is None:
+            continue
+        cfg = r.get("cfg"); close_hist = r.get("close_hist")
+        _live_fn = getattr(bt, "trend_long_now_live", None)  # absent on a stale reload
+        if cfg is not None and close_hist is not None and _live_fn is not None:
+            if _live_fn(cfg, close_hist, plive) is True:  # trend flips long on live px
+                out.add(r["key"])
+        elif mode == "ma":
+            # fallback for results lacking cfg/close_hist: the naive
+            # price-vs-SMA read IS the real entry rule for plain `ma` only.
+            ma = r.get("ma_val")
+            if ma is not None and plive > ma:
+                out.add(r["key"])
+    return out

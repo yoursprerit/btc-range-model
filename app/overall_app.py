@@ -73,6 +73,8 @@ def _stale_core(mod) -> bool:
             return True
         if not getattr(mod, "LIVE_EXIT_MODE_AWARE", False):
             return True
+        if not hasattr(mod, "live_entry_keys"):
+            return True
         if not hasattr(mod, "adjust_for_selection"):
             return True
         if not hasattr(mod, "slice_metrics"):
@@ -628,6 +630,11 @@ with tab_live:
     # include_entries flags fresh
     # buys that would open into an already-broken trend as well as current holds.
     _live_exits = ov.live_exit_keys(results, _spot, include_entries=True)
+    # mirror set for likely ENTRIES: flat names with no committed buy whose live
+    # price now satisfies the trend's real long condition — if it holds into the
+    # close they signal today and open next bar. Used only to flag rows green in
+    # the action table (the live book never pre-funds an uncommitted signal).
+    _live_entries = ov.live_entry_keys(results, _spot)
     try:
         gate_live = ov.signal_gated_allocation(
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
@@ -803,6 +810,16 @@ with tab_live:
         st.caption("No held position's live price is below its trend filter — the "
                    "**Recommended Live Possible Targetbook** matches the book "
                    "today's committed signals would publish.")
+    if _live_entries:
+        st.success("🟢 **Likely entries:** " + ", ".join(sorted(_live_entries)) +
+                   " " + ("is" if len(_live_entries) == 1 else "are") +
+                   " flat off the last close but the **live price is now above the "
+                   "trend filter** — if it holds into the close, the signal fires "
+                   "today and " +
+                   ("it enters" if len(_live_entries) == 1 else "they enter") +
+                   " on the next bar. Flagged green in the action plan below; the "
+                   "live book never pre-funds a signal before it commits at the "
+                   "close.")
 
     # ── 1b. USER INCLUDE / EXCLUDE overlay on the live-adjusted book ─────
     # Same control as the 📋 Target Book viewer: untick a position and its weight
@@ -987,12 +1004,18 @@ with tab_live:
                    "engine (they fall back to the live engine's values only when "
                    "nothing has been published yet, or for an instrument added since "
                    "the last publish). Intraday drift shows up only in the live "
-                   "columns and the red ⚠️ flags. Held/opened risk assets total "
+                   "columns and the red ⚠️ / green 🟢 flags. Held/opened risk assets "
+                   "total "
                    "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
                    "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
                    "the live price — they still **hold/open today** but **exit on the "
                    "next bar** (either the last close already crossed the trend, or the "
-                   "live price has since slipped below it). **Price (Close of Last Bar)** "
+                   "live price has since slipped below it). Rows shaded **green** 🟢 are "
+                   "the mirror on the way in: committed fresh buys that **enter on the "
+                   "next bar**, plus flat names whose **live price has risen above the "
+                   "trend filter** — if it holds into the close, the signal fires today "
+                   "and they **likely enter next bar** (an uncommitted signal is never "
+                   "pre-funded in the live columns). **Price (Close of Last Bar)** "
                    "is the official close of the last completed daily bar the signals run "
                    "on; **Live Price** is the current spot quote (coloured green/red vs "
                    "that close). **Unreal. P&L** is measured "
@@ -1098,17 +1121,38 @@ with tab_live:
             _committed_exit = bool(a.get("exits_next_bar"))
             _live_exit = a["key"] in _live_exits
             exit_next = _committed_exit or _live_exit
-            row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
-                         "box-shadow:inset 3px 0 0 #dc2626" if exit_next
-                         else "border-bottom:1px solid #eef2f7")
-            if not exit_next:
-                warn = ""
-            elif _committed_exit:                      # last close already below trend
+            # …and the green mirror: a row that opens on the NEXT bar. Two cases,
+            # exactly like the exits: the committed entry (action OPEN — the last
+            # close already fired the buy signal), and the live-driven likely
+            # entry — a flat row with no committed buy whose live price has risen
+            # above the trend filter (in _live_entries), so if it holds into the
+            # close it signals today and enters next bar. A pending exit always
+            # wins the row colour (an OPEN into a re-broken trend stays red).
+            _committed_entry = (not a["in_pos"]) and _act == "OPEN"
+            _live_entry = a["key"] in _live_entries
+            enter_next = (not exit_next) and (_committed_entry or _live_entry)
+            if exit_next:
+                row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
+                             "box-shadow:inset 3px 0 0 #dc2626")
+            elif enter_next:
+                row_style = ("border-bottom:1px solid #bbf7d0;background:#f0fdf4;"
+                             "box-shadow:inset 3px 0 0 #16a34a")
+            else:
+                row_style = "border-bottom:1px solid #eef2f7"
+            if _committed_exit:                        # last close already below trend
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
                         "⚠️ exits next bar</div>")
-            else:                                      # live-driven (hold or fresh entry)
+            elif _live_exit:                           # live-driven (hold or fresh entry)
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
                         "⚠️ live px below trend — exits next bar</div>")
+            elif _committed_entry:                     # last close already fired the buy
+                warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
+                        "🟢 enters next bar</div>")
+            elif _live_entry:                          # live-driven likely entry
+                warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
+                        "🟢 live px above trend — likely enters next bar</div>")
+            else:
+                warn = ""
             rows.append(
                 f"<tr style='{row_style}'>"
                 f"<td style='padding:8px 10px'>{_pill(_act, ac)}{warn}</td>"
