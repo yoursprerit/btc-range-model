@@ -845,45 +845,50 @@ with tab_live:
         _base_src = "current holdings (nothing published yet)"
     _moves_label = (f"{_base_src} → your selection" if _excluded
                     else f"{_base_src} → live-adjusted target")
-    st.markdown(f"**Rebalancing moves** — {_moves_label}")
-    moves = []
 
-    # Rounding-consistent deltas + retired-key handling live in the core so they
-    # are unit-tested; this loop only renders them.
-    for _mv in ov.rebalancing_moves(_base_w, _base_idle, _adj_target, _adj_sata):
-        _kk, _d = _mv["key"], _mv["delta_pct"]
-        if _kk == "SATA":
-            _label, _badge = "💵 <b>SATA</b>", ""
-            _col = C_EXIT if _d > 0 else C_BUY      # more idle cash = de-risking
-        else:
-            # A book published before a universe change can name an instrument
-            # the live universe no longer trades (an ETHA-era book after the ETH
-            # swap); it still belongs here, since the action is to sell it to 0.
-            _meta = by_key.get(_kk)
-            _badge = _kind_badge(_meta["kind"]) if _meta else ""
-            _label = (f"<b>{_kk}</b>" if _meta else
-                      f"<b>{_kk}</b><span style='font-size:10px;color:#94a3b8'>"
-                      f" (retired)</span>")
-            _col = C_BUY if _d > 0 else C_EXIT
-        moves.append(
-            f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
-            f"{_label}{_badge} {_mv['from_pct']:.0f}% → {_mv['to_pct']:.0f}% "
-            f"<span style='color:{_col};font-weight:700'>"
-            f"{'▲' if _d > 0 else '▼'}{abs(_d):.0f}pt</span></span>")
-    st.markdown("".join(moves) if moves
-                else "_Book already at target — no rebalancing needed._",
-                unsafe_allow_html=True)
+    # One collapsible box holds both rebalancing views: the trades that take the
+    # book in force to the recommended target, and the prev → current published
+    # comparison with the optimizer's rationale.
+    with st.expander(f"🔁 **Rebalancing moves** — {_moves_label}", expanded=False):
+        moves = []
 
-    # ── prev → current published books: what changed at the last publish & why
-    # Same donut-to-donut comparison the two left pies invite, with the
-    # optimizer's rationale spelled out per move. Reasons come from the two
-    # published payloads themselves (recorded decisions + priority scores),
-    # not a live recomputation — see ov.book_move_reasons.
-    if _prev_book and _cur_book:
-        _bm_hdr = (f"🔁 **Rebalancing moves — Previous → Current Targetbook** "
-                   f"(as-of {_prev_book.get('as_of', '—')} → "
-                   f"{_cur_book.get('as_of', '—')}: why the optimizer moved)")
-        with st.expander(_bm_hdr, expanded=False):
+        # Rounding-consistent deltas + retired-key handling live in the core so
+        # they are unit-tested; this loop only renders them.
+        for _mv in ov.rebalancing_moves(_base_w, _base_idle, _adj_target, _adj_sata):
+            _kk, _d = _mv["key"], _mv["delta_pct"]
+            if _kk == "SATA":
+                _label, _badge = "💵 <b>SATA</b>", ""
+                _col = C_EXIT if _d > 0 else C_BUY  # more idle cash = de-risking
+            else:
+                # A book published before a universe change can name an
+                # instrument the live universe no longer trades (an ETHA-era
+                # book after the ETH swap); it still belongs here, since the
+                # action is to sell it to 0.
+                _meta = by_key.get(_kk)
+                _badge = _kind_badge(_meta["kind"]) if _meta else ""
+                _label = (f"<b>{_kk}</b>" if _meta else
+                          f"<b>{_kk}</b><span style='font-size:10px;color:#94a3b8'>"
+                          f" (retired)</span>")
+                _col = C_BUY if _d > 0 else C_EXIT
+            moves.append(
+                f"<span style='font-size:13px;margin-right:16px;white-space:nowrap'>"
+                f"{_label}{_badge} {_mv['from_pct']:.0f}% → {_mv['to_pct']:.0f}% "
+                f"<span style='color:{_col};font-weight:700'>"
+                f"{'▲' if _d > 0 else '▼'}{abs(_d):.0f}pt</span></span>")
+        st.markdown("".join(moves) if moves
+                    else "_Book already at target — no rebalancing needed._",
+                    unsafe_allow_html=True)
+
+        # ── prev → current published books: what changed at the last publish &
+        # why. Same donut-to-donut comparison the two left pies invite, with the
+        # optimizer's rationale spelled out per move. Reasons come from the two
+        # published payloads themselves (recorded decisions + priority scores),
+        # not a live recomputation — see ov.book_move_reasons.
+        if _prev_book and _cur_book:
+            st.markdown("---")
+            st.markdown(f"**Previous → Current Targetbook** "
+                        f"(as-of {_prev_book.get('as_of', '—')} → "
+                        f"{_cur_book.get('as_of', '—')}: why the optimizer moved)")
             st.caption("Each published book's weights are the optimal base "
                        "blend tilted by that morning's **entry-priority** score "
                        "(live momentum · macro sentiment · back-tested win-rate "
