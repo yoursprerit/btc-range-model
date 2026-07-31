@@ -128,7 +128,7 @@ else:
         "sibling ⛏️ Gold Miners app trades GDX & NUGT on the divergence signal."
     )
 import strategy_version as _sv                 # noqa: E402
-st.caption(_sv.badge_caption())                # visible above every tab
+_sv.render_badge()                             # visible above every tab
 
 
 # ════════════════════════════════════════════════════════════════════════

@@ -320,7 +320,7 @@ def get_profile_comparison(bucket: str):
 
 st.title("🧭 Overall Trading — Combined Decision Cockpit")
 import strategy_version as _sv                 # noqa: E402
-st.caption(_sv.badge_caption())                # visible above every tab
+_sv.render_badge()                             # visible above every tab
 st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instruments "
            "(each app's 1× primary plus its higher-beta / leveraged siblings). "
            "Live entry/exit signals, current positions, the historically-optimal "
@@ -1412,7 +1412,7 @@ with tab_live:
             # spans more than one stamped strategy version
             _spans = _bookrep["version_spans"]
             if len(_spans) > 1 and st.toggle(
-                    f"🔒 Current-logic books only — `{_spans[-1]['version']}`, "
+                    f"🔒 Current-logic books only — **`{_spans[-1]['version'].upper()}`**, "
                     f"{_spans[-1]['n_books']} "
                     f"book{'s' if _spans[-1]['n_books'] != 1 else ''} from "
                     f"{_spans[-1]['start'].strftime('%b %d, %Y')}",
@@ -1521,7 +1521,7 @@ with tab_live:
                     st.warning(
                         "⚠️ **This window mixes strategy-logic generations** — "
                         + " → ".join(
-                            f"`{s['version']}` ({s['n_books']} "
+                            f"**`{s['version'].upper()}`** ({s['n_books']} "
                             f"book{'s' if s['n_books'] != 1 else ''}, from "
                             f"{s['start'].strftime('%b %d')})" for s in _mixed)
                         + ". Every metric below blends them. Toggle **🔒 "
@@ -1624,10 +1624,10 @@ with tab_live:
                     if _s["start"] >= _sm["start"]:
                         _fig_pnl.add_vline(
                             x=_s["start"].to_pydatetime(), line_dash="dash",
-                            line_color="#f59e0b", line_width=1.5,
-                            annotation_text=f"⚙️ {_s['version']}",
-                            annotation_font_size=10,
-                            annotation_font_color="#b45309")
+                            line_color="#7c3aed", line_width=2,
+                            annotation_text=f"<b>⚙️ {_s['version'].upper()}</b>",
+                            annotation_font_size=13,
+                            annotation_font_color="#7c3aed")
             _src_title = ("as-published books" if _actual
                           else f"`{_profile}` profile")
             _fig_pnl.update_layout(
@@ -1765,7 +1765,11 @@ with tab_live:
                             f"<td><code>{_b['profile']}</code>"
                             f"<span style='font-size:10px;color:#94a3b8'> "
                             f"{_b['book_mode']}</span></td>"
-                            f"<td><code>{_b['version']}</code>"
+                            f"<td><span style='background:{_sv.BADGE_COLOR};"
+                            f"color:#fff;font-weight:800;font-size:11px;"
+                            f"letter-spacing:.04em;padding:2px 9px;"
+                            f"border-radius:999px;white-space:nowrap'>"
+                            f"{_b['version'].upper()}</span>"
                             + (f"<div style='font-size:10px;color:#94a3b8'>"
                                f"{_b['code_sha']}</div>" if _b.get("code_sha")
                                else "") + "</td>"
