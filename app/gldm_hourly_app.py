@@ -127,6 +127,8 @@ else:
         f"{gc.DUAL_MA_SLOW}** crossover on the gold close (−3% stops). The "
         "sibling ⛏️ Gold Miners app trades GDX & NUGT on the divergence signal."
     )
+import strategy_version as _sv                 # noqa: E402
+st.caption(_sv.badge_caption())                # visible above every tab
 
 
 # ════════════════════════════════════════════════════════════════════════

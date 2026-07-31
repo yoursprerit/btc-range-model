@@ -301,6 +301,8 @@ def _download(payload: dict, secret) -> None:
 
 # ══════════════════════════════════════════════════════════════════════════
 st.title("✅ Executed Book (IBKR)")
+import strategy_version as _sv                 # noqa: E402
+st.caption(_sv.badge_caption())
 st.caption("What the IBKR executor actually did on the last rebalance — trades "
            "placed and the resulting positions.")
 

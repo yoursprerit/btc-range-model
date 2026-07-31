@@ -319,6 +319,8 @@ def get_profile_comparison(bucket: str):
 
 
 st.title("🧭 Overall Trading — Combined Decision Cockpit")
+import strategy_version as _sv                 # noqa: E402
+st.caption(_sv.badge_caption())                # visible above every tab
 st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instruments "
            "(each app's 1× primary plus its higher-beta / leveraged siblings). "
            "Live entry/exit signals, current positions, the historically-optimal "

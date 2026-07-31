@@ -80,6 +80,8 @@ def _load(mtime: float, hist_mtime: float):
 
 
 st.title("🩺 Strategy Health — Decay Monitor")
+import strategy_version as _sv                 # noqa: E402
+st.caption(_sv.badge_caption())
 
 if not _HEALTH_JSON.exists():
     st.info("**No health snapshot yet.** The monitor is computed nightly by the "

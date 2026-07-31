@@ -103,6 +103,8 @@ with st.sidebar:
                "hours; intraday bars update through the session._")
 
 st.title(f"{cfg.emoji} {cfg.key} — {cfg.name}")
+import strategy_version as _sv                 # noqa: E402
+st.caption(_sv.badge_caption())                # visible above every tab
 st.caption(cfg.blurb + f"  Models: ridge on log-returns (hourly close), ridge "
            "H/L bands & close cones, logistic day-type — driven by the asset's "
            f"macro factors. The **{cfg.strategy_name}** strategy is tuned to beat "

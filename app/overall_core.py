@@ -1870,15 +1870,16 @@ def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
 # replay's simulation of the same rules.
 BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
 
-# Deliberate strategy-logic version.  BUMP THIS whenever the Overall logic or
-# any per-asset strategy changes materially — the publisher stamps it (plus the
-# publishing commit's SHA) into every book it commits, and the P&L section
-# segments the as-published record wherever the stamp changes, so performance
-# from different generations of the strategy is never silently conflated.
-# Books published before stamping existed are labelled from the committed
-# side-car ``data/overall/book_versions.json`` (see
-# ``scripts/backfill_book_versions.py``) as ``pre-v1``.
-STRATEGY_VERSION = "v1"
+# Deliberate strategy-logic version — single source of truth (and bump
+# instructions) in ``app/strategy_version.py``, dependency-light so every UI
+# can badge it; re-exported here for the publisher and the replay.  The
+# publisher stamps it (plus the publishing commit's SHA) into every book it
+# commits, and the P&L section segments the as-published record wherever the
+# stamp changes, so performance from different generations of the strategy is
+# never silently conflated.  Books published before stamping existed are
+# labelled from the committed side-car ``data/overall/book_versions.json``
+# (see ``scripts/backfill_book_versions.py``) as ``pre-v1``.
+from strategy_version import STRATEGY_VERSION  # noqa: E402,F401
 BOOK_VERSIONS_JSON = _REPO_ROOT / "data" / "overall" / "book_versions.json"
 
 
