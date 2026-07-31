@@ -72,9 +72,12 @@ with st.sidebar:
     st.caption("_Every timestamp on this page comes from the same shared "
                "helpers the individual apps use, so they always match._")
 
-# Signal apps in the Overall universe, with their display metadata.
-_PARENTS = [("BTC", "₿", "Bitcoin (BTC → BTC · MSTR · MSTU)"),
-            ("GLDM", "🥇", "Gold (GLDM → GLDM · GDX · UGL · NUGT)")] + \
+# Signal apps in the Overall universe, with their display metadata — one row
+# per audited signal app, matching the Overall engine's parent keys (gold and
+# gold-miners are separate signal apps with separate audit rows).
+_PARENTS = [("BTC", "₿", "Bitcoin (BTC → BTC · MSTR · MSTU · ETH)"),
+            ("GLDM", "🥇", "Gold (GLDM → GLDM · UGL)"),
+            ("GDXM", "⛏️", "Gold Miners (GDXM → GDX · NUGT)")] + \
            [(k, ticker_config.CONFIGS[k].emoji,
              f"{k} · {ticker_config.CONFIGS[k].name.split('(')[0].strip()}")
             for k in ticker_config.APP_KEYS]
@@ -89,7 +92,6 @@ _LOG = fr.read_refresh_log()
 # being open: signals refreshed by the scheduled publisher show up here too.
 _DA = fr.load_daily_audit() or {}
 _DA_GEN = _DA.get("generated_at_utc")
-_DA_ROWS = {r.get("app"): r for r in (_DA.get("audit") or {}).get("rows") or []}
 
 
 def _scheduled_is_newer(entry: dict | None) -> bool:
@@ -158,29 +160,30 @@ def _stat(col, label: str, value) -> None:
 st.markdown("### 1 · Individual app signals")
 st.caption("What each app's signals are generated from and the freshest close "
            "available right now. **Signals last refreshed** counts only a "
-           "refresh computed from the *freshest close available now* (a live "
-           "page render in this deployment or the scheduled headless publisher "
-           "run, whichever is more recent) — an app still sitting on an older "
-           "close shows no refresh time and a 🚨 STALE status.")
+           "refresh computed from the *freshest close available now* — from "
+           "the app's own page render, the 🧭 Overall app's live render (which "
+           "re-runs and audits every app's signals), or the scheduled headless "
+           "publisher run, whichever has the newest signal bar — an app still "
+           "sitting on an older close shows no refresh time and a 🚨 STALE "
+           "status.")
 
+_SOURCE_TAG = {"scheduled": " · ⚙️ scheduled run", "overall": " · 🧭 Overall app"}
 rows = []
 for key, emoji, label in _PARENTS:
     kind = fr.PARENT_CLASS.get(key, "us_equity")
     exp = fr.expected_asof(kind, _NOW)
-    entry = _LOG.get(key) or {}
-    darow = _DA_ROWS.get(key)
-    if darow is not None and _scheduled_is_newer(entry):
-        # the committed scheduled-run audit is the freshest record for this app
-        logged_asof = darow.get("actual_asof")
-        refreshed = f"{_DA.get('generated_at_ct', '—')} · ⚙️ scheduled run"
-    else:
-        logged_asof = entry.get("as_of")
-        refreshed = entry.get("recorded_at_ct") or "—"
+    # newest evidence across the app's own render, the Overall app's
+    # live-render audit rows and the scheduled publisher artifact — the same
+    # merge everywhere, so this table can never call an app STALE while the
+    # Overall app is showing its signals fresh.
+    best = fr.freshest_signal_record(key, log=_LOG, daily_audit=_DA)
     fresh = None
     age = 0
-    if logged_asof:
-        fresh = pd.Timestamp(logged_asof) >= exp
-        age = max((exp - pd.Timestamp(logged_asof)).days, 0)
+    refreshed = "—"
+    if best is not None:
+        fresh = best["as_of"] >= exp
+        age = max((exp - best["as_of"]).days, 0)
+        refreshed = best["recorded_at_ct"] + _SOURCE_TAG.get(best["source"], "")
     if not fresh:
         # only a refresh computed from the freshest available close counts —
         # a stale (or unrecorded) app shows no refresh time at all
