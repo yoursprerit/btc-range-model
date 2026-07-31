@@ -1860,6 +1860,112 @@ def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
                 start=sub.index[0], end=sub.index[-1])
 
 
+# ── as-published record — the books that ACTUALLY traded ────────────────────
+# The publisher archives every daily target book it commits (one JSON per
+# signal day, ``data/overall/book_archive/<as_of>.json`` — see
+# ``target_book.archive_book``).  Those books ARE the strategy's real past:
+# the optimiser re-sizes the book every morning, so every daily trim/re-size
+# it ever ordered is baked into the archived weights.  Replaying them gives
+# the exact historical performance record, as opposed to the walk-forward
+# replay's simulation of the same rules.
+BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
+
+
+def load_published_books(archive_dir: Path | None = None) -> list[dict]:
+    """Every archived as-published target book, parsed and sorted by
+    ``as_of``.  Unreadable files are skipped; a record needs at least an
+    ``as_of`` and a ``weights`` dict to count."""
+    import json
+    books = []
+    for p in sorted(Path(archive_dir or BOOK_ARCHIVE_DIR).glob("*.json")):
+        try:
+            b = json.loads(p.read_text())
+            if b.get("as_of") and isinstance(b.get("weights"), dict):
+                books.append(b)
+        except Exception:
+            continue
+    books.sort(key=lambda b: pd.Timestamp(b["as_of"]))
+    return books
+
+
+def published_book_replay(returns: pd.DataFrame, books: list[dict],
+                          sata_daily: float = SATA_DAILY) -> dict | None:
+    """Compound the ACTUALLY-PUBLISHED daily books — the exact historical
+    record, daily optimiser trims included — into the same shapes the
+    walk-forward replay returns (``ret``/``equity``/``weights``/``sata``), so
+    the P&L section's every calculation, toggle and metric can run off either
+    source unchanged.
+
+    Day *d* is earned by the latest archived book with ``as_of`` strictly
+    before *d* — the decided-at-previous-close convention shared with the
+    replay and the 🩺 health monitor's ``realized_book_returns`` (a book
+    published from bar *D*'s committed signals trades at *D*+1).  The first
+    archived ``as_of`` bar is the cost basis: it displays the first book (put
+    on at that close) but earns nothing.  Sleeve returns come from the same
+    ``returns_matrix`` as the replay; the book's cash remainder earns the
+    SATA coupon on business days.  Gross of costs/fills, like the replay.
+
+    Extras beyond the replay shape: ``books`` — one record per archived
+    publish (as_of / profile / book_mode / weights / cash / one-way
+    ``turnover`` vs the previous book, cash leg included) for the daily-trims
+    table — and ``dropped``, any book key absent from ``returns`` (its weight
+    earns nothing rather than silently borrowing another sleeve's return).
+    Returns ``None`` when there is nothing replayable (<2 bars covered)."""
+    parsed = []
+    for b in books or []:
+        try:
+            parsed.append(dict(
+                as_of=pd.Timestamp(b["as_of"]),
+                weights={k: float(v) for k, v in (b.get("weights") or {}).items()},
+                cash=float(b.get("cash_weight", 0.0) or 0.0),
+                profile=str(b.get("profile") or "—"),
+                book_mode=str(b.get("book_mode") or "paper")))
+        except Exception:
+            continue
+    parsed.sort(key=lambda r: r["as_of"])
+    if not parsed or returns is None or returns.empty:
+        return None
+    idx = returns.index[returns.index >= parsed[0]["as_of"]]
+    if len(idx) < 2:
+        return None
+    a_dates = np.array([r["as_of"].to_datetime64() for r in parsed])
+    keys = list(returns.columns)
+    col = {k: j for j, k in enumerate(keys)}
+    R = np.nan_to_num(returns.reindex(idx).to_numpy(float))
+    biz = np.asarray(idx.dayofweek < 5)
+    W = np.zeros((len(idx), len(keys)))
+    sata_w = np.zeros(len(idx))
+    port = np.zeros(len(idx))
+    dropped = set()
+    for t, d in enumerate(idx):
+        i = int(np.searchsorted(a_dates, d.to_datetime64(), side="left")) - 1
+        b = parsed[max(i, 0)]                  # t=0 → first book, earns 0 below
+        for k, wt in b["weights"].items():
+            j = col.get(k)
+            if j is None:
+                dropped.add(k)
+                continue
+            W[t, j] = wt
+        sata_w[t] = b["cash"]
+        if t > 0:
+            port[t] = float(np.dot(W[t], R[t])) + \
+                (sata_w[t] * sata_daily if biz[t] else 0.0)
+    # one-way turnover between consecutive publishes — the daily trims, made
+    # visible (0.5 × Σ|Δw| over the union of keys, cash leg included)
+    parsed[0]["turnover"] = None
+    for prev, cur in zip(parsed, parsed[1:]):
+        ks = set(prev["weights"]) | set(cur["weights"])
+        cur["turnover"] = 0.5 * (
+            sum(abs(cur["weights"].get(k, 0.0) - prev["weights"].get(k, 0.0))
+                for k in ks) + abs(cur["cash"] - prev["cash"]))
+    daily = pd.Series(port, index=idx)
+    eq = _equity(daily)
+    return dict(ret=daily, equity=eq, metrics=curve_metrics(eq),
+                weights=pd.DataFrame(W, index=idx, columns=keys),
+                sata=pd.Series(sata_w, index=idx),
+                books=parsed, dropped=sorted(dropped))
+
+
 def benchmarks(returns: pd.DataFrame, results: list[dict],
                pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
     """Reference curves: equal-weight buy&hold of the underlyings (always

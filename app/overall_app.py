@@ -231,6 +231,17 @@ def get_entry_closes(positions: tuple):
 # (the daily gate/tilt book, look-ahead-free anchors), NOT a fixed-weight blend.
 STRAT_CURVE = "Overall strategy (gated replay)"
 
+# display name of the as-published record — the target books actually committed
+# each day (data/overall/book_archive/), daily optimiser trims included.
+STRAT_CURVE_ACTUAL = "Overall strategy (as published)"
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_published_books(bucket: str):
+    """The archived as-published target books (one per signal day), re-read on
+    the shared refresh bucket so a fresh publish shows up without a restart."""
+    return ov.load_published_books()
+
 
 @st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
 def get_all_profiles(bucket: str):
@@ -1353,26 +1364,84 @@ with tab_live:
 
     # ── 4. OVERALL STRATEGY P&L SINCE A USER-CHOSEN START DATE ──────────
     # What has the combined strategy actually delivered for someone who put
-    # capital in on a given date?  Re-bases the active profile's WALK-FORWARD
-    # GATED REPLAY equity curve (the daily gate/tilt book, look-ahead-free)
-    # at the chosen date and reads P&L / performance / risk off the slice —
-    # so drawdown, Sharpe etc. are measured from the entry point, not from
-    # back-test inception.  Follows the risk profile selected above.
+    # capital in on a given date?  Two selectable sources feed one identical
+    # pipeline: the AS-PUBLISHED record (the target books actually committed
+    # each day — data/overall/book_archive/ — so every daily optimiser
+    # trim/re-size is in every figure) or the WALK-FORWARD GATED REPLAY
+    # simulation of the same rules over the full back-test history.  Either
+    # curve is re-based at the chosen date so drawdown, Sharpe etc. are
+    # measured from the entry point, not from inception.
     with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
-        st.caption(f"P&L, performance and risk of the **daily-gated Overall "
-                   f"strategy** (walk-forward replay — the same gate/tilt "
-                   f"logic the live book runs, anchors re-fit each quarter on "
-                   f"prior data only) measured from the start date below, "
-                   f"under the risk profile selected above (currently "
-                   f"**`{_profile}`**). Change the profile or the date and "
-                   "every figure recomputes. Dollar figures scale the 💼 "
-                   "portfolio value entered above.")
-        _wf = _PF["wf"]
+        _books = get_published_books(_bucket())
+        _bookrep = ov.published_book_replay(_PF["rets"], _books) if _books else None
+        _SRC_ACTUAL = "🎯 As-published record (actual books)"
+        _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
+        if _bookrep is not None:
+            _pnl_src = st.radio(
+                "Performance source", [_SRC_ACTUAL, _SRC_REPLAY],
+                horizontal=True, key="overall_pnl_source",
+                help="**As-published record** — compounds the target books the "
+                     "publisher actually committed each day (one archived JSON "
+                     "per signal day), so the daily optimizer's trims and "
+                     "re-sizes are exactly the ones that really happened. "
+                     "**Walk-forward replay** — a look-ahead-free simulation "
+                     "of the same gate/tilt rules over the full back-test "
+                     "history (longer window, but a reconstruction, not the "
+                     "record).")
+        else:
+            _pnl_src = _SRC_REPLAY
+            st.caption("ℹ️ No archived published books found "
+                       "(`data/overall/book_archive/`) — showing the "
+                       "walk-forward replay only. The as-published view "
+                       "unlocks once the daily publisher has archived books.")
+        _actual = _pnl_src == _SRC_ACTUAL
+        if _actual:
+            _n_books = len(_bookrep["books"])
+            st.caption(f"P&L, performance and risk of the **as-published "
+                       f"Overall strategy book** — the {_n_books} dated target "
+                       f"books actually committed by the daily publisher "
+                       f"(`data/overall/book_archive/`), compounded at "
+                       "official closes. The optimizer re-sizes the book "
+                       "every morning, so **every daily trim/re-size that "
+                       "really happened flows through every figure and "
+                       "toggled section below** (the 🔁 toggle lists each "
+                       "book and its trims). This view follows the profile "
+                       "each book was *actually published under* (shown per "
+                       "book below) — the risk-profile selector above does "
+                       "not rewrite history. Dollar figures scale the 💼 "
+                       "portfolio value entered above.")
+            _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"]}
+            _strat_label = STRAT_CURVE_ACTUAL
+            _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
+                            **_PF["curves"]}
+            _curve_all = _bookrep["equity"]
+            if _bookrep["dropped"]:
+                st.caption("⚠️ Book keys not in today's universe (weight "
+                           "earns nothing): "
+                           + ", ".join(f"`{k}`" for k in _bookrep["dropped"]))
+        else:
+            st.caption(f"P&L, performance and risk of the **daily-gated Overall "
+                       f"strategy** (walk-forward replay — the same gate/tilt "
+                       f"logic the live book runs, anchors re-fit each quarter on "
+                       f"prior data only) measured from the start date below, "
+                       f"under the risk profile selected above (currently "
+                       f"**`{_profile}`**). Change the profile or the date and "
+                       "every figure recomputes. Dollar figures scale the 💼 "
+                       "portfolio value entered above.")
+            _wf = _PF["wf"]
+            _strat_label = STRAT_CURVE
+            _curves_view = _PF["curves"]
+            _curve_all = _PF["curves"][STRAT_CURVE]
         # sleeve-inclusion gate + per-trade notionals under a daily-weight book
         _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
-        _curve_all = _PF["curves"][STRAT_CURVE]
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
         _default_start = pd.Timestamp("2026-03-01").date()
+        # switching source narrows the valid range (the as-published record is
+        # younger than the replay) — clamp a remembered date or the widget errors
+        if "overall_pnl_start" in st.session_state:
+            _remember = st.session_state["overall_pnl_start"]
+            if _remember < _d0 or _remember > _d1:
+                st.session_state["overall_pnl_start"] = min(max(_remember, _d0), _d1)
         pnl_cols = st.columns([1, 3])
         with pnl_cols[0]:
             _start_sel = st.date_input(
@@ -1388,12 +1457,14 @@ with tab_live:
         else:
             _pnl_d = _sm["total_ret"] * portfolio_value
             _end_v = portfolio_value * (1 + _sm["total_ret"])
+            _src_note = (f"as-published record · {_n_books} books" if _actual
+                         else f"profile <code>{_profile}</code>")
             with pnl_cols[1]:
                 st.markdown(
                     f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
                     f"Measured <b>{_sm['start'].strftime('%b %d, %Y')} → "
                     f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
-                    f"days · profile <code>{_profile}</code></div>",
+                    f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
             pm = st.columns(4)
             pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
@@ -1433,9 +1504,11 @@ with tab_live:
                                "trades on their realised return, open positions on "
                                "their current unrealised P&L.")
 
-            # same-window benchmark comparison — is the strategy earning its keep?
+            # same-window benchmark comparison — is the strategy earning its
+            # keep?  In as-published mode the walk-forward replay stays in the
+            # table as a benchmark row, so record-vs-simulation is one glance.
             _bench_rows = []
-            for _nm, _cv in _PF["curves"].items():
+            for _nm, _cv in _curves_view.items():
                 _bm_sm = ov.slice_metrics(_cv, _start_sel)
                 if _bm_sm:
                     _bench_rows.append((_nm, _bm_sm))
@@ -1448,12 +1521,12 @@ with tab_live:
                       "<th style='text-align:right'>Sharpe</th></tr>")
                 br = []
                 for _nm, _m in _bench_rows:
-                    _hi = "background:#eff6ff;font-weight:700;" if _nm == STRAT_CURVE else ""
+                    _hi = "background:#eff6ff;font-weight:700;" if _nm == _strat_label else ""
                     _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
                     br.append(
                         f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
                         f"<td style='padding:6px 10px'>{_nm}"
-                        f"{' ◄ this strategy' if _nm == STRAT_CURVE else ''}</td>"
+                        f"{' ◄ this strategy' if _nm == _strat_label else ''}</td>"
                         f"<td style='text-align:right;color:{_pc};font-weight:600'>"
                         f"{_m['total_ret']*100:+.1f}%</td>"
                         f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
@@ -1466,10 +1539,12 @@ with tab_live:
 
             # equity curve re-based to the portfolio value at the chosen start
             _fig_pnl = go.Figure()
-            _pnl_styles = {STRAT_CURVE: ("#111827", 3),
+            _pnl_styles = {_strat_label: ("#111827", 3),
                            "Equal-weight strategies": ("#0ea5e9", 1.5),
                            "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
-            for _nm, _cv in _PF["curves"].items():
+            if _actual:                        # replay demoted to a benchmark line
+                _pnl_styles[STRAT_CURVE] = ("#7c3aed", 1.5)
+            for _nm, _cv in _curves_view.items():
                 _sub = _cv.loc[pd.Timestamp(_start_sel):]
                 if len(_sub) < 2:
                     continue
@@ -1480,21 +1555,33 @@ with tab_live:
             _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
+            _src_title = ("as-published books" if _actual
+                          else f"`{_profile}` profile")
             _fig_pnl.update_layout(
                 height=340, margin=dict(t=30, b=10, l=10, r=10),
                 yaxis_title="Portfolio value ($)", hovermode="x unified",
                 legend=dict(orientation="h", y=1.1),
                 title=dict(text=f"Growth of ${portfolio_value:,.0f} since "
-                                f"{_sm['start'].strftime('%b %d, %Y')} — `{_profile}` profile",
+                                f"{_sm['start'].strftime('%b %d, %Y')} — {_src_title}",
                            font_size=13))
             st.plotly_chart(_fig_pnl, use_container_width=True)
-            st.caption("⚠️ Simulated performance of the daily-gated strategy under "
-                       "the selected risk profile (idle capital earning SATA), "
-                       "assuming entry at the close of the anchor bar. The replay is "
-                       "walk-forward — anchor weights re-fit each quarter start on "
-                       "prior data only, priorities from as-of inputs lagged one bar — so "
-                       "no figure uses information from after the day it describes. "
-                       "Not investment advice.")
+            if _actual:
+                st.caption("📌 The **as-published record**: each day compounds "
+                           "the archived book actually committed from the "
+                           "previous bar's close — weights, daily optimizer "
+                           "trims, cash remainder (earning SATA on business "
+                           "days) exactly as published. Marked at official "
+                           "closes, gross of commissions/fills (the IBKR "
+                           "executed-book history is the fills-level record). "
+                           "Not investment advice.")
+            else:
+                st.caption("⚠️ Simulated performance of the daily-gated strategy under "
+                           "the selected risk profile (idle capital earning SATA), "
+                           "assuming entry at the close of the anchor bar. The replay is "
+                           "walk-forward — anchor weights re-fit each quarter start on "
+                           "prior data only, priorities from as-of inputs lagged one bar — so "
+                           "no figure uses information from after the day it describes. "
+                           "Not investment advice.")
 
             # ── daily % allocation — the book behind the curve above ─────────
             if st.toggle(f"📊 Daily % allocation by asset since "
@@ -1514,8 +1601,104 @@ with tab_live:
                            "BTC·MSTR·MSTU·ETH — hover any band for that day's "
                            "per-asset split); grey on top is idle cash in "
                            "**SATA**. Bands widen and narrow daily as "
-                           "priorities move — even when no Action signal "
-                           "changes.")
+                           + ("the published books trim and re-size positions "
+                              "— even when no Action signal changes."
+                              if _actual else
+                              "priorities move — even when no Action signal "
+                              "changes."))
+
+            # ── published books & daily trims — the record, book by book ─────
+            # (as-published mode only: this IS the archive, one row per publish)
+            if _actual:
+                _bk_all = _bookrep["books"]
+                _bk_win = [b for b in _bk_all
+                           if b["as_of"].date() >= _sm["start"].date()]
+                # include the book driving the anchor bar (published before it)
+                _bk_pre = [b for b in _bk_all
+                           if b["as_of"].date() < _sm["start"].date()]
+                if _bk_pre:
+                    _bk_win = [_bk_pre[-1]] + _bk_win
+                _turns = [b["turnover"] for b in _bk_win
+                          if b.get("turnover") is not None]
+                _avg_to = (sum(_turns) / len(_turns)) if _turns else 0.0
+                if st.toggle(
+                        f"🔁 Published books & daily trims since "
+                        f"{_sm['start'].strftime('%b %d, %Y')} — "
+                        f"{len(_bk_win)} book{'s' if len(_bk_win) != 1 else ''}"
+                        + (f" · avg daily turnover {_avg_to*100:.1f}%"
+                           if _turns else "")
+                        + " (toggle to show)",
+                        key="overall_published_books"):
+                    st.caption("One row per **archived publish** (newest "
+                               "first): the book's signal bar, the risk "
+                               "profile it was actually published under, "
+                               "deployed vs idle capital, its **one-way "
+                               "turnover** vs the previous book (½·Σ|Δweight|, "
+                               "cash leg included — the size of that "
+                               "morning's optimizer trims), and every "
+                               "per-asset weight change. These books are "
+                               "exactly what the P&L above compounds, so all "
+                               "the trims listed here are already inside "
+                               "every metric in this section.")
+                    _bh = ("<tr style='background:#f1f5f9;font-size:12px;"
+                           "text-align:left'>"
+                           "<th style='padding:6px 10px'>Signal bar</th>"
+                           "<th>Profile</th>"
+                           "<th style='text-align:right'>Deployed</th>"
+                           "<th style='text-align:right'>💵 Cash</th>"
+                           "<th style='text-align:right'>Turnover</th>"
+                           "<th style='padding-left:10px'>Weight changes vs "
+                           "previous book</th></tr>")
+                    _brs = []
+                    for _prev_b, _b in zip([None] + _bk_win[:-1], _bk_win):
+                        _dep = sum(_b["weights"].values())
+                        _pw = (_prev_b or {}).get("weights", {})
+                        _chg = []
+                        for _k in sorted(set(_b["weights"]) | set(_pw),
+                                         key=lambda k: -abs(_b["weights"].get(k, 0.0)
+                                                            - _pw.get(k, 0.0))):
+                            _w0, _w1 = _pw.get(_k, 0.0), _b["weights"].get(_k, 0.0)
+                            _d = _w1 - _w0
+                            if _prev_b is None:
+                                _chg.append(f"{_k} {_w1*100:.1f}%")
+                                continue
+                            if abs(_d) < 0.0005:
+                                continue
+                            _cc = C_BUY if _d > 0 else C_EXIT
+                            if _w0 < 0.0005:
+                                _lbl = f"{_k} <b>new +{_w1*100:.1f}%</b>"
+                            elif _w1 < 0.0005:
+                                _lbl = f"{_k} <b>closed −{_w0*100:.1f}%</b>"
+                            else:
+                                _lbl = (f"{_k} {_w0*100:.1f}→{_w1*100:.1f}% "
+                                        f"<b>({_d*100:+.1f})</b>")
+                            _chg.append(f"<span style='color:{_cc}'>{_lbl}</span>")
+                        _chg_s = (" · ".join(_chg) if _chg else
+                                  "<span style='color:#94a3b8'>unchanged</span>")
+                        if _prev_b is None:
+                            _chg_s = ("<span style='color:#64748b'>opening book: "
+                                      f"{' · '.join(_chg) or '—'}</span>")
+                        _to = _b.get("turnover")
+                        _to_s = ("—" if _prev_b is None or _to is None
+                                 else f"{_to*100:.1f}%")
+                        _brs.append(
+                            f"<tr style='border-bottom:1px solid #eef2f7'>"
+                            f"<td style='padding:6px 10px;font-weight:700;"
+                            f"font-variant-numeric:tabular-nums'>"
+                            f"{_b['as_of'].strftime('%b %d, %Y')}</td>"
+                            f"<td><code>{_b['profile']}</code>"
+                            f"<span style='font-size:10px;color:#94a3b8'> "
+                            f"{_b['book_mode']}</span></td>"
+                            f"<td style='text-align:right'>{_dep*100:.1f}%</td>"
+                            f"<td style='text-align:right;color:#64748b'>"
+                            f"{_b['cash']*100:.1f}%</td>"
+                            f"<td style='text-align:right;font-weight:600'>{_to_s}</td>"
+                            f"<td style='padding:6px 10px;font-size:11.5px'>"
+                            f"{_chg_s}</td></tr>")
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;border-collapse:collapse'>"
+                                f"{_bh}{''.join(reversed(_brs))}</table></div>",
+                                unsafe_allow_html=True)
 
             # ── per-asset breakdown — opt-in via toggle so the page stays clean
             # (a nested st.expander is not allowed inside the section expander)
@@ -1528,8 +1711,9 @@ with tab_live:
                            "simply buying & holding it, both measured from the same "
                            "start date. **In mkt** = share of days the sleeve was "
                            "actually long (it earns SATA when flat inside the blend); "
-                           "**Peak wt** = the largest daily allocation the replayed "
-                           "book ever gave it. Sleeves whose data begins after the "
+                           "**Peak wt** = the largest daily allocation the selected "
+                           "book (as-published or replay, per the source toggle "
+                           "above) ever gave it. Sleeves whose data begins after the "
                            "start date are measured from their own first bar "
                            "(noted inline).")
                 if not _pa:
@@ -1658,7 +1842,7 @@ with tab_live:
                     f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
                     f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (toggle to show)",
                     key="overall_trade_log"):
-                st.caption("Every round-trip across the sleeves the replayed book "
+                st.caption("Every round-trip across the sleeves the selected book "
                            "holds (weight > 0) that was open at any point since the "
                            "start date — including trades entered before it — plus "
                            "any **currently-open position** (highlighted; its return "
@@ -1800,7 +1984,7 @@ with tab_live:
                            "sleeve's weighted share (plus the **SATA** yield on "
                            "idle capital) and scaled by the blend's compounding "
                            "value, so the bars **sum exactly to the Strategy "
-                           "P&L dollar figure** for the selected profile and "
+                           "P&L dollar figure** for the selected source and "
                            "start date. Green bars are net winners, red bars "
                            "net losers; each is labelled with its share of the "
                            "net total. (This is exact attribution off the blend "
