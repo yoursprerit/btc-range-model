@@ -169,8 +169,16 @@ def get_hourly():
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_predictions(_daily_key: str):
-    daily = get_daily()
-    preds = btg.build_predictions(daily)
+    # Signals are generated ONLY from closed sessions: strip Yahoo's
+    # in-progress *today* row before building the prediction table, so the
+    # U1/D2/D3 signatures, regime state and strategy sims never flicker on a
+    # bar whose high/low/close are still moving. New signatures appear only
+    # after the 4:00 PM ET close (matching the published Target Book).
+    d = get_daily()
+    dc = freshness.drop_in_progress_us_bar(d)
+    if dc is not None and not dc.empty:
+        d = dc
+    preds = btg.build_predictions(d)
     sig = btg.precompute_signals(preds)
     return preds, sig
 
@@ -199,12 +207,14 @@ if daily is None or daily.empty:
 # while today's own bar is still open (Fri → Mon across a weekend) — and the
 # forecast would drift with every intraday tick. The Live tab instead anchors
 # every daily-model forecast (H/L, cones, day-type) on the last COMPLETED
-# session, so intraday the highlighted forecast is *today's* H/L. Price
-# metrics and the hourly chart keep the partial bar (that's live info).
+# session, so intraday the highlighted forecast is *today's* H/L. The
+# prediction/signal tables (get_predictions) are built on this frame too, so
+# new signatures are generated only after the close. Price metrics and the
+# hourly chart keep the partial bar (that's live info).
 daily_completed = freshness.drop_in_progress_us_bar(daily)
 if daily_completed is None or daily_completed.empty:
     daily_completed = daily
-_daily_key = f"{daily.index.max()}::{len(daily)}"
+_daily_key = f"{daily_completed.index.max()}::{len(daily_completed)}"
 preds, sig = get_predictions(_daily_key)
 completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
 
@@ -214,7 +224,10 @@ completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()
 # close (4:00 PM ET) of the newest daily bar.
 try:
     import freshness as _fr
-    _sig_asof = pd.Timestamp(daily.index.max())
+    # Signals come from the completed-bars frame, so the caption/audit as-of
+    # is the closed session the signatures were generated from — never the
+    # in-progress today bar.
+    _sig_asof = pd.Timestamp(daily_completed.index.max())
     st.caption(_fr.signal_close_caption("us_equity", _sig_asof))
     _fr.record_refresh("GDXM" if IS_MINERS else "GLDM", kind="us_equity",
                        app_label=("⛏️ Gold Miners (GDX·NUGT)" if IS_MINERS
@@ -981,7 +994,10 @@ def position_panel(asset, col_container, end=None):
         col_container.info(f"{label}: price series unavailable.")
         return
     if end is None:
-        px = float(preds[col].iloc[-1]); as_of = pd.Timestamp(preds["target_date"].iloc[-1])
+        # Live price from the raw daily frame (keeps the intraday partial
+        # bar); preds is completed-bars-only so signals never move intraday.
+        _ps = (daily[col] if col in daily else preds[col]).dropna()
+        px = float(_ps.iloc[-1]); as_of = pd.Timestamp(_ps.index[-1])
     else:
         sub = preds[preds["target_date"] <= pd.Timestamp(end)]
         px = float(sub[col].iloc[-1]); as_of = pd.Timestamp(end)
@@ -1840,7 +1856,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
                    (f"${last_px-_ma:+,.2f} vs close" if _ma else None),
                    delta_color="normal" if (_ma and last_px >= _ma) else "inverse")
     else:
-        _dm = dual_ma_state(d_df)
+        _dm = dual_ma_state(d_fc)          # signal state: completed bars only
         d3c.metric(f"Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}",
                    f"${_dm['fast']:,.2f} / ${_dm['slow']:,.2f}",
                    f"{_dm['gap']:+.2f}% gap — {'LONG' if _dm['long_now'] else 'FLAT'}",
@@ -1868,13 +1884,15 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         # ── SOXX-style trend signal block: net banner + signature cards + the
         #    dual-MA chart of the exact signal this app trades ──
         st.markdown("### 🔔 Trend Signal  ·  _the GLDM dual-MA cross both sleeves trade_")
-        dm = dual_ma_state(d_df)
+        # Signal state & chart from completed bars only — the dual-MA cross is
+        # evaluated at the close, so no provisional intraday cross is shown.
+        dm = dual_ma_state(d_fc)
         render_trend_signatures(dm, end=end)
-        render_dualma_chart(d_df, key_prefix=("live" if is_live else "hist"))
+        render_dualma_chart(d_fc, key_prefix=("live" if is_live else "hist"))
         st.markdown(f"### 🎯 Strategy — Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend (GLDM & UGL)")
     render_strategy_card()
     st.markdown("#### Strategy conditions (live)")
-    render_conditions_box(sigs, d_df=d_df)
+    render_conditions_box(sigs, d_df=d_fc)
     st.markdown("#### Current positions")
     pcols = st.columns(len(APP_ASSETS))
     for _asset, _pc in zip(APP_ASSETS, pcols):
