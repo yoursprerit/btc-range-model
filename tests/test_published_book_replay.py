@@ -169,6 +169,14 @@ def test_only_version_filters_to_that_generation():
                                     only_version="v9") is None
 
 
+def test_strategy_version_single_source():
+    # the badge module is the single source of truth; overall_core (and via it
+    # the publisher's stamp) must re-export the identical value
+    import strategy_version as sv
+    assert oc.STRATEGY_VERSION == sv.STRATEGY_VERSION
+    assert sv.STRATEGY_VERSION in sv.badge_caption()
+
+
 def test_load_book_version_map_missing_file_is_empty(tmp_path):
     assert oc.load_book_version_map(tmp_path / "nope.json") == {}
     (tmp_path / "v.json").write_text(json.dumps(
