@@ -106,7 +106,7 @@ def _scheduled_is_newer(entry: dict | None) -> bool:
 
 st.title("🕵️ Daily Audit — signal freshness trail")
 import strategy_version as _sv                 # noqa: E402
-st.caption(_sv.badge_caption())
+_sv.render_badge()
 st.caption(f"🔄 Audit page refreshed **{fr.fmt_ct(_NOW, seconds=True)}**")
 
 # ── the daily cycle, in plain words ──────────────────────────────────────────

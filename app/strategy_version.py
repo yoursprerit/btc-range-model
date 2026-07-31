@@ -15,9 +15,35 @@ re-exports the constant for the engine/publisher side.
 """
 STRATEGY_VERSION = "v1"
 
+BADGE_COLOR = "#7c3aed"        # the logic-provenance purple, used app-wide
+
 
 def badge_caption() -> str:
-    """The one-line badge every app shows under its title."""
+    """Plain-text one-liner (markdown) — fallback where HTML can't render."""
     return (f"⚙️ Strategy logic version: **`{STRATEGY_VERSION}`** — bumped on "
             "material strategy changes; every published Targetbook is "
             "stamped with the version that produced it.")
+
+
+def badge_html() -> str:
+    """The high-visibility version pill every app shows under its title: the
+    version number in a bold white-on-purple pill so it can't be missed, with
+    the explanatory note in muted small print beside it."""
+    return (
+        "<div style='margin:2px 0 12px 0;display:flex;align-items:center;"
+        "gap:10px;flex-wrap:wrap'>"
+        f"<span style='background:{BADGE_COLOR};color:#ffffff;"
+        "font-weight:800;font-size:16px;line-height:1;padding:7px 15px;"
+        "border-radius:999px;letter-spacing:.04em;white-space:nowrap;"
+        "box-shadow:0 1px 3px rgba(0,0,0,.2)'>"
+        f"⚙️ STRATEGY LOGIC {STRATEGY_VERSION.upper()}</span>"
+        "<span style='color:#64748b;font-size:12px'>bumped on material "
+        "strategy changes · every published Targetbook is stamped with the "
+        "version that produced it</span></div>")
+
+
+def render_badge() -> None:
+    """Render the pill in a Streamlit app (import kept local so this module
+    stays importable engine-side without Streamlit)."""
+    import streamlit as st
+    st.markdown(badge_html(), unsafe_allow_html=True)

@@ -271,10 +271,13 @@ def _render_book(payload: dict, *, source: str) -> None:
     # strategy-logic provenance stamped into the (signed) payload — books
     # published before stamping existed render as pre-stamp
     _bk_ver = payload.get("strategy_version")
-    _ver_txt = (f"⚙️ logic {_bk_ver}"
+    _ver_txt = (f"⚙️ logic <b style='font-size:15px;letter-spacing:.04em'>"
+                f"{str(_bk_ver).upper()}</b>"
                 + (f" · {str(payload.get('code_sha'))[:12]}"
                    if payload.get("code_sha") else "")
-                if _bk_ver else "⚙️ logic pre-stamp (pre-v1)")
+                if _bk_ver else
+                "⚙️ logic <b style='font-size:15px;letter-spacing:.04em'>"
+                "PRE-V1</b> (pre-stamp)")
     st.markdown(
         _badge(acct_txt, acct_col) + "  " +
         _badge(sig_txt, sig_color) + "  " +
@@ -486,7 +489,7 @@ def _bucket() -> str:
 # ══════════════════════════════════════════════════════════════════════════
 st.title("📋 Target Book (IBKR)")
 import strategy_version as _sv                 # noqa: E402
-st.caption(_sv.badge_caption())
+_sv.render_badge()
 st.caption("The signed allocation the IBKR executor trades — mapped to the "
            "instruments actually traded (BTC → IBIT). **Paper** parks idle capital "
            "as cash; **Live** parks it in a SATA position. Published **once "

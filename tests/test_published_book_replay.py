@@ -175,6 +175,9 @@ def test_strategy_version_single_source():
     import strategy_version as sv
     assert oc.STRATEGY_VERSION == sv.STRATEGY_VERSION
     assert sv.STRATEGY_VERSION in sv.badge_caption()
+    # the high-visibility pill shows the version (upper-cased) prominently
+    assert sv.STRATEGY_VERSION.upper() in sv.badge_html()
+    assert sv.BADGE_COLOR in sv.badge_html()
 
 
 def test_load_book_version_map_missing_file_is_empty(tmp_path):

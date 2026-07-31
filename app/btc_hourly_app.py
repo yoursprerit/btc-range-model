@@ -190,7 +190,7 @@ st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
 st.title("📈 Bitcoin — Live hourly next-close forecast")
 import strategy_version as _sv                 # noqa: E402
-st.caption(_sv.badge_caption())                # visible above every tab
+_sv.render_badge()                             # visible above every tab
 st.caption(
     "Live feed: BTC + ETH + macro (Yahoo) + Fear & Greed (alternative.me). "
     "Model: ridge regression on log-returns. "
