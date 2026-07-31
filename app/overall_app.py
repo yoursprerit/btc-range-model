@@ -106,12 +106,13 @@ _AUTOREFRESH_SECS = 45                # re-run cadence so the live price column 
 
 # ── app registry (shared with the router / other apps) ────────────────────
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK"])
 _APP_LABELS = {
     "OVERALL": "🧭  Overall Trading",
     "BTC": "₿  Bitcoin (BTC)",
     "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
     "DAILYAUDIT": "🕵️  Daily Audit",
+    "HEALTH": "🩺  Strategy Health",
     "TARGETBOOK": "📋  Target Book (IBKR)",
     "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
 }
@@ -302,6 +303,20 @@ st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instrume
            "Live entry/exit signals, current positions, the historically-optimal "
            "cross-asset allocation, and one combined back-test — built around a "
            "single question: **where should capital go today?**")
+
+# 🩺 one-line strategy-health badge — read from the committed nightly snapshot
+# (never computes anything); a red flag finds the user on the page they
+# actually open daily.  Full monitor: the 🩺 Strategy Health app.
+try:
+    import json as _json
+    _hp = _json.loads((_REPO_ROOT / "data" / "overall"
+                       / "strategy_health.json").read_text())
+    _hv, _hi = _hp["verdict"], {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    st.caption(f"🩺 Strategy health: {_hi.get(_hv['status'], '⬜')} "
+               f"{_hv['headline']} (as-of {_hp['as_of']}) — details in the "
+               "**🩺 Strategy Health** app in the sidebar.")
+except Exception:
+    pass
 
 _profile = st.session_state["overall_risk_profile"]
 try:

@@ -38,11 +38,12 @@ sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
            "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
            "DAILYAUDIT": "🕵️  Daily Audit",
+           "HEALTH": "🩺  Strategy Health",
            "TARGETBOOK": "📋  Target Book (IBKR)",
            "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
 for _k, _c in ticker_config.CONFIGS.items():
@@ -130,6 +131,10 @@ def _run_choice():
     elif _choice == "DAILYAUDIT":
         # Freshness trail: per-app signal closes, Overall update, book publish.
         _exec_app(_APP_DIR / "daily_audit_app.py")
+    elif _choice == "HEALTH":
+        # Decay monitor: book-vs-replay tracking, drawdown tripwires,
+        # rolling edge vs B&H, trade expectancy — reads committed artifacts only.
+        _exec_app(_APP_DIR / "health_app.py")
     elif _choice == "TARGETBOOK":
         # Friendly viewer for the published signed IBKR target book.
         _exec_app(_APP_DIR / "target_book_app.py")
