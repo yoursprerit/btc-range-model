@@ -2551,33 +2551,34 @@ are summarised per app (all decided on **completed daily closes**):
 
 | App / signal | Traded instruments | Engine | Entry criteria | Exit criteria |
 |---|---|---|---|---|
-| ₿ **BTC** | BTC · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC & MSTR signal-only, MSTU −6% stop + 5-bar V-reversal re-entry |
+| ₿ **BTC** | BTC · ETH · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC signal-only, MSTR −3% / MSTU −6% / ETH −8% stops (2026-07-25 honest-fill re-sweep) + post-stop re-entry (5-bar V-reversal, 12-bar U1 override) |
 | 🥇 **Gold Trend (GLDM)** | GLDM · UGL (2×) | Dual-MA 25/100 | 25-day SMA of the GLDM close crosses above the 100-day (decided at the close) | 25-day SMA crosses back below the 100-day; −3% stops |
-| ⛏️ **Gold Miners (GDXM)** | GDX (β) · NUGT (2×) | Divergence Pure-Regime | U1 divergence on the GLDM signal (err_hi 3d-avg > +0.15% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.10%) or D3 exhaustion; GDX −3%, NUGT −5% |
+| ⛏️ **Gold Miners (GDXM)** | GDX (β) · NUGT (2×) | Divergence Pure-Regime | U1 divergence on the GLDM signal (err_hi 3d-avg > +0.10% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.20%) or D3 exhaustion; GDX −5%, NUGT −8% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
 | ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
 | 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |
 | 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
 | ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
-| ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.30% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.18%) or D3 exhaustion; −10% stop |
-| 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.24% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.48%) or D3 exhaustion; signal-only (no fixed stop) |
+| ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.42% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.18%) or D3 exhaustion; −10% stop |
+| 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.32% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.46%) or D3 exhaustion; signal-only (no fixed stop) |
 
 *Shorthand:* **U1** = bullish divergence (the model's predicted daily high
 overshoots while price breaks its recent highs) · **D1** = downtrend pressure
 (repeated low-breaks) · **D2** = momentum fade · **D3** = exhaustion ·
 **regime confirm** = price above a rising short MA, or a clean 10-day recovery,
 or a V-reversal gate · **signal-only** = exits on the signal with no fixed
-stop (a 1× stop whipsaws a leveraged/high-beta sleeve). Siblings share the
+stop (kept where the 2026-07-25 honest-fill stop sweeps showed a fixed stop
+only whipsaws). Siblings share the
 parent's entry/exit **timing** but fill at their own price with their own stop.
 
 Every asset runs the **exact engine its own app trades**, so the Overall app's
 signals, positions and back-tests match each source app:
 
-- **BTC / MSTR / MSTU** run the **BTC app's own trained CT model**
+- **BTC / ETH / MSTR / MSTU** run the **BTC app's own trained CT model**
   (`inference_assets_ct.joblib`, 116 features incl. Bitcoin on-chain + Coinbase
   premium) with the app's live **Standard MA (above-MA30) entry gate** (U1>+1.3%
   + ≥2 high-breaks, regime-adaptive D2/D3 exit, MA30 gate, per-asset stops, SL
-  re-entry) — all three assets share the same gate. Since the **2026-07-25
+  re-entry) — all four assets share the same gate. Since the **2026-07-25
   look-ahead fix**, MSTR/MSTU fills land at the first exchange close *after*
   the 12:00-UTC signal moment (the old same-date fill preceded the signal by
   ~15 h and banked the overnight gap; config-unchanged the fix moved MSTR
@@ -2607,12 +2608,24 @@ signals, positions and back-tests match each source app:
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert
 level, whether we're long, entry price/date, unrealised P&L, stop (or a
-signal-only exit for the no-stop sleeves — **BTC, MSTR, UGL, ERX, the 3× SOXL**
-and **WGMI** carry no fixed stop, since a tight stop whipsaws a
-leveraged/high-beta name) and days held —
+signal-only exit for the no-stop sleeves — **BTC, ARTY, the XLE sleeve
+(XLE · OIH · ERX), the 3× SOXL** and **WGMI** carry no fixed stop, where the
+stop sweeps showed a fixed stop only whipsaws) and days held —
 for the primary **and** each sibling (which shares the parent's entry/exit timing
 but has its own fill price and P&L). That drives the **action plan** and the
 **allocation donuts**.
+
+**Rebalancing moves.** The 🔁 collapsible box on the Live tab holds both
+rebalancing views. The first lists the trades that take the book **actually in
+force** — the published **Current Targetbook**, the artifact the IBKR executor
+trades (never a synthetic reconstruction) — to the live-adjusted recommended
+target, each delta routed to/from SATA. A 🎛️ include/exclude overlay can drop
+a position first; its weight parks in SATA and is never redistributed to the
+survivors. The second view compares the **previous → current published books**
+with the optimizer's recorded rationale per move — a **signal fired** (fresh
+entry), a **signal died** (exit / trend break / retired from the universe), or
+the **priority tilt drifted** and the water-fill re-spread the difference —
+read from the published payloads themselves, not a live recomputation.
 
 **The optimal allocation.** Each strategy is long when its signal is on and
 otherwise parks idle capital in **SATA** (see below), producing a daily return
@@ -2680,6 +2693,34 @@ paying a ~13% annual coupon as a daily dividend on $100 par (≈13.88% effective
 reinvested). With **no open positions the entire book sits in SATA**, earning
 that yield until a signal fires. Idle capital earns SATA in the back-test too, so
 the combined curve reflects cash working rather than sitting dead.
+
+**🩺 Strategy Health — the decay watchdog.** Every sleeve's config was
+*selected* by sweeping candidates over the same history it is reported on, so
+the live edge is expected to be smaller than the back-tested edge — and simple
+technical rules (dual-MA, MACD, divergence gates) are exactly the class of
+signal that dies when the regime that made them work ends. A nightly job
+(right after the Target-Book publish) therefore rebuilds **four monitors** per
+sleeve and per profile and commits the snapshot the 🩺 **Strategy Health** app
+reads:
+
+| Monitor | Question |
+|---|---|
+| **M1** Book-vs-replay tracking | Is the *published* book earning what the model says it should? |
+| **M2** Drawdown tripwires | Has the curve gone deeper — or stayed underwater longer — than its own history ever did? |
+| **M3** Edge vs Buy & Hold | Is the *timing* alpha alive, or is absolute P&L just the asset rallying? |
+| **M4** Trade expectancy | Are the last 20 trades consistent with the sleeve's own trade distribution? |
+
+Each monitor reports 🟢 healthy · 🟡 warning · 🔴 alarm · ⬜ warming-up (not
+enough data — deliberately *not* green), with thresholds fixed **ex-ante** and
+each breach's first date persisted in the committed artifact, so a one-day
+flicker never escalates and every flag's history is auditable in git. The
+worst state surfaces as the one-line badge under this app's title. **The
+monitor never changes a weight** — the adaptivity eval's penalty-box variant
+showed auto-de-rating cold sleeves was neutral-to-negative — so an alarm
+triggers the *human* review protocol: re-run the sleeve's honest-fill re-sweep
+and decide (retune, de-rate, or retire). With ~18 monitored sleeves about one
+🟡 at any time is expected by chance; act on 🔴, or on a 🟡 that persists.
+Full design + thresholds: `STRATEGY_HEALTH.md`.
 
 **Honest caveats.**
 - The back-test's *allocation layer* is walk-forward (anchors fit on prior data
