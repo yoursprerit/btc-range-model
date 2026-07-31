@@ -1446,8 +1446,10 @@ def historical_allocation(snap: dict, base_weights: dict,
 
 
 # ── historical replay of the signal-gated, priority-tilted allocation ──────
-def priority_component_history(results: list[dict],
-                               index: pd.Index) -> dict[str, pd.DataFrame]:
+def priority_component_history(results: list[dict], index: pd.Index,
+                               wr_window: int | None = None,
+                               sharpe_window: int | None = None
+                               ) -> dict[str, pd.DataFrame]:
     """Causal daily history of every ``compute_priorities`` input, per key.
 
     The live gate scores candidates on five components; each has an exact
@@ -1479,7 +1481,13 @@ def priority_component_history(results: list[dict],
     Returns ``{key: DataFrame(mom, sent, wr, sharpe_raw, regime)}`` reindexed
     and forward-filled onto ``index`` (each value stands until the next bar of
     that sleeve's own calendar).  NOT shifted — the caller decides the
-    information lag."""
+    information lag.
+
+    Adaptivity experiments (defaults reproduce the published behaviour):
+    ``wr_window=N`` scores win-rate over only the LAST N closed trades and
+    ``sharpe_window=M`` scores Sharpe over only the last M bars — rolling
+    reads that respond to recent form instead of lifetime averages.  Still
+    strictly as-of."""
     # parent-level reads (momentum / sentiment / regime), shared by siblings
     groups: dict[str, list[dict]] = {}
     for res in results:
@@ -1512,12 +1520,21 @@ def priority_component_history(results: list[dict],
             ex = pd.Series([float(t["ret"]) > 0 for t in log],
                            index=pd.DatetimeIndex([pd.Timestamp(t["exit_date"])
                                                    for t in log])).sort_index()
-            wr = ex.astype(float).groupby(level=0).sum().cumsum() / \
-                 ex.groupby(level=0).size().cumsum()   # same-day exits → one bar
+            if wr_window:                       # rolling: last N closed trades
+                wr = ex.astype(float).rolling(wr_window, min_periods=1).mean() \
+                       .groupby(level=0).last()  # same-day exits → one bar
+            else:                                # expanding lifetime win rate
+                wr = ex.astype(float).groupby(level=0).sum().cumsum() / \
+                     ex.groupby(level=0).size().cumsum()
         else:
             wr = pd.Series(dtype=float)
         r = res["ret"]
-        shp = (r.expanding(60).mean() / r.expanding(60).std()) * np.sqrt(TRADING_DAYS)
+        if sharpe_window:
+            mp = min(60, sharpe_window)
+            shp = (r.rolling(sharpe_window, min_periods=mp).mean()
+                   / r.rolling(sharpe_window, min_periods=mp).std()) * np.sqrt(TRADING_DAYS)
+        else:
+            shp = (r.expanding(60).mean() / r.expanding(60).std()) * np.sqrt(TRADING_DAYS)
         df = pd.DataFrame(dict(
             mom=pc["mom"].reindex(index).ffill(),
             sent=pc["sent"].reindex(index).ffill().fillna(0.5),
@@ -1533,7 +1550,9 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
                         caps: dict | None = None, mdd_floor: float = -0.35,
                         objective: str = "balanced",
                         sata_daily: float = SATA_DAILY, min_hist: int = 250,
-                        n_samples: int = 8000, seed: int = 7) -> list[tuple]:
+                        n_samples: int = 8000, seed: int = 7,
+                        refit: str = "A",
+                        fit_window: int | None = None) -> list[tuple]:
     """Expanding-window anchor-weight schedule with NO look-ahead.
 
     The live gate anchors position sizes on the optimiser's weights; fitting
@@ -1552,22 +1571,37 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
     covers the warm-up.  A sleeve with little or no data inside a fit window
     may carry an arbitrary anchor — harmless, since the replay water-fills
     over the sleeves actually in the market and the anchor only sets relative
-    size once the sleeve is live."""
+    size once the sleeve is live.
+
+    Adaptivity experiments (defaults reproduce the published behaviour):
+    ``refit="Q"`` re-fits at quarter starts instead of each Jan 1;
+    ``fit_window=N`` fits on only the trailing N bars (a ROLLING window that
+    forgets old regimes) instead of the expanding full history.  Both remain
+    strictly causal — every fit still sees only data before its effective
+    date."""
     caps = caps or CAP_BY_KEY
     idx = rets.index
     cols = list(rets.columns)
     cap_vec = np.array([caps.get(c, 0.30) for c in cols])
     ew = _cap_normalise(np.full(len(cols), 1.0 / len(cols)), cap_vec)
     sched = [(idx[0], {c: float(w) for c, w in zip(cols, ew)})]
-    for y in range(idx[0].year + 1, idx[-1].year + 1):
-        d = pd.Timestamp(f"{y}-01-01")
+    if refit == "Q":
+        refit_dates = [pd.Timestamp(f"{y}-{m:02d}-01")
+                       for y in range(idx[0].year, idx[-1].year + 1)
+                       for m in (1, 4, 7, 10)]
+    else:
+        refit_dates = [pd.Timestamp(f"{y}-01-01")
+                       for y in range(idx[0].year + 1, idx[-1].year + 1)]
+    for d in refit_dates:
         prior = idx[idx < d]
-        if len(prior) < min_hist:
+        if len(prior) < min_hist or d > idx[-1]:
             continue
-        fit_end = prior[-1]
-        o = optimize_weights(rets.loc[:fit_end], caps=caps, n_samples=n_samples,
+        fit_r = rets.loc[:prior[-1]]
+        if fit_window:
+            fit_r = fit_r.iloc[-fit_window:]
+        o = optimize_weights(fit_r, caps=caps, n_samples=n_samples,
                              seed=seed, mdd_floor=mdd_floor,
-                             pos=(pos.loc[:fit_end] if pos is not None else None),
+                             pos=(pos.loc[fit_r.index] if pos is not None else None),
                              sata_daily=sata_daily, objective=objective,
                              fundamental=False)
         sched.append((d, o["optimal"]["weights"]))
@@ -1579,7 +1613,10 @@ def replay_gated_allocation(results: list[dict],
                             caps: dict | None = None,
                             sata_daily: float = SATA_DAILY,
                             tilt: bool = True,
-                            anchors: list[tuple] | None = None) -> dict:
+                            anchors: list[tuple] | None = None,
+                            wr_window: int | None = None,
+                            sharpe_window: int | None = None,
+                            penalty: dict | None = None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -1620,6 +1657,15 @@ def replay_gated_allocation(results: list[dict],
     fitting bias produced it) OR ``anchors`` (a ``walkforward_anchors``
     schedule; each day uses the latest entry effective on/before it, so the
     anchors are look-ahead-free too).  Exactly one must be supplied.
+
+    Adaptivity experiments (defaults reproduce the published behaviour):
+    ``wr_window``/``sharpe_window`` make the priority's win-rate/Sharpe reads
+    rolling instead of lifetime (see ``priority_component_history``);
+    ``penalty=dict(window=126, floor=0.0, mult=0.5)`` is a *penalty box* —
+    a funded sleeve whose rolling ``window``-bar Sharpe (lagged one bar) is
+    below ``floor`` has its raw weight multiplied by ``mult`` before the
+    water-fill, automatically de-rating persistent underperformers.  All
+    strictly as-of.
     """
     caps = caps or CAP_BY_KEY
     rets = returns_matrix(results)
@@ -1635,7 +1681,8 @@ def replay_gated_allocation(results: list[dict],
     else:
         day_anchor = None
     pos = position_matrix(results, idx, carry=True)
-    comp = priority_component_history(results, idx)
+    comp = priority_component_history(results, idx, wr_window=wr_window,
+                                      sharpe_window=sharpe_window)
     # decision at close t−1 drives the book that earns day t's return
     lag = {k: comp[k].shift(1) for k in keys}
 
@@ -1647,6 +1694,17 @@ def replay_gated_allocation(results: list[dict],
     shp_m = np.column_stack([lag[k]["sharpe_raw"].to_numpy(float) for k in keys])
     reg_m = np.column_stack([lag[k]["regime"].to_numpy(float) for k in keys])
     pw = PRIORITY_WEIGHTS
+    pen_m = None
+    if penalty:
+        p_win = int(penalty.get("window", 126))
+        p_mp = min(60, p_win)
+        pen_m = np.column_stack([
+            ((rets[k].rolling(p_win, min_periods=p_mp).mean()
+              / rets[k].rolling(p_win, min_periods=p_mp).std())
+             * np.sqrt(TRADING_DAYS)).shift(1).to_numpy(float)
+            for k in keys])
+        p_floor = float(penalty.get("floor", 0.0))
+        p_mult = float(penalty.get("mult", 0.5))
 
     port = np.zeros(len(idx))
     W = np.zeros((len(idx), len(keys)))
@@ -1673,6 +1731,11 @@ def replay_gated_allocation(results: list[dict],
                 raw[j] = max(bw.get(keys[j], 0.0), 1e-6) * (0.5 + score)
         else:
             raw = {j: max(bw.get(keys[j], 0.0), 1e-6) for j in act}
+        if pen_m is not None:                   # penalty box: de-rate cold sleeves
+            for j in act:
+                v = pen_m[t, j]
+                if v == v and v < p_floor:
+                    raw[j] *= p_mult
         target = _waterfill(raw, {j: caps.get(keys[j], 0.30) for j in raw})
         dep = 0.0
         for j, w in target.items():
@@ -1701,21 +1764,34 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              objective: str = "balanced",
                              sata_daily: float = SATA_DAILY, tilt: bool = True,
                              min_hist: int = 250, n_samples: int = 8000,
-                             seed: int = 7) -> dict:
+                             seed: int = 7, refit: str = "A",
+                             fit_window: int | None = None,
+                             wr_window: int | None = None,
+                             sharpe_window: int | None = None,
+                             penalty: dict | None = None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
     on a ``walkforward_anchors`` schedule.  Every input to a given day's book —
     anchor weights, funded set, priority components — is computable from data
     available at the previous close.  This is what the app publishes as the
     combined back-test; the full-sample optimiser weights remain in use only
     for TODAY'S live book, where all history to date is legitimately known.
-    The schedule is attached as ``anchors``."""
+    The schedule is attached as ``anchors``.
+
+    The adaptivity-experiment knobs (``refit``/``fit_window``/``wr_window``/
+    ``sharpe_window``/``penalty``) pass straight through to
+    ``walkforward_anchors`` / ``replay_gated_allocation``; the defaults
+    reproduce the published strategy exactly (see
+    ``scripts/eval_adaptive_variants.py`` for the comparison harness)."""
     rets = returns_matrix(results)
     pos = position_matrix(results, rets.index)
     anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
                                   objective=objective, sata_daily=sata_daily,
-                                  min_hist=min_hist, n_samples=n_samples, seed=seed)
+                                  min_hist=min_hist, n_samples=n_samples, seed=seed,
+                                  refit=refit, fit_window=fit_window)
     rep = replay_gated_allocation(results, caps=caps, sata_daily=sata_daily,
-                                  tilt=tilt, anchors=anchors)
+                                  tilt=tilt, anchors=anchors,
+                                  wr_window=wr_window, sharpe_window=sharpe_window,
+                                  penalty=penalty)
     rep["anchors"] = anchors
     return rep
 
