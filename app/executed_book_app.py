@@ -302,6 +302,9 @@ def _download(payload: dict, secret) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 st.title("✅ Executed Book (IBKR)")
 import strategy_version as _sv                 # noqa: E402
+if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
+    import importlib                           # stale hot-loaded module (the
+    _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()
 st.caption("What the IBKR executor actually did on the last rebalance — trades "
            "placed and the resulting positions.")

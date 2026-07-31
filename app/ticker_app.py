@@ -104,6 +104,9 @@ with st.sidebar:
 
 st.title(f"{cfg.emoji} {cfg.key} — {cfg.name}")
 import strategy_version as _sv                 # noqa: E402
+if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
+    import importlib                           # stale hot-loaded module (the
+    _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()                             # visible above every tab
 st.caption(cfg.blurb + f"  Models: ridge on log-returns (hourly close), ridge "
            "H/L bands & close cones, logistic day-type — driven by the asset's "

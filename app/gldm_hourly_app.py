@@ -128,6 +128,9 @@ else:
         "sibling ⛏️ Gold Miners app trades GDX & NUGT on the divergence signal."
     )
 import strategy_version as _sv                 # noqa: E402
+if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
+    import importlib                           # stale hot-loaded module (the
+    _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()                             # visible above every tab
 
 
