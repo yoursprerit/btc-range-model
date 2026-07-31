@@ -1,0 +1,59 @@
+{
+ "schema": "book-versions/v1",
+ "generated_at_utc": "2026-07-31T15:47:01+00:00",
+ "note": "Backfilled provenance for archived books published before inline strategy_version stamping. 'pre-v1' spans evolving logic (per-book code_sha is the publishing commit); books from stamping onward carry their version inline and are not listed here.",
+ "books": {
+  "2026-07-16": {
+   "strategy_version": "pre-v1",
+   "code_sha": "da60912408b9"
+  },
+  "2026-07-17": {
+   "strategy_version": "pre-v1",
+   "code_sha": "46c8d5308bd5"
+  },
+  "2026-07-20": {
+   "strategy_version": "pre-v1",
+   "code_sha": "ad954b1b0b01"
+  },
+  "2026-07-21": {
+   "strategy_version": "pre-v1",
+   "code_sha": "bf920f31670d"
+  },
+  "2026-07-22": {
+   "strategy_version": "pre-v1",
+   "code_sha": "4449d2d270d0"
+  },
+  "2026-07-23": {
+   "strategy_version": "pre-v1",
+   "code_sha": "a0f59cf44c46"
+  },
+  "2026-07-24": {
+   "strategy_version": "pre-v1",
+   "code_sha": "cb2589992a37"
+  },
+  "2026-07-25": {
+   "strategy_version": "pre-v1",
+   "code_sha": "e17eb0e427fa"
+  },
+  "2026-07-26": {
+   "strategy_version": "pre-v1",
+   "code_sha": "664561f46f9f"
+  },
+  "2026-07-27": {
+   "strategy_version": "pre-v1",
+   "code_sha": "537209fc4bba"
+  },
+  "2026-07-28": {
+   "strategy_version": "pre-v1",
+   "code_sha": "5d32657e91d1"
+  },
+  "2026-07-29": {
+   "strategy_version": "pre-v1",
+   "code_sha": "d3d7bba38527"
+  },
+  "2026-07-30": {
+   "strategy_version": "pre-v1",
+   "code_sha": "a8e5c6a1b1ef"
+  }
+ }
+}

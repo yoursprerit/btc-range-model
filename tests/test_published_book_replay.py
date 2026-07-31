@@ -112,6 +112,73 @@ def test_attribution_sums_exactly_to_the_curve():
     assert np.isclose(sum(att["per_key"].values()) + att["sata"], total, atol=1e-9)
 
 
+def test_live_book_sata_weight_is_the_cash_leg_not_a_sleeve():
+    # live books park idle capital as a real SATA *weights* entry with
+    # cash_weight 0 — it must accrue the coupon, not drop as an unknown key
+    rets = _rets(IDX, AAA=pd.Series(0.0, index=IDX))
+    books = [_book("2026-07-06", {"AAA": 0.4, "SATA": 0.6}, 0.0)]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.001)
+    assert rep["dropped"] == []
+    assert np.allclose(rep["ret"].iloc[1:], 0.6 * 0.001)     # all biz days
+    assert rep["sata"].iloc[0] == 0.6
+    assert rep["books"][0]["cash"] == 0.6
+
+
+def test_version_labels_inline_wins_then_sidecar_then_unstamped():
+    rets = _rets(IDX, AAA=pd.Series(0.0, index=IDX))
+    b0 = _book("2026-07-06", {"AAA": 1.0}, 0.0)              # sidecar-labelled
+    b1 = _book("2026-07-07", {"AAA": 1.0}, 0.0)              # unstamped
+    b2 = dict(_book("2026-07-08", {"AAA": 1.0}, 0.0),
+              strategy_version="v1", code_sha="abc123def4567890")  # inline
+    vmap = {"2026-07-06": {"strategy_version": "pre-v1", "code_sha": "deadbeef"}}
+    rep = oc.published_book_replay(rets, [b0, b1, b2], sata_daily=0.0,
+                                   version_map=vmap)
+    vs = [b["version"] for b in rep["books"]]
+    assert vs == ["pre-v1", "unstamped", "v1"]
+    assert rep["books"][0]["code_sha"] == "deadbeef"
+    assert rep["books"][2]["code_sha"] == "abc123def456"     # trimmed to 12
+    assert [(s["version"], s["n_books"]) for s in rep["version_spans"]] == \
+        [("pre-v1", 1), ("unstamped", 1), ("v1", 1)]
+
+
+def test_version_spans_group_consecutive_books():
+    rets = _rets(IDX, AAA=pd.Series(0.0, index=IDX))
+    books = [dict(_book(f"2026-07-0{d}", {"AAA": 1.0}, 0.0),
+                  strategy_version=v)
+             for d, v in [(6, "v1"), (7, "v1"), (8, "v2")]]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0)
+    spans = rep["version_spans"]
+    assert [(s["version"], s["n_books"]) for s in spans] == [("v1", 2), ("v2", 1)]
+    assert spans[0]["start"] == pd.Timestamp("2026-07-06")
+    assert spans[0]["end"] == pd.Timestamp("2026-07-07")
+    assert spans[1]["start"] == pd.Timestamp("2026-07-08")
+
+
+def test_only_version_filters_to_that_generation():
+    rets = _rets(IDX, AAA=pd.Series(0.01, index=IDX))
+    books = [dict(_book("2026-07-06", {"AAA": 1.0}, 0.0), strategy_version="v1"),
+             dict(_book("2026-07-08", {"AAA": 0.5}, 0.5), strategy_version="v2")]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0,
+                                   only_version="v2")
+    assert [b["version"] for b in rep["books"]] == ["v2"]
+    # coverage re-anchors at the v2 book — no v1 days leak in
+    assert rep["ret"].index[0] == pd.Timestamp("2026-07-08")
+    assert np.allclose(rep["ret"].iloc[1:], 0.5 * 0.01)
+    # filtering to a version with nothing replayable → None, not garbage
+    assert oc.published_book_replay(rets, books, sata_daily=0.0,
+                                    only_version="v9") is None
+
+
+def test_load_book_version_map_missing_file_is_empty(tmp_path):
+    assert oc.load_book_version_map(tmp_path / "nope.json") == {}
+    (tmp_path / "v.json").write_text(json.dumps(
+        {"schema": "book-versions/v1",
+         "books": {"2026-07-06": {"strategy_version": "pre-v1",
+                                  "code_sha": "abc"}}}))
+    m = oc.load_book_version_map(tmp_path / "v.json")
+    assert m["2026-07-06"]["strategy_version"] == "pre-v1"
+
+
 def test_load_published_books_reads_sorted_and_skips_junk(tmp_path):
     (tmp_path / "2026-07-08.json").write_text(
         json.dumps(_book("2026-07-08", {"AAA": 1.0}, 0.0)))
