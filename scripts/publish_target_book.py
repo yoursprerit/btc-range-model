@@ -70,6 +70,21 @@ def _write_audit(path: Path, *, audit: dict, results: list, profile: str,
     print(f"Wrote audit trail {path}")
 
 
+def _publish_sha() -> str:
+    """Short SHA of the code publishing this book: the Action's GITHUB_SHA,
+    else the local HEAD, else ``unknown`` — provenance only, never fatal."""
+    sha = os.environ.get("GITHUB_SHA")
+    if not sha:
+        try:
+            import subprocess
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_REPO,
+                                 capture_output=True, text=True,
+                                 timeout=10).stdout.strip()
+        except Exception:
+            sha = ""
+    return (sha or "unknown")[:12]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Publish the Overall target books (Option C)")
     ap.add_argument("--profile", default=oc.DEFAULT_PROFILE,
@@ -206,6 +221,14 @@ def main() -> int:
             "crypto", fr.expected_crypto_asof(anchor)).isoformat())
     paper["signal_basis"] = _basis
     live["signal_basis"] = dict(_basis)
+
+    # Stamp the STRATEGY-LOGIC PROVENANCE (signature-covered): the deliberate
+    # strategy version plus the publishing commit, so the as-published P&L
+    # record can segment on logic changes instead of silently conflating
+    # books produced by different generations of the strategy.
+    for _bk in (paper, live):
+        _bk["strategy_version"] = oc.STRATEGY_VERSION
+        _bk["code_sha"] = _publish_sha()
 
     outdir = Path(args.out).parent
     outdir.mkdir(parents=True, exist_ok=True)

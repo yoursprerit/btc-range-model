@@ -243,6 +243,12 @@ def get_published_books(bucket: str):
     return ov.load_published_books()
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def get_book_version_map(bucket: str):
+    """Backfilled strategy-version provenance for pre-stamp archived books."""
+    return ov.load_book_version_map()
+
+
 @st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
 def get_all_profiles(bucket: str):
     """Compute the full portfolio for every UI risk profile once, so switching
@@ -1373,7 +1379,10 @@ with tab_live:
     # measured from the entry point, not from inception.
     with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
         _books = get_published_books(_bucket())
-        _bookrep = ov.published_book_replay(_PF["rets"], _books) if _books else None
+        _vmap = get_book_version_map(_bucket())
+        _bookrep = (ov.published_book_replay(_PF["rets"], _books,
+                                             version_map=_vmap)
+                    if _books else None)
         _SRC_ACTUAL = "🎯 As-published record (actual books)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
         if _bookrep is not None:
@@ -1396,6 +1405,32 @@ with tab_live:
                        "unlocks once the daily publisher has archived books.")
         _actual = _pnl_src == _SRC_ACTUAL
         if _actual:
+            # strategy-logic segmentation — never silently blend book
+            # generations: offer a current-logic-only view when the archive
+            # spans more than one stamped strategy version
+            _spans = _bookrep["version_spans"]
+            if len(_spans) > 1 and st.toggle(
+                    f"🔒 Current-logic books only — `{_spans[-1]['version']}`, "
+                    f"{_spans[-1]['n_books']} "
+                    f"book{'s' if _spans[-1]['n_books'] != 1 else ''} from "
+                    f"{_spans[-1]['start'].strftime('%b %d, %Y')}",
+                    key="overall_pnl_current_logic",
+                    help="Restrict every figure below to books published under "
+                         "the newest strategy-logic version, so nothing from "
+                         "older generations of the strategy leaks into the "
+                         "metrics. Off = the full record, with generation "
+                         "boundaries marked and a warning when the window "
+                         "mixes them."):
+                _rep_cur = ov.published_book_replay(
+                    _PF["rets"], _books, version_map=_vmap,
+                    only_version=_spans[-1]["version"])
+                if _rep_cur is not None:
+                    _bookrep = _rep_cur
+                    _spans = _bookrep["version_spans"]
+                else:
+                    st.info("Not enough current-logic books to measure yet "
+                            "(needs at least two bars) — showing the full "
+                            "record with its generation boundaries instead.")
             _n_books = len(_bookrep["books"])
             st.caption(f"P&L, performance and risk of the **as-published "
                        f"Overall strategy book** — the {_n_books} dated target "
@@ -1408,8 +1443,15 @@ with tab_live:
                        "book and its trims). This view follows the profile "
                        "each book was *actually published under* (shown per "
                        "book below) — the risk-profile selector above does "
-                       "not rewrite history. Dollar figures scale the 💼 "
-                       "portfolio value entered above.")
+                       "not rewrite history. Books are segmented by "
+                       "**strategy-logic version** (stamped at publish; "
+                       "earlier books backfilled from their publishing "
+                       "commits), so performance from older generations of "
+                       "the strategy is never silently conflated with the "
+                       "current implementation — boundaries are marked on "
+                       "the chart and a warning flags any mixed window. "
+                       "Dollar figures scale the 💼 portfolio value entered "
+                       "above.")
             _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"]}
             _strat_label = STRAT_CURVE_ACTUAL
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
@@ -1466,6 +1508,25 @@ with tab_live:
                     f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
                     f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
+            if _actual and len(_spans) > 1:
+                # a span drives the days from its first book to the NEXT
+                # span's first book — flag windows touching more than one
+                _next_starts = [s["start"] for s in _spans[1:]] + [None]
+                _mixed = [s for s, _nx in zip(_spans, _next_starts)
+                          if (_nx is None or _nx > _sm["start"])
+                          and s["start"] <= _sm["end"]]
+                if len(_mixed) > 1:
+                    st.warning(
+                        "⚠️ **This window mixes strategy-logic generations** — "
+                        + " → ".join(
+                            f"`{s['version']}` ({s['n_books']} "
+                            f"book{'s' if s['n_books'] != 1 else ''}, from "
+                            f"{s['start'].strftime('%b %d')})" for s in _mixed)
+                        + ". Every metric below blends them. Toggle **🔒 "
+                          "Current-logic books only** above to isolate the "
+                          "current implementation's record, or switch to the "
+                          "🧪 walk-forward replay for the current "
+                          "implementation's full-history back-test.")
             pm = st.columns(4)
             pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
                          delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
@@ -1555,6 +1616,16 @@ with tab_live:
             _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
+            if _actual:
+                # mark every strategy-generation switch inside the window
+                for _s in _spans[1:]:
+                    if _s["start"] >= _sm["start"]:
+                        _fig_pnl.add_vline(
+                            x=_s["start"].to_pydatetime(), line_dash="dash",
+                            line_color="#f59e0b", line_width=1.5,
+                            annotation_text=f"⚙️ {_s['version']}",
+                            annotation_font_size=10,
+                            annotation_font_color="#b45309")
             _src_title = ("as-published books" if _actual
                           else f"`{_profile}` profile")
             _fig_pnl.update_layout(
@@ -1631,7 +1702,9 @@ with tab_live:
                         key="overall_published_books"):
                     st.caption("One row per **archived publish** (newest "
                                "first): the book's signal bar, the risk "
-                               "profile it was actually published under, "
+                               "profile it was actually published under, the "
+                               "**strategy-logic version** that produced it "
+                               "(with the publishing commit), "
                                "deployed vs idle capital, its **one-way "
                                "turnover** vs the previous book (½·Σ|Δweight|, "
                                "cash leg included — the size of that "
@@ -1644,6 +1717,7 @@ with tab_live:
                            "text-align:left'>"
                            "<th style='padding:6px 10px'>Signal bar</th>"
                            "<th>Profile</th>"
+                           "<th>Logic</th>"
                            "<th style='text-align:right'>Deployed</th>"
                            "<th style='text-align:right'>💵 Cash</th>"
                            "<th style='text-align:right'>Turnover</th>"
@@ -1689,6 +1763,10 @@ with tab_live:
                             f"<td><code>{_b['profile']}</code>"
                             f"<span style='font-size:10px;color:#94a3b8'> "
                             f"{_b['book_mode']}</span></td>"
+                            f"<td><code>{_b['version']}</code>"
+                            + (f"<div style='font-size:10px;color:#94a3b8'>"
+                               f"{_b['code_sha']}</div>" if _b.get("code_sha")
+                               else "") + "</td>"
                             f"<td style='text-align:right'>{_dep*100:.1f}%</td>"
                             f"<td style='text-align:right;color:#64748b'>"
                             f"{_b['cash']*100:.1f}%</td>"

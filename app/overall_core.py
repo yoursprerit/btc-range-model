@@ -1870,6 +1870,29 @@ def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
 # replay's simulation of the same rules.
 BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
 
+# Deliberate strategy-logic version.  BUMP THIS whenever the Overall logic or
+# any per-asset strategy changes materially — the publisher stamps it (plus the
+# publishing commit's SHA) into every book it commits, and the P&L section
+# segments the as-published record wherever the stamp changes, so performance
+# from different generations of the strategy is never silently conflated.
+# Books published before stamping existed are labelled from the committed
+# side-car ``data/overall/book_versions.json`` (see
+# ``scripts/backfill_book_versions.py``) as ``pre-v1``.
+STRATEGY_VERSION = "v1"
+BOOK_VERSIONS_JSON = _REPO_ROOT / "data" / "overall" / "book_versions.json"
+
+
+def load_book_version_map(path: Path | None = None) -> dict:
+    """The backfilled ``as_of → {code_sha, strategy_version}`` side-car for
+    archived books that predate inline version stamping.  ``{}`` when absent —
+    unmatched books simply render as ``unstamped``."""
+    import json
+    try:
+        payload = json.loads(Path(path or BOOK_VERSIONS_JSON).read_text())
+        return dict(payload.get("books") or {})
+    except Exception:
+        return {}
+
 
 def load_published_books(archive_dir: Path | None = None) -> list[dict]:
     """Every archived as-published target book, parsed and sorted by
@@ -1889,7 +1912,9 @@ def load_published_books(archive_dir: Path | None = None) -> list[dict]:
 
 
 def published_book_replay(returns: pd.DataFrame, books: list[dict],
-                          sata_daily: float = SATA_DAILY) -> dict | None:
+                          sata_daily: float = SATA_DAILY,
+                          version_map: dict | None = None,
+                          only_version: str | None = None) -> dict | None:
     """Compound the ACTUALLY-PUBLISHED daily books — the exact historical
     record, daily optimiser trims included — into the same shapes the
     walk-forward replay returns (``ret``/``equity``/``weights``/``sata``), so
@@ -1905,24 +1930,51 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     ``returns_matrix`` as the replay; the book's cash remainder earns the
     SATA coupon on business days.  Gross of costs/fills, like the replay.
 
+    A LIVE book parks its idle remainder as a real ``SATA`` weights entry
+    (``cash_weight`` 0 — see the publisher); that leg is folded back into the
+    cash/SATA term here so it accrues the coupon instead of being dropped as
+    an unknown sleeve.
+
+    Strategy-logic provenance: each book is labelled with its
+    ``strategy_version`` — the inline stamp the publisher writes (signature-
+    covered) when present, else the backfilled ``version_map`` side-car
+    (``load_book_version_map``), else ``unstamped`` — and consecutive
+    same-version books are grouped into ``version_spans`` so the UI can mark
+    every point where the record switches strategy generations.
+    ``only_version`` restricts the replay to books carrying that label — the
+    "current-logic books only" view, guaranteed free of old-logic
+    conflation.
+
     Extras beyond the replay shape: ``books`` — one record per archived
-    publish (as_of / profile / book_mode / weights / cash / one-way
-    ``turnover`` vs the previous book, cash leg included) for the daily-trims
-    table — and ``dropped``, any book key absent from ``returns`` (its weight
-    earns nothing rather than silently borrowing another sleeve's return).
-    Returns ``None`` when there is nothing replayable (<2 bars covered)."""
+    publish (as_of / profile / book_mode / version / code_sha / weights /
+    cash / one-way ``turnover`` vs the previous book, cash leg included) for
+    the daily-trims table — ``version_spans`` as above, and ``dropped``, any
+    book key absent from ``returns`` (its weight earns nothing rather than
+    silently borrowing another sleeve's return).  Returns ``None`` when
+    there is nothing replayable (<2 bars covered)."""
+    version_map = version_map or {}
     parsed = []
     for b in books or []:
         try:
+            as_of = pd.Timestamp(b["as_of"])
+            w = {k: float(v) for k, v in (b.get("weights") or {}).items()}
+            # live books hold idle capital as an actual SATA position — that
+            # IS the cash/SATA leg, not a market sleeve
+            cash = float(b.get("cash_weight", 0.0) or 0.0) + w.pop("SATA", 0.0)
+            side = version_map.get(str(as_of.date()), {})
             parsed.append(dict(
-                as_of=pd.Timestamp(b["as_of"]),
-                weights={k: float(v) for k, v in (b.get("weights") or {}).items()},
-                cash=float(b.get("cash_weight", 0.0) or 0.0),
+                as_of=as_of, weights=w, cash=cash,
                 profile=str(b.get("profile") or "—"),
-                book_mode=str(b.get("book_mode") or "paper")))
+                book_mode=str(b.get("book_mode") or "paper"),
+                version=str(b.get("strategy_version")
+                            or side.get("strategy_version") or "unstamped"),
+                code_sha=(str(b.get("code_sha") or side.get("code_sha") or "")
+                          [:12] or None)))
         except Exception:
             continue
     parsed.sort(key=lambda r: r["as_of"])
+    if only_version is not None:
+        parsed = [r for r in parsed if r["version"] == only_version]
     if not parsed or returns is None or returns.empty:
         return None
     idx = returns.index[returns.index >= parsed[0]["as_of"]]
@@ -1958,12 +2010,22 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
         cur["turnover"] = 0.5 * (
             sum(abs(cur["weights"].get(k, 0.0) - prev["weights"].get(k, 0.0))
                 for k in ks) + abs(cur["cash"] - prev["cash"]))
+    # consecutive same-version books → one span each; a span boundary is a
+    # strategy-generation switch the UI must surface, never silently blend
+    spans = []
+    for r in parsed:
+        if spans and spans[-1]["version"] == r["version"]:
+            spans[-1]["end"] = r["as_of"]
+            spans[-1]["n_books"] += 1
+        else:
+            spans.append(dict(version=r["version"], start=r["as_of"],
+                              end=r["as_of"], n_books=1))
     daily = pd.Series(port, index=idx)
     eq = _equity(daily)
     return dict(ret=daily, equity=eq, metrics=curve_metrics(eq),
                 weights=pd.DataFrame(W, index=idx, columns=keys),
                 sata=pd.Series(sata_w, index=idx),
-                books=parsed, dropped=sorted(dropped))
+                books=parsed, version_spans=spans, dropped=sorted(dropped))
 
 
 def benchmarks(returns: pd.DataFrame, results: list[dict],
