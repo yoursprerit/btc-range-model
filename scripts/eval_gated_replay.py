@@ -21,10 +21,11 @@ optimal-weight anchors and idle→SATA treatment:
                  lagged one bar, min-max ranked across that day's funded set,
                  water-filled to the profile caps.
   walk-forward   ``walkforward_gated_replay``: gate + tilt with the LAST
-  (published)    look-ahead removed — anchor weights re-fit each Jan 1 on
-                 prior data only (equal-weight warm-up, fundamental overlay
-                 off).  THE NUMBERS THE APP PUBLISHES; verified prefix-
-                 invariant by ``scripts/check_lookahead.py``.
+  (published)    look-ahead removed — anchor weights re-fit at each QUARTER
+                 start on prior data only (equal-weight warm-up, fundamental
+                 overlay off; quarterly adopted from the adaptivity eval).
+                 THE NUMBERS THE APP PUBLISHES; verified prefix-invariant by
+                 ``scripts/check_lookahead.py``.
 
 No transaction or slippage costs are modelled anywhere (matching the published
 fixed-weight numbers); daily one-way turnover is reported so the cost surface
@@ -166,7 +167,7 @@ def _write_md(profiles: dict, asof, n_sleeves: int, n_bars: int) -> None:
     L.append("* **Anchors**: the first three variants deliberately share the "
              "full-history optimal weights (per profile, fundamental overlay ON) "
              "so their gaps isolate the daily gate/tilt effects; the "
-             "**walk-forward row re-fits anchors each Jan 1 on prior data only** "
+             "**walk-forward row re-fits anchors at each quarter start on prior data only** "
              "(equal-weight warm-up, overlay OFF) — the app's published "
              "construction, prefix-invariance-verified by "
              "`scripts/check_lookahead.py`.")

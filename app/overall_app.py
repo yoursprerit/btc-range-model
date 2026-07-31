@@ -1255,7 +1255,7 @@ with tab_live:
     with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
         st.caption(f"P&L, performance and risk of the **daily-gated Overall "
                    f"strategy** (walk-forward replay — the same gate/tilt "
-                   f"logic the live book runs, anchors re-fit each year on "
+                   f"logic the live book runs, anchors re-fit each quarter on "
                    f"prior data only) measured from the start date below, "
                    f"under the risk profile selected above (currently "
                    f"**`{_profile}`**). Change the profile or the date and "
@@ -1381,8 +1381,8 @@ with tab_live:
             st.caption("⚠️ Simulated performance of the daily-gated strategy under "
                        "the selected risk profile (idle capital earning SATA), "
                        "assuming entry at the close of the anchor bar. The replay is "
-                       "walk-forward — anchor weights re-fit each Jan 1 on prior "
-                       "data only, priorities from as-of inputs lagged one bar — so "
+                       "walk-forward — anchor weights re-fit each quarter start on "
+                       "prior data only, priorities from as-of inputs lagged one bar — so "
                        "no figure uses information from after the day it describes. "
                        "Not investment advice.")
 
@@ -2300,8 +2300,8 @@ with tab_bt:
                "the SAME daily logic the live book runs: capital deployed only "
                "to the sleeves in the market, sized by anchor weights **tilted "
                "by the as-of entry-priority read** and water-filled to the "
-               "profile caps. Anchors are **re-fit each Jan 1 on prior data "
-               "only** (equal-weight before enough history exists), priority "
+               "profile caps. Anchors are **re-fit each quarter start on prior "
+               "data only** (equal-weight before enough history exists), priority "
                "inputs are lagged one bar — nothing in the curve uses "
                "information from after the day it describes. Out-of-sample "
                f"from {_oos_span} depending on the instrument (staggered starts — "
@@ -2382,7 +2382,7 @@ with tab_bt:
                    "30% — so the optimiser only leans on the 2× / β names when "
                    "they improve risk-adjusted return. These weights anchor "
                    "**today's live book**; the back-test above re-fits its own "
-                   "anchors each year on prior data only (this scheme table is "
+                   "anchors each quarter on prior data only (this scheme table is "
                    "a static-blend diagnostic of the current fit, not the "
                    "back-test).")
 
@@ -2498,7 +2498,7 @@ with tab_bt:
         f"buy-&-hold of the same instruments at **{bm['bh_equal']['total_ret']*100:,.0f}%** "
         f"but a **{bm['bh_equal']['mdd']*100:.0f}%** drawdown "
         f"(Sharpe **{bm['bh_equal']['sharpe']:.2f}**).")
-    st.caption("⚠️ The replay is walk-forward (anchors re-fit each Jan 1 on prior "
+    st.caption("⚠️ The replay is walk-forward (anchors re-fit each quarter start on prior "
                "data only, priority inputs lagged a bar, no fundamental overlay), "
                "but per-sleeve strategy *parameters* were tuned on history and "
                "no transaction costs are charged — a daily-rebalanced book "
@@ -2603,8 +2603,10 @@ is NOT a fixed-weight blend. Every day of the back-test rebuilds the book the
 live logic would have held **using only information available at the previous
 close**: the sleeves in the market that day get capital, sized by anchor
 weights × (0.5 + entry-priority) and water-filled to the profile caps, with the
-remainder in SATA. Anchor weights are **re-fit every Jan 1 on the data before
-that date** (cap-normalised equal weight before enough history exists), the
+remainder in SATA. Anchor weights are **re-fit at every quarter start
+(Jan/Apr/Jul/Oct 1) on the data before that date** (cap-normalised equal
+weight before enough history exists — quarterly refits were adopted after the
+adaptivity eval showed they beat annual on both return and Sharpe), the
 priority inputs are their as-of analogues (momentum vs the 50-day SMA, the
 rolling sentiment gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime
 rule) lagged one bar, and the fundamental overlay is excluded throughout.
