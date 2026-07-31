@@ -50,6 +50,7 @@ import plotly.graph_objects as go
 import importlib
 import gldm_core
 import backtest_gldm
+import freshness
 
 # Streamlit re-executes the main script from disk on every run, but `import`
 # returns whatever is cached in sys.modules — so after a code update that adds
@@ -192,6 +193,17 @@ daily = get_daily()
 if daily is None or daily.empty:
     st.error("Could not fetch GLDM data from Yahoo. Click **Refresh now** to retry.")
     st.stop()
+# Completed-bars view for the daily models: during US market hours Yahoo's
+# daily feed carries an in-progress *today* row whose high/low/close are still
+# moving. Forecasting off it would label the "next bar" as the day AFTER today
+# while today's own bar is still open (Fri → Mon across a weekend) — and the
+# forecast would drift with every intraday tick. The Live tab instead anchors
+# every daily-model forecast (H/L, cones, day-type) on the last COMPLETED
+# session, so intraday the highlighted forecast is *today's* H/L. Price
+# metrics and the hourly chart keep the partial bar (that's live info).
+daily_completed = freshness.drop_in_progress_us_bar(daily)
+if daily_completed is None or daily_completed.empty:
+    daily_completed = daily
 _daily_key = f"{daily.index.max()}::{len(daily)}"
 preds, sig = get_predictions(_daily_key)
 completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
@@ -1178,7 +1190,8 @@ def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
                                  font=dict(size=13), x=0, xanchor="left"),
                       yaxis_title="Price ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                      xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
+                      xaxis=dict(rangebreaks=_gap_rangebreaks(x), **_GRID),
+                      yaxis=_GRID, **_PLOT_BG)
     return fig
 
 
@@ -1264,7 +1277,8 @@ def _cone_forecast_fig(as_of_iso, horizon, lookback, title, band_rgba, line_col)
                       title=dict(text=title + subtitle, font=dict(size=13), x=0, xanchor="left"),
                       yaxis_title="Close ($)", yaxis_tickprefix="$", yaxis_tickformat=",.2f",
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                      xaxis=_GRID, yaxis=_GRID, **_PLOT_BG)
+                      xaxis=dict(rangebreaks=_gap_rangebreaks(x), **_GRID),
+                      yaxis=_GRID, **_PLOT_BG)
     return fig
 
 
@@ -1272,11 +1286,13 @@ _HR_LOOKBACK_HOURS = 23   # rolling look-back window (hours). 23h actuals + ~1h
                           # forecast ≈ a 24h span, matching the BTC daily bar view.
 
 
-def _hourly_rangebreaks(x_vals):
+def _gap_rangebreaks(x_vals):
     """Rangebreaks that collapse x-axis spans with no bars (market closed:
-    overnight, weekends, holidays) so consecutive market-hours bars plot as a
-    continuous line instead of a flat overnight connector followed by a jump
-    at the next open.  Data-driven — a 24/7 asset has no gaps, so no breaks."""
+    overnight, weekends, holidays) so consecutive bars plot as a continuous
+    line instead of a flat connector followed by a jump at the next open.
+    Data-driven, so it works at any cadence — hourly bars collapse the
+    overnight/weekend span, daily bars collapse weekends & holidays — and a
+    24/7 asset has no gaps, so no breaks."""
     idx = pd.DatetimeIndex(pd.to_datetime(np.atleast_1d(x_vals))).unique().sort_values()
     if len(idx) < 3:
         return []
@@ -1445,7 +1461,7 @@ def _hourly_forecast_fig(as_of_date, is_live, hl=None, ma_lines=None):
                       margin=dict(l=0, r=10, t=46, b=0),
                       legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
                       xaxis=dict(title="Time (US Central)", tickformat="%d-%b %H:%M",
-                                 rangebreaks=_hourly_rangebreaks(list(act_ct) + [next_ct]),
+                                 rangebreaks=_gap_rangebreaks(list(act_ct) + [next_ct]),
                                  **_GRID),
                       yaxis=_GRID, **_PLOT_BG)
     return fig
@@ -1768,8 +1784,13 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         d_df = daily[daily.index <= pd.Timestamp(as_of_date)]
         ph = None
-    hl = predict_next_daily_hl(d_df)
-    dt = predict_day_type(d_df)
+    # Daily-model inference frame: completed bars only, so intraday the
+    # highlighted forecast is *today's* H/L (made from the last completed
+    # close), not tomorrow's made off a half-formed bar. Replay frames end on
+    # a past close, so they're already all-completed.
+    d_fc = daily_completed if is_live else d_df
+    hl = predict_next_daily_hl(d_fc)
+    dt = predict_day_type(d_fc)
     sent = gc.gold_macro_sentiment(d_df).dropna()
     sent_now = float(sent.iloc[-1]) if len(sent) else np.nan
     sigs = signatures_asof(d_df.index[-1] if not is_live else completed_all["target_date"].iloc[-1])
@@ -1861,7 +1882,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
 
     # ── model forecast charts (hourly + Daily H/L + 7d & 14d close cones) ──
     st.markdown("---")
-    render_prediction_plots(d_df, key_prefix=("live" if is_live else "hist"),
+    render_prediction_plots(d_fc, key_prefix=("live" if is_live else "hist"),
                             is_live=is_live, as_of_date=as_of_date, sigs=sigs)
 
 
