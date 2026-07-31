@@ -169,6 +169,28 @@ def test_only_version_filters_to_that_generation():
                                     only_version="v9") is None
 
 
+def test_min_as_of_keeps_rebranded_old_bars_out():
+    # a re-publish of an OLD signal day under new code gets the new stamp —
+    # min_as_of (STRATEGY_VERSION_START) must still keep it out of the record
+    rets = _rets(IDX, AAA=pd.Series(0.01, index=IDX))
+    books = [dict(_book("2026-07-06", {"AAA": 1.0}, 0.0), strategy_version="v1"),
+             dict(_book("2026-07-08", {"AAA": 0.5}, 0.5), strategy_version="v1")]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0,
+                                   only_version="v1", min_as_of="2026-07-08")
+    assert [str(b["as_of"].date()) for b in rep["books"]] == ["2026-07-08"]
+    assert rep["ret"].index[0] == pd.Timestamp("2026-07-08")
+    # nothing on/after the cutoff → None, never a leak of earlier books
+    assert oc.published_book_replay(rets, books, sata_daily=0.0,
+                                    only_version="v1",
+                                    min_as_of="2026-07-11") is None
+
+
+def test_version_start_constant_sane():
+    import strategy_version as sv
+    assert oc.STRATEGY_VERSION_START == sv.STRATEGY_VERSION_START
+    assert pd.Timestamp(sv.STRATEGY_VERSION_START) is not pd.NaT
+
+
 def test_strategy_version_single_source():
     # the badge module is the single source of truth; overall_core (and via it
     # the publisher's stamp) must re-export the identical value

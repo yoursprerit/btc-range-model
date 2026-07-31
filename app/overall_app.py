@@ -1385,12 +1385,22 @@ with tab_live:
     with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
         _books = get_published_books(_bucket())
         _vmap = get_book_version_map(_bucket())
-        _bookrep = (ov.published_book_replay(_PF["rets"], _books,
-                                             version_map=_vmap)
+        # full archive only for context (how many older-generation books
+        # exist); the as-published VIEW is CURRENT-STRATEGY BOOKS ONLY —
+        # stamped with STRATEGY_VERSION, signal days on/after its start date
+        _bookrep_all = (ov.published_book_replay(_PF["rets"], _books,
+                                                 version_map=_vmap)
+                        if _books else None)
+        _bookrep = (ov.published_book_replay(
+                        _PF["rets"], _books, version_map=_vmap,
+                        only_version=ov.STRATEGY_VERSION,
+                        min_as_of=ov.STRATEGY_VERSION_START)
                     if _books else None)
+        _ver_up = ov.STRATEGY_VERSION.upper()
+        _ver_start = pd.Timestamp(ov.STRATEGY_VERSION_START).strftime("%b %d, %Y")
         _SRC_ACTUAL = "🎯 As-published record (actual books)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
-        if _bookrep is not None:
+        if _bookrep_all is not None:
             _pnl_src = st.radio(
                 "Performance source", [_SRC_ACTUAL, _SRC_REPLAY],
                 horizontal=True, key="overall_pnl_source",
@@ -1398,8 +1408,11 @@ with tab_live:
                      "publisher actually committed each day (one archived JSON "
                      "per signal day), so the daily optimizer's trims and "
                      "re-sizes are exactly the ones that really happened. "
+                     f"**Only books published under the current strategy "
+                     f"version ({_ver_up}, from {_ver_start}) are counted** — "
+                     "older-generation books never mix in. "
                      "**Walk-forward replay** — a look-ahead-free simulation "
-                     "of the same gate/tilt rules over the full back-test "
+                     "of the current rules over the full back-test "
                      "history (longer window, but a reconstruction, not the "
                      "record).")
         else:
@@ -1409,38 +1422,30 @@ with tab_live:
                        "walk-forward replay only. The as-published view "
                        "unlocks once the daily publisher has archived books.")
         _actual = _pnl_src == _SRC_ACTUAL
+        if _actual and _bookrep is None:
+            # the current version's record hasn't accumulated 2 bars yet —
+            # say so explicitly and fall back to the replay, never to
+            # old-generation books
+            _n_old = len(_bookrep_all["books"])
+            st.info(f"🎯 The as-published record under the current strategy "
+                    f"version **{_ver_up}** starts accumulating on "
+                    f"**{_ver_start}** — not enough {_ver_up}-stamped books "
+                    f"yet. The {_n_old} archived "
+                    f"book{'s' if _n_old != 1 else ''} from earlier strategy "
+                    "generations are excluded by design, so old-logic "
+                    "performance can never mix into this view. Showing the "
+                    "🧪 walk-forward replay (the current implementation's "
+                    "full-history back-test) until the record exists.")
+            _actual = False
         if _actual:
-            # strategy-logic segmentation — never silently blend book
-            # generations: offer a current-logic-only view when the archive
-            # spans more than one stamped strategy version
-            _spans = _bookrep["version_spans"]
-            if len(_spans) > 1 and st.toggle(
-                    f"🔒 Current-logic books only — **`{_spans[-1]['version'].upper()}`**, "
-                    f"{_spans[-1]['n_books']} "
-                    f"book{'s' if _spans[-1]['n_books'] != 1 else ''} from "
-                    f"{_spans[-1]['start'].strftime('%b %d, %Y')}",
-                    key="overall_pnl_current_logic",
-                    help="Restrict every figure below to books published under "
-                         "the newest strategy-logic version, so nothing from "
-                         "older generations of the strategy leaks into the "
-                         "metrics. Off = the full record, with generation "
-                         "boundaries marked and a warning when the window "
-                         "mixes them."):
-                _rep_cur = ov.published_book_replay(
-                    _PF["rets"], _books, version_map=_vmap,
-                    only_version=_spans[-1]["version"])
-                if _rep_cur is not None:
-                    _bookrep = _rep_cur
-                    _spans = _bookrep["version_spans"]
-                else:
-                    st.info("Not enough current-logic books to measure yet "
-                            "(needs at least two bars) — showing the full "
-                            "record with its generation boundaries instead.")
             _n_books = len(_bookrep["books"])
+            _n_old = len(_bookrep_all["books"]) - _n_books
             st.caption(f"P&L, performance and risk of the **as-published "
                        f"Overall strategy book** — the {_n_books} dated target "
-                       f"books actually committed by the daily publisher "
-                       f"(`data/overall/book_archive/`), compounded at "
+                       f"book{'s' if _n_books != 1 else ''} committed by the "
+                       f"daily publisher (`data/overall/book_archive/`) "
+                       f"**under the current strategy version {_ver_up}** "
+                       f"(records start {_ver_start}), compounded at "
                        "official closes. The optimizer re-sizes the book "
                        "every morning, so **every daily trim/re-size that "
                        "really happened flows through every figure and "
@@ -1448,15 +1453,14 @@ with tab_live:
                        "book and its trims). This view follows the profile "
                        "each book was *actually published under* (shown per "
                        "book below) — the risk-profile selector above does "
-                       "not rewrite history. Books are segmented by "
-                       "**strategy-logic version** (stamped at publish; "
-                       "earlier books backfilled from their publishing "
-                       "commits), so performance from older generations of "
-                       "the strategy is never silently conflated with the "
-                       "current implementation — boundaries are marked on "
-                       "the chart and a warning flags any mixed window. "
-                       "Dollar figures scale the 💼 portfolio value entered "
-                       "above.")
+                       "not rewrite history. "
+                       + (f"**{_n_old} older-generation "
+                          f"book{'s' if _n_old != 1 else ''}** (pre-{_ver_up} "
+                          "logic) are excluded so the record reflects only "
+                          "the currently-implemented strategy. "
+                          if _n_old else "")
+                       + "Dollar figures scale the 💼 portfolio value entered "
+                         "above.")
             _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"]}
             _strat_label = STRAT_CURVE_ACTUAL
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
@@ -1504,7 +1508,9 @@ with tab_live:
         else:
             _pnl_d = _sm["total_ret"] * portfolio_value
             _end_v = portfolio_value * (1 + _sm["total_ret"])
-            _src_note = (f"as-published record · {_n_books} books" if _actual
+            _src_note = (f"as-published <b style='color:{_sv.BADGE_COLOR}'>"
+                         f"{_ver_up}</b> record · {_n_books} "
+                         f"book{'s' if _n_books != 1 else ''}" if _actual
                          else f"profile <code>{_profile}</code>")
             with pnl_cols[1]:
                 st.markdown(
@@ -1513,25 +1519,6 @@ with tab_live:
                     f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
                     f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
-            if _actual and len(_spans) > 1:
-                # a span drives the days from its first book to the NEXT
-                # span's first book — flag windows touching more than one
-                _next_starts = [s["start"] for s in _spans[1:]] + [None]
-                _mixed = [s for s, _nx in zip(_spans, _next_starts)
-                          if (_nx is None or _nx > _sm["start"])
-                          and s["start"] <= _sm["end"]]
-                if len(_mixed) > 1:
-                    st.warning(
-                        "⚠️ **This window mixes strategy-logic generations** — "
-                        + " → ".join(
-                            f"**`{s['version'].upper()}`** ({s['n_books']} "
-                            f"book{'s' if s['n_books'] != 1 else ''}, from "
-                            f"{s['start'].strftime('%b %d')})" for s in _mixed)
-                        + ". Every metric below blends them. Toggle **🔒 "
-                          "Current-logic books only** above to isolate the "
-                          "current implementation's record, or switch to the "
-                          "🧪 walk-forward replay for the current "
-                          "implementation's full-history back-test.")
             pm = st.columns(4)
             pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
                          delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
@@ -1621,17 +1608,7 @@ with tab_live:
             _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
-            if _actual:
-                # mark every strategy-generation switch inside the window
-                for _s in _spans[1:]:
-                    if _s["start"] >= _sm["start"]:
-                        _fig_pnl.add_vline(
-                            x=_s["start"].to_pydatetime(), line_dash="dash",
-                            line_color="#7c3aed", line_width=2,
-                            annotation_text=f"<b>⚙️ {_s['version'].upper()}</b>",
-                            annotation_font_size=13,
-                            annotation_font_color="#7c3aed")
-            _src_title = ("as-published books" if _actual
+            _src_title = (f"as-published books ({_ver_up})" if _actual
                           else f"`{_profile}` profile")
             _fig_pnl.update_layout(
                 height=340, margin=dict(t=30, b=10, l=10, r=10),
