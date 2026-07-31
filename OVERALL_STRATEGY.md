@@ -135,9 +135,13 @@ in which
   rebuilt daily from as-of inputs (momentum vs SMA50, the rolling sentiment
   gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime rule), lagged one
   bar and water-filled to the profile caps,
-* the **anchor weights are re-fit each Jan 1 on data strictly before that date**
-  (cap-normalised equal weight during the first-year warm-up), with the
-  (now fully retired) fundamental overlay excluded,
+* the **anchor weights are re-fit at each quarter start (Jan/Apr/Jul/Oct 1) on
+  data strictly before that date** (cap-normalised equal weight during the
+  first-year warm-up), with the (now fully retired) fundamental overlay
+  excluded — quarterly replaced the original annual cadence after the
+  adaptivity study (`OVERALL_ADAPTIVE_EVAL.md`) showed it wins on both return
+  and Sharpe while every other candidate (rolling-window anchors, rolling
+  priority stats, penalty box) was neutral-to-negative,
 * **SATA accrues on weekday bars only** — its coupon is 0.13/250 per *business*
   day, so crediting the crypto calendar's weekend bars would compound the cash
   yield to ~19%/yr instead of ~13% (US market holidays still credit under the

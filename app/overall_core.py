@@ -1551,7 +1551,7 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
                         objective: str = "balanced",
                         sata_daily: float = SATA_DAILY, min_hist: int = 250,
                         n_samples: int = 8000, seed: int = 7,
-                        refit: str = "A",
+                        refit: str = "Q",
                         fit_window: int | None = None) -> list[tuple]:
     """Expanding-window anchor-weight schedule with NO look-ahead.
 
@@ -1561,9 +1561,11 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
 
       * from inception until ``min_hist`` bars exist, the anchors are the
         cap-normalised EQUAL weights — a constant that uses no return data;
-      * each January 1 thereafter the optimiser is re-fit on the data strictly
-        BEFORE that date (same caps / drawdown budget / objective as the
-        profile, ``fundamental=False`` — the mid-2026 forward view is
+      * at each QUARTER start thereafter (Jan/Apr/Jul/Oct 1 — the published
+        cadence, adopted from the V3 adaptivity eval where it beat annual
+        refits on both return and Sharpe) the optimiser is re-fit on the data
+        strictly BEFORE that date (same caps / drawdown budget / objective as
+        the profile, ``fundamental=False`` — the mid-2026 forward view is
         hindsight relative to history, so it must not tilt the replay), and
         those weights anchor the book until the next refit.
 
@@ -1574,7 +1576,7 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
     size once the sleeve is live.
 
     Adaptivity experiments (defaults reproduce the published behaviour):
-    ``refit="Q"`` re-fits at quarter starts instead of each Jan 1;
+    ``refit="A"`` reverts to the pre-V3 annual (each Jan 1) cadence;
     ``fit_window=N`` fits on only the trailing N bars (a ROLLING window that
     forgets old regimes) instead of the expanding full history.  Both remain
     strictly causal — every fit still sees only data before its effective
@@ -1764,7 +1766,7 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              objective: str = "balanced",
                              sata_daily: float = SATA_DAILY, tilt: bool = True,
                              min_hist: int = 250, n_samples: int = 8000,
-                             seed: int = 7, refit: str = "A",
+                             seed: int = 7, refit: str = "Q",
                              fit_window: int | None = None,
                              wr_window: int | None = None,
                              sharpe_window: int | None = None,

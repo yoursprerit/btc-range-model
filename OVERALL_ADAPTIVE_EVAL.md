@@ -4,15 +4,15 @@
 
 ## Question
 
-Can the strategy learn and evolve when sleeves under/over-perform? The published construction adapts through binary signals (fast), the priority tilt (moderate) and expanding-window anchor refits (slow, never forgets). Four candidate upgrades are tested against it, individually and combined:
+Can the strategy learn and evolve when sleeves under/over-perform? The published construction adapts through binary signals (fast), the priority tilt (moderate) and expanding-window anchor refits — **quarterly since 2026-07 (V3 of this eval, adopted after it beat annual refits on both return and Sharpe)**. The remaining candidate upgrades are tested against it, individually and combined:
 
 | Variant | What changes | Adaptation it adds |
 |---|---|---|
+| V0 Annual refits | the pre-V3 published cadence (each Jan 1) | reference: what adopting V3 bought |
 | V1 Rolling anchors | anchors fit on trailing 504 bars (~2y) instead of all history | the optimiser *forgets* old regimes |
 | V2 Rolling priority | win-rate over last 20 trades, Sharpe over last 252 bars | priority reacts to recent form, not lifetime averages |
-| V3 Quarterly refits | anchors re-fit every quarter (expanding) | fresher weights, same memory |
 | V4 Penalty box | funded sleeve with rolling 126-bar Sharpe < 0 (lagged) gets raw weight ×0.5 | automatic de-rating of cold sleeves |
-| V5 Combined | V1+V2+V3+V4 | all of the above |
+| V5 Combined | V1+V2+V4 on the quarterly baseline | all of the above |
 
 All variants are strictly causal (rolling windows and one-bar lags only); the combined variant PASSED the truncation prefix-invariance spot-check.
 
@@ -22,59 +22,59 @@ All variants are strictly causal (rolling windows and one-bar lags only); the co
 
 | Variant | Window | Total | CAGR | MaxDD | Sharpe |
 |---|---|---:|---:|---:|---:|
-| Baseline (published) | full | +1107.7% | +56.5% | -24.2% | 1.63 |
-| Baseline (published) | since 2025 | +264.6% | +127.4% | -22.8% | 2.27 |
-| Baseline (published) | 2026 YTD | +73.2% | +160.0% | -22.8% | 2.14 |
-| V1 Rolling anchors (2y window) | full | +953.0% | +52.7% | -24.2% | 1.56 |
-| V1 Rolling anchors (2y window) | since 2025 | +230.3% | +113.6% | -22.8% | 2.19 |
-| V1 Rolling anchors (2y window) | 2026 YTD | +73.2% | +160.0% | -22.8% | 2.14 |
-| V2 Rolling priority (20 trades / 252 bars) | full | +1103.3% | +56.4% | -24.2% | 1.63 |
-| V2 Rolling priority (20 trades / 252 bars) | since 2025 | +262.8% | +126.7% | -23.0% | 2.26 |
+| Baseline (published, quarterly refits) | full | +1214.1% | +58.9% | -24.6% | 1.66 |
+| Baseline (published, quarterly refits) | since 2025 | +290.8% | +137.7% | -22.8% | 2.34 |
+| Baseline (published, quarterly refits) | 2026 YTD | +73.2% | +160.0% | -22.8% | 2.14 |
+| V0 Annual refits (pre-V3 published) | full | +1107.7% | +56.5% | -24.2% | 1.63 |
+| V0 Annual refits (pre-V3 published) | since 2025 | +264.6% | +127.4% | -22.8% | 2.27 |
+| V0 Annual refits (pre-V3 published) | 2026 YTD | +73.2% | +160.0% | -22.8% | 2.14 |
+| V1 Rolling anchors (2y window) | full | +939.2% | +52.3% | -24.6% | 1.57 |
+| V1 Rolling anchors (2y window) | since 2025 | +202.6% | +102.0% | -22.6% | 2.09 |
+| V1 Rolling anchors (2y window) | 2026 YTD | +35.3% | +69.1% | -22.6% | 1.41 |
+| V2 Rolling priority (20 trades / 252 bars) | full | +1215.3% | +58.9% | -24.6% | 1.66 |
+| V2 Rolling priority (20 trades / 252 bars) | since 2025 | +291.4% | +137.9% | -23.0% | 2.34 |
 | V2 Rolling priority (20 trades / 252 bars) | 2026 YTD | +72.4% | +157.8% | -23.0% | 2.12 |
-| V3 Quarterly refits | full | +1214.1% | +58.9% | -24.6% | 1.66 |
-| V3 Quarterly refits | since 2025 | +290.8% | +137.7% | -22.8% | 2.34 |
-| V3 Quarterly refits | 2026 YTD | +73.2% | +160.0% | -22.8% | 2.14 |
-| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | full | +1038.5% | +54.8% | -24.2% | 1.59 |
-| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | since 2025 | +268.3% | +128.9% | -22.7% | 2.28 |
+| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | full | +1149.8% | +57.5% | -24.7% | 1.63 |
+| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | since 2025 | +296.5% | +139.9% | -22.7% | 2.36 |
 | V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | 2026 YTD | +72.6% | +158.3% | -22.7% | 2.13 |
-| V5 Combined (V1+V2+V3+V4) | full | +923.9% | +51.9% | -24.7% | 1.55 |
-| V5 Combined (V1+V2+V3+V4) | since 2025 | +210.5% | +105.4% | -22.4% | 2.11 |
-| V5 Combined (V1+V2+V3+V4) | 2026 YTD | +35.4% | +69.5% | -22.4% | 1.40 |
+| V5 Combined (V1+V2+V4 on quarterly) | full | +923.9% | +51.9% | -24.7% | 1.55 |
+| V5 Combined (V1+V2+V4 on quarterly) | since 2025 | +210.5% | +105.4% | -22.4% | 2.11 |
+| V5 Combined (V1+V2+V4 on quarterly) | 2026 YTD | +35.4% | +69.5% | -22.4% | 1.40 |
 
-* **V1 Rolling anchors (2y window)** vs baseline: CAGR -3.8pt · Sharpe -0.07 · maxDD +0.0pt · turnover 8.8%/day
-* **V2 Rolling priority (20 trades / 252 bars)** vs baseline: CAGR -0.1pt · Sharpe -0.00 · maxDD -0.0pt · turnover 9.6%/day
-* **V3 Quarterly refits** vs baseline: CAGR +2.4pt · Sharpe +0.03 · maxDD -0.4pt · turnover 9.8%/day
-* **V4 Penalty box (126-bar Sharpe < 0 → ×0.5)** vs baseline: CAGR -1.7pt · Sharpe -0.04 · maxDD -0.0pt · turnover 9.8%/day
-* **V5 Combined (V1+V2+V3+V4)** vs baseline: CAGR -4.6pt · Sharpe -0.08 · maxDD -0.5pt · turnover 9.3%/day
+* **V0 Annual refits (pre-V3 published)** vs baseline: CAGR -2.4pt · Sharpe -0.03 · maxDD +0.4pt · turnover 9.5%/day
+* **V1 Rolling anchors (2y window)** vs baseline: CAGR -6.6pt · Sharpe -0.10 · maxDD +0.0pt · turnover 9.1%/day
+* **V2 Rolling priority (20 trades / 252 bars)** vs baseline: CAGR +0.0pt · Sharpe +0.00 · maxDD +0.0pt · turnover 9.8%/day
+* **V4 Penalty box (126-bar Sharpe < 0 → ×0.5)** vs baseline: CAGR -1.4pt · Sharpe -0.04 · maxDD -0.1pt · turnover 10.0%/day
+* **V5 Combined (V1+V2+V4 on quarterly)** vs baseline: CAGR -7.0pt · Sharpe -0.12 · maxDD -0.1pt · turnover 9.3%/day
 
 ### Growth
 
 | Variant | Window | Total | CAGR | MaxDD | Sharpe |
 |---|---|---:|---:|---:|---:|
-| Baseline (published) | full | +1421.1% | +63.1% | -30.5% | 1.49 |
-| Baseline (published) | since 2025 | +375.9% | +169.4% | -28.6% | 2.29 |
-| Baseline (published) | 2026 YTD | +86.7% | +196.2% | -28.6% | 2.11 |
-| V1 Rolling anchors (2y window) | full | +1210.4% | +58.8% | -30.9% | 1.43 |
-| V1 Rolling anchors (2y window) | since 2025 | +282.2% | +134.4% | -30.9% | 1.95 |
-| V1 Rolling anchors (2y window) | 2026 YTD | +66.6% | +142.9% | -30.9% | 1.64 |
-| V2 Rolling priority (20 trades / 252 bars) | full | +1417.1% | +63.0% | -30.5% | 1.49 |
-| V2 Rolling priority (20 trades / 252 bars) | since 2025 | +374.9% | +169.0% | -28.7% | 2.28 |
-| V2 Rolling priority (20 trades / 252 bars) | 2026 YTD | +86.2% | +194.8% | -28.7% | 2.10 |
-| V3 Quarterly refits | full | +1598.0% | +66.4% | -29.7% | 1.53 |
-| V3 Quarterly refits | since 2025 | +383.3% | +172.0% | -27.8% | 2.31 |
-| V3 Quarterly refits | 2026 YTD | +89.6% | +204.3% | -27.8% | 2.16 |
-| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | full | +1377.9% | +62.3% | -30.7% | 1.47 |
-| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | since 2025 | +384.1% | +172.3% | -28.6% | 2.31 |
-| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | 2026 YTD | +86.4% | +195.5% | -28.6% | 2.10 |
-| V5 Combined (V1+V2+V3+V4) | full | +1417.0% | +63.0% | -33.6% | 1.42 |
-| V5 Combined (V1+V2+V3+V4) | since 2025 | +275.8% | +131.8% | -33.6% | 1.88 |
-| V5 Combined (V1+V2+V3+V4) | 2026 YTD | +59.3% | +124.7% | -33.6% | 1.50 |
+| Baseline (published, quarterly refits) | full | +1598.0% | +66.4% | -29.7% | 1.53 |
+| Baseline (published, quarterly refits) | since 2025 | +383.3% | +172.0% | -27.8% | 2.31 |
+| Baseline (published, quarterly refits) | 2026 YTD | +89.6% | +204.3% | -27.8% | 2.16 |
+| V0 Annual refits (pre-V3 published) | full | +1421.1% | +63.1% | -30.5% | 1.49 |
+| V0 Annual refits (pre-V3 published) | since 2025 | +375.9% | +169.4% | -28.6% | 2.29 |
+| V0 Annual refits (pre-V3 published) | 2026 YTD | +86.7% | +196.2% | -28.6% | 2.11 |
+| V1 Rolling anchors (2y window) | full | +1596.9% | +66.4% | -33.8% | 1.48 |
+| V1 Rolling anchors (2y window) | since 2025 | +280.9% | +133.9% | -33.8% | 1.91 |
+| V1 Rolling anchors (2y window) | 2026 YTD | +59.7% | +125.8% | -33.8% | 1.51 |
+| V2 Rolling priority (20 trades / 252 bars) | full | +1593.9% | +66.3% | -29.7% | 1.53 |
+| V2 Rolling priority (20 trades / 252 bars) | since 2025 | +383.0% | +171.9% | -27.8% | 2.31 |
+| V2 Rolling priority (20 trades / 252 bars) | 2026 YTD | +89.4% | +203.6% | -27.8% | 2.15 |
+| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | full | +1510.4% | +64.8% | -29.7% | 1.50 |
+| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | since 2025 | +390.1% | +174.5% | -28.0% | 2.32 |
+| V4 Penalty box (126-bar Sharpe < 0 → ×0.5) | 2026 YTD | +88.8% | +201.9% | -28.0% | 2.13 |
+| V5 Combined (V1+V2+V4 on quarterly) | full | +1417.0% | +63.0% | -33.6% | 1.42 |
+| V5 Combined (V1+V2+V4 on quarterly) | since 2025 | +275.8% | +131.8% | -33.6% | 1.88 |
+| V5 Combined (V1+V2+V4 on quarterly) | 2026 YTD | +59.3% | +124.7% | -33.6% | 1.50 |
 
-* **V1 Rolling anchors (2y window)** vs baseline: CAGR -4.3pt · Sharpe -0.06 · maxDD -0.4pt · turnover 6.9%/day
-* **V2 Rolling priority (20 trades / 252 bars)** vs baseline: CAGR -0.1pt · Sharpe +0.00 · maxDD -0.0pt · turnover 7.8%/day
-* **V3 Quarterly refits** vs baseline: CAGR +3.3pt · Sharpe +0.04 · maxDD +0.9pt · turnover 7.4%/day
-* **V4 Penalty box (126-bar Sharpe < 0 → ×0.5)** vs baseline: CAGR -0.8pt · Sharpe -0.02 · maxDD -0.1pt · turnover 8.1%/day
-* **V5 Combined (V1+V2+V3+V4)** vs baseline: CAGR -0.1pt · Sharpe -0.07 · maxDD -3.1pt · turnover 7.9%/day
+* **V0 Annual refits (pre-V3 published)** vs baseline: CAGR -3.3pt · Sharpe -0.04 · maxDD -0.9pt · turnover 7.8%/day
+* **V1 Rolling anchors (2y window)** vs baseline: CAGR -0.0pt · Sharpe -0.05 · maxDD -4.2pt · turnover 7.5%/day
+* **V2 Rolling priority (20 trades / 252 bars)** vs baseline: CAGR -0.1pt · Sharpe -0.00 · maxDD -0.0pt · turnover 7.4%/day
+* **V4 Penalty box (126-bar Sharpe < 0 → ×0.5)** vs baseline: CAGR -1.6pt · Sharpe -0.03 · maxDD +0.0pt · turnover 7.8%/day
+* **V5 Combined (V1+V2+V4 on quarterly)** vs baseline: CAGR -3.3pt · Sharpe -0.11 · maxDD -4.0pt · turnover 7.9%/day
 
 ## Caveats
 

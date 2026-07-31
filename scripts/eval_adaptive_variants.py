@@ -9,20 +9,21 @@ published baseline — WITHOUT touching the running strategy (every knob is an
 opt-in parameter whose default reproduces the published behaviour, and the
 app passes none of them):
 
-  baseline        the published construction — annual expanding-window anchor
-                  refits, lifetime (expanding) win-rate & Sharpe in the
-                  priority score, no penalty box.
+  baseline        the published construction — QUARTERLY expanding-window
+                  anchor refits (V3, adopted 2026-07 after this eval showed
+                  it beat annual on both return and Sharpe), lifetime
+                  (expanding) win-rate & Sharpe in the priority score, no
+                  penalty box.
+  V0 annual-refit the pre-V3 published construction (anchors re-fit each
+                  Jan 1) — kept for reference.
   V1 rolling-anchors   anchors fit on only the trailing 504 bars (~2 years),
                   so the optimiser FORGETS old regimes.
   V2 rolling-priority  win-rate over the last 20 closed trades and Sharpe
                   over the last 252 bars — priority reacts to recent form.
-  V3 quarterly-refit   anchors re-fit every quarter (expanding window) —
-                  fresher weights without changing what they remember.
   V4 penalty-box  a funded sleeve whose rolling 126-bar Sharpe (lagged one
                   bar) is negative has its raw weight halved before the
                   water-fill — automatic de-rating of cold sleeves.
-  V5 combined     all four at once (quarterly rolling-window fits + rolling
-                  priority stats + penalty box).
+  V5 combined     V1+V2+V4 on the quarterly baseline.
 
 All variants remain strictly causal (rolling windows and lags only); the
 script spot-checks that by prefix-invariance on the combined variant.
@@ -52,15 +53,15 @@ SLICES = [("2025-01-01", "since 2025"), ("2026-01-01", "2026 YTD")]
 OUT_MD = _REPO / "OVERALL_ADAPTIVE_EVAL.md"
 
 VARIANTS = [
-    ("Baseline (published)", dict()),
+    ("Baseline (published, quarterly refits)", dict()),
+    ("V0 Annual refits (pre-V3 published)", dict(refit="A")),
     ("V1 Rolling anchors (2y window)", dict(fit_window=504)),
     ("V2 Rolling priority (20 trades / 252 bars)",
      dict(wr_window=20, sharpe_window=252)),
-    ("V3 Quarterly refits", dict(refit="Q")),
     ("V4 Penalty box (126-bar Sharpe < 0 → ×0.5)",
      dict(penalty=dict(window=126, floor=0.0, mult=0.5))),
-    ("V5 Combined (V1+V2+V3+V4)",
-     dict(refit="Q", fit_window=504, wr_window=20, sharpe_window=252,
+    ("V5 Combined (V1+V2+V4 on quarterly)",
+     dict(fit_window=504, wr_window=20, sharpe_window=252,
           penalty=dict(window=126, floor=0.0, mult=0.5))),
 ]
 
@@ -146,22 +147,24 @@ def _write_md(table: dict, results: list, causal_ok: bool) -> None:
          "## Question\n",
          "Can the strategy learn and evolve when sleeves under/over-perform? "
          "The published construction adapts through binary signals (fast), "
-         "the priority tilt (moderate) and expanding-window anchor refits "
-         "(slow, never forgets). Four candidate upgrades are tested against "
-         "it, individually and combined:\n",
+         "the priority tilt (moderate) and expanding-window anchor refits — "
+         "**quarterly since 2026-07 (V3 of this eval, adopted after it beat "
+         "annual refits on both return and Sharpe)**. The remaining candidate "
+         "upgrades are tested against it, individually and combined:\n",
          "| Variant | What changes | Adaptation it adds |",
          "|---|---|---|",
+         "| V0 Annual refits | the pre-V3 published cadence (each Jan 1) | "
+         "reference: what adopting V3 bought |",
          "| V1 Rolling anchors | anchors fit on trailing 504 bars (~2y) "
          "instead of all history | the optimiser *forgets* old regimes |",
          "| V2 Rolling priority | win-rate over last 20 trades, Sharpe over "
          "last 252 bars | priority reacts to recent form, not lifetime "
          "averages |",
-         "| V3 Quarterly refits | anchors re-fit every quarter (expanding) | "
-         "fresher weights, same memory |",
          "| V4 Penalty box | funded sleeve with rolling 126-bar Sharpe < 0 "
          "(lagged) gets raw weight ×0.5 | automatic de-rating of cold "
          "sleeves |",
-         "| V5 Combined | V1+V2+V3+V4 | all of the above |\n",
+         "| V5 Combined | V1+V2+V4 on the quarterly baseline | all of the "
+         "above |\n",
          "All variants are strictly causal (rolling windows and one-bar lags "
          "only); the combined variant "
          f"{'PASSED' if causal_ok else 'FAILED'} the truncation "
@@ -179,7 +182,7 @@ def _write_md(table: dict, results: list, causal_ok: bool) -> None:
                 L.append(f"| {label} | {wname} | {m['total_ret'] * 100:+.1f}% | "
                          f"{m['cagr'] * 100:+.1f}% | {m['mdd'] * 100:.1f}% | "
                          f"{m['sharpe']:.2f} |")
-        base = rows["Baseline (published)"]["full"]
+        base = rows["Baseline (published, quarterly refits)"]["full"]
         L.append("")
         for label, row in rows.items():
             if label.startswith("Baseline"):
