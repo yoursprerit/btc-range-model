@@ -10,9 +10,12 @@ import sys
 from types import SimpleNamespace
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 import overall_core as oc  # noqa: E402
+import ticker_config as tcfg  # noqa: E402
 
 
 def _ma_cfg(win=3):
@@ -77,3 +80,53 @@ def test_missing_live_quote_and_non_trend_modes_skip():
     div = _res(key="C", mode="divergence", cfg=None, close_hist=None)
     spot = {"B": {"price": 1.0}, "C": {"price": 1.0}}
     assert oc.live_entry_keys([no_quote, macd, div], spot) == set()
+
+
+# ── divergence apps (e.g. ARTY) — provisional live-bar entry gate ──────────
+def _div_fixture(n=120):
+    """Synthetic completed-signature frame: quiet errors throughout, then the
+    last TWO completed bars post high-breaks (err_hi ≈ +0.8 vs a ~0 median) —
+    one more high-break at today's provisional bar fires ARTY's U1 (err_hi
+    3d-avg > 0.32 with ≥2 high-breaks) inside a bull regime (rising closes)."""
+    rows = []
+    for i in range(n):
+        c = 100.0 + 0.1 * i
+        ph, pl = c * 1.01, c * 0.99
+        ah = ph + (0.008 * c if i >= n - 2 else 0.0)
+        rows.append(dict(close_asof=c, pred_high=ph, pred_low=pl,
+                         actual_high=ah, actual_low=pl,
+                         target_date=pd.Timestamp("2026-01-01")
+                         + pd.Timedelta(days=i)))
+    completed = pd.DataFrame(rows)
+    c0 = 100.0 + 0.1 * n
+    pending = dict(close_asof=c0, pred_high=c0 * 1.01, pred_low=c0 * 0.99)
+    return completed, pending, c0
+
+
+def _div_res(completed, pending, tone="watch"):
+    return dict(key="ARTY", mode="divergence", parent="ARTY",
+                pos=dict(in_pos=False), decision=dict(tone=tone),
+                cfg=tcfg.CONFIGS["ARTY"], close_hist=None, ma_val=None,
+                sig_completed=completed, pending_pred=pending)
+
+
+def test_divergence_strong_live_rally_fires_the_entry_gate():
+    completed, pending, c0 = _div_fixture()
+    r = _div_res(completed, pending)
+    live = pending["pred_high"] * 1.01          # live px breaks the model band
+    assert oc.live_entry_keys([r], {"ARTY": {"price": live}}) == {"ARTY"}
+
+
+def test_divergence_weak_live_price_not_flagged():
+    completed, pending, c0 = _div_fixture()
+    r = _div_res(completed, pending)
+    live = pending["pred_low"] * 0.99           # live px sinks below the band
+    assert oc.live_entry_keys([r], {"ARTY": {"price": live}}) == set()
+
+
+def test_divergence_without_pending_bands_or_history_skips():
+    completed, pending, c0 = _div_fixture()
+    no_bands = _div_res(completed, None)
+    no_hist = _div_res(None, pending)
+    spot = {"ARTY": {"price": pending["pred_high"] * 1.01}}
+    assert oc.live_entry_keys([no_bands, no_hist], spot) == set()
