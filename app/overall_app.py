@@ -75,6 +75,8 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "live_entry_keys"):
             return True
+        if not getattr(mod, "LIVE_ENTRY_DIVERGENCE_AWARE", False):
+            return True
         if not hasattr(mod, "adjust_for_selection"):
             return True
         if not hasattr(mod, "slice_metrics"):
@@ -813,13 +815,36 @@ with tab_live:
     if _live_entries:
         st.success("🟢 **Likely entries:** " + ", ".join(sorted(_live_entries)) +
                    " " + ("is" if len(_live_entries) == 1 else "are") +
-                   " flat off the last close but the **live price is now above the "
-                   "trend filter** — if it holds into the close, the signal fires "
-                   "today and " +
+                   " flat off the last close but the **live price now satisfies "
+                   "the entry condition** (trend filter crossed, or a divergence "
+                   "app's entry gate firing on the live bar) — if it holds into "
+                   "the close, the signal fires today and " +
                    ("it enters" if len(_live_entries) == 1 else "they enter") +
                    " on the next bar. Flagged green in the action plan below; the "
                    "live book never pre-funds a signal before it commits at the "
                    "close.")
+    # committed entries the frozen morning book predates: the ENGINE's latest
+    # close fired the buy (action OPEN) but the published book still records a
+    # different action — the signal committed after the morning publish (e.g. a
+    # divergence pure-regime buy at today's close). The action table flags the
+    # row green; say it here too so it isn't lost behind the book-pinned pill.
+    _book_act_now = {x.get("key"): x.get("action")
+                     for x in ((_cur_book or {}).get("actions") or [])}
+    _new_commits = sorted(
+        a["key"] for a in gate["actions"]
+        if a["action"] == "OPEN" and not a["in_pos"]
+        and _book_act_now.get(a["key"]) not in (None, "OPEN"))
+    if _new_commits:
+        st.success("🟢 **New committed " +
+                   ("entry" if len(_new_commits) == 1 else "entries") +
+                   ":** " + ", ".join(_new_commits) + " — the buy signal "
+                   "**fired at today's close**, after the morning publish, so "
+                   "the frozen Current Targetbook doesn't carry it yet. " +
+                   ("It enters" if len(_new_commits) == 1 else "They enter") +
+                   " on the **next bar** and " +
+                   ("gets" if len(_new_commits) == 1 else "get") +
+                   " funded at the next ≈7:15 AM CT publish (or a manual 🚀 "
+                   "publish).")
 
     # ── 1b. USER INCLUDE / EXCLUDE overlay on the live-adjusted book ─────
     # Same control as the 📋 Target Book viewer: untick a position and its weight
@@ -1012,10 +1037,13 @@ with tab_live:
                    "next bar** (either the last close already crossed the trend, or the "
                    "live price has since slipped below it). Rows shaded **green** 🟢 are "
                    "the mirror on the way in: committed fresh buys that **enter on the "
-                   "next bar**, plus flat names whose **live price has risen above the "
-                   "trend filter** — if it holds into the close, the signal fires today "
-                   "and they **likely enter next bar** (an uncommitted signal is never "
-                   "pre-funded in the live columns). **Price (Close of Last Bar)** "
+                   "next bar**, plus flat names whose **live price now satisfies the "
+                   "entry condition** — a trend filter crossed, or a divergence app's "
+                   "entry gate (e.g. ARTY's U1 + regime confirm) firing with the live "
+                   "price as the provisional bar — if it holds into the close, the "
+                   "signal fires today and they **likely enter next bar** (an "
+                   "uncommitted signal is never pre-funded in the live columns). "
+                   "**Price (Close of Last Bar)** "
                    "is the official close of the last completed daily bar the signals run "
                    "on; **Live Price** is the current spot quote (coloured green/red vs "
                    "that close). **Unreal. P&L** is measured "
@@ -1122,13 +1150,21 @@ with tab_live:
             _live_exit = a["key"] in _live_exits
             exit_next = _committed_exit or _live_exit
             # …and the green mirror: a row that opens on the NEXT bar. Two cases,
-            # exactly like the exits: the committed entry (action OPEN — the last
-            # close already fired the buy signal), and the live-driven likely
-            # entry — a flat row with no committed buy whose live price has risen
-            # above the trend filter (in _live_entries), so if it holds into the
-            # close it signals today and enters next bar. A pending exit always
-            # wins the row colour (an OPEN into a re-broken trend stays red).
-            _committed_entry = (not a["in_pos"]) and _act == "OPEN"
+            # exactly like the exits: the committed entry (the ENGINE's action is
+            # OPEN — the latest close fired the buy signal; deliberately NOT the
+            # book-pinned _act, since a signal that commits at today's close
+            # AFTER the morning publish — e.g. ARTY's pure-regime buy — is
+            # exactly what this flag must surface, like exits_next_bar it drifts
+            # with the engine), and the live-driven likely entry — a flat row
+            # with no committed buy whose live price now satisfies the entry
+            # condition (in _live_entries), so if it holds into the close it
+            # signals today and enters next bar. A pending exit always wins the
+            # row colour (an OPEN into a re-broken trend stays red).
+            _committed_entry = (not a["in_pos"]) and a["action"] == "OPEN"
+            # a committed entry the frozen morning book predates (its recorded
+            # action isn't OPEN) gets called out — the pill and flag disagree
+            # on purpose: the pill is the book, the flag is today's signal.
+            _book_masked_entry = _committed_entry and _ba and _act != "OPEN"
             _live_entry = a["key"] in _live_entries
             enter_next = (not exit_next) and (_committed_entry or _live_entry)
             if exit_next:
@@ -1145,12 +1181,17 @@ with tab_live:
             elif _live_exit:                           # live-driven (hold or fresh entry)
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
                         "⚠️ live px below trend — exits next bar</div>")
+            elif _book_masked_entry:                   # fired after the morning publish
+                warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
+                        "🟢 signal fired at today's close — enters next bar</div>")
             elif _committed_entry:                     # last close already fired the buy
                 warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
                         "🟢 enters next bar</div>")
             elif _live_entry:                          # live-driven likely entry
+                _why = ("live px above trend" if _r["mode"] in ("ma", "dual_ma", "ma_vol")
+                        else "live px fires entry signal")   # divergence apps (e.g. ARTY)
                 warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
-                        "🟢 live px above trend — likely enters next bar</div>")
+                        f"🟢 {_why} — likely enters next bar</div>")
             else:
                 warn = ""
             rows.append(

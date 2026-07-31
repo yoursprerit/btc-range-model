@@ -95,7 +95,25 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     df["target_date"] = df.index
     keep = ["close_asof", "pred_high", "pred_low", "actual_high", "actual_low",
             "target_date", "px_close"] + [c for c in keep_price if c in df and c != "px_close"]
-    return df[keep].copy()
+    out = df[keep].copy()
+    # Model H/L bands for the PENDING next bar — the one after the last
+    # completed bar — predicted from features known at the last close only
+    # (the same causal alignment as every completed row: bar D's bands come
+    # from bar D−1's features).  Attached as frame metadata so the live
+    # "likely enters next bar" read (overall_core.live_entry_keys) can score
+    # today's in-progress bar for divergence apps without a second model fit.
+    try:
+        last_feat = feat[feat_cols].iloc[[-1]]
+        c0 = float(close.iloc[-1])
+        if np.isfinite(c0) and not last_feat.isna().any().any():
+            out.attrs["pending_pred"] = dict(
+                close_asof=c0,
+                pred_high=float(c0 * (1 + mh.predict(last_feat)[0]) + bias_hi),
+                pred_low=float(c0 * (1 + ml.predict(last_feat)[0]) + bias_lo),
+                asof_date=str(feat.index[-1].date()))
+    except Exception:
+        pass
+    return out
 
 
 # ── vectorised signal precompute ──────────────────────────────────────────

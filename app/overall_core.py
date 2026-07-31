@@ -62,6 +62,13 @@ from ticker_config import TickerConfig, get_config, _STD_PERIODS   # noqa: E402
 # guard checks this so a hot-reload against an older cached module is refreshed.
 LIVE_EXIT_MODE_AWARE = True
 
+# Capability flag: this build's live_entry_keys also scores DIVERGENCE apps —
+# it re-runs the real entry gate (compute_trend_signatures) with the live price
+# as a provisional completed bar, using the pending-bar model bands run_asset
+# attaches (sig_completed / pending_pred).  Checked by the app's _stale_core
+# guard alongside LIVE_EXIT_MODE_AWARE.
+LIVE_ENTRY_DIVERGENCE_AWARE = True
+
 
 def _warmup_imports() -> None:
     """Force every heavy, lazily-imported module into ``sys.modules`` on a
@@ -553,8 +560,21 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
         # each traded instrument shares the parent decision but has its own pos
         dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val,
                             long_now=long_now)
-        out.append(_asset_result(cfg, label, col, r, daily, dec, alert, bull,
-                                 sent, ma_val, dchg, mom))
+        res = _asset_result(cfg, label, col, r, daily, dec, alert, bull,
+                            sent, ma_val, dchg, mom)
+        if cfg.strategy_mode == "divergence":
+            # completed-signature tail + the model's bands for the pending bar,
+            # so live_entry_keys can re-run the REAL divergence entry gate with
+            # the live price as a provisional completed bar (the divergence
+            # mirror of trend_long_now_live).  tail(150) matches the signature
+            # computation above — the 60-bar median centering needs the runway.
+            res["sig_completed"] = (
+                completed.tail(150)[["close_asof", "pred_high", "pred_low",
+                                     "actual_high", "actual_low",
+                                     "target_date"]].copy()
+                if len(completed) >= 3 else None)
+            res["pending_pred"] = getattr(preds, "attrs", {}).get("pending_pred")
+        out.append(res)
     return out
 
 
@@ -2111,24 +2131,67 @@ def live_exit_keys(results: list[dict], spot: dict,
     return out
 
 
+def divergence_entry_now_live(cfg, completed, pending: dict | None,
+                              live_px) -> bool | None:
+    """Would the divergence engine's flat-side ENTRY fire if today's bar closed
+    at ``live_px``?  The divergence mirror of ``trend_long_now_live``: appends a
+    provisional completed bar — the model's pending-bar bands (``pending``, from
+    ``build_predictions``) scored against the live price standing in for the
+    bar's high AND low — re-runs the REAL signature engine
+    (``compute_trend_signatures``) on the extended frame, and applies the same
+    exit-overrides-entry precedence as ``_net_decision``'s flat branch.  Using
+    the live price as the provisional high understates ``err_hi`` (the true
+    intraday high is ≥ live), so a True here is a conservative read — the entry
+    fires even on the understated bar.  Returns None when inputs are unusable
+    (missing bands / too little history), never guessing."""
+    if (completed is None or len(completed) < 3 or not pending
+            or live_px is None or not np.isfinite(live_px)):
+        return None
+    try:
+        row = pd.DataFrame([dict(
+            close_asof=float(pending["close_asof"]),
+            pred_high=float(pending["pred_high"]),
+            pred_low=float(pending["pred_low"]),
+            actual_high=float(live_px), actual_low=float(live_px),
+            target_date=pd.Timestamp(completed["target_date"].iloc[-1])
+            + pd.Timedelta(days=1))])
+        frame = pd.concat([completed.reset_index(drop=True), row],
+                          ignore_index=True)
+        sigs = tc.compute_trend_signatures(cfg, frame)
+    except Exception:
+        return None
+    if not sigs:
+        return None
+    # same net-exit precedence as _net_decision's flat branch: an active exit
+    # signal blocks the entry, so this can never say "enters" while D2/D3 fire.
+    exit_sig = (bool(sigs["d2_triggered"]) or bool(sigs["d3_triggered"])
+                or (bool(sigs["d1_triggered"]) and cfg.use_d1_exit))
+    return bool(sigs["entry_triggered"]) and not exit_sig
+
+
 def live_entry_keys(results: list[dict], spot: dict) -> set:
-    """Mirror of :func:`live_exit_keys` for FRESH ENTRIES: keys of trend
-    instruments that are flat off the last close (no committed buy signal) but
-    whose *live* price satisfies the mode's REAL long condition — if it holds
-    into the close, the signal fires today and the position **opens next bar**.
-    The condition is re-evaluated with the live price as the newest close (via
-    ``trend_long_now_live``): for ``ma``/``ma_vol`` that's close-vs-SMA (plus
-    the vol gate), and for ``dual_ma`` the fast/slow SMA cross — NOT a naive
-    price-vs-line read (so a name whose price merely pops above its slow SMA is
-    not mis-flagged before a golden cross).  Instruments already signalling buy
-    off the last close (committed entries, action OPEN) are excluded — they are
-    flagged separately as certain, not "likely", entries.  MACD (oscillator)
-    and divergence entries are signal-triggered, not simple price-crossings, so
+    """Mirror of :func:`live_exit_keys` for FRESH ENTRIES: keys of instruments
+    that are flat off the last close (no committed buy signal) but whose *live*
+    price satisfies the mode's REAL entry condition — if it holds into the
+    close, the signal fires today and the position **opens next bar**.
+
+    Trend modes (``ma``/``dual_ma``/``ma_vol``) re-evaluate the long condition
+    with the live price as the newest close (via ``trend_long_now_live``):
+    close-vs-SMA (plus the vol gate) for ``ma``/``ma_vol``, the fast/slow SMA
+    cross for ``dual_ma`` — NOT a naive price-vs-line read (so a name whose
+    price merely pops above its slow SMA is not mis-flagged before a golden
+    cross).  DIVERGENCE apps (e.g. ARTY) re-run the real signature engine with
+    the live price scored against the model's pending-bar bands — see
+    :func:`divergence_entry_now_live` — so a live rally strong enough to fire
+    U1 + the regime gate at today's close is flagged too.  Instruments already
+    signalling buy off the last close (committed entries, action OPEN) are
+    excluded — they are flagged separately as certain, not "likely", entries.
+    MACD (oscillator) entries are signal-triggered with no live equivalent, so
     they're not included."""
     out = set()
     for r in results:
         mode = r.get("mode")
-        if mode not in ("ma", "dual_ma", "ma_vol"):
+        if mode not in ("ma", "dual_ma", "ma_vol", "divergence"):
             continue
         p = r.get("pos") or {}
         if p.get("in_pos"):
@@ -2139,6 +2202,12 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
         if plive is None:
             continue
         cfg = r.get("cfg"); close_hist = r.get("close_hist")
+        if mode == "divergence":
+            if cfg is not None and divergence_entry_now_live(
+                    cfg, r.get("sig_completed"), r.get("pending_pred"),
+                    plive) is True:
+                out.add(r["key"])
+            continue
         _live_fn = getattr(bt, "trend_long_now_live", None)  # absent on a stale reload
         if cfg is not None and close_hist is not None and _live_fn is not None:
             if _live_fn(cfg, close_hist, plive) is True:  # trend flips long on live px
