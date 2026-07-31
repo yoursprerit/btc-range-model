@@ -555,3 +555,62 @@ def load_daily_audit() -> dict | None:
         return json.loads(DAILY_AUDIT_JSON.read_text())
     except Exception:
         return None
+
+
+def freshest_signal_record(app_key: str, log: dict | None = None,
+                           daily_audit: dict | None = None) -> dict | None:
+    """The best freshness evidence for ONE signal app, merged across every
+    source that can attest to when its signals were last generated:
+
+    * the app page's own render entry in the refresh log;
+    * the scheduled once-daily publisher's committed audit row
+      (``data/overall/daily_audit.json``);
+    * the 🧭 Overall app's live-render per-app audit rows — the Overall app
+      re-runs the full engine (re-fetching every sleeve's data) on each render
+      and records ``audit_rows`` under its ``OVERALL`` log entry, so its row
+      for this app is exactly as authoritative as the app's own page render.
+
+    The winner is the record with the newest ``as_of`` bar (the actual
+    freshness evidence), tie-broken by the newest record time — so one source
+    still sitting on an older close can never mask another source that already
+    generated signals from a newer one.  This is what keeps the 🕵️ Daily Audit
+    tab consistent with the Overall app after a close rolls over: the Overall
+    render proves the new close's signals exist even when the individual app
+    pages haven't re-rendered and the morning publisher hasn't re-run.
+
+    Returns ``dict(source, as_of, recorded_at_utc, recorded_at_ct)`` with
+    ``source`` ∈ {``app``, ``scheduled``, ``overall``} and ``as_of`` a
+    normalized tz-naive Timestamp; ``None`` when no source has a usable record.
+    """
+    log = read_refresh_log() if log is None else (log or {})
+    da = (load_daily_audit() or {}) if daily_audit is None else (daily_audit or {})
+    cands: list[dict] = []
+
+    def _add(source: str, recorded_at, recorded_ct, asof) -> None:
+        if not recorded_at or not asof or str(asof).strip() in ("—", "-", ""):
+            return
+        try:
+            rec = _as_utc(recorded_at)
+            a = pd.Timestamp(asof).tz_localize(None).normalize()
+        except Exception:
+            return
+        cands.append(dict(source=source, as_of=a, recorded_at_utc=rec,
+                          recorded_at_ct=recorded_ct or fmt_ct(rec, seconds=True)))
+
+    e = log.get(app_key) or {}
+    _add("app", e.get("recorded_at_utc"), e.get("recorded_at_ct"), e.get("as_of"))
+
+    for r in (da.get("audit") or {}).get("rows") or []:
+        if r.get("app") == app_key:
+            _add("scheduled", da.get("generated_at_utc"),
+                 da.get("generated_at_ct"), r.get("actual_asof"))
+
+    ov = log.get("OVERALL") or {}
+    for r in ov.get("audit_rows") or []:
+        if r.get("app") == app_key:
+            _add("overall", ov.get("recorded_at_utc"),
+                 ov.get("recorded_at_ct"), r.get("actual_asof"))
+
+    if not cands:
+        return None
+    return max(cands, key=lambda c: (c["as_of"], c["recorded_at_utc"]))

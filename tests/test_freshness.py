@@ -233,6 +233,77 @@ def test_record_refresh_roundtrip(tmp_path, monkeypatch):
     assert "recorded_at_utc" in log["SOXX"]
 
 
+# ── freshest_signal_record — the Daily Audit page's per-app source merge ─────
+def test_freshest_record_overall_render_wins_after_close_rolls_over():
+    """Regression: after the 4 PM ET close the morning scheduled run and the
+    app's own page render both sit on yesterday's close, but the Overall app
+    has re-rendered — re-running the whole engine — and audited the app on
+    TODAY's close.  The Daily Audit tab must use that newest evidence, so it
+    can never show 🚨 STALE while the Overall app shows ✅ Fresh."""
+    log = {"SOXX": {"as_of": "2026-07-30",
+                    "recorded_at_utc": "2026-07-31T14:00:00+00:00",
+                    "recorded_at_ct": "Jul 31, 2026 at 9:00:00 AM CDT"},
+           "OVERALL": {"recorded_at_utc": "2026-07-31T21:10:00+00:00",
+                       "recorded_at_ct": "Jul 31, 2026 at 4:10:00 PM CDT",
+                       "audit_rows": [
+                           {"app": "SOXX", "actual_asof": "2026-07-31"},
+                           {"app": "GRID", "actual_asof": "2026-07-31"}]}}
+    da = {"generated_at_utc": "2026-07-31T13:05:03+00:00",
+          "generated_at_ct": "Jul 31, 2026 at 8:05:03 AM CDT",
+          "audit": {"rows": [{"app": "SOXX", "actual_asof": "2026-07-30"}]}}
+    best = fr.freshest_signal_record("SOXX", log=log, daily_audit=da)
+    assert best["source"] == "overall"
+    assert best["as_of"] == pd.Timestamp("2026-07-31")
+    # 5:10 PM CDT, past the close: today's bar is the expected one → fresh
+    assert best["as_of"] >= fr.expected_asof("us_equity", "2026-07-31T22:10:00Z")
+    # an app only present in the Overall render's audit rows still resolves
+    grid = fr.freshest_signal_record("GRID", log=log, daily_audit=da)
+    assert grid["source"] == "overall" and grid["as_of"] == pd.Timestamp("2026-07-31")
+
+
+def test_freshest_record_ties_broken_by_record_time():
+    # Same as_of everywhere → the most recent record wins (scheduled run here).
+    log = {"SOXX": {"as_of": "2026-07-30",
+                    "recorded_at_utc": "2026-07-31T09:00:00+00:00",
+                    "recorded_at_ct": "early"}}
+    da = {"generated_at_utc": "2026-07-31T13:05:03+00:00",
+          "generated_at_ct": "later",
+          "audit": {"rows": [{"app": "SOXX", "actual_asof": "2026-07-30"}]}}
+    best = fr.freshest_signal_record("SOXX", log=log, daily_audit=da)
+    assert best["source"] == "scheduled"
+    assert best["recorded_at_ct"] == "later"
+
+
+def test_freshest_record_newer_asof_beats_newer_record_time():
+    # A later page render on a rate-limited feed (older bar) must not mask the
+    # scheduled run that already generated signals from the newer close.
+    log = {"SOXX": {"as_of": "2026-07-29",
+                    "recorded_at_utc": "2026-07-31T20:00:00+00:00",
+                    "recorded_at_ct": "later-but-staler"}}
+    da = {"generated_at_utc": "2026-07-31T13:05:03+00:00",
+          "generated_at_ct": "morning run",
+          "audit": {"rows": [{"app": "SOXX", "actual_asof": "2026-07-30"}]}}
+    best = fr.freshest_signal_record("SOXX", log=log, daily_audit=da)
+    assert best["source"] == "scheduled"
+    assert best["as_of"] == pd.Timestamp("2026-07-30")
+
+
+def test_freshest_record_degrades_safely():
+    # no sources at all
+    assert fr.freshest_signal_record("SOXX", log={}, daily_audit={}) is None
+    # failed-to-load rows ("—") and unparsable stamps are skipped, not crashed on
+    log = {"OVERALL": {"recorded_at_utc": "2026-07-31T21:10:00+00:00",
+                       "audit_rows": [{"app": "GRID", "actual_asof": "—"}]}}
+    da = {"generated_at_utc": "not-a-date",
+          "audit": {"rows": [{"app": "GRID", "actual_asof": "2026-07-30"}]}}
+    assert fr.freshest_signal_record("GRID", log=log, daily_audit=da) is None
+    # a lone valid app entry still resolves (and fills recorded_at_ct itself)
+    log = {"GRID": {"as_of": "2026-07-30",
+                    "recorded_at_utc": "2026-07-31T14:00:00+00:00"}}
+    best = fr.freshest_signal_record("GRID", log=log, daily_audit={})
+    assert best["source"] == "app" and "2026" in best["recorded_at_ct"]
+
+
 def test_record_refresh_never_raises(monkeypatch, tmp_path):
     # unwritable dir → still no exception (best-effort by design)
     monkeypatch.setattr(fr, "RUNTIME_DIR", tmp_path / "no" / "such" / "\0bad")
