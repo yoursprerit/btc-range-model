@@ -153,9 +153,17 @@ def get_hourly(key: str):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_predictions(key: str, _daily_key: str):
+    # Signals are generated ONLY from closed sessions: strip Yahoo's
+    # in-progress *today* row before building the prediction table, so the
+    # U1/D2/D3 signatures, regime state and strategy sims never flicker on a
+    # bar whose high/low/close are still moving. New signatures appear only
+    # after the 4:00 PM ET close (matching the published Target Book).
     c = ticker_config.get_config(key)
-    daily = get_daily(key)
-    preds = bt.build_predictions(c, daily)
+    d = get_daily(key)
+    dc = freshness.drop_in_progress_us_bar(d)
+    if dc is not None and not dc.empty:
+        d = dc
+    preds = bt.build_predictions(c, d)
     sig = bt.precompute_signals(c, preds)
     return preds, sig
 
@@ -186,12 +194,14 @@ if daily is None or daily.empty:
 # across a weekend) — and the forecast would drift with every intraday tick.
 # The Live tab instead anchors every daily-model forecast (H/L, cones,
 # day-type) on the last COMPLETED session, so intraday the highlighted
-# forecast is *today's* H/L. Price metrics and the hourly chart keep the
-# partial bar (that's live info).
+# forecast is *today's* H/L. The prediction/signal tables (get_predictions)
+# are built on this frame too, so new signatures are generated only after the
+# close. Price metrics and the hourly chart keep the partial bar (that's live
+# info).
 daily_completed = freshness.drop_in_progress_us_bar(daily)
 if daily_completed is None or daily_completed.empty:
     daily_completed = daily
-_daily_key = f"{daily.index.max()}::{len(daily)}"
+_daily_key = f"{daily_completed.index.max()}::{len(daily_completed)}"
 preds, sig = get_predictions(cfg.key, _daily_key)
 completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()]
 
@@ -201,7 +211,10 @@ completed_all = preds[preds["actual_high"].notna() & preds["actual_low"].notna()
 # close (4:00 PM ET) of the newest daily bar.
 try:
     import freshness as _fr
-    _sig_asof = pd.Timestamp(daily.index.max())
+    # Signals come from the completed-bars frame, so the caption/audit as-of
+    # is the closed session the signatures were generated from — never the
+    # in-progress today bar.
+    _sig_asof = pd.Timestamp(daily_completed.index.max())
     st.caption(_fr.signal_close_caption("us_equity", _sig_asof))
     _fr.record_refresh(cfg.key, kind="us_equity",
                        app_label=f"{cfg.emoji} {cfg.key}",
@@ -1034,7 +1047,10 @@ def position_panel(label, col, col_container, end=None):
         col_container.info(f"{label}: price series unavailable.")
         return
     if end is None:
-        px = float(preds[col].iloc[-1]); as_of = pd.Timestamp(preds["target_date"].iloc[-1])
+        # Live price from the raw daily frame (keeps the intraday partial
+        # bar); preds is completed-bars-only so signals never move intraday.
+        _ps = (daily[col] if col in daily else preds[col]).dropna()
+        px = float(_ps.iloc[-1]); as_of = pd.Timestamp(_ps.index[-1])
     else:
         sub = preds[preds["target_date"] <= pd.Timestamp(end)]
         px = float(sub[col].iloc[-1]); as_of = pd.Timestamp(end)
@@ -1852,7 +1868,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     sent = tc.macro_sentiment(cfg, d_df).dropna()
     sent_now = float(sent.iloc[-1]) if len(sent) else np.nan
     sigs = signatures_asof(d_df.index[-1] if not is_live else completed_all["target_date"].iloc[-1])
-    mst = ma_state(d_df)
+    mst = ma_state(d_fc)               # signal state: completed bars only
 
     last_px = float(d_df["px_close"].iloc[-1]); prev_px = float(d_df["px_close"].iloc[-2])
 
@@ -1920,7 +1936,9 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         st.markdown(f"### 🔔 Trend-Filter Signal  ·  _the {TUI['headline']} this app trades on_")
         render_ma_signatures(mst, primary_pos)
-        render_trend_regime_chart(d_df, key_prefix=("live" if is_live else "hist"),
+        # Signal chart from completed bars only — the trend filter is
+        # evaluated at the close, so no provisional intraday cross is shown.
+        render_trend_regime_chart(d_fc, key_prefix=("live" if is_live else "hist"),
                                   pos=primary_pos)
         with st.expander("🔬 Divergence read (U1 / D2 / D3) — context only, not traded", expanded=False):
             st.caption(f"For parity with the Gold/BTC apps. {cfg.key} is traded by the "
