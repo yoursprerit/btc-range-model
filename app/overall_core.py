@@ -1927,6 +1927,45 @@ def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
                 start=sub.index[0], end=sub.index[-1])
 
 
+def pnl_daily_replay(returns: pd.DataFrame, weights: pd.DataFrame,
+                     sata_w: pd.Series, start,
+                     sata_daily: float = SATA_DAILY) -> dict | None:
+    """Day-by-day dollar P&L of the daily-weight book since ``start`` —
+    ``pnl_attribution_replay`` with the day axis KEPT instead of summed
+    away.  Same maths, same conventions (anchor bar = cost basis, earns
+    nothing; business-day-only SATA accrual; each day's return scaled by
+    the blend's compounded value at the previous close), so the figures
+    telescope exactly: every day's ``total`` is the change in the blend's
+    re-based equity over that bar, and the per-day values sum over days to
+    ``pnl_attribution_replay``'s ``per_key``/``sata``/``total`` to float
+    precision.  Source-agnostic like the attribution: the replay's and the
+    as-published record's weight matrices both feed it unchanged.
+
+    All dollar figures are per $1 invested at the anchor close — multiply
+    by the portfolio value for dollars.  Returns ``per_key`` (DataFrame:
+    one column per sleeve, one row per day), ``sata`` (Series), ``total``
+    (Series — the day's whole-blend P&L) and ``ret`` (Series — the day's
+    blend % return); ``None`` with <2 bars on/after ``start``."""
+    sub = returns.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return None
+    W = weights.reindex(sub.index).fillna(0.0).to_numpy(float)
+    contrib = W * np.nan_to_num(sub.to_numpy(float))
+    biz = np.asarray(sub.index.dayofweek < 5)
+    sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float)
+                 * sata_daily * biz)
+    contrib[0, :] = 0.0
+    sata_term[0] = 0.0
+    port = contrib.sum(axis=1) + sata_term
+    v_prev = np.concatenate([[1.0], np.cumprod(1.0 + port)[:-1]])
+    per_key = pd.DataFrame(contrib * v_prev[:, None],
+                           index=sub.index, columns=sub.columns)
+    sata_d = pd.Series(sata_term * v_prev, index=sub.index)
+    return dict(per_key=per_key, sata=sata_d,
+                total=per_key.sum(axis=1) + sata_d,
+                ret=pd.Series(port, index=sub.index))
+
+
 # ── as-published record — the books that ACTUALLY traded ────────────────────
 # The publisher archives every daily target book it commits (one JSON per
 # signal day, ``data/overall/book_archive/<as_of>.json`` — see

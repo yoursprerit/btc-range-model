@@ -1660,6 +1660,13 @@ with tab_live:
                               "priorities move — even when no Action signal "
                               "changes."))
 
+            # per-day $ / % P&L off the same weights + returns as the P&L-by-
+            # asset attribution — shared by the trade log's Day-P&L column and
+            # the 📆 Daily P&L chart, and exact for both sources
+            _dpl = ov.pnl_daily_replay(_PF["rets"], _wf["weights"],
+                                       _wf["sata"], _start_sel,
+                                       sata_daily=ov.SATA_DAILY)
+
             # ── daily trade log — every buy/sell the daily book ordered ──────
             # (both sources: the source radio above decides which weight
             # matrix — as-published books or walk-forward replay — feeds it)
@@ -1694,8 +1701,14 @@ with tab_live:
                            "movement (Σ|Δweight|) by the 💼 portfolio value; "
                            "turnover is one-way (½·Σ|Δweight|, cash leg "
                            "included), matching the published-book trims. "
-                           "The anchor bar's opening book is the cost basis, "
-                           "so the log starts with the changes after it.")
+                           "**Day P&L** is what the whole book earned or lost "
+                           "over that bar, in dollars on the 💼 portfolio "
+                           "value and in % — set up by the *previous* close's "
+                           "book; the row's own trades start earning from the "
+                           "next bar. The anchor bar's opening book is the "
+                           "cost basis, so the log starts with the changes "
+                           "after it. (The 📆 Daily P&L toggle below charts "
+                           "every day, quiet ones included.)")
                 if not _dtl:
                     st.info("The book never changed in this window — no daily "
                             "trades to list.")
@@ -1721,6 +1734,7 @@ with tab_live:
                            "adjustments (re-sizes)</th>"
                            "<th style='text-align:right'>Turnover</th>"
                            "<th style='text-align:right'>≈ $ traded</th>"
+                           "<th style='text-align:right'>Day P&amp;L</th>"
                            "<th style='text-align:right'>💵 Cash after</th></tr>")
                     _drs = []
                     for _d in _dtl:
@@ -1729,6 +1743,16 @@ with tab_live:
                         _tilt = " · ".join(_dtl_chip(a) for a in _d["actions"]
                                            if not a["signal_change"])
                         _none = "<span style='color:#94a3b8'>—</span>"
+                        _pl_s = _none
+                        if _dpl is not None and _d["date"] in _dpl["total"].index:
+                            _pl_v = float(_dpl["total"].loc[_d["date"]]) \
+                                * portfolio_value
+                            _pl_r = float(_dpl["ret"].loc[_d["date"]])
+                            _pl_c = C_BUY if _pl_v >= 0 else C_EXIT
+                            _pl_s = (f"<span style='color:{_pl_c};"
+                                     f"font-weight:700'>${_pl_v:+,.0f}</span>"
+                                     f"<div style='font-size:10px;"
+                                     f"color:#94a3b8'>{_pl_r*100:+.2f}%</div>")
                         _drs.append(
                             f"<tr style='border-bottom:1px solid #eef2f7'>"
                             f"<td style='padding:6px 10px;font-weight:700;"
@@ -1744,6 +1768,8 @@ with tab_live:
                             f"<td style='text-align:right;"
                             f"font-variant-numeric:tabular-nums'>"
                             f"${_d['gross']*portfolio_value:,.0f}</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>{_pl_s}</td>"
                             f"<td style='text-align:right;color:#64748b'>"
                             f"{_d['cash1']*100:.1f}%</td></tr>")
                     st.markdown(
@@ -1752,6 +1778,87 @@ with tab_live:
                         f"<table style='width:100%;border-collapse:collapse'>"
                         f"{_dh}{''.join(_drs)}</table></div>",
                         unsafe_allow_html=True)
+
+            # ── daily P&L — what the book made or lost, every single day ─────
+            # (both sources, off the same day-axis attribution as the column
+            # above — bars sum exactly to the headline Strategy P&L dollars)
+            if st.toggle(
+                    f"📆 Daily P&L since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — every day's $ "
+                    "and % result, split by sleeve on hover (toggle on/off)",
+                    key="overall_daily_pnl"):
+                if _dpl is None:
+                    st.info("Not enough blend history after that date — "
+                            "no daily P&L to chart.")
+                else:
+                    st.caption("What the "
+                               + ("**as-published book**" if _actual
+                                  else "**walk-forward replay book**")
+                               + " (per the performance-source toggle above) "
+                               "**earned or lost each trading day**: green "
+                               "bars are up days, red bars down days, "
+                               "**every day included** (unlike the 🧾 trade "
+                               "log, which lists only days that traded). "
+                               "Each day's blend return is scaled by the "
+                               "book's compounded value at the previous "
+                               "close, so the bars **sum exactly to the "
+                               "headline Strategy P&L dollar figure** for "
+                               "this source and start date. Hover any bar "
+                               "for the day's **% return and per-sleeve "
+                               "split** (largest contributors, SATA "
+                               "included); the anchor bar is the cost basis "
+                               "and earns nothing. Dollar figures scale the "
+                               "💼 portfolio value entered above.")
+                    _dd = _dpl["total"].iloc[1:] * portfolio_value
+                    _dr = _dpl["ret"].iloc[1:]
+                    _dp_hov = []
+                    for _dt in _dd.index:
+                        _parts = [(k, float(_dpl["per_key"].at[_dt, k])
+                                   * portfolio_value)
+                                  for k in _dpl["per_key"].columns]
+                        _parts = [p for p in _parts if abs(p[1]) >= 0.5]
+                        _parts.sort(key=lambda p: -abs(p[1]))
+                        _more = len(_parts) - 5
+                        _txt = " · ".join(f"{k} ${v:+,.0f}"
+                                          for k, v in _parts[:5])
+                        if _more > 0:
+                            _txt += f" · +{_more} more"
+                        _sata_v = float(_dpl["sata"].loc[_dt]) * portfolio_value
+                        if abs(_sata_v) >= 0.5:
+                            _txt = ((_txt + " · ") if _txt else "") + \
+                                f"💵 SATA ${_sata_v:+,.0f}"
+                        _dp_hov.append(_txt or "book flat — no deployed P&L")
+                    fig_dp = go.Figure(go.Bar(
+                        x=_dd.index, y=_dd.to_numpy(),
+                        marker_color=[C_BUY if v >= 0 else C_EXIT
+                                      for v in _dd],
+                        customdata=[[r * 100, h]
+                                    for r, h in zip(_dr, _dp_hov)],
+                        hovertemplate="%{x|%b %d, %Y}: <b>$%{y:+,.0f}</b> "
+                                      "(%{customdata[0]:+.2f}%)<br>"
+                                      "%{customdata[1]}<extra></extra>"))
+                    fig_dp.add_hline(y=0, line_color="#94a3b8", line_width=1)
+                    _n_up = int((_dd > 0).sum())
+                    _n_all = int(len(_dd))
+                    fig_dp.update_layout(
+                        height=340, margin=dict(t=30, b=10, l=10, r=10),
+                        yaxis_title="Day P&L ($)",
+                        title=dict(
+                            text=f"Daily P&L on ${portfolio_value:,.0f} — "
+                                 f"sums to ${_dd.sum():+,.0f} · "
+                                 f"{_n_up}/{_n_all} days up",
+                            font_size=13))
+                    st.plotly_chart(fig_dp, use_container_width=True)
+                    _bd, _wd = _dd.idxmax(), _dd.idxmin()
+                    st.caption(f"Best day **{_bd.strftime('%b %d, %Y')}** "
+                               f"(${_dd.loc[_bd]:+,.0f} · "
+                               f"{_dr.loc[_bd]*100:+.2f}%) · worst day "
+                               f"**{_wd.strftime('%b %d, %Y')}** "
+                               f"(${_dd.loc[_wd]:+,.0f} · "
+                               f"{_dr.loc[_wd]*100:+.2f}%). Weekend bars "
+                               "carry the crypto sleeves' P&L only (equity "
+                               "sleeves hold through closed markets; SATA "
+                               "accrues on business days).")
 
             # ── published books & daily trims — the record, book by book ─────
             # (as-published mode only: this IS the archive, one row per publish)
