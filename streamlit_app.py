@@ -123,6 +123,30 @@ except Exception:
 _orig_spc = st.set_page_config
 st.set_page_config = lambda *a, **k: None            # sub-apps' calls become no-ops
 
+# ── main-pane root: wipe the previous app's screen on a switch ───────────────
+# Streamlit keeps the previous run's elements visible (dimmed) until the new run
+# overwrites them or finishes.  Within ONE app that's the right behaviour — the
+# ~45 s auto-refresh updates in place with no flash.  Across an app SWITCH it is
+# the "ghosting" users see: the heavy apps compute for seconds before emitting
+# their first element, and the whole previous app lingers on screen meanwhile.
+#
+# Fix: render every sub-app inside a single root container that always occupies
+# the main pane's first slot.  On a normal rerun the root is a plain
+# ``st.container()`` — the frontend keeps its children until they're replaced,
+# so same-app refreshes stay flicker-free.  On a switch the root is created via
+# ``st.empty().container()``: the ``Empty`` delta lands in the same slot and the
+# frontend drops the old app's entire subtree *immediately*, then the container
+# re-establishes the identical delta path for the new app to render into.
+#
+# ``_rendered_app`` is recorded the moment the wipe delta is emitted (deltas
+# stream to the browser as they are created), NOT after the sub-app finishes —
+# the apps' own "Refresh now" buttons call ``st.rerun()`` mid-render, and
+# recording late would misread that follow-up pass as a switch and blank the
+# screen on every refresh click.
+_prev_rendered = st.session_state.get("_rendered_app")
+_root = st.empty().container() if _prev_rendered != _choice else st.container()
+st.session_state["_rendered_app"] = _choice
+
 
 def _run_choice():
     if _choice == "OVERALL":
@@ -166,6 +190,7 @@ def _run_choice():
 
 
 try:
-    _run_choice()
+    with _root:                                       # all main-pane output lands here
+        _run_choice()
 finally:
     st.set_page_config = _orig_spc                    # restore for the next run
