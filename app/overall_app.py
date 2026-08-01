@@ -1640,7 +1640,7 @@ with tab_live:
             if st.toggle(f"📊 Daily % allocation by asset since "
                          f"{_sm['start'].strftime('%b %d, %Y')} — every asset's "
                          "share of the book through time (toggle on/off)",
-                         value=True, key="overall_alloc_history_pnl"):
+                         key="overall_alloc_history_pnl"):
                 st.plotly_chart(
                     _alloc_area_fig(
                         _wf["weights"].loc[pd.Timestamp(_start_sel):],
