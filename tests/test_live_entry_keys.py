@@ -130,3 +130,49 @@ def test_divergence_without_pending_bands_or_history_skips():
     no_hist = _div_res(None, pending)
     spot = {"ARTY": {"price": pending["pred_high"] * 1.01}}
     assert oc.live_entry_keys([no_bands, no_hist], spot) == set()
+
+
+# ── stale re-served quotes (weekends / holidays / after-hours) ──────────────
+# Yahoo's regularMarketPrice repeats the last session close when the market is
+# shut. Appending that price as a provisional NEW bar duplicates the last
+# close and shifts every rolling window by one — flipping marginal dual-MA
+# crosses and manufacturing phantom flags that contradict the committed
+# decision (and the ticker app). Observed: REMX "exits next bar" on a
+# Saturday while its app showed LONG — HOLDING. The live overlay must stay
+# silent until a genuinely new price exists.
+def test_weekend_requote_never_phantom_flags_an_exit():
+    # committed dual-MA state is LONG (fast 27.5 > slow 21.67), but appending
+    # the last close AGAIN flips the shifted SMAs (25 < 26.67) — the exact
+    # phantom-exit mechanism. Live == last close → no new info → not flagged.
+    r = _res(key="REMX", mode="dual_ma", in_pos=True, tone="hold",
+             cfg=_dual_cfg(2, 3), close_hist=[10.0, 30.0, 25.0])
+    assert oc.live_exit_keys([r], {"REMX": {"price": 25.0}}) == set()
+    # …a quote within 1 bp of the close is the same non-information
+    assert oc.live_exit_keys([r], {"REMX": {"price": 25.001}}) == set()
+    # …but a genuinely lower live print still flags the real cross-break
+    assert oc.live_exit_keys([r], {"REMX": {"price": 20.0}}) == {"REMX"}
+
+
+def test_weekend_requote_never_phantom_flags_an_entry():
+    # committed dual-MA state is FLAT (fast 12.5 < slow 18.33); duplicating
+    # the last close would golden-cross the shifted SMAs (15 > 13.33) — the
+    # phantom-entry mirror. Live == last close → not flagged.
+    r = _res(key="GRID", mode="dual_ma", cfg=_dual_cfg(2, 3),
+             close_hist=[30.0, 10.0, 15.0])
+    assert oc.live_entry_keys([r], {"GRID": {"price": 15.0}}) == set()
+    # …a genuinely higher live print still flags the real golden cross
+    assert oc.live_entry_keys([r], {"GRID": {"price": 100.0}}) == {"GRID"}
+
+
+def test_weekend_requote_skips_the_divergence_entry_too():
+    # same rule for divergence apps (e.g. ARTY): a re-served last close is
+    # not a live rally — no provisional-bar entry check until a new price
+    completed, pending, c0 = _div_fixture()
+    strong = pending["pred_high"] * 1.01
+    r = _div_res(completed, pending)
+    r["close_hist"] = [c0 * 0.99, strong]       # last committed close
+    assert oc.live_entry_keys([r], {"ARTY": {"price": strong}}) == set()
+    # …a genuinely new price above the band still fires the gate
+    r2 = _div_res(completed, pending)
+    r2["close_hist"] = [c0 * 0.99, c0]
+    assert oc.live_entry_keys([r2], {"ARTY": {"price": strong}}) == {"ARTY"}

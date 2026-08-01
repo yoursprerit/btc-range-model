@@ -2432,6 +2432,38 @@ def apply_entry_basis(results: list[dict], entry_closes: dict) -> None:
                 p["dist_stop"] = (last / p["stop_px"] - 1) * 100
 
 
+def _live_is_last_close(r: dict, plive, tol: float = 1e-4) -> bool:
+    """True when the live quote IS the parent's last committed close, just
+    re-served (weekends, market holidays, and after-hours — Yahoo's
+    ``regularMarketPrice`` simply repeats the last session close then).
+
+    Why it matters: the live entry/exit checks append the live price to the
+    committed close history as a PROVISIONAL NEW bar.  When that price equals
+    the last close, the appended bar adds no information — it merely
+    duplicates the final close and shifts every rolling window by one bar,
+    which can flip a marginal read (e.g. a dual-MA golden cross whose fast/
+    slow SMAs sit close together) and manufacture phantom "exits next bar" /
+    "likely enters next bar" flags that contradict the committed decision —
+    and the instrument's own ticker app, which shows committed bars only
+    (observed: REMX flagged "exits next bar" in the Overall action table on
+    a Saturday while the REMX app correctly showed LONG — HOLDING).  The
+    committed engine state already answers "what if the next close equals
+    the last one", so the live overlay should stay silent until a genuinely
+    NEW price exists.  ``tol`` is relative (default 1 bp — quotes that close
+    to the last close carry no actionable new information either).  Returns
+    False when the history is unavailable (the caller's fallback reads are
+    consistent with the committed state by construction)."""
+    ch = r.get("close_hist")
+    if ch is None or plive is None:
+        return False
+    arr = np.asarray(ch, float)
+    arr = arr[np.isfinite(arr)]
+    if not len(arr) or not np.isfinite(plive):
+        return False
+    last = float(arr[-1])
+    return abs(float(plive) - last) <= abs(last) * tol
+
+
 def live_exit_keys(results: list[dict], spot: dict,
                    include_entries: bool = False) -> set:
     """Keys of trend instruments the *live* price says will drop out on the next
@@ -2461,6 +2493,8 @@ def live_exit_keys(results: list[dict], spot: dict,
         plive = (spot.get(r.get("parent")) or {}).get("price")
         if plive is None:
             continue
+        if _live_is_last_close(r, plive):
+            continue                 # stale re-served quote — no new information
         # Re-run the mode's ACTUAL long condition with the live price as the newest
         # close.  Critically, dual_ma exits on a fast/slow SMA cross (a "death
         # cross"), NOT on price dropping below the slow SMA — so a naive
@@ -2551,6 +2585,8 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
         plive = (spot.get(r.get("parent")) or {}).get("price")
         if plive is None:
             continue
+        if _live_is_last_close(r, plive):
+            continue                 # stale re-served quote — no new information
         cfg = r.get("cfg"); close_hist = r.get("close_hist")
         if mode == "divergence":
             if cfg is not None and divergence_entry_now_live(
