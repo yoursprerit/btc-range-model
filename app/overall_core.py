@@ -866,6 +866,73 @@ def trade_log_since(results: list[dict], weights: dict, start,
     return rows
 
 
+def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
+                    min_delta: float = 0.0005) -> list[dict]:
+    """Day-by-day BUY/SELL log implied by the daily-weight book since
+    ``start`` — the positions bought and sold at each close as Action
+    signals open/close sleeves and the daily optimizer's tilt adjustments
+    re-size the ones already held.  Source-agnostic: feed it either the
+    walk-forward replay's weight matrix or the as-published record's
+    (``replay_gated_allocation`` and ``published_book_replay`` return the
+    same ``weights``/``sata`` shape), so the P&L section's source toggle
+    drives this log unchanged.
+
+    Both sources share the decided-at-previous-close convention (row *d*
+    is the book earning day *d*, put on at the previous bar's close), so
+    the diff between consecutive rows IS the trade ticket executed at the
+    earlier bar's close — each log entry is dated at that execution bar.
+    Every day-over-day weight change beyond ``min_delta`` becomes one
+    action:
+
+    * ``buy``  — 0 → w  (position opened — a signal change)
+    * ``sell`` — w → 0  (position closed — a signal change)
+    * ``add`` / ``trim`` — re-sized while held (a daily tilt adjustment)
+
+    Returns one dict per day that traded (newest first): ``date`` (the
+    execution close), ``actions`` sorted largest |Δweight| first (each
+    with ``key``/``w0``/``w1``/``delta``/``action``/``signal_change``),
+    ``gross`` (Σ|Δw| across the risk sleeves — the fraction of the book
+    traded at that close), one-way ``turnover`` (½·(Σ|Δw| + |Δcash|) —
+    the published-book trim convention), the cash weight before/after,
+    and per-day ``n_buys``/``n_sells``/``n_resize`` counts.  Days where
+    nothing moved beyond ``min_delta`` are omitted."""
+    w = weights.loc[pd.Timestamp(start):].fillna(0.0)
+    if len(w) < 2:
+        return []
+    cash = sata.reindex(w.index).fillna(0.0).astype(float)
+    days = []
+    for i in range(1, len(w)):
+        prev, cur = w.iloc[i - 1], w.iloc[i]
+        actions = []
+        for k in w.columns:
+            w0, w1 = float(prev[k]), float(cur[k])
+            d = w1 - w0
+            if abs(d) < min_delta:
+                continue
+            if w0 < min_delta:
+                act = "buy"
+            elif w1 < min_delta:
+                act = "sell"
+            else:
+                act = "add" if d > 0 else "trim"
+            actions.append(dict(key=k, w0=w0, w1=w1, delta=d, action=act,
+                                signal_change=act in ("buy", "sell")))
+        if not actions:
+            continue
+        actions.sort(key=lambda a: -abs(a["delta"]))
+        gross = float((cur - prev).abs().sum())
+        d_cash = float(cash.iloc[i] - cash.iloc[i - 1])
+        days.append(dict(
+            date=w.index[i - 1], actions=actions, gross=gross,
+            turnover=0.5 * (gross + abs(d_cash)),
+            cash0=float(cash.iloc[i - 1]), cash1=float(cash.iloc[i]),
+            n_buys=sum(a["action"] == "buy" for a in actions),
+            n_sells=sum(a["action"] == "sell" for a in actions),
+            n_resize=sum(not a["signal_change"] for a in actions)))
+    days.reverse()
+    return days
+
+
 def sata_slice_metrics(index: pd.Index, start) -> dict | None:
     """The SATA idle-cash sleeve since ``start`` on the blend's calendar: a
     constant ``SATA_DAILY`` yield on a flat $100 par — so no drawdown, every

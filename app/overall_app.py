@@ -1660,6 +1660,99 @@ with tab_live:
                               "priorities move — even when no Action signal "
                               "changes."))
 
+            # ── daily trade log — every buy/sell the daily book ordered ──────
+            # (both sources: the source radio above decides which weight
+            # matrix — as-published books or walk-forward replay — feeds it)
+            _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"], _start_sel)
+            _dtl_buys = sum(d["n_buys"] for d in _dtl)
+            _dtl_sells = sum(d["n_sells"] for d in _dtl)
+            _dtl_resz = sum(d["n_resize"] for d in _dtl)
+            if st.toggle(
+                    f"🧾 Daily trade log since "
+                    f"{_sm['start'].strftime('%b %d, %Y')} — "
+                    f"{_dtl_buys} buy{'s' if _dtl_buys != 1 else ''} · "
+                    f"{_dtl_sells} sell{'s' if _dtl_sells != 1 else ''} · "
+                    f"{_dtl_resz} tilt re-size{'s' if _dtl_resz != 1 else ''} "
+                    f"across {len(_dtl)} trading "
+                    f"day{'s' if len(_dtl) != 1 else ''} (toggle on/off)",
+                    key="overall_daily_trade_log"):
+                st.caption("Every position **bought and sold, day by day**, as "
+                           "the "
+                           + ("**as-published books**" if _actual
+                              else "**walk-forward replay**")
+                           + " (per the performance-source toggle above) "
+                           "re-shaped the book: **🚦 signal changes** open "
+                           "(green) or fully close (red) a sleeve when its "
+                           "Action signal flips, while **⚖️ daily tilt "
+                           "adjustments** re-size positions already held — "
+                           "the daily optimizer's adds and trims. Each row is "
+                           "the trade ticket executed at that bar's close "
+                           "(the book earns from the next bar — the "
+                           "decided-at-previous-close convention), newest "
+                           "first; days with no changes are omitted. "
+                           "**≈ $ traded** scales the day's gross weight "
+                           "movement (Σ|Δweight|) by the 💼 portfolio value; "
+                           "turnover is one-way (½·Σ|Δweight|, cash leg "
+                           "included), matching the published-book trims. "
+                           "The anchor bar's opening book is the cost basis, "
+                           "so the log starts with the changes after it.")
+                if not _dtl:
+                    st.info("The book never changed in this window — no daily "
+                            "trades to list.")
+                else:
+                    def _dtl_chip(a):
+                        _cc = C_BUY if a["delta"] > 0 else C_EXIT
+                        if a["action"] == "buy":
+                            _lbl = f"{a['key']} <b>bought +{a['w1']*100:.1f}%</b>"
+                        elif a["action"] == "sell":
+                            _lbl = f"{a['key']} <b>sold −{a['w0']*100:.1f}%</b>"
+                        else:
+                            _lbl = (f"{a['key']} {a['w0']*100:.1f}→"
+                                    f"{a['w1']*100:.1f}% "
+                                    f"<b>({a['delta']*100:+.1f})</b>")
+                        return f"<span style='color:{_cc}'>{_lbl}</span>"
+
+                    _dh = ("<tr style='background:#f1f5f9;font-size:12px;"
+                           "text-align:left'>"
+                           "<th style='padding:6px 10px'>Executed at close</th>"
+                           "<th style='padding-left:10px'>🚦 Signal changes "
+                           "(bought / sold)</th>"
+                           "<th style='padding-left:10px'>⚖️ Daily tilt "
+                           "adjustments (re-sizes)</th>"
+                           "<th style='text-align:right'>Turnover</th>"
+                           "<th style='text-align:right'>≈ $ traded</th>"
+                           "<th style='text-align:right'>💵 Cash after</th></tr>")
+                    _drs = []
+                    for _d in _dtl:
+                        _sig = " · ".join(_dtl_chip(a) for a in _d["actions"]
+                                          if a["signal_change"])
+                        _tilt = " · ".join(_dtl_chip(a) for a in _d["actions"]
+                                           if not a["signal_change"])
+                        _none = "<span style='color:#94a3b8'>—</span>"
+                        _drs.append(
+                            f"<tr style='border-bottom:1px solid #eef2f7'>"
+                            f"<td style='padding:6px 10px;font-weight:700;"
+                            f"font-variant-numeric:tabular-nums;"
+                            f"white-space:nowrap'>"
+                            f"{_d['date'].strftime('%b %d, %Y')}</td>"
+                            f"<td style='padding:6px 10px;font-size:11.5px'>"
+                            f"{_sig or _none}</td>"
+                            f"<td style='padding:6px 10px;font-size:11.5px'>"
+                            f"{_tilt or _none}</td>"
+                            f"<td style='text-align:right;font-weight:600'>"
+                            f"{_d['turnover']*100:.1f}%</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>"
+                            f"${_d['gross']*portfolio_value:,.0f}</td>"
+                            f"<td style='text-align:right;color:#64748b'>"
+                            f"{_d['cash1']*100:.1f}%</td></tr>")
+                    st.markdown(
+                        f"<div style='overflow-x:auto;max-height:440px;"
+                        f"overflow-y:auto;margin:8px 0;'>"
+                        f"<table style='width:100%;border-collapse:collapse'>"
+                        f"{_dh}{''.join(_drs)}</table></div>",
+                        unsafe_allow_html=True)
+
             # ── published books & daily trims — the record, book by book ─────
             # (as-published mode only: this IS the archive, one row per publish)
             if _actual:
