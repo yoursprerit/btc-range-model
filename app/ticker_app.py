@@ -489,8 +489,15 @@ def _gate_card(title, icon, fired, rows, interpretation):
         f"<b>📊 What it means:</b> {interpretation}</div></div>")
 
 
-def net_signal_div(sigs):
-    """Resolve raw signatures → ONE state (divergence mode). Exit overrides entry."""
+def net_signal_div(sigs, pos=None):
+    """Resolve raw signatures → ONE state (divergence mode). Exit overrides entry.
+
+    With ``pos`` supplied, a fresh ENTRY while the strategy is FLAT is labelled
+    with its execution timing — "ENTERS NEXT BAR" — matching the trend apps'
+    banner and the Overall app's action-plan flag word for word (the signal is
+    decided at the close and executed on the next bar; all three surfaces
+    describe the same committed state).  Without ``pos`` (e.g. the trend apps'
+    context-only divergence expander) the plain label is kept."""
     if not sigs:
         return dict(state="NEUTRAL", label="NO DATA", ico="⬜",
                     bg="#f8fafc", brd="#94a3b8", reason="insufficient completed bars")
@@ -508,9 +515,17 @@ def net_signal_div(sigs):
         gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
                                 ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
                                 ("⚡ V-reversal", sigs.get("v_recent_gate"))] if f]
+        reason = "U1 confirmed inside the Pure-Regime gate: " + " + ".join(gates)
+        if pos is not None and not pos.get("in_pos_now"):
+            # flat + committed entry — same wording as the trend apps' banner
+            # and the Overall action plan: decided at the close, opens next bar
+            return dict(state="ENTRY", label="ENTRY / GO LONG — ENTERS NEXT BAR",
+                        ico="🟢", bg="#f0fdf4", brd="#16a34a",
+                        reason=reason + ". Strategy is FLAT today; the entry "
+                               "was decided at the close and the position "
+                               "opens on the next bar.")
         return dict(state="ENTRY", label="ENTRY / GO LONG", ico="🟢",
-                    bg="#f0fdf4", brd="#16a34a",
-                    reason="U1 confirmed inside the Pure-Regime gate: " + " + ".join(gates))
+                    bg="#f0fdf4", brd="#16a34a", reason=reason)
     if u1:
         return dict(state="WATCH_UP", label="U1 WATCH — GATE NOT MET", ico="🟡",
                     bg="#fefce8", brd="#ca8a04",
@@ -553,15 +568,21 @@ def net_signal_ma(mst, pos=None):
                     bg="#f0fdf4", brd="#16a34a",
                     reason=f"Strategy is long; {desc} — hold.")
     if above:
-        # Flat but the trend signal is bullish again → the filter re-enters next bar.
-        base = (f"Strategy is FLAT. The trend signal is bullish again ({desc}), so it "
-                f"will RE-ENTER (go long) on the next bar.")
+        # Flat but the trend signal is bullish → a COMMITTED entry, decided at
+        # the close and executed next bar.  Same label, colour and timing words
+        # as the divergence apps' banner and the Overall app's action-plan flag
+        # ("enters next bar"), so the three surfaces can never look like they
+        # disagree about the same state (previously this was a yellow
+        # "FLAT — RE-ENTRY PENDING NEXT BAR" while ARTY showed a green
+        # "ENTRY / GO LONG" for the identical situation).
+        base = (f"Strategy is FLAT today. The trend signal is bullish ({desc}), so it "
+                f"ENTERS (goes long) on the next bar.")
         if just_exit:
             base += (f" It exited on {pd.Timestamp(just_exit['exit_date']).strftime('%b %d')} "
                      f"({just_exit['reason']}) on the *prior* bar — a one-bar whipsaw; the "
                      f"signal has since recovered.")
-        return dict(state="WATCH_UP", label="FLAT — RE-ENTRY PENDING NEXT BAR", ico="🟡",
-                    bg="#fefce8", brd="#ca8a04", reason=base)
+        return dict(state="ENTRY", label="ENTRY / GO LONG — ENTERS NEXT BAR", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a", reason=base)
     return dict(state="EXIT", label="FLAT — BELOW TREND", ico="🔴",
                 bg="#fef2f2", brd="#dc2626",
                 reason=f"Strategy is FLAT; {desc} — stand aside in cash.")
@@ -650,7 +671,7 @@ def render_strategy_card():
 
 def render_conditions_box(sigs, mst, pos=None):
     if IS_DIV:
-        ns = net_signal_div(sigs)
+        ns = net_signal_div(sigs, pos)
         if not sigs:
             st.info("Strategy conditions unavailable — need ≥ 3 completed bars.")
             return
@@ -794,11 +815,11 @@ def render_conditions_box(sigs, mst, pos=None):
 </div>""", unsafe_allow_html=True)
 
 
-def render_signatures(sigs):
+def render_signatures(sigs, pos=None):
     if not sigs:
         st.info("Not enough completed bars for trend signatures yet (need ≥ 3).")
         return
-    ns = net_signal_div(sigs)
+    ns = net_signal_div(sigs, pos)
     as_of = pd.Timestamp(sigs["as_of_date"]).strftime("%Y-%m-%d")
     st.markdown(
         f"""<div style="background:{ns['bg']};border:2px solid {ns['brd']};
@@ -1930,7 +1951,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
 
     if IS_DIV:
         st.markdown(f"### 🔔 Trend-Signature Alert  ·  _signals derived from the {cfg.key} daily H/L model_")
-        render_signatures(sigs)
+        render_signatures(sigs, pos=primary_pos)
         st.markdown("#### 🚪 Entry-gate conditions  ·  _what turns a U1 pressure signal into an actual entry_")
         render_gate_signatures(sigs)
     else:
