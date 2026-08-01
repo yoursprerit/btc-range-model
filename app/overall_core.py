@@ -1249,6 +1249,75 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 sata_info=SATA)
 
 
+def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
+                               today=None) -> dict:
+    """Weekend/holiday guard for the LIVE recommended book.
+
+    On a US trading day this is the identity — the gate's normal intraday
+    behaviour is returned untouched.  On days the US equity market is
+    CLOSED (weekend or NYSE holiday) the live gate must not re-rank or
+    re-size the book: most sleeves' signal apps get no new bar (their data
+    is stale from the last close), yet the daily tilt keeps recomputing —
+    and because priorities are min-max normalised ACROSS the funded set,
+    the crypto sleeves' fresh weekend bars shift every stale sleeve's
+    normalised score, re-sizing positions that cannot even trade.  The fix
+    pins the book to the ``book_weights`` actually published (the Current
+    Targetbook's risk weights) and applies ONLY committed signal changes
+    on top:
+
+    * a sleeve whose gate action is CLOSE (committed exit, or a live-price
+      forced exit) is dropped — its weight goes to SATA;
+    * a sleeve whose gate action is OPEN is funded from idle capital at
+      the gate's own tilted target size (in the gate's priority order,
+      capped by the idle remaining);
+    * every other sleeve keeps its published weight EXACTLY — no tilt
+      re-sizing on a day it cannot trade.
+
+    Equity engines produce no new bar on closed days, so any OPEN/CLOSE
+    seen here necessarily comes from an app whose signal asset does trade
+    (the BTC/ETH apps — their bars close 12:00 UTC every day, weekends
+    included) or was committed at the last real close and simply predates
+    the published book — exactly the changes that SHOULD move the book.
+    With no published book to pin to (``book_weights`` falsy) the gate is
+    returned unchanged.  Returns a new gate dict of the same shape with
+    per-action ``target`` values rewritten to match and a ``freeze``
+    record (``day``/``closed``/``opened``/``pinned``) for the UI."""
+    import freshness as fr
+    today = (pd.Timestamp(today).date() if today is not None
+             else pd.Timestamp.now(tz="America/New_York").date())
+    if fr.is_us_trading_day(today) or not book_weights:
+        return gate
+    act_by = {a["key"]: a["action"] for a in gate["actions"]}
+    target, closed = {}, []
+    for k, w in book_weights.items():
+        if w <= 0.0005:
+            continue
+        if act_by.get(k) == "CLOSE":
+            closed.append(k)
+            continue
+        target[k] = float(w)
+    idle = max(1.0 - sum(target.values()), 0.0)
+    opened = []
+    for a in gate["actions"]:                 # OPENs come priority-ranked
+        k = a["key"]
+        if a["action"] != "OPEN" or k in target:
+            continue
+        w = min(float(gate["target"].get(k, 0.0)), idle)
+        if w <= 0.0005:
+            continue
+        target[k] = w
+        idle -= w
+        opened.append(k)
+    sata = max(1.0 - sum(target.values()), 0.0)
+    actions = [dict(a, target=target.get(a["key"], 0.0))
+               for a in gate["actions"]]
+    return dict(gate, target=target, sata=sata, actions=actions,
+                freeze=dict(day=str(today), closed=sorted(closed),
+                            opened=opened,
+                            pinned=sorted(k for k in target
+                                          if k not in opened)))
+
+
 def rebalancing_moves(base_weights: dict, base_idle: float,
                       target: dict, target_idle: float,
                       idle_key: str = "SATA") -> list[dict]:

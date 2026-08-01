@@ -659,10 +659,46 @@ with tab_live:
     # close they signal today and open next bar. Used only to flag rows green in
     # the action table (the live book never pre-funds an uncommitted signal).
     _live_entries = ov.live_entry_keys(results, _spot)
+
+    def _load_published_book(*paths: Path) -> dict | None:
+        """First readable published-book payload among *paths* (None if none)."""
+        import json as _json
+        for _p in paths:
+            try:
+                if _p.exists():
+                    return _json.loads(_p.read_text())
+            except Exception:
+                continue
+        return None
+
+    def _book_alloc(payload: dict) -> tuple[dict, float]:
+        """(risk_weights, idle_weight) from a published book — LIVE books park
+        idle capital as a SATA weight, PAPER books as cash_weight."""
+        w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
+        idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
+        return w, idle
+
+    # published books loaded BEFORE the live gate: the closed-market freeze
+    # below pins the weekend/holiday live recommendation to the current book
+    _TB_DIR = _REPO_ROOT / "data" / "overall"
+    _prev_book = _load_published_book(_TB_DIR / "target_book_live_prev.json",
+                                      _TB_DIR / "target_book_prev.json")
+    _cur_book = _load_published_book(_TB_DIR / "target_book_live.json",
+                                     _TB_DIR / "target_book.json")
+
     try:
         gate_live = ov.signal_gated_allocation(
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
             force_exit=_live_exits)
+        # weekend / holiday guard: on days the US market is closed, the daily
+        # tilt must not re-size sleeves whose signal apps got no new bar (the
+        # cross-set priority normalisation would let the crypto sleeves' fresh
+        # weekend bars move every stale sleeve's weight).  Pin the live book
+        # to the published Current Targetbook — only committed signal changes
+        # (the BTC/ETH apps' bars close every day) can move it.
+        if _cur_book:
+            gate_live = ov.apply_closed_market_freeze(
+                gate_live, _book_alloc(_cur_book)[0])
     except Exception:
         gate_live = gate
 
@@ -714,24 +750,6 @@ with tab_live:
                           height=320, margin=dict(t=40, b=10, l=10, r=10))
         return fig
 
-    def _load_published_book(*paths: Path) -> dict | None:
-        """First readable published-book payload among *paths* (None if none)."""
-        import json as _json
-        for _p in paths:
-            try:
-                if _p.exists():
-                    return _json.loads(_p.read_text())
-            except Exception:
-                continue
-        return None
-
-    def _book_alloc(payload: dict) -> tuple[dict, float]:
-        """(risk_weights, idle_weight) from a published book — LIVE books park
-        idle capital as a SATA weight, PAPER books as cash_weight."""
-        w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
-        idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
-        return w, idle
-
     def _book_close_caption(payload: dict) -> str:
         """Explicit close DATES a published book is built from.  Prefers the
         book's own signature-covered ``signal_basis`` stamp (written by the
@@ -759,12 +777,7 @@ with tab_live:
         return (f"Other tickers as of market close **{eq}** · BTC · MSTR · "
                 f"MSTU · ETH as of bar close **{btc}**")
 
-    _TB_DIR = _REPO_ROOT / "data" / "overall"
-    _prev_book = _load_published_book(_TB_DIR / "target_book_live_prev.json",
-                                      _TB_DIR / "target_book_prev.json")
-    _cur_book = _load_published_book(_TB_DIR / "target_book_live.json",
-                                     _TB_DIR / "target_book.json")
-
+    # (_prev_book / _cur_book loaded above, before the live gate)
     # Today's-publish-pending notice: past the 7:15-AM-CT anchor but the newest
     # published book still predates it (GitHub cron fires routinely arrive
     # late), the donuts below are necessarily YESTERDAY's books — say so
@@ -818,6 +831,23 @@ with tab_live:
                    "as a Targetbook."
                    + (" **Live-adjusted:** pending exits removed." if _live_exits
                       else " No pending live exits."))
+    _frz = gate_live.get("freeze")
+    if _frz:
+        st.info("🧊 **US market closed today** (weekend/holiday) — the "
+                "Recommended Live book is **pinned to the published Current "
+                "Targetbook**. Sleeves whose signal apps got no new bar keep "
+                "their published weight exactly; only **committed signal "
+                "changes** from apps whose bar still closes today (the ₿ BTC "
+                "and ⟠ ETH apps — 7:00 AM CT bar, every day) can move the "
+                "book. No daily-tilt re-sizing of positions that cannot "
+                "trade. "
+                + (f"Dropped on signal: **{', '.join(_frz['closed'])}**. "
+                   if _frz["closed"] else "")
+                + (f"Opened on signal: **{', '.join(_frz['opened'])}**. "
+                   if _frz["opened"] else "")
+                + ("Today: no signal changes — the live book equals the "
+                   "published book." if not (_frz["closed"] or _frz["opened"])
+                   else ""))
     if _live_exits:
         st.warning("⚠️ **Live-adjusted:** " + ", ".join(sorted(_live_exits)) +
                    " " + ("is" if len(_live_exits) == 1 else "are") +
@@ -1662,28 +1692,42 @@ with tab_live:
 
             # per-day $ / % P&L off the same weights + returns as the P&L-by-
             # asset attribution — shared by the trade log's Day-P&L column and
-            # the 📆 Daily P&L chart, and exact for both sources
-            _dpl = ov.pnl_daily_replay(_PF["rets"], _wf["weights"],
-                                       _wf["sata"], _start_sel,
-                                       sata_daily=ov.SATA_DAILY)
+            # the 📆 Daily P&L chart, and exact for both sources.  LAZY: the
+            # series (and the trade-log diff) are computed only when a toggle
+            # that needs them is actually on, so the default page load pays
+            # nothing for these sections.
+            _dpl_memo = {}
+
+            def _get_dpl():
+                if "v" not in _dpl_memo:
+                    _dpl_memo["v"] = ov.pnl_daily_replay(
+                        _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
+                        sata_daily=ov.SATA_DAILY)
+                return _dpl_memo["v"]
 
             # ── daily trade log — every buy/sell the daily book ordered ──────
             # (both sources: the source radio above decides which weight
             # matrix — as-published books or walk-forward replay — feeds it)
-            _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"], _start_sel)
-            _dtl_buys = sum(d["n_buys"] for d in _dtl)
-            _dtl_sells = sum(d["n_sells"] for d in _dtl)
-            _dtl_resz = sum(d["n_resize"] for d in _dtl)
             if st.toggle(
                     f"🧾 Daily trade log since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — "
-                    f"{_dtl_buys} buy{'s' if _dtl_buys != 1 else ''} · "
-                    f"{_dtl_sells} sell{'s' if _dtl_sells != 1 else ''} · "
-                    f"{_dtl_resz} tilt re-size{'s' if _dtl_resz != 1 else ''} "
-                    f"across {len(_dtl)} trading "
-                    f"day{'s' if len(_dtl) != 1 else ''} (toggle on/off)",
+                    f"{_sm['start'].strftime('%b %d, %Y')} — positions bought "
+                    "& sold day by day, with each day's P&L (toggle on/off)",
                     key="overall_daily_trade_log"):
-                st.caption("Every position **bought and sold, day by day**, as "
+                _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"],
+                                          _start_sel)
+                _dtl_buys = sum(d["n_buys"] for d in _dtl)
+                _dtl_sells = sum(d["n_sells"] for d in _dtl)
+                _dtl_resz = sum(d["n_resize"] for d in _dtl)
+                _dpl = _get_dpl()
+                st.caption(f"**{_dtl_buys} "
+                           f"buy{'s' if _dtl_buys != 1 else ''} · "
+                           f"{_dtl_sells} "
+                           f"sell{'s' if _dtl_sells != 1 else ''} · "
+                           f"{_dtl_resz} tilt "
+                           f"re-size{'s' if _dtl_resz != 1 else ''} across "
+                           f"{len(_dtl)} trading "
+                           f"day{'s' if len(_dtl) != 1 else ''}.** "
+                           "Every position **bought and sold, day by day**, as "
                            "the "
                            + ("**as-published books**" if _actual
                               else "**walk-forward replay**")
@@ -1785,6 +1829,7 @@ with tab_live:
                     f"{_sm['start'].strftime('%b %d, %Y')} — every day's $ "
                     "and % result, split by sleeve on hover (toggle on/off)",
                     key="overall_daily_pnl"):
+                _dpl = _get_dpl()
                 if _dpl is None:
                     st.info("Not enough blend history after that date — "
                             "no daily P&L to chart.")
