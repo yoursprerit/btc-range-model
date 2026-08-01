@@ -221,3 +221,57 @@ def test_load_published_books_reads_sorted_and_skips_junk(tmp_path):
     (tmp_path / "noweights.json").write_text(json.dumps({"as_of": "2026-07-07"}))
     books = oc.load_published_books(tmp_path)
     assert [b["as_of"] for b in books] == ["2026-07-06", "2026-07-08"]
+
+
+def test_daily_pnl_keeps_the_day_axis_and_sums_to_the_attribution():
+    # pnl_daily_replay is pnl_attribution_replay with the day axis kept —
+    # the 📆 Daily P&L chart and the trade log's Day-P&L column run off it,
+    # so its day sums must reproduce the attribution (and the headline
+    # curve) exactly, per sleeve and in total
+    rng = np.random.default_rng(11)
+    idx = pd.date_range("2026-07-01", periods=15, freq="D")
+    rets = _rets(idx,
+                 AAA=pd.Series(rng.normal(0, 0.02, 15), index=idx),
+                 BBB=pd.Series(rng.normal(0, 0.03, 15), index=idx))
+    books = [_book("2026-07-01", {"AAA": 0.5, "BBB": 0.3}, 0.2),
+             _book("2026-07-04", {"AAA": 0.3, "BBB": 0.5}, 0.2),
+             _book("2026-07-09", {"AAA": 0.7}, 0.3)]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0005)
+    att = oc.pnl_attribution_replay(rets, rep["weights"], rep["sata"],
+                                    idx[0], sata_daily=0.0005)
+    dp = oc.pnl_daily_replay(rets, rep["weights"], rep["sata"],
+                             idx[0], sata_daily=0.0005)
+    # anchor bar is the cost basis — earns nothing
+    assert dp["total"].iloc[0] == 0.0 and dp["ret"].iloc[0] == 0.0
+    # per-sleeve day columns sum over days to the attribution's per-key $
+    for k, v in att["per_key"].items():
+        assert np.isclose(dp["per_key"][k].sum(), v, atol=1e-12)
+    assert np.isclose(dp["sata"].sum(), att["sata"], atol=1e-12)
+    assert np.isclose(dp["total"].sum(), att["total"], atol=1e-9)
+
+
+def test_daily_pnl_telescopes_the_equity_curve():
+    # each day's total $ is exactly the change in the re-based equity over
+    # that bar, and ret is the curve's daily % return — the chart's bars are
+    # the headline curve, sliced day by day
+    rng = np.random.default_rng(12)
+    idx = pd.date_range("2026-07-01", periods=10, freq="D")
+    rets = _rets(idx, AAA=pd.Series(rng.normal(0, 0.02, 10), index=idx))
+    books = [_book("2026-07-01", {"AAA": 0.8}, 0.2)]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0005)
+    dp = oc.pnl_daily_replay(rets, rep["weights"], rep["sata"],
+                             idx[0], sata_daily=0.0005)
+    eq = rep["equity"] / rep["equity"].iloc[0]
+    assert np.allclose(dp["total"].to_numpy()[1:],
+                       eq.diff().dropna().to_numpy(), atol=1e-12)
+    assert np.allclose(dp["ret"].to_numpy()[1:],
+                       eq.pct_change().dropna().to_numpy(), atol=1e-12)
+
+
+def test_daily_pnl_returns_none_when_window_too_short():
+    idx = pd.date_range("2026-07-01", periods=5, freq="D")
+    rets = _rets(idx, AAA=pd.Series(0.01, index=idx))
+    books = [_book("2026-07-01", {"AAA": 1.0}, 0.0)]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0)
+    assert oc.pnl_daily_replay(rets, rep["weights"], rep["sata"],
+                               idx[-1], sata_daily=0.0) is None
