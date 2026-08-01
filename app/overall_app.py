@@ -1734,8 +1734,7 @@ with tab_live:
                            "adjustments (re-sizes)</th>"
                            "<th style='text-align:right'>Turnover</th>"
                            "<th style='text-align:right'>≈ $ traded</th>"
-                           "<th style='text-align:right'>Day P&amp;L</th>"
-                           "<th style='text-align:right'>💵 Cash after</th></tr>")
+                           "<th style='text-align:right'>Day P&amp;L</th></tr>")
                     _drs = []
                     for _d in _dtl:
                         _sig = " · ".join(_dtl_chip(a) for a in _d["actions"]
@@ -1770,8 +1769,7 @@ with tab_live:
                             f"${_d['gross']*portfolio_value:,.0f}</td>"
                             f"<td style='text-align:right;"
                             f"font-variant-numeric:tabular-nums'>{_pl_s}</td>"
-                            f"<td style='text-align:right;color:#64748b'>"
-                            f"{_d['cash1']*100:.1f}%</td></tr>")
+                            f"</tr>")
                     st.markdown(
                         f"<div style='overflow-x:auto;max-height:440px;"
                         f"overflow-y:auto;margin:8px 0;'>"
