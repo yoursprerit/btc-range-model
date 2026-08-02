@@ -701,7 +701,7 @@ def curve_metrics(equity: pd.Series) -> dict:
     return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
 
 
-def slice_metrics(equity: pd.Series, start) -> dict | None:
+def slice_metrics(equity: pd.Series, start, end=None) -> dict | None:
     """P&L / performance / risk metrics for an equity curve **re-based at
     ``start``** — i.e. what an investor who put capital into the strategy on
     that date has experienced since.  Re-basing (dividing the slice by its first
@@ -709,8 +709,10 @@ def slice_metrics(equity: pd.Series, start) -> dict | None:
     entry point, not from the back-test's inception.  Returns ``None`` when the
     curve has fewer than 2 bars on/after ``start`` (nothing to measure); the
     first bar on/after ``start`` becomes the actual anchor (weekends/holidays
-    roll forward)."""
-    sub = equity.loc[pd.Timestamp(start):]
+    roll forward).  An optional ``end`` closes the window at the last bar
+    on/before it (``None`` = through the latest bar)."""
+    sub = equity.loc[pd.Timestamp(start):
+                     (pd.Timestamp(end) if end is not None else None)]
     if len(sub) < 2:
         return None
     sub = sub / sub.iloc[0]
@@ -722,31 +724,34 @@ def slice_metrics(equity: pd.Series, start) -> dict | None:
                 **curve_metrics(sub))
 
 
-def per_asset_slice_metrics(results: list[dict], start) -> list[dict]:
+def per_asset_slice_metrics(results: list[dict], start, end=None) -> list[dict]:
     """Per-instrument read since ``start``: each sleeve's strategy equity and
     its buy-&-hold equity, both re-based at the anchor (see ``slice_metrics``),
     plus the share of days it actually spent in the market.  An instrument whose
     history begins after ``start`` is measured from its own first bar (its
     ``strat['start']`` says so); one with <2 bars since ``start`` is skipped.
-    Rows come back in ``results`` order (grouped by parent signal)."""
+    Rows come back in ``results`` order (grouped by parent signal).  An
+    optional ``end`` closes every window at the last bar on/before it
+    (``None`` = through the latest bar)."""
+    end_ts = pd.Timestamp(end) if end is not None else None
     rows = []
     for res in results:
-        sm = slice_metrics(_equity(res["ret"]), start)
+        sm = slice_metrics(_equity(res["ret"]), start, end)
         if sm is None:
             continue
         bh_eq = pd.Series(np.asarray(res["r"]["bh"], float),
                           index=pd.DatetimeIndex(res["dates"]))
-        pos_sub = res["pos_series"].loc[pd.Timestamp(start):]
+        pos_sub = res["pos_series"].loc[pd.Timestamp(start):end_ts]
         rows.append(dict(
             key=res["key"], name=res["name"], kind=res["kind"],
             parent=res["parent"], accent=res["accent"], emoji=res["emoji"],
             in_market=float(pos_sub.mean()) if len(pos_sub) else 0.0,
-            strat=sm, bh=slice_metrics(bh_eq, start),
-            trades=trade_stats_since(res, start)))
+            strat=sm, bh=slice_metrics(bh_eq, start, end),
+            trades=trade_stats_since(res, start, end)))
     return rows
 
 
-def trade_stats_since(res: dict, start) -> dict:
+def trade_stats_since(res: dict, start, end=None) -> dict:
     """Trade count and win rate for one sleeve since ``start``.  A trade counts
     when it was open at any point on/after the anchor — i.e. every closed trade
     whose exit lands on/after ``start`` (even if entered before it) plus the
@@ -755,24 +760,35 @@ def trade_stats_since(res: dict, start) -> dict:
     closed trade wins on its realised return; the open one on its current
     unrealised P&L.  ``win_rate`` is a 0–1 fraction, ``None`` with no trades.
 
+    With an ``end``, only trades open at some point within ``[start, end]``
+    count: closed trades additionally need an entry on/before ``end`` (still
+    judged on their full realised return, even when the exit lands after
+    ``end``), and the currently-open position counts only when entered
+    on/before ``end`` (an undated open position can't be assigned to the
+    window, so it's conservatively not counted).
+
     Not every engine exposes ``trade_log``: the BTC CT engine's ``trades`` ARE
     dicts of the same shape, so fall back to them when ``trade_log`` is absent
     (e.g. a stale hot-loaded engine module).  The dict filter also skips
     engines whose ``trades`` is a bare array of returns — undated trades can't
     be assigned to the window, so they're (conservatively) not counted."""
     start = pd.Timestamp(start)
+    end = pd.Timestamp(end) if end is not None else None
     log = res["r"].get("trade_log")
     if not log:
         raw = res["r"].get("trades")           # may be a numpy array — no `or`
         log = [t for t in (raw if raw is not None else []) if isinstance(t, dict)]
     wins = n = 0
     for t in log:
-        if pd.Timestamp(t["exit_date"]) >= start:
+        if pd.Timestamp(t["exit_date"]) >= start and \
+           (end is None or pd.Timestamp(t["entry_date"]) <= end):
             n += 1
             wins += t["ret"] > 0
     n_open = 0
     pos = res.get("pos") or {}
-    if pos.get("in_pos"):
+    if pos.get("in_pos") and (end is None or (
+            pos.get("entry_date") is not None
+            and pd.Timestamp(pos["entry_date"]) <= end)):
         n_open = 1
         n += 1
         wins += (pos.get("upnl") or 0) > 0
@@ -794,7 +810,8 @@ def overall_trade_stats(pa_rows: list[dict], weights: dict,
 
 def trade_log_since(results: list[dict], weights: dict, start,
                     min_w: float = 0.002,
-                    weight_matrix: pd.DataFrame | None = None) -> list[dict]:
+                    weight_matrix: pd.DataFrame | None = None,
+                    end=None) -> list[dict]:
     """The individual trades behind ``overall_trade_stats``: every round-trip
     across the sleeves the optimal blend holds (weight > ``min_w``) that was
     open at any point on/after ``start`` — closed trades whose exit lands on/
@@ -808,8 +825,14 @@ def trade_log_since(results: list[dict], weights: dict, start,
     row's default ``weight``.  With a ``weight_matrix`` (the replay's daily
     weight frame) each trade instead carries the PEAK weight the book gave
     that sleeve while the trade was open — the honest deployed notional under
-    a daily-rebalanced book."""
+    a daily-rebalanced book.
+
+    With an ``end``, only trades open at some point within ``[start, end]``
+    are listed — same window rule as ``trade_stats_since``: closed trades
+    additionally need an entry on/before ``end``, and the currently-open
+    position is listed only when entered on/before ``end``."""
     start = pd.Timestamp(start)
+    end = pd.Timestamp(end) if end is not None else None
 
     def _px(t: dict, *keys):
         for k in keys:
@@ -837,9 +860,9 @@ def trade_log_since(results: list[dict], weights: dict, start,
                     emoji=res["emoji"], accent=res["accent"], weight=float(w))
         for t in log:
             exit_d = pd.Timestamp(t["exit_date"])
-            if exit_d < start:
-                continue
             entry_d = pd.Timestamp(t["entry_date"])
+            if exit_d < start or (end is not None and entry_d > end):
+                continue
             base["weight"] = _trade_w(res["key"], w, entry_d, exit_d)
             rows.append(dict(base, open=False, entry_date=entry_d, exit_date=exit_d,
                              entry_px=_px(t, "entry_px", "entry_price"),
@@ -849,15 +872,16 @@ def trade_log_since(results: list[dict], weights: dict, start,
         pos = res.get("pos") or {}
         if pos.get("in_pos"):
             e_dt = pd.Timestamp(pos["entry_date"]) if pos.get("entry_date") else None
-            upnl = pos.get("upnl")             # % — refreshed by apply_spot
-            last_px = res.get("last_close")
-            base["weight"] = _trade_w(res["key"], w, e_dt, None)
-            rows.append(dict(base, open=True, entry_date=e_dt, exit_date=None,
-                             entry_px=_px(pos, "entry_px"),
-                             exit_px=(float(last_px) if last_px is not None
-                                      and np.isfinite(last_px) else None),
-                             ret=(upnl / 100 if upnl is not None else None),
-                             reason="open", days=pos.get("days")))
+            if end is None or (e_dt is not None and e_dt <= end):
+                upnl = pos.get("upnl")         # % — refreshed by apply_spot
+                last_px = res.get("last_close")
+                base["weight"] = _trade_w(res["key"], w, e_dt, None)
+                rows.append(dict(base, open=True, entry_date=e_dt, exit_date=None,
+                                 entry_px=_px(pos, "entry_px"),
+                                 exit_px=(float(last_px) if last_px is not None
+                                          and np.isfinite(last_px) else None),
+                                 ret=(upnl / 100 if upnl is not None else None),
+                                 reason="open", days=pos.get("days")))
     _far_past = pd.Timestamp("1900-01-01")
     rows.sort(key=lambda r: (r["open"],
                              r["exit_date"] or r["entry_date"] or _far_past,
