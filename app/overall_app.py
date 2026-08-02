@@ -1412,7 +1412,7 @@ with tab_live:
     # simulation of the same rules over the full back-test history.  Either
     # curve is re-based at the chosen date so drawdown, Sharpe etc. are
     # measured from the entry point, not from inception.
-    with st.expander("📈 **Overall strategy P&L — from your start date**", expanded=False):
+    with st.expander("📈 **Overall strategy P&L — pick your start & end dates**", expanded=False):
         _books = get_published_books(_bucket())
         _vmap = get_book_version_map(_bucket())
         # full archive only for context (how many older-generation books
@@ -1513,17 +1513,22 @@ with tab_live:
             _strat_label = STRAT_CURVE
             _curves_view = _PF["curves"]
             _curve_all = _PF["curves"][STRAT_CURVE]
-        # sleeve-inclusion gate + per-trade notionals under a daily-weight book
-        _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
         _default_start = pd.Timestamp("2026-03-01").date()
+        _today = pd.Timestamp.now(tz="America/New_York").date()
+        _end_max = max(_d1, _today)
         # switching source narrows the valid range (the as-published record is
         # younger than the replay) — clamp a remembered date or the widget errors
         if "overall_pnl_start" in st.session_state:
             _remember = st.session_state["overall_pnl_start"]
             if _remember < _d0 or _remember > _d1:
                 st.session_state["overall_pnl_start"] = min(max(_remember, _d0), _d1)
-        pnl_cols = st.columns([1, 3])
+        if "overall_pnl_end" in st.session_state:
+            _remember_e = st.session_state["overall_pnl_end"]
+            if _remember_e < _d0 or _remember_e > _end_max:
+                st.session_state["overall_pnl_end"] = min(max(_remember_e, _d0),
+                                                          _end_max)
+        pnl_cols = st.columns([1, 1, 2])
         with pnl_cols[0]:
             _start_sel = st.date_input(
                 "📅 Start date", value=min(max(_default_start, _d0), _d1),
@@ -1531,18 +1536,47 @@ with tab_live:
                 help="First strategy bar on/after this date becomes the cost-basis "
                      "anchor (weekends/holidays roll forward). Defaults to "
                      "March 1, 2026.")
+        with pnl_cols[1]:
+            _end_sel = st.date_input(
+                "📅 End date", value=min(max(_today, _d0), _end_max),
+                min_value=_d0, max_value=_end_max, key="overall_pnl_end",
+                help="Last strategy bar on/before this date closes the "
+                     "measurement window (weekends/holidays roll back). "
+                     "Defaults to today on every load, so the section keeps "
+                     "measuring through the latest bar unless you pick an "
+                     "earlier cut-off.")
+        # everything below measures the [start, end] window — truncate the
+        # curves / weight matrices / returns once here and every downstream
+        # figure, chart and toggle follows.  _end_arg stays None while the end
+        # date covers the latest bar so open positions keep counting as today.
+        _end_ts = pd.Timestamp(_end_sel)
+        _end_arg = None if _end_sel >= _d1 else _end_sel
+        _curve_all = _curve_all.loc[:_end_ts]
+        _curves_view = {k: v.loc[:_end_ts] for k, v in _curves_view.items()}
+        _wf = {"weights": _wf["weights"].loc[:_end_ts],
+               "sata": _wf["sata"].loc[:_end_ts]}
+        _rets_win = _PF["rets"].loc[:_end_ts]
+        # sleeve-inclusion gate + per-trade notionals under a daily-weight book
+        _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
         _sm = ov.slice_metrics(_curve_all, _start_sel)
         if _sm is None:
-            st.warning("Not enough strategy history on/after that date — pick an "
-                       f"earlier start (data runs {_d0} → {_d1}).")
+            st.warning("Not enough strategy history between those dates — pick "
+                       "an earlier start or a later end "
+                       f"(data runs {_d0} → {_d1}).")
         else:
+            # window label for every toggle/chart below: "since <start>" while
+            # the end date covers the latest bar, "<start> → <end>" otherwise
+            _win_lbl = (f"since {_sm['start'].strftime('%b %d, %Y')}"
+                        if _end_arg is None else
+                        f"{_sm['start'].strftime('%b %d, %Y')} → "
+                        f"{_sm['end'].strftime('%b %d, %Y')}")
             _pnl_d = _sm["total_ret"] * portfolio_value
             _end_v = portfolio_value * (1 + _sm["total_ret"])
             _src_note = (f"as-published <b style='color:{_sv.BADGE_COLOR}'>"
                          f"{_ver_up}</b> record · {_n_books} "
                          f"book{'s' if _n_books != 1 else ''}" if _actual
                          else f"profile <code>{_profile}</code>")
-            with pnl_cols[1]:
+            with pnl_cols[2]:
                 st.markdown(
                     f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
                     f"Measured <b>{_sm['start'].strftime('%b %d, %Y')} → "
@@ -1561,7 +1595,7 @@ with tab_live:
             pm[3].metric("Sharpe (ann.)", f"{_sm['sharpe']:.2f}",
                          delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
             # per-asset since-start reads (also feed the blend-level trade stats)
-            _pa = ov.per_asset_slice_metrics(results, _start_sel)
+            _pa = ov.per_asset_slice_metrics(results, _start_sel, end=_end_arg)
             _ots = ov.overall_trade_stats(_pa, _wmax)
             pm2 = st.columns(6)
             pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%",
@@ -1644,8 +1678,8 @@ with tab_live:
                 height=340, margin=dict(t=30, b=10, l=10, r=10),
                 yaxis_title="Portfolio value ($)", hovermode="x unified",
                 legend=dict(orientation="h", y=1.1),
-                title=dict(text=f"Growth of ${portfolio_value:,.0f} since "
-                                f"{_sm['start'].strftime('%b %d, %Y')} — {_src_title}",
+                title=dict(text=f"Growth of ${portfolio_value:,.0f} "
+                                f"{_win_lbl} — {_src_title}",
                            font_size=13))
             st.plotly_chart(_fig_pnl, use_container_width=True)
             if _actual:
@@ -1667,16 +1701,14 @@ with tab_live:
                            "Not investment advice.")
 
             # ── daily % allocation — the book behind the curve above ─────────
-            if st.toggle(f"📊 Daily % allocation by asset since "
-                         f"{_sm['start'].strftime('%b %d, %Y')} — every asset's "
-                         "share of the book through time (toggle on/off)",
+            if st.toggle(f"📊 Daily % allocation by asset {_win_lbl} — every "
+                         "asset's share of the book through time (toggle on/off)",
                          key="overall_alloc_history_pnl"):
                 st.plotly_chart(
                     _alloc_area_fig(
                         _wf["weights"].loc[pd.Timestamp(_start_sel):],
                         _wf["sata"].loc[pd.Timestamp(_start_sel):],
-                        f"Daily % allocation since "
-                        f"{_sm['start'].strftime('%b %d, %Y')} — every asset "
+                        f"Daily % allocation {_win_lbl} — every asset "
                         f"plus SATA (stacks to 100%)"),
                     use_container_width=True)
                 st.caption("The exact book the P&L above compounds each day, "
@@ -1701,7 +1733,7 @@ with tab_live:
             def _get_dpl():
                 if "v" not in _dpl_memo:
                     _dpl_memo["v"] = ov.pnl_daily_replay(
-                        _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
+                        _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                         sata_daily=ov.SATA_DAILY)
                 return _dpl_memo["v"]
 
@@ -1709,8 +1741,7 @@ with tab_live:
             # (both sources: the source radio above decides which weight
             # matrix — as-published books or walk-forward replay — feeds it)
             if st.toggle(
-                    f"🧾 Daily trade log since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — positions bought "
+                    f"🧾 Daily trade log {_win_lbl} — positions bought "
                     "& sold day by day, with each day's P&L (toggle on/off)",
                     key="overall_daily_trade_log"):
                 _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"],
@@ -1825,8 +1856,7 @@ with tab_live:
             # (both sources, off the same day-axis attribution as the column
             # above — bars sum exactly to the headline Strategy P&L dollars)
             if st.toggle(
-                    f"📆 Daily P&L since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — every day's $ "
+                    f"📆 Daily P&L {_win_lbl} — every day's $ "
                     "and % result, split by sleeve on hover (toggle on/off)",
                     key="overall_daily_pnl"):
                 _dpl = _get_dpl()
@@ -1908,7 +1938,8 @@ with tab_live:
             if _actual:
                 _bk_all = _bookrep["books"]
                 _bk_win = [b for b in _bk_all
-                           if b["as_of"].date() >= _sm["start"].date()]
+                           if _sm["start"].date() <= b["as_of"].date()
+                           <= _sm["end"].date()]
                 # include the book driving the anchor bar (published before it)
                 _bk_pre = [b for b in _bk_all
                            if b["as_of"].date() < _sm["start"].date()]
@@ -1918,8 +1949,7 @@ with tab_live:
                           if b.get("turnover") is not None]
                 _avg_to = (sum(_turns) / len(_turns)) if _turns else 0.0
                 if st.toggle(
-                        f"🔁 Published books & daily trims since "
-                        f"{_sm['start'].strftime('%b %d, %Y')} — "
+                        f"🔁 Published books & daily trims {_win_lbl} — "
                         f"{len(_bk_win)} book{'s' if len(_bk_win) != 1 else ''}"
                         + (f" · avg daily turnover {_avg_to*100:.1f}%"
                            if _turns else "")
@@ -2010,8 +2040,7 @@ with tab_live:
             # ── per-asset breakdown — opt-in via toggle so the page stays clean
             # (a nested st.expander is not allowed inside the section expander)
             # (_pa computed above, alongside the blend-level trade stats)
-            if st.toggle(f"🔬 Per-asset breakdown since "
-                         f"{_sm['start'].strftime('%b %d, %Y')} — every sleeve's "
+            if st.toggle(f"🔬 Per-asset breakdown {_win_lbl} — every sleeve's "
                          "return & risk (toggle to show)",
                          key="overall_pa_breakdown"):
                 st.caption("Each instrument's **own signal-driven strategy** vs "
@@ -2142,10 +2171,11 @@ with tab_live:
 
             # ── trade log — the individual trades behind the counts above ──────
             _tl = ov.trade_log_since(results, _wmax, _start_sel,
-                                     weight_matrix=_wf["weights"])
+                                     weight_matrix=_wf["weights"],
+                                     end=_end_arg)
             _n_open_tl = sum(1 for t in _tl if t["open"])
             if st.toggle(
-                    f"📜 Trade log since {_sm['start'].strftime('%b %d, %Y')} — "
+                    f"📜 Trade log {_win_lbl} — "
                     f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
                     f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (toggle to show)",
                     key="overall_trade_log"):
@@ -2222,9 +2252,8 @@ with tab_live:
 
             # ── capital traded by asset — where the strategy put the money ─────
             if st.toggle(
-                    f"🥧 Capital traded by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — % of total deployed "
-                    "capital (toggle to show)",
+                    f"🥧 Capital traded by asset {_win_lbl} — % of total "
+                    "deployed capital (toggle to show)",
                     key="overall_capital_by_asset"):
                 st.caption("Each round-trip in the trade log above (open positions "
                            "included) deploys its sleeve's blend weight of the 💼 "
@@ -2282,8 +2311,7 @@ with tab_live:
 
             # ── P&L by asset — exact attribution of the blend's P&L ──────────
             if st.toggle(
-                    f"📊 P&L by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — how much each "
+                    f"📊 P&L by asset {_win_lbl} — how much each "
                     "instrument earned or lost (toggle to show)",
                     key="overall_pnl_share_by_asset"):
                 st.caption("The headline **Strategy P&L above, split by sleeve**: "
@@ -2298,7 +2326,7 @@ with tab_live:
                            "curve — unlike the trade log's **≈ $ on blend** "
                            "column, which is a per-trade approximation.)")
                 _att = ov.pnl_attribution_replay(
-                    _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
+                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
                 if _att is None:
                     st.info("Not enough blend history after that date — "
@@ -2358,9 +2386,8 @@ with tab_live:
 
             # ── capital efficiency — P&L per dollar of capital deployed ──────
             if st.toggle(
-                    f"⚡ Capital efficiency by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — P&L earned per $ "
-                    "of capital traded (toggle to show)",
+                    f"⚡ Capital efficiency by asset {_win_lbl} — P&L earned "
+                    "per $ of capital traded (toggle to show)",
                     key="overall_capital_efficiency"):
                 st.caption("Each sleeve's **exact-attribution P&L** (the chart "
                            "above) divided by the **total capital it deployed** "
@@ -2374,7 +2401,7 @@ with tab_live:
                            "**SATA** isn't shown — its yield accrues on idle "
                            "cash, not traded capital.")
                 _eff_att = ov.pnl_attribution_replay(
-                    _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
+                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
                 if not _tl or _eff_att is None:
                     st.info("No sleeve the blend holds traded in this window — "
@@ -2419,8 +2446,7 @@ with tab_live:
 
             # ── win rate per asset — how often each sleeve's trades won ──────
             if st.toggle(
-                    f"🎯 Win rate by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — share of winning "
+                    f"🎯 Win rate by asset {_win_lbl} — share of winning "
                     "trades per instrument (toggle to show)",
                     key="overall_win_rate_by_asset"):
                 st.caption("Winning trades out of all counted trades per sleeve "
@@ -2478,9 +2504,8 @@ with tab_live:
 
             # ── trade efficiency — each trade's average share of total P&L ───
             if st.toggle(
-                    f"💡 Trade efficiency by asset since "
-                    f"{_sm['start'].strftime('%b %d, %Y')} — average % of total "
-                    "P&L earned per trade (toggle to show)",
+                    f"💡 Trade efficiency by asset {_win_lbl} — average % of "
+                    "total P&L earned per trade (toggle to show)",
                     key="overall_trade_efficiency"):
                 st.caption("**(P&L per trade ÷ total P&L) × 100** for each "
                            "sleeve: its **exact-attribution P&L** (the 📊 chart "
@@ -2494,7 +2519,7 @@ with tab_live:
                            "**SATA** isn't shown — its yield accrues daily on "
                            "idle cash, not from trades.")
                 _pe_att = ov.pnl_attribution_replay(
-                    _PF["rets"], _wf["weights"], _wf["sata"], _start_sel,
+                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
                 _wts_pe = _wmax
                 _pe_bars = []
