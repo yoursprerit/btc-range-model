@@ -22,11 +22,13 @@ name: Dispatch publish (external-scheduler relay)
 # pinned to the day's 7:15 AM CT anchor — so a relay fire publishes exactly
 # the book the scheduled run would have.
 #
-# SCHEDULER SIDE: two Claude Code Routines (12:16 & 13:16 UTC daily —
-# 7:16 AM CDT and CST respectively) fetch main's daily_audit.json first and
-# push the marker commit ONLY if today's book has not been published yet and
-# the 7:15 AM America/Chicago anchor has passed. The publish workflow's own
-# cron slots remain as backup.
+# SCHEDULER SIDE: the primary external scheduler is a cron-job.org job that
+# calls the workflow_dispatch API directly with a PAT at 7:16 AM
+# America/Chicago (see docs/EXTERNAL_SCHEDULER.md) — it does not need this
+# relay. The relay stays as the fallback path for automation whose
+# credentials lack the Actions scope (e.g. Claude Code sessions, whose
+# GitHub tokens carry contents:write only): push the marker commit and this
+# workflow performs the dispatch.
 #
 # `publish-trigger` is listed alongside this development branch so the relay
 # keeps working from a stable, dedicated branch if this one is ever merged

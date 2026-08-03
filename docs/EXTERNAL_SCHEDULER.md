@@ -23,7 +23,29 @@ workflow's cron slots then remain as backup. This runbook sets that up with
    is added automatically). Nothing else.
 5. Generate and copy the token (shown once).
 
-## 2. Create the cron-job.org job
+## 2. Verify the token from your own machine (optional, ~1 minute)
+
+A successful dispatch returns **HTTP 204** with an empty body; harmless to run
+even on a day whose book is already published (a same-day re-publish yields
+the identical book).
+
+```bash
+curl -i -X POST \
+  -H "Authorization: Bearer PASTE_TOKEN_HERE" \
+  -H "Accept: application/vnd.github+json" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/repos/yoursprerit/btc-range-model/actions/workflows/publish-target-book.yml/dispatches" \
+  -d '{"ref":"main"}'
+```
+
+(On Windows PowerShell use `curl.exe`, backticks for line continuation, and
+escape the body quotes: `-d "{\"ref\":\"main\"}"`.) Within seconds a *Publish
+target book* run with event `workflow_dispatch` appears in the Actions tab.
+Troubleshooting: `401 Bad credentials` → token pasted wrong; `403`/`404` →
+token missing the **Actions: Read and write** permission or not scoped to
+`btc-range-model`.
+
+## 3. Create the cron-job.org job
 
 Create a free account, then **Create cronjob** with:
 
@@ -38,9 +60,9 @@ Create a free account, then **Create cronjob** with:
 | Header 3 | `X-GitHub-Api-Version: 2022-11-28` |
 | Notifications | Enable failure notifications (Settings → notify on failure) |
 
-Save, then use cron-job.org's **"Test run"** button: a successful dispatch
-returns **HTTP 204** (empty body) and a `Publish target book` run with event
-`workflow_dispatch` appears in the repo's Actions tab within seconds.
+Save, then use cron-job.org's **"Test run"** button: same success criteria as
+the curl test above — **HTTP 204**, and a `Publish target book` run with event
+`workflow_dispatch` in the repo's Actions tab within seconds.
 
 ### Why these choices
 

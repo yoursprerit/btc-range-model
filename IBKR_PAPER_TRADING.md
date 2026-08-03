@@ -222,6 +222,13 @@ Bitcoin trades continuously, so the book is refreshed daily; only the
 book is written, and the published book then stays **frozen until the next
 morning's cycle**.
 
+> **On-time delivery:** GitHub's `on: schedule` is best-effort — fires arrive
+> minutes-to-hours late, and some days every slot is dropped (2026-08-03).
+> The punctual 7:16-AM-CT fire therefore comes from an external cron-job.org
+> job hitting the `workflow_dispatch` API with a fine-grained PAT — setup in
+> [`docs/EXTERNAL_SCHEDULER.md`](docs/EXTERNAL_SCHEDULER.md). The workflow's
+> own cron slots remain as same-day backup.
+
 The **only** way to replace the frozen book intraday is to publish **on demand
 from the app**: the 📋 Target Book page has a **🚀 Publish new target book**
 button that dispatches the same GitHub Action via `workflow_dispatch`, so a
