@@ -48,6 +48,16 @@ name: Publish target book (IBKR Option C)
 #     -d '{"ref":"main"}'
 # API dispatch fires precisely; the cron slots below then remain as backup.
 #
+# 2026-08-03: that hardening is LIVE. GitHub dropped EVERY scheduled fire for
+# 2.5+ hours this morning (zero runs by 8:45 AM CT), so an external scheduler
+# now drives the on-time publish: two Claude Code Routines (12:16 & 13:16 UTC
+# daily — 7:16 AM CDT / CST) push a [dispatch-publish] marker commit that the
+# dispatch-publish.yml relay workflow turns into a workflow_dispatch of this
+# file on main (the Routines' tokens lack the Actions write scope to call the
+# dispatch API directly; the relay's GITHUB_TOKEN has it). Each Routine checks
+# daily_audit.json first and only fires if today's book is still unpublished
+# after the 7:15 AM CT anchor. The cron slots below remain as backup.
+#
 # NOTE: `on: schedule` fires only from the repo's DEFAULT branch. workflow_dispatch
 # also stays, for manual runs / first tests (it bypasses the schedule guard).
 
