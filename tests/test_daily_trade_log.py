@@ -116,6 +116,77 @@ def test_start_filter_and_too_short_window():
     assert oc.daily_trade_log(w, sata, IDX[4]) == []
 
 
+def test_trim_pnl_measured_from_the_entry_close():
+    # bought at close of IDX0 (earning rows 1-2), trimmed at close of IDX2 —
+    # the slice sold realized (1+r1)(1+r2)−1; entry_date is the buy close
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.2])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.01])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.6, 0.6, 0.8, 0.8]), IDX[0],
+                             returns=rets)
+    trim = next(a for d in log for a in d["actions"] if a["action"] == "trim")
+    assert np.isclose(trim["pnl"], 1.10 * 1.05 - 1)
+    assert trim["entry_date"] == IDX[0]
+    # the buy itself carries no P&L
+    buy = next(a for d in log for a in d["actions"] if a["action"] == "buy")
+    assert buy["pnl"] is None and buy["entry_date"] is None
+
+
+def test_full_sell_also_carries_pnl():
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.0, 0.0])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.01])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.6, 0.6, 1.0, 1.0]), IDX[0],
+                             returns=rets)
+    sell = next(a for d in log for a in d["actions"] if a["action"] == "sell")
+    assert np.isclose(sell["pnl"], 1.10 * 1.05 - 1)
+    assert sell["entry_date"] == IDX[0]
+
+
+def test_pnl_none_without_returns_or_return_column():
+    w = _frame(AAA=[0.5, 0.5, 0.3, 0.3, 0.3])
+    sata = _sata([0.5, 0.5, 0.7, 0.7, 0.7])
+    a = oc.daily_trade_log(w, sata, IDX[0])[0]["actions"][0]
+    assert a["pnl"] is None and a["entry_date"] is None
+    rets = _frame(BBB=[0.0, 0.0, 0.0, 0.0, 0.0])   # no AAA column
+    a = oc.daily_trade_log(w, sata, IDX[0], returns=rets)[0]["actions"][0]
+    assert a["pnl"] is None
+
+
+def test_held_from_matrix_start_measures_from_the_first_close():
+    # already held at row 0 → the anchor bar is the cost basis: only r1
+    # counts for a trim executed at close of IDX1 (r0 excluded)
+    w = _frame(AAA=[0.5, 0.5, 0.3, 0.3, 0.3])
+    rets = _frame(AAA=[0.20, 0.10, 0.05, 0.0, 0.0])
+    log = oc.daily_trade_log(w, _sata([0.5, 0.5, 0.7, 0.7, 0.7]), IDX[0],
+                             returns=rets)
+    a = log[0]["actions"][0]
+    assert np.isclose(a["pnl"], 0.10)
+    assert a["entry_date"] == IDX[0]
+
+
+def test_pnl_uses_the_true_entry_before_the_window_anchor():
+    # bought at close of IDX0, window anchored at IDX2 — the trim executed
+    # at close of IDX3 still measures from the real buy: (1+r1)(1+r2)(1+r3)
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.4, 0.2])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, 0.02, -0.01])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.6, 0.6, 0.6, 0.8]), IDX[2],
+                             returns=rets)
+    assert len(log) == 1 and log[0]["date"] == IDX[3]
+    a = log[0]["actions"][0]
+    assert np.isclose(a["pnl"], 1.10 * 1.05 * 1.02 - 1)
+    assert a["entry_date"] == IDX[0]
+
+
+def test_pnl_restarts_at_reentry():
+    # closed and re-opened — the later trim measures from the SECOND buy
+    w = _frame(AAA=[0.4, 0.0, 0.4, 0.4, 0.2])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, 0.02, -0.01])
+    log = oc.daily_trade_log(w, _sata([0.6, 1.0, 0.6, 0.6, 0.8]), IDX[0],
+                             returns=rets)
+    trim = next(a for d in log for a in d["actions"] if a["action"] == "trim")
+    assert np.isclose(trim["pnl"], 1.05 * 1.02 - 1)   # rows 2-3 only
+    assert trim["entry_date"] == IDX[1]
+
+
 def test_runs_off_the_as_published_replay_unchanged():
     # the P&L source toggle swaps the weight matrix under the same call —
     # published_book_replay's weights/sata must feed it directly

@@ -1780,7 +1780,7 @@ with tab_live:
                     "& sold day by day, with each day's P&L (toggle on/off)",
                     key="overall_daily_trade_log"):
                 _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"],
-                                          _start_sel)
+                                          _start_sel, returns=_rets_win)
                 _dtl_buys = sum(d["n_buys"] for d in _dtl)
                 _dtl_sells = sum(d["n_sells"] for d in _dtl)
                 _dtl_resz = sum(d["n_resize"] for d in _dtl)
@@ -1802,7 +1802,14 @@ with tab_live:
                            "(green) or fully close (red) a sleeve when its "
                            "Action signal flips, while **⚖️ daily tilt "
                            "adjustments** re-size positions already held — "
-                           "the daily optimizer's adds and trims. Each row is "
+                           "the daily optimizer's adds and trims. Tilt trims "
+                           "also carry the **realized P&L on the slice "
+                           "sold**: the sleeve's % return from the "
+                           "position's entry close to that sale close "
+                           "(positions already held at the record's first "
+                           "bar measure from that bar's close), and the "
+                           "≈ $ gain or loss locked in on the dollars sold, "
+                           "scaled by the 💼 portfolio value. Each row is "
                            "the trade ticket executed at that bar's close "
                            "(the book earns from the next bar — the "
                            "decided-at-previous-close convention), newest "
@@ -1833,6 +1840,16 @@ with tab_live:
                             _lbl = (f"{a['key']} {a['w0']*100:.1f}→"
                                     f"{a['w1']*100:.1f}% "
                                     f"<b>({a['delta']*100:+.1f})</b>")
+                            if (a["delta"] < 0 and a.get("pnl") is not None
+                                    and a["pnl"] > -1):
+                                # realized P&L on the slice sold: proceeds
+                                # |Δw|·💼 minus their entry-close cost basis
+                                _sold = abs(a["delta"]) * portfolio_value
+                                _pd = _sold - _sold / (1 + a["pnl"])
+                                _pc = C_BUY if a["pnl"] >= 0 else C_EXIT
+                                _lbl += (f" · <span style='color:{_pc}'>"
+                                         f"P&amp;L {a['pnl']*100:+.1f}% "
+                                         f"≈ ${_pd:+,.0f}</span>")
                         return f"<span style='color:{_cc}'>{_lbl}</span>"
 
                     _dh = ("<tr style='background:#f1f5f9;font-size:12px;"
