@@ -54,6 +54,7 @@ for _p in (str(_APP_DIR), str(_REPO_ROOT)):
 import ticker_core as tc                     # noqa: E402
 import backtest_ticker as bt                 # noqa: E402
 import ticker_config                         # noqa: E402
+import freshness as _frs                     # noqa: E402
 from ticker_config import TickerConfig, get_config, _STD_PERIODS   # noqa: E402
 
 # Capability flag: this build's live_exit_keys re-runs each mode's real trend
@@ -481,7 +482,8 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
     return dict(state="FLAT", label="FLAT — NO SIGNAL", ico="⬜", tone="flat")
 
 
-def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dchg, mom):
+def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dchg, mom,
+                  hist=None):
     """Assemble one traded-instrument result dict from a run_strategy output."""
     dates = pd.to_datetime(pd.Series(r["dates"]))
     strat = np.asarray(r["strat"], float)
@@ -521,8 +523,11 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         engine_label=cfg.engine_label(),
         # committed close history + config so the live-price exit check can re-run
         # the mode's real trend condition (e.g. dual_ma's fast/slow SMA cross)
-        # rather than a naive price-vs-line proxy.
-        cfg=cfg, close_hist=daily["px_close"].to_numpy(float),
+        # rather than a naive price-vs-line proxy.  Completed sessions only —
+        # trend_long_now_live APPENDS the live price as the provisional newest
+        # close, so an in-progress bar left here would count today twice.
+        cfg=cfg,
+        close_hist=(hist if hist is not None else daily)["px_close"].to_numpy(float),
     )
 
 
@@ -532,16 +537,30 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
     daily = _load_daily(cfg)
     if daily is None or daily.empty or "px_close" not in daily.columns:
         return []
-    preds = bt.build_predictions(cfg, daily)
+    # COMMITTED signals come from completed sessions only, exactly like each
+    # dedicated app (they build predictions on drop_in_progress_us_bar(daily)).
+    # The gated frame overlays Yahoo's in-progress *today* row during US market
+    # hours for live prices — feeding that half-formed bar into the signature
+    # math lets D2/D3 (and the trend cross) flip intraday off a partial
+    # high/low, so the Overall card would show an EXIT the source app doesn't.
+    # The live-price provisional layer (live_exit_keys / live_entry_keys)
+    # handles intraday reads separately.  ``daily`` keeps the partial bar for
+    # display prices.
+    hist = _frs.drop_in_progress_us_bar(daily)
+    if hist is None or hist.empty or "px_close" not in hist.columns:
+        hist = daily
+    preds = bt.build_predictions(cfg, hist)
     sig = bt.precompute_signals(cfg, preds)
 
     # parent-level signal snapshot (shared by all traded instruments)
     last_close = float(daily["px_close"].iloc[-1])
     prev_close = float(daily["px_close"].iloc[-2]) if len(daily) > 1 else last_close
     dchg = (last_close / prev_close - 1) * 100 if prev_close else 0.0
-    # trend line for display / live-exit, and the engine's actual long signal
-    ma_val = bt.trend_line_value(cfg, daily) if cfg.is_trend else None
-    long_now = bt.trend_long_now(cfg, daily) if cfg.is_trend else None
+    # trend line for display / live-exit, and the engine's actual long signal —
+    # both on the completed frame (decisions are made at the close; the naive
+    # partial-bar read would flicker intraday)
+    ma_val = bt.trend_line_value(cfg, hist) if cfg.is_trend else None
+    long_now = bt.trend_long_now(cfg, hist) if cfg.is_trend else None
     # common momentum read (distance above a 50-day SMA) for cross-asset priority
     ref_ma = float(daily["px_close"].tail(50).mean())
     mom = (last_close / ref_ma - 1) if ref_ma else 0.0
@@ -575,7 +594,7 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
         dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val,
                             long_now=long_now)
         res = _asset_result(cfg, label, col, r, daily, dec, alert, bull,
-                            sent, ma_val, dchg, mom)
+                            sent, ma_val, dchg, mom, hist=hist)
         if cfg.strategy_mode == "divergence":
             # completed-signature tail + the model's bands for the pending bar,
             # so live_entry_keys can re-run the REAL divergence entry gate with
