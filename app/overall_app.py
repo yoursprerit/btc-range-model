@@ -1904,6 +1904,85 @@ with tab_live:
                         f"{_dh}{''.join(_drs)}</table></div>",
                         unsafe_allow_html=True)
 
+            # ── realized P&L by asset — what the sell tickets locked in ──────
+            # (the 🧾 trade log's ⚖️ tilt trims + 🚦 sell signals rolled up
+            # per sleeve — realized-only, per-trade approximation: it does
+            # NOT reconcile to the exact 📊 P&L-by-asset attribution)
+            if st.toggle(
+                    f"💰 Realized P&L by asset {_win_lbl} — % and $ locked "
+                    "in by daily tilt trims & sell signals (toggle to show)",
+                    key="overall_realized_pnl_by_asset"):
+                _rlz = ov.realized_pnl_by_asset(
+                    _wf["weights"], _wf["sata"], _start_sel, _rets_win)
+                if not _rlz:
+                    st.info("No position was trimmed or sold in this window — "
+                            "nothing realized yet.")
+                else:
+                    st.caption("**Only the P&L locked in by sales**: every "
+                               "**⚖️ daily tilt trim** and **🚦 sell-signal "
+                               "close** the "
+                               + ("**as-published books**" if _actual
+                                  else "**walk-forward replay**")
+                               + " ordered since the start date, rolled up "
+                               "per asset — the 🧾 trade log's sell tickets "
+                               "aggregated. Each bar sums slice proceeds "
+                               "minus their entry-close cost basis, scaled "
+                               "by the 💼 portfolio value; the % label is "
+                               "the cost-weighted realized return "
+                               "(Σproceeds/Σcost − 1). Hover for the "
+                               "tilt-vs-signal split, trade counts and the "
+                               "dollars sold. **Unrealized P&L on positions "
+                               "still held is NOT included**, and dollars "
+                               "use the trade-ticket convention "
+                               "(un-compounded, static 💼 scaling) — so "
+                               "these bars deliberately do **not** sum to "
+                               "the exact 📊 P&L-by-asset attribution "
+                               "below, which counts every day's earnings, "
+                               "held or sold, off the compounding blend "
+                               "curve.")
+                    _rb = []
+                    for k, r in _rlz.items():
+                        _em = (by_key.get(k)
+                               or ov.ASSET_META.get(k, {})).get("emoji", "")
+                        _n_t, _n_s = r["n_trims"], r["n_sells"]
+                        _rb.append((
+                            f"{_em} {k}".strip(),
+                            r["pnl"] * portfolio_value,
+                            r["ret"],
+                            C_BUY if r["pnl"] >= 0 else C_EXIT,
+                            f"{_n_t} tilt trim{'s' if _n_t != 1 else ''} "
+                            f"(${r['pnl_tilt']*portfolio_value:+,.0f}) · "
+                            f"{_n_s} signal sell{'s' if _n_s != 1 else ''} "
+                            f"(${r['pnl_signal']*portfolio_value:+,.0f}) · "
+                            f"${r['proceeds']*portfolio_value:,.0f} sold"))
+                    _rb.sort(key=lambda b: b[1])
+                    _rlz_tot = sum(b[1] for b in _rb)
+                    _rlz_cost = sum(r["cost"] for r in _rlz.values())
+                    _rlz_ret = (sum(r["proceeds"] for r in _rlz.values())
+                                / _rlz_cost - 1) if _rlz_cost > 0 else 0.0
+                    fig_rlz = go.Figure(go.Bar(
+                        y=[b[0] for b in _rb],
+                        x=[b[1] for b in _rb],
+                        orientation="h",
+                        marker_color=[b[3] for b in _rb],
+                        text=[f"${v:+,.0f} · {rr*100:+.1f}%"
+                              for _, v, rr, _c, _h in _rb],
+                        textposition="outside", cliponaxis=False,
+                        customdata=[[b[4]] for b in _rb],
+                        hovertemplate="%{y}: <b>$%{x:+,.0f}</b><br>"
+                                      "%{customdata[0]}<extra></extra>"))
+                    fig_rlz.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                    fig_rlz.update_layout(
+                        height=max(280, 26 * len(_rb) + 80),
+                        margin=dict(t=40, b=10, l=10, r=110),
+                        xaxis_title="$ realized on sales since start",
+                        title=dict(text=f"Realized P&L per asset — "
+                                        f"${_rlz_tot:+,.0f} locked in "
+                                        f"({_rlz_ret*100:+.1f}% on the "
+                                        f"capital sold)",
+                                   font_size=13))
+                    st.plotly_chart(fig_rlz, use_container_width=True)
+
             # ── daily P&L — what the book made or lost, every single day ─────
             # (both sources, off the same day-axis attribution as the column
             # above — bars sum exactly to the headline Strategy P&L dollars)
