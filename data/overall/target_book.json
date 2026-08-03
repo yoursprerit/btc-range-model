@@ -1,6 +1,6 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-03T13:48:13+00:00",
+ "generated_at_utc": "2026-08-03T13:51:26+00:00",
  "as_of": "2026-08-02",
  "profile": "Balanced",
  "book_mode": "paper",
@@ -18,16 +18,16 @@
  },
  "cash_weight": 1.1102230246251565e-16,
  "exec_price": {
-  "GDX": 74.124,
-  "NUGT": 110.682,
-  "SOXX": 487.85,
-  "SOXL": 103.16,
-  "XLE": 58.39,
-  "OIH": 376.02,
-  "ERX": 91.19,
-  "REMX": 65.85,
-  "GRID": 178.355,
-  "ARTY": 66.49
+  "GDX": 74.23,
+  "NUGT": 110.96,
+  "SOXX": 487.15,
+  "SOXL": 102.755,
+  "XLE": 58.478,
+  "OIH": 374.54,
+  "ERX": 91.07,
+  "REMX": 65.985,
+  "GRID": 178.56,
+  "ARTY": 66.655
  },
  "actions": [
   {
@@ -177,7 +177,7 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-03T13:48:12+00:00",
+  "checked_at_utc": "2026-08-03T13:51:23+00:00",
   "stale_apps": []
  },
  "signal_basis": {
@@ -186,9 +186,9 @@
   "btc_bar_close_utc": "2026-08-03T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "a73900913e9f",
+ "code_sha": "fd4a8a69904f",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "9ff94aa367992bc52e8fd6f69eeb4875f91bbfe00babea1588cf1c95d6e11122"
+  "value": "97f29784add17ed033fa60cc6e1a0aa90640b8465905b680e2501c847cfd80a3"
  }
 }
