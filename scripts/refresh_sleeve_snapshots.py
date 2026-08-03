@@ -47,10 +47,14 @@ def _gldm_spec() -> dg.GateSpec:
     traded += [f"{t.lower()}_close" for t in gc.LEVERAGED_SYMBOLS]
     if "nugt_close" not in traded:
         traded.append("nugt_close")
+    syms = {"gldm_close": gc.PRIMARY_SYMBOL}
+    syms.update({f"{t.lower()}_close": t for t in gc.LEVERAGED_SYMBOLS})
+    syms.setdefault("nugt_close", "NUGT")
     return dg.GateSpec(key="GLDM", price_col="gldm_close",
                        traded_close_cols=traded,
                        macro_close_cols=[f"{n}_close" for n in gc.MACRO_SYMS],
-                       snapshot_csv=gc.DAILY_CACHE_CSV)
+                       snapshot_csv=gc.DAILY_CACHE_CSV,
+                       symbol_by_col=syms)
 
 
 def main() -> int:

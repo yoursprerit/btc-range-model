@@ -211,6 +211,86 @@ def test_audit_trail_records_every_decision(tmp_path):
         assert e["sha256"] != "—" and e["rows"] > 0
 
 
+# ── Nasdaq cross-check of newly-added sessions ──────────────────────────────
+def _make_stale_snapshot(spec, nbars=2):
+    """Pin a good snapshot, then trim its newest ``nbars`` sessions so the next
+    gated_daily call MUST take the refresh path (and cross-check the re-added
+    sessions)."""
+    good = _frame()
+    dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    man_p = Path(spec.manifest_json)
+    man = json.loads(man_p.read_text())
+    snap, _ = dg.load_snapshot(spec)
+    old = snap.iloc[:-nbars]
+    dg._atomic_write(spec.snapshot_csv, old.to_csv())
+    man["checksum_sha256"] = dg.frame_sha(old)
+    man_p.write_text(json.dumps(man))
+    return good, old
+
+
+def _fake_nasdaq(close: pd.Series):
+    """market_fallback.daily_ohlcv stand-in serving the given close series."""
+    def _daily_ohlcv(symbol, start, end=None):
+        s = close[close.index >= pd.Timestamp(start)]
+        return pd.DataFrame({"open": s, "high": s, "low": s,
+                             "close": s, "volume": 1e6}, index=s.index)
+    return _daily_ohlcv
+
+
+def test_crosscheck_agreement_refreshes(tmp_path, monkeypatch):
+    import market_fallback as mf
+    spec = _spec(tmp_path)
+    spec.symbol_by_col = {"px_close": "TST"}
+    good, _ = _make_stale_snapshot(spec)
+    monkeypatch.setattr(mf, "daily_ohlcv", _fake_nasdaq(good["px_close"]))
+    out = dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "refreshed"
+    man = json.loads(Path(spec.manifest_json).read_text())
+    xc = [c for c in man["qc_checks"] if c["name"] == "nasdaq_crosscheck"]
+    assert xc and xc[0]["passed"]                 # verification ran & recorded
+
+
+def test_crosscheck_disagreement_rejects(tmp_path, monkeypatch):
+    import market_fallback as mf
+    spec = _spec(tmp_path)
+    spec.symbol_by_col = {"px_close": "TST"}
+    good, old = _make_stale_snapshot(spec)
+    # Nasdaq agrees on history but disputes the newly-added sessions by 2%
+    disputed = good["px_close"].copy()
+    disputed.loc[disputed.index > old.index.max()] *= 1.02
+    monkeypatch.setattr(mf, "daily_ohlcv", _fake_nasdaq(disputed))
+    out = dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    gi = out.attrs["data_gate"]
+    assert gi["decision"] == "fallback_snapshot"
+    assert "nasdaq_crosscheck" in gi["failed_checks"]
+    assert pd.Timestamp(out.index.max()) == old.index.max()   # kept last good
+
+
+def test_crosscheck_unavailable_skips(tmp_path, monkeypatch):
+    import market_fallback as mf
+    spec = _spec(tmp_path)
+    spec.symbol_by_col = {"px_close": "TST"}
+    good, _ = _make_stale_snapshot(spec)
+    monkeypatch.setattr(mf, "daily_ohlcv",
+                        lambda *a, **k: pd.DataFrame())       # Nasdaq down
+    out = dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    # no independent evidence available → must not block the refresh
+    assert out.attrs["data_gate"]["decision"] == "refreshed"
+
+
+def test_crosscheck_split_rebase_tolerated(tmp_path, monkeypatch):
+    """A raw (unadjusted) Nasdaq series after a split differs from Yahoo by a
+    constant factor — the base alignment must divide it out, not flag it."""
+    import market_fallback as mf
+    spec = _spec(tmp_path)
+    spec.symbol_by_col = {"px_close": "TST"}
+    good, _ = _make_stale_snapshot(spec)
+    monkeypatch.setattr(mf, "daily_ohlcv",
+                        _fake_nasdaq(good["px_close"] * 15.0))  # 15:1 raw basis
+    out = dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "refreshed"
+
+
 def test_tampered_snapshot_not_pinned(tmp_path):
     """A snapshot rewritten outside save_snapshot (hash mismatch) must be
     re-validated via a fresh fetch instead of being trusted."""
