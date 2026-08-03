@@ -521,6 +521,15 @@ def net_signal_div(sigs, pos=None):
         parts = [p for p, f in [("D3 exhaustion", d3), ("D2 momentum fade", d2),
                                 ("D1 downtrend", d1_exit)] if f]
         note = " — entry is blocked while an exit is active" if entry else ""
+        if pos is not None and pos.get("in_pos_now"):
+            # in position + exit signal — decided at the close, executed on the
+            # next bar (the sim lags signals one bar), so mirror the trend apps'
+            # and the Overall action table's timing words for the same state.
+            return dict(state="EXIT", label="EXIT — EXITS NEXT BAR", ico="🔴",
+                        bg="#fef2f2", brd="#dc2626",
+                        reason="Exit signal: " + " + ".join(parts) + note +
+                               ". The position is still open today; the exit was "
+                               "decided at the close and executes on the next bar.")
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
                     reason="Exit signal: " + " + ".join(parts) + note)
@@ -577,9 +586,21 @@ def net_signal_ma(mst, pos=None):
             just_exit = lt
 
     if in_pos:
-        return dict(state="ENTRY", label="LONG — HOLDING", ico="🟢",
-                    bg="#f0fdf4", brd="#16a34a",
-                    reason=f"Strategy is long; {desc} — hold.")
+        if above:
+            return dict(state="ENTRY", label="LONG — HOLDING", ico="🟢",
+                        bg="#f0fdf4", brd="#16a34a",
+                        reason=f"Strategy is long; {desc} — hold.")
+        # Long, but the latest close broke the trend: the filter decides at the
+        # close and acts on the NEXT bar, so the position is still open today
+        # and closes on the next bar.  Surface that pending exit — same label,
+        # word for word, as the Overall app's committed decision — instead of a
+        # bare "LONG — HOLDING" that contradicts the Overall action table's
+        # "exits next bar" flag for the identical committed state.
+        return dict(state="EXIT",
+                    label="LONG — HOLDING (below trend → exits next bar)",
+                    ico="🟡", bg="#fefce8", brd="#ca8a04",
+                    reason=f"Strategy is long but {desc} — the exit was decided "
+                           "at the close; the position closes on the next bar.")
     if above:
         # Flat but the trend signal is bullish → a COMMITTED entry, decided at
         # the close and executed next bar.  Same label, colour and timing words

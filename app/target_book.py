@@ -132,7 +132,7 @@ def build_payload(*, as_of: str, profile: str, weights: dict[str, float],
     """
     trimmed = [
         {k: a.get(k) for k in ("key", "action", "decision", "target",
-                               "in_pos", "priority")}
+                               "in_pos", "priority", "exits_next_bar")}
         for a in (actions or [])
     ]
     return {

@@ -63,11 +63,17 @@ def _curve_metrics(equity: pd.Series) -> dict:
 
 
 def _trend_decision(long_now: bool, in_pos: bool):
-    """Dual-MA sleeve decision (GLDM & UGL): long/flat off the 25/100 cross."""
+    """Dual-MA sleeve decision (GLDM & UGL): long/flat off the 25/100 cross.
+
+    The cross decides at the close and acts on the NEXT bar, so an in-position
+    EXIT here means "still open today, closes next bar" — the flag lets the
+    Overall action table show its ⚠️ exits-next-bar banner even when the pill
+    is pinned to a morning book published before the signal committed."""
     if in_pos:
         if long_now:
             return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
-        return dict(state="EXIT", label="EXIT — MA CROSS-DOWN", ico="🔴", tone="exit")
+        return dict(state="EXIT", label="EXIT — MA CROSS-DOWN", ico="🔴", tone="exit",
+                    exits_next_bar=True)
     if long_now:
         return dict(state="ENTRY", label="ENTER — DUAL-MA CROSS-UP", ico="🟢", tone="buy")
     return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
@@ -85,7 +91,11 @@ def _decision(sigs, in_pos):
     why = "D3 exhaustion" if d3 else "D2 momentum fade"
     if in_pos:
         if exit_sig:
-            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit")
+            # decided at the close, executed next bar (backtest_gldm lags the
+            # signals one bar) — flag it so the Overall action table's
+            # exits-next-bar banner covers the miners sleeves (GDX/NUGT) too.
+            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit",
+                        exits_next_bar=True)
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
     if exit_sig:
         return dict(state="AVOID", label=f"STAND ASIDE — EXIT ACTIVE ({why})",
