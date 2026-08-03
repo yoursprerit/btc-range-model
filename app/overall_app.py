@@ -1597,15 +1597,43 @@ with tab_live:
             # per-asset since-start reads (also feed the blend-level trade stats)
             _pa = ov.per_asset_slice_metrics(results, _start_sel, end=_end_arg)
             _ots = ov.overall_trade_stats(_pa, _wmax)
+            # winning-days read conditioned on days with risk on — SATA-only
+            # days would otherwise count as tiny guaranteed wins
+            _dw = ov.daily_win_stats(_curve_all, _start_sel,
+                                     active=_wf["weights"].sum(axis=1))
             pm2 = st.columns(6)
-            pm2[0].metric("Winning days", f"{_sm['win_days']*100:.0f}%",
-                          help="Share of trading days since the start date on "
-                               "which the whole-portfolio strategy curve closed "
-                               "up — days the blend made money, out of all "
-                               "trading days measured.")
+            if _dw is None or _dw["win_rate"] is None:
+                pm2[0].metric("Winning days (invested)", "—",
+                              delta=f"all-days {_sm['win_days']*100:.0f}%",
+                              delta_color="off",
+                              help="No days with risk deployed in this window "
+                                   "— the book sat fully in SATA cash.")
+            else:
+                pm2[0].metric(
+                    "Winning days (invested)", f"{_dw['win_rate']*100:.0f}%",
+                    delta=(f"{_dw['wins']}/{_dw['n_active']} days · 95% CI "
+                           f"{_dw['ci_lo']*100:.0f}–{_dw['ci_hi']*100:.0f}%"),
+                    delta_color="off",
+                    help="Share of days the blend closed up, counting ONLY days "
+                         "it actually held a position — fully-in-cash days are "
+                         "excluded so the steady SATA yield can't inflate the "
+                         "rate. The Wilson 95% interval says how seriously to "
+                         "take the headline: with few invested days a coin "
+                         "flip sits inside it.")
             pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
             pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
-            pm2[3].metric("Trading days", f"{_sm['days']}")
+            if _dw is None or _dw["win_rate"] is None:
+                pm2[3].metric("Trading days", f"{_sm['days']}")
+            else:
+                pm2[3].metric(
+                    "Daily edge (invested)", f"{_dw['expectancy']*100:+.2f}%",
+                    delta=(f"win {_dw['avg_win']*100:+.2f}% / "
+                           f"loss {_dw['avg_loss']*100:+.2f}%"),
+                    delta_color="off",
+                    help="Mean return per invested day — win rate × average "
+                         "winning day + loss rate × average losing day. The "
+                         "number that actually compounds: a high win rate "
+                         "with a negative edge still loses money.")
             pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
                           delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
                           delta_color="off",
@@ -2114,6 +2142,11 @@ with tab_live:
                                      else f"{_tr['win_rate']*100:.0f}%"
                                           f" <span style='color:#94a3b8;font-size:10px'>"
                                           f"({_tr['wins']}/{_tr['n_trades']})</span>")
+                            _dw_a = p.get("daily")
+                            _wd_s = ("—" if not _dw_a or _dw_a["win_rate"] is None
+                                     else f"{_dw_a['win_rate']*100:.0f}%"
+                                          f" <span style='color:#94a3b8;font-size:10px'>"
+                                          f"({_dw_a['wins']}/{_dw_a['n_active']})</span>")
                             par.append(
                                 f"<tr style='border-bottom:1px solid #eef2f7'>"
                                 f"<td style='padding:6px 10px;font-weight:700'>"
@@ -2129,7 +2162,7 @@ with tab_live:
                                 f"<td style='text-align:right'>{sm_a['sharpe']:.2f}</td>"
                                 f"<td style='text-align:right;font-weight:600'>{_tr_s}</td>"
                                 f"<td style='text-align:right;font-weight:600'>{_wr_s}</td>"
-                                f"<td style='text-align:right'>{sm_a['win_days']*100:.0f}%</td>"
+                                f"<td style='text-align:right'>{_wd_s}</td>"
                                 f"<td style='text-align:right'>{p['in_market']*100:.0f}%</td>"
                                 f"<td style='text-align:right;font-weight:700'>"
                                 f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
@@ -2161,7 +2194,9 @@ with tab_live:
                                "included); **Win rate** judges closed trades on their "
                                "realised return and the open one on its current "
                                "unrealised P&L, while **Win days** is the share of "
-                               "positive daily returns. **SATA** is the idle-cash "
+                               "positive daily returns counting only the days the "
+                               "sleeve actually held its position — flat days can't "
+                               "pad the rate. **SATA** is the idle-cash "
                                "park: a steady ~13%/yr daily yield on a flat $100 "
                                "par — no drawdown, no trades, its weight is simply "
                                "whatever the risk sleeves leave undeployed each day. "

@@ -738,10 +738,81 @@ def slice_metrics(equity: pd.Series, start, end=None) -> dict | None:
                 **curve_metrics(sub))
 
 
+def _wilson(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion — behaves sanely at
+    small ``n`` and near 0%/100%, where the naive normal interval breaks."""
+    p = wins / n
+    denom = 1.0 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * np.sqrt(p * (1.0 - p) / n + z * z / (4 * n * n))
+    return float((centre - margin) / denom), float((centre + margin) / denom)
+
+
+def daily_win_stats(equity: pd.Series, start, end=None,
+                    active: pd.Series | None = None) -> dict | None:
+    """Winning-days read on an equity curve, conditioned on the days the
+    strategy actually held risk.
+
+    ``slice_metrics``' ``win_days`` counts positive days out of ALL trading
+    days — but idle capital parks in SATA at a constant daily yield, so every
+    fully-cash day is a tiny guaranteed "win" and the all-days rate drifts
+    toward the in-market share instead of measuring edge.  Here a day only
+    enters the denominator when ``active`` (a daily position flag / deployed-
+    weight series, reindexed to the return days) is > 0; without ``active``
+    every day counts, matching the old behaviour.
+
+    Win rate alone can't be judged without the payoff side (a 60% rate with
+    fat losing days still loses money), so the dict carries the full first-
+    order read on the active-day distribution:
+
+      n_days      trading days in the window (denominator of ``slice_metrics``)
+      n_active    days with risk on — the denominator here
+      wins        active days with return > 0 (flat active days are NOT wins)
+      win_rate    wins / n_active, ``None`` with no active days
+      ci_lo/ci_hi Wilson 95% interval on ``win_rate`` — with few active days
+                  a coin flip is inside the interval and the headline rate
+                  should not be trusted
+      avg_win     mean return of positive active days (0.0 if none)
+      avg_loss    mean return of negative active days (≤ 0; 0.0 if none)
+      payoff      avg_win / |avg_loss|, ``None`` with no losing days
+      expectancy  mean active-day return — exactly
+                  ``p·avg_win + (1−p)·avg_loss`` with flat days folded in;
+                  the per-day edge that compounds
+
+    Windowing matches ``slice_metrics``: first bar on/after ``start`` anchors,
+    optional ``end`` closes at the last bar on/before it, ``None`` with <2
+    bars.  Daily returns are autocorrelated in trending tapes, so the Wilson
+    interval is mildly optimistic — read it as a floor on the uncertainty."""
+    sub = equity.loc[pd.Timestamp(start):
+                     (pd.Timestamp(end) if end is not None else None)]
+    if len(sub) < 2:
+        return None
+    rets = sub.pct_change().dropna()
+    n_days = len(rets)
+    if active is not None:
+        on = active.reindex(rets.index).fillna(0.0).astype(float) > 0
+        rets = rets[on]
+    n = len(rets)
+    if n == 0:
+        return dict(n_days=n_days, n_active=0, wins=0, win_rate=None,
+                    ci_lo=None, ci_hi=None, avg_win=None, avg_loss=None,
+                    payoff=None, expectancy=None)
+    wins = int((rets > 0).sum())
+    ci_lo, ci_hi = _wilson(wins, n)
+    up, dn = rets[rets > 0], rets[rets < 0]
+    avg_win = float(up.mean()) if len(up) else 0.0
+    avg_loss = float(dn.mean()) if len(dn) else 0.0
+    return dict(n_days=n_days, n_active=n, wins=wins, win_rate=wins / n,
+                ci_lo=ci_lo, ci_hi=ci_hi, avg_win=avg_win, avg_loss=avg_loss,
+                payoff=(avg_win / abs(avg_loss)) if avg_loss < 0 else None,
+                expectancy=float(rets.mean()))
+
+
 def per_asset_slice_metrics(results: list[dict], start, end=None) -> list[dict]:
     """Per-instrument read since ``start``: each sleeve's strategy equity and
     its buy-&-hold equity, both re-based at the anchor (see ``slice_metrics``),
-    plus the share of days it actually spent in the market.  An instrument whose
+    plus the share of days it actually spent in the market and its invested-
+    days winning read (``daily`` — see ``daily_win_stats``).  An instrument whose
     history begins after ``start`` is measured from its own first bar (its
     ``strat['start']`` says so); one with <2 bars since ``start`` is skipped.
     Rows come back in ``results`` order (grouped by parent signal).  An
@@ -750,7 +821,8 @@ def per_asset_slice_metrics(results: list[dict], start, end=None) -> list[dict]:
     end_ts = pd.Timestamp(end) if end is not None else None
     rows = []
     for res in results:
-        sm = slice_metrics(_equity(res["ret"]), start, end)
+        eq = _equity(res["ret"])
+        sm = slice_metrics(eq, start, end)
         if sm is None:
             continue
         bh_eq = pd.Series(np.asarray(res["r"]["bh"], float),
@@ -761,6 +833,7 @@ def per_asset_slice_metrics(results: list[dict], start, end=None) -> list[dict]:
             parent=res["parent"], accent=res["accent"], emoji=res["emoji"],
             in_market=float(pos_sub.mean()) if len(pos_sub) else 0.0,
             strat=sm, bh=slice_metrics(bh_eq, start, end),
+            daily=daily_win_stats(eq, start, end, active=res["pos_series"]),
             trades=trade_stats_since(res, start, end)))
     return rows
 
