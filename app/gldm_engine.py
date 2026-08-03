@@ -214,7 +214,19 @@ def run_gldm() -> list[dict]:
     daily = _load_daily()
     if daily is None or daily.empty or "gldm_close" not in daily.columns:
         return []
-    preds = bg.build_predictions(daily)
+    # COMMITTED signals from completed sessions only, exactly like the Gold app
+    # (it builds predictions on freshness.drop_in_progress_us_bar(daily)).  The
+    # gated frame overlays Yahoo's in-progress *today* row during US market
+    # hours for live prices — but that bar's high is only "the high so far", so
+    # scoring it as a completed bar biases err_hi downward and can fire a
+    # spurious D2 momentum-fade EXIT intraday that the Gold Miners app (which
+    # strips the partial bar) never shows.  ``daily`` keeps the partial bar for
+    # the live display prices below.
+    import freshness as _frs
+    hist = _frs.drop_in_progress_us_bar(daily)
+    if hist is None or hist.empty or "gldm_close" not in hist.columns:
+        hist = daily
+    preds = bg.build_predictions(hist)
     # build_predictions only keeps ugl/gdx closes; carry NUGT's price through so
     # the same gold signal can be simulated on the 2× miners sleeve.
     if "nugt_close" in daily.columns:
