@@ -467,7 +467,12 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
     why = ("D3 exhaustion" if d3 else "D2 momentum fade" if d2 else "D1 downtrend")
     if in_pos:
         if exit_sig:
-            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit")
+            # Divergence exits are decided at the close and executed on the NEXT
+            # bar (backtest_ticker.simulate lags signals one bar), exactly like
+            # the trend family's pending exit above — carry the same flag so the
+            # action table's "exits next bar" banner covers both engine families.
+            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit",
+                        exits_next_bar=True)
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
     # flat — an active exit signal blocks entry (net-exit), even if U1 is firing
     if exit_sig:
@@ -1529,10 +1534,19 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
         return max(base_weights.get(k, 0.0), 1e-6)
 
     in_pos = [res for res in results if res["pos"]["in_pos"]]
-    # closing = committed exits, plus any caller-forced exits (e.g. positions the
-    # live price says will drop out on the next bar).
+    # closing = committed exits — a tone-"exit" decision (divergence/BTC EXIT)
+    # OR a committed pending exit (the trend family's HOLD + exits_next_bar:
+    # the last close already broke the trend, so the position drops out on the
+    # next bar) — plus any caller-forced exits (e.g. positions the live price
+    # says will drop out on the next bar).  Both committed forms mean the same
+    # thing — "this position will not be held after the next bar" — so both are
+    # excluded from the recommended book; previously only tone-"exit" sleeves
+    # were, leaving a trend sleeve whose death-cross committed at today's close
+    # (e.g. REMX) still funded while its row was flagged "exits next bar".
     closing = {res["key"] for res in in_pos
-               if res["decision"]["tone"] == "exit" or res["key"] in force_exit}
+               if res["decision"]["tone"] == "exit"
+               or res["decision"].get("exits_next_bar")
+               or res["key"] in force_exit}
     keep = [res for res in in_pos if res["key"] not in closing]
     # a fresh entry whose live price has already broken the trend (in force_exit)
     # would reverse straight back out next bar — don't fund it in the live book.
@@ -1625,11 +1639,16 @@ def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
     if fr.is_us_trading_day(today) or not book_weights:
         return gate
     act_by = {a["key"]: a["action"] for a in gate["actions"]}
+    # committed pending exits (HOLD + exits_next_bar — the trend family's "last
+    # close broke the trend, exits next bar") are committed signal changes just
+    # like a CLOSE, so the freeze applies them too instead of pinning a weight
+    # the strategy has already decided to drop.
+    pending_exit = {a["key"] for a in gate["actions"] if a.get("exits_next_bar")}
     target, closed = {}, []
     for k, w in book_weights.items():
         if w <= 0.0005:
             continue
-        if act_by.get(k) == "CLOSE":
+        if act_by.get(k) == "CLOSE" or k in pending_exit:
             closed.append(k)
             continue
         target[k] = float(w)

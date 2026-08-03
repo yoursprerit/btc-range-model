@@ -422,7 +422,11 @@ def _decision(sigs, i, in_pos):
     why = "D3 exhaustion" if d3 else "D2 fade (bear)"
     if in_pos:
         if exit_sig:
-            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit")
+            # decided at the close, executed next bar — same flag as every
+            # other engine so the Overall action table's exits-next-bar banner
+            # is uniform across the BTC/MSTR/MSTU sleeves too.
+            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit",
+                        exits_next_bar=True)
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
     if exit_sig:
         return dict(state="AVOID", label=f"STAND ASIDE — EXIT ACTIVE ({why})",

@@ -1105,10 +1105,12 @@ with tab_live:
                    "columns and the red ⚠️ / green 🟢 flags. Held/opened risk assets "
                    "total "
                    "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
-                   "**red** ⚠️ are holds **or fresh entries** whose trend has broken on "
-                   "the live price — they still **hold/open today** but **exit on the "
-                   "next bar** (either the last close already crossed the trend, or the "
-                   "live price has since slipped below it). Rows shaded **green** 🟢 are "
+                   "**red** ⚠️ are holds **or fresh entries** with a pending exit — "
+                   "they still **hold/open today** but **exit on the next bar** "
+                   "(the last close already crossed the trend, a committed exit "
+                   "signal fired at today's close — e.g. a divergence app's D2/D3 — "
+                   "or the live price has since slipped below the trend). Rows "
+                   "shaded **green** 🟢 are "
                    "the mirror on the way in: committed fresh buys that **enter on the "
                    "next bar**, plus flat names whose **live price now satisfies the "
                    "entry condition** — a trend filter crossed, or a divergence app's "
@@ -1216,10 +1218,22 @@ with tab_live:
                       if a["in_pos"] and _cb else "")
             # a hold/entry whose trend has broken drops out on the NEXT bar — flag the
             # whole row red so it's clear the position is about to be closed out. This
-            # covers two cases: the committed last-close exit (exits_next_bar), and the
+            # covers two cases: the committed last-close exit — the exits_next_bar
+            # flag (trend break or a divergence/CT exit signal, all decided at the
+            # close and executed next bar) or the ENGINE's CLOSE action on a held
+            # position (deliberately NOT the book-pinned _act: an exit that commits
+            # at today's close AFTER the morning publish — e.g. a GDX/NUGT D2 fade —
+            # is exactly what this flag must surface; the pill is the book, the flag
+            # is today's signal, mirroring _committed_entry below) — and the
             # live-price exit — a row that still holds/opens today but whose live price
             # has fallen below the trend filter (in _live_exits, incl. fresh entries).
-            _committed_exit = bool(a.get("exits_next_bar"))
+            _committed_exit = bool(a.get("exits_next_bar")) or (
+                a["in_pos"] and a["action"] == "CLOSE")
+            # a committed exit the frozen morning book predates (its recorded
+            # action/flag shows no exit) gets called out — pill and flag disagree
+            # on purpose, exactly like _book_masked_entry.
+            _book_masked_exit = _committed_exit and _ba and _act != "CLOSE" \
+                and not _ba.get("exits_next_bar")
             _live_exit = a["key"] in _live_exits
             exit_next = _committed_exit or _live_exit
             # …and the green mirror: a row that opens on the NEXT bar. Two cases,
@@ -1248,7 +1262,10 @@ with tab_live:
                              "box-shadow:inset 3px 0 0 #16a34a")
             else:
                 row_style = "border-bottom:1px solid #eef2f7"
-            if _committed_exit:                        # last close already below trend
+            if _book_masked_exit:                      # fired after the morning publish
+                warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
+                        "⚠️ signal exited at today's close — exits next bar</div>")
+            elif _committed_exit:                      # last close already signalled the exit
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
                         "⚠️ exits next bar</div>")
             elif _live_exit:                           # live-driven (hold or fresh entry)
