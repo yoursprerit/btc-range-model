@@ -1,0 +1,99 @@
+{
+ "key": "ARTY",
+ "source": "yahoo-live",
+ "saved_at_utc": "2026-08-03T00:18:07+00:00",
+ "rows": 2033,
+ "date_from": "2018-06-28",
+ "date_to": "2026-07-31",
+ "columns": [
+  "px_open",
+  "px_high",
+  "px_low",
+  "px_close",
+  "px_volume",
+  "qqq_open",
+  "qqq_high",
+  "qqq_low",
+  "qqq_close",
+  "qqq_volume",
+  "xlk_open",
+  "xlk_high",
+  "xlk_low",
+  "xlk_close",
+  "xlk_volume",
+  "smh_open",
+  "smh_high",
+  "smh_low",
+  "smh_close",
+  "smh_volume",
+  "nvda_open",
+  "nvda_high",
+  "nvda_low",
+  "nvda_close",
+  "nvda_volume",
+  "tnx_open",
+  "tnx_high",
+  "tnx_low",
+  "tnx_close",
+  "tnx_volume",
+  "spx_open",
+  "spx_high",
+  "spx_low",
+  "spx_close",
+  "spx_volume",
+  "vix_open",
+  "vix_high",
+  "vix_low",
+  "vix_close",
+  "vix_volume"
+ ],
+ "checksum_sha256": "682b249231fa63f2",
+ "qc_passed": true,
+ "qc_checks": [
+  {
+   "name": "non_empty",
+   "passed": true,
+   "detail": "2033 rows"
+  },
+  {
+   "name": "min_rows",
+   "passed": true,
+   "detail": "2033 rows (need \u2265 260)"
+  },
+  {
+   "name": "index_sane",
+   "passed": true,
+   "detail": "sorted, no duplicate sessions"
+  },
+  {
+   "name": "price_positive_finite",
+   "passed": true,
+   "detail": "px_close: 2033 non-null values"
+  },
+  {
+   "name": "required_columns",
+   "passed": true,
+   "detail": "all present"
+  },
+  {
+   "name": "no_extreme_traded_moves",
+   "passed": true,
+   "detail": "all daily moves plausible"
+  },
+  {
+   "name": "no_row_regression",
+   "passed": true,
+   "detail": "2033 rows vs snapshot 2028"
+  },
+  {
+   "name": "no_span_regression",
+   "passed": true,
+   "detail": "last 2026-07-31 vs snapshot 2026-07-24"
+  },
+  {
+   "name": "history_agreement",
+   "passed": true,
+   "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
+  }
+ ]
+}
