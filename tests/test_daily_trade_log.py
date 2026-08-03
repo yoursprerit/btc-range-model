@@ -264,18 +264,47 @@ def test_realized_plus_unrealized_equals_attribution_when_open():
         assert np.isclose(r["total"], att["per_key"]["AAA"])
 
 
-def test_realized_pnl_by_asset_omits_never_sold_keys():
-    # BBB only ever bought/held — no realized entry; nothing sold at all → {}
+def test_held_only_sleeves_reported_with_zero_tickets():
+    # BBB is bought and held (no listed sale) — it is still reported, with
+    # zero ticket counts, real deployed capital, and exact reconciliation;
+    # a never-held sleeve stays absent
     w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.2],
-               BBB=[0.0, 0.3, 0.3, 0.3, 0.3])
+               BBB=[0.0, 0.3, 0.3, 0.3, 0.3],
+               DDD=[0.0, 0.0, 0.0, 0.0, 0.0])
     rets = _frame(AAA=[0.0, 0.10, 0.05, 0.0, 0.0],
-                  BBB=[0.0, 0.20, 0.20, 0.20, 0.20])
-    rlz = oc.realized_pnl_by_asset(w, _sata([1.0, 0.3, 0.3, 0.5, 0.5]),
-                                   IDX[0], rets)
-    assert set(rlz) == {"AAA"}
-    held = _frame(CCC=[0.5, 0.5, 0.5, 0.5, 0.5])
-    assert oc.realized_pnl_by_asset(held, _sata([0.5] * 5), IDX[0],
-                                    _frame(CCC=[0.1] * 5)) == {}
+                  BBB=[0.0, 0.20, 0.20, 0.20, 0.20],
+                  DDD=[0.0, 0.0, 0.0, 0.0, 0.0])
+    sata = _sata([1.0, 0.3, 0.3, 0.5, 0.5])
+    rlz = oc.realized_pnl_by_asset(w, sata, IDX[0], rets, sata_daily=0.0)
+    att = oc.pnl_attribution_replay(rets, w, sata, IDX[0], sata_daily=0.0)
+    assert set(rlz) == {"AAA", "BBB"}
+    b = rlz["BBB"]
+    assert (b["n_trims"], b["n_sells"]) == (0, 0)
+    # outperforming the book daily → re-balances only ever SELL BBB, so
+    # deployed is exactly the entry lot; drift sells realize P&L with no
+    # listed ticket, and the sleeve still reconciles exactly
+    assert np.isclose(b["deployed"], 0.3)
+    assert b["pnl"] > 0
+    assert np.isclose(b["total"], att["per_key"]["BBB"])
+
+
+def test_deployed_capital_identity():
+    # deployed = anchor basis + every buy flow = cost sold + cost still open
+    rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.01])
+    # flat at end, single buy then sell flows only → deployed is exactly
+    # the one fresh lot
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.0])
+    r = oc.realized_pnl_by_asset(w, _sata([1.0, 0.6, 0.6, 0.8, 1.0]),
+                                 IDX[0], rets, sata_daily=0.0)["AAA"]
+    assert np.isclose(r["deployed"], 0.4)
+    assert np.isclose(r["cost_open"], 0.0)
+    assert np.isclose(r["deployed"], r["cost"] + r["cost_open"])
+    # still-open variant keeps the identity with basis left invested
+    w2 = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.2])
+    r2 = oc.realized_pnl_by_asset(w2, _sata([1.0, 0.6, 0.6, 0.8, 0.8]),
+                                  IDX[0], rets, sata_daily=0.0)["AAA"]
+    assert r2["cost_open"] > 0
+    assert np.isclose(r2["deployed"], r2["cost"] + r2["cost_open"])
 
 
 def test_runs_off_the_as_published_replay_unchanged():

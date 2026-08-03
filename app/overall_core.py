@@ -1182,14 +1182,20 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
     Returns ``{key: {...}}`` with ``pnl`` (realized), ``unrealized``,
     ``total`` (their sum — the attribution dollars), ``ret``
     (Σproceeds/Σcost-sold − 1, the money-weighted realized % return on
-    the capital sold), ``proceeds``/``cost``, the signal-vs-tilt split
-    of the realized dollars (``pnl_signal`` — flows executed at closes
-    where the listed ticket was a real signal sale, per ``active`` when
-    the source provides it; ``pnl_tilt`` — everything else, re-balance
-    drift included) and the listed sale-ticket counts
-    ``n_trims``/``n_sells``.  Sleeves with no listed sale ticket in the
-    window are omitted (their — typically tiny — drift P&L stays in the
-    attribution); ``{}`` with <2 bars on/after ``start``."""
+    the capital sold), ``proceeds``/``cost``, ``deployed`` (the TOTAL
+    cost the ledger ever put into the sleeve — the anchor basis plus
+    every buy flow: signal opens, tilt adds and daily re-balance buys —
+    i.e. the gross capital cycled through it; always equals ``cost`` +
+    ``cost_open``, the basis still invested at the window end), the
+    signal-vs-tilt split of the realized dollars (``pnl_signal`` —
+    flows executed at closes where the listed ticket was a real signal
+    sale, per ``active`` when the source provides it; ``pnl_tilt`` —
+    everything else, re-balance drift included) and the listed
+    sale-ticket counts ``n_trims``/``n_sells``.  EVERY sleeve held at
+    some point in the window is reported (a bought-and-held sleeve has
+    zero ticket counts but real ``deployed``/``unrealized``) — callers
+    wanting only sleeves that sold filter on the ticket counts; ``{}``
+    with <2 bars on/after ``start``."""
     sub = returns.loc[pd.Timestamp(start):]
     if len(sub) < 2:
         return {}
@@ -1221,11 +1227,12 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
     out: dict[str, dict] = {}
     n = len(sub)
     for ci, k in enumerate(sub.columns):
-        if k not in listed:
-            continue
         wk = W[:, ci]
+        if not (wk > 0).any():
+            continue
         rk = R[:, ci]
         cost = a_val = wk[0]                    # basis = the anchor close
+        deployed = wk[0]                        # anchor holding = cost in
         realized = rl_sig = proceeds = cost_sold = 0.0
         for j in range(n):
             if j > 0:                           # pre-re-balance value
@@ -1235,9 +1242,11 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
             h_val = wk[j + 1] * V[j]            # post-re-balance value
             if a_val <= 0:
                 cost = h_val if h_val > 0 else 0.0   # fresh lot (or stay flat)
+                deployed += cost
                 continue
             if h_val >= a_val:
                 cost += h_val - a_val           # buy: cost added at value
+                deployed += h_val - a_val
                 continue
             sold = a_val - h_val                # sell flow at this close
             gain = sold * (1.0 - cost / a_val) if cost > 0 else sold
@@ -1248,14 +1257,16 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
                 rl_sig += gain
             cost *= h_val / a_val               # pro-rata cost removal
         unreal = (a_val - cost) if a_val > 0 else 0.0
-        n_sig = sum(a["signal_change"] for a in listed[k])
+        tickets = listed.get(k, [])
+        n_sig = sum(a["signal_change"] for a in tickets)
         out[k] = dict(pnl=realized, unrealized=unreal,
                       total=realized + unreal,
                       ret=(proceeds / cost_sold - 1.0) if cost_sold > 0
                       else 0.0,
                       proceeds=proceeds, cost=cost_sold,
+                      deployed=deployed, cost_open=cost,
                       pnl_signal=rl_sig, pnl_tilt=realized - rl_sig,
-                      n_trims=len(listed[k]) - n_sig, n_sells=n_sig)
+                      n_trims=len(tickets) - n_sig, n_sells=n_sig)
     return out
 
 
