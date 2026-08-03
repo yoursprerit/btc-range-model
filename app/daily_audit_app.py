@@ -333,5 +333,64 @@ st.caption("_This page answers “did everything run?”; the 🩺 **Strategy "
            "replay tracking, drawdown tripwires, edge vs B&H and trade "
            "expectancy per sleeve._")
 
+# ════════════════════════════════════════════════════════════════════════════
+# 6 · Dataset audit trail — which data every back-test actually consumed
+# ════════════════════════════════════════════════════════════════════════════
+st.markdown("### 6 · Dataset audit trail")
+st.caption("_Every sleeve's daily history now goes through a **quality gate** "
+           "(`app/data_gate.py`): a fetch is validated (columns, span, "
+           "plausible moves, agreement with the pinned history), **pinned** as "
+           "the day's snapshot when it passes, and **rejected in favour of the "
+           "last known-good snapshot** when it fails — so the back-tests stop "
+           "drifting between page loads. This trail shows, per dataset, what "
+           "was served, from which source, its content hash, and which app "
+           "consumed it._")
+try:
+    import data_gate as dgt
+    if not (hasattr(dgt, "read_audit") and hasattr(dgt, "read_manifest")):
+        dgt = importlib.reload(dgt)
+    _trail = dgt.read_audit()
+except Exception:
+    _trail = {}
+if not _trail:
+    st.markdown("_No dataset loads recorded yet on this server — the trail "
+                "fills in as the 🧭 Overall or ticker apps load data._")
+else:
+    _DEC_ICO = {"pinned": "📌", "refreshed": "✅", "fallback_snapshot": "🛟",
+                "live_unvalidated": "⚠️"}
+    _rows = []
+    for _k in sorted(_trail):
+        _e = (_trail[_k] or [{}])[0]                      # newest entry
+        _rows.append(dict(
+            Dataset=_k,
+            Decision=f"{_DEC_ICO.get(_e.get('decision'), '·')} "
+                     f"{_e.get('decision', '—')}",
+            Source=_e.get("source", "—"),
+            Span=f"{_e.get('date_from', '—')} → {_e.get('date_to', '—')}",
+            Rows=_e.get("rows", 0),
+            **{"SHA-256": _e.get("sha256", "—"),
+               "QC": ("✅" if _e.get("qc_passed")
+                      else "❌ " + ", ".join(_e.get("failed_checks") or [])
+                      if _e.get("qc_passed") is not None else "—"),
+               "Consumer": _e.get("consumer", "—"),
+               "Loaded (CT)": _e.get("ts_ct", "—")},
+        ))
+    st.dataframe(pd.DataFrame(_rows), hide_index=True, use_container_width=True)
+    with st.expander("Full per-dataset history (newest first)"):
+        _dk = st.selectbox("Dataset", sorted(_trail), key="ds_audit_key")
+        st.dataframe(pd.DataFrame(_trail.get(_dk) or []),
+                     hide_index=True, use_container_width=True)
+    st.caption("_**pinned** = the validated snapshot already covers the last "
+               "completed session and is reused byte-for-byte (no refetch) · "
+               "**refreshed** = a live fetch passed all quality checks and "
+               "became the new snapshot · **fallback_snapshot** = the live "
+               "fetch FAILED quality control and the last known-good snapshot "
+               "was served instead · **live_unvalidated** = no snapshot exists "
+               "yet, so an unvalidated fetch was served (bootstrap only). The "
+               "in-progress bar overlaid for live views is never part of the "
+               "pinned history. BTC/MSTR/MSTU/ETH already run from the "
+               "committed, checksummed `data/backtest/` vintage "
+               "(see its `manifest.json`)._")
+
 # record this page's own render, like every other app
 fr.record_refresh("DAILYAUDIT", kind="audit", app_label="🕵️ Daily Audit")

@@ -1,0 +1,223 @@
+"""Unit tests for app/data_gate.py — the data-quality gate, pinned snapshots
+and the dataset audit trail.
+
+No network, no Streamlit: fetches are stubbed with synthetic frames whose
+dates are anchored to the REAL ``freshness.expected_equity_asof()`` clock, so
+the completed/in-progress split behaves exactly as in production.
+"""
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+
+import freshness as fr    # noqa: E402
+import data_gate as dg    # noqa: E402
+
+CUT = fr.expected_equity_asof()          # last completed US session, real clock
+
+
+def _frame(n=320, end=CUT, seed=7, cols_extra=("soxl_close", "vix_close")):
+    """Synthetic completed-bars daily frame ending at ``end``."""
+    idx = pd.bdate_range(end=end, periods=n)
+    rng = np.random.default_rng(seed)
+    px = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    df = pd.DataFrame(index=idx)
+    df["px_open"] = px * (1 + rng.normal(0, 0.002, n))
+    df["px_high"] = px * 1.01
+    df["px_low"] = px * 0.99
+    df["px_close"] = px
+    df["px_volume"] = 1e6
+    for c in cols_extra:
+        df[c] = px * (2.0 if c.startswith("soxl") else 0.2)
+    return df
+
+
+def _spec(tmp_path, key="TEST"):
+    return dg.GateSpec(
+        key=key, price_col="px_close",
+        traded_close_cols=["px_open", "px_high", "px_low", "px_close",
+                           "soxl_close"],
+        macro_close_cols=["vix_close"],
+        snapshot_csv=tmp_path / "macro_daily.csv")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit(tmp_path, monkeypatch):
+    monkeypatch.setattr(dg, "AUDIT_JSON", tmp_path / "dataset_audit.json")
+    monkeypatch.setattr(dg, "RUNTIME_DIR", tmp_path)
+    yield
+
+
+# ── quality checks ───────────────────────────────────────────────────────────
+def test_checks_pass_on_good_frame(tmp_path):
+    rep = dg.run_quality_checks(_spec(tmp_path), _frame())
+    assert rep["passed"], rep["failed"]
+
+
+def test_checks_fail_on_empty_and_short(tmp_path):
+    spec = _spec(tmp_path)
+    assert not dg.run_quality_checks(spec, None)["passed"]
+    rep = dg.run_quality_checks(spec, _frame(n=50))
+    assert "min_rows" in rep["failed"]
+
+
+def test_checks_fail_on_missing_macro_column(tmp_path):
+    df = _frame().drop(columns=["vix_close"])
+    rep = dg.run_quality_checks(_spec(tmp_path), df)
+    assert "required_columns" in rep["failed"]
+
+
+def test_checks_fail_on_all_nan_column(tmp_path):
+    df = _frame()
+    df["vix_close"] = np.nan            # present but silently dead feed
+    rep = dg.run_quality_checks(_spec(tmp_path), df)
+    assert "required_columns" in rep["failed"]
+
+
+def test_checks_fail_on_extreme_traded_move(tmp_path):
+    df = _frame()
+    df.iloc[-5, df.columns.get_loc("soxl_close")] *= 3.0   # +200% one-day print
+    rep = dg.run_quality_checks(_spec(tmp_path), df)
+    assert "no_extreme_traded_moves" in rep["failed"]
+
+
+def test_checks_fail_on_regression_vs_snapshot(tmp_path):
+    spec = _spec(tmp_path)
+    snap = _frame()
+    shrunk = snap.iloc[:200]
+    rep = dg.run_quality_checks(spec, shrunk, snapshot=snap)
+    assert "no_row_regression" in rep["failed"]
+    assert "no_span_regression" in rep["failed"]
+    # min_rows also fires at 200 < 260 — but the regression checks are the point
+
+
+def test_checks_fail_on_rewritten_history(tmp_path):
+    spec = _spec(tmp_path)
+    snap = _frame()
+    rewritten = snap.copy()
+    wob = 1 + 0.01 * np.sin(np.arange(60))          # jitters 60 recent returns
+    rewritten.iloc[-60:, rewritten.columns.get_loc("px_close")] *= wob
+    rep = dg.run_quality_checks(spec, rewritten, snapshot=snap)
+    assert "history_agreement" in rep["failed"]
+
+
+# ── the gate: refresh → pin → fallback ──────────────────────────────────────
+def test_refresh_pins_snapshot_and_manifest(tmp_path):
+    spec = _spec(tmp_path)
+    good = _frame()
+    out = dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "refreshed"
+    assert spec.snapshot_csv.exists() and Path(spec.manifest_json).exists()
+    man = json.loads(Path(spec.manifest_json).read_text())
+    assert man["qc_passed"] is True
+    snap, _ = dg.load_snapshot(spec)
+    assert man["checksum_sha256"] == dg.frame_sha(snap)
+    assert pd.Timestamp(snap.index.max()) <= CUT     # completed bars only
+
+
+def test_pinned_path_never_refetches(tmp_path):
+    spec = _spec(tmp_path)
+    dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="UNIT")
+
+    def _boom():
+        raise AssertionError("full fetch must not run on the pinned path")
+
+    out = dg.gated_daily(spec, fetch_full=_boom, consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "pinned"
+    assert pd.Timestamp(out.index.max()) == pd.Timestamp(
+        fr.last_completed_session(out.index))
+
+
+def test_pinned_path_is_byte_identical(tmp_path):
+    spec = _spec(tmp_path)
+    a = dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="UNIT")
+    b = dg.gated_daily(spec, fetch_full=lambda: _frame(seed=99), consumer="X")
+    pd.testing.assert_frame_equal(a, b)              # seed-99 fetch never ran
+
+
+def test_in_progress_bar_split_from_history(tmp_path):
+    spec = _spec(tmp_path)
+    full = _frame()
+    partial_date = CUT + pd.Timedelta(days=1)
+    partial = full.iloc[[-1]].copy()
+    partial.index = [partial_date]
+    with_partial = pd.concat([full, partial])
+    out = dg.gated_daily(spec, fetch_full=lambda: with_partial, consumer="U")
+    # served frame keeps the live in-progress row …
+    assert pd.Timestamp(out.index.max()) == partial_date
+    # … but the pinned snapshot must not contain it
+    snap = pd.read_csv(spec.snapshot_csv, index_col=0, parse_dates=True)
+    assert pd.Timestamp(snap.index.max()) <= CUT
+
+
+def test_partial_overlay_on_pinned_snapshot(tmp_path):
+    spec = _spec(tmp_path)
+    good = _frame()
+    dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    recent = good.iloc[[-1]].copy()
+    recent.index = [CUT + pd.Timedelta(days=1)]
+    out = dg.gated_daily(spec, fetch_full=lambda: _frame(seed=1),
+                         fetch_recent=lambda: recent, consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "pinned"
+    assert pd.Timestamp(out.index.max()) == CUT + pd.Timedelta(days=1)
+    snap = pd.read_csv(spec.snapshot_csv, index_col=0, parse_dates=True)
+    assert pd.Timestamp(snap.index.max()) <= CUT     # overlay never persisted
+
+
+def test_rejected_fetch_falls_back_to_snapshot(tmp_path):
+    spec = _spec(tmp_path)
+    good = _frame()
+    dg.gated_daily(spec, fetch_full=lambda: good, consumer="UNIT")
+    # invalidate the manifest freshness so the gate MUST try the fetch again
+    man_p = Path(spec.manifest_json)
+    man = json.loads(man_p.read_text())
+    snap = pd.read_csv(spec.snapshot_csv, index_col=0, parse_dates=True)
+    old = dg._norm_index(snap).iloc[:-2]             # snapshot now 2 bars stale
+    dg._atomic_write(spec.snapshot_csv, old.to_csv())
+    man["checksum_sha256"] = dg.frame_sha(old)
+    man_p.write_text(json.dumps(man))
+
+    corrupt = _frame().drop(columns=["vix_close"])   # fails required_columns
+    out = dg.gated_daily(spec, fetch_full=lambda: corrupt, consumer="UNIT")
+    gi = out.attrs["data_gate"]
+    assert gi["decision"] == "fallback_snapshot"
+    assert "required_columns" in gi["failed_checks"]
+    assert "vix_close" in out.columns                # the snapshot, not the fetch
+
+
+def test_unvalidated_live_when_no_snapshot(tmp_path):
+    spec = _spec(tmp_path)
+    corrupt = _frame().drop(columns=["vix_close"])
+    out = dg.gated_daily(spec, fetch_full=lambda: corrupt, consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "live_unvalidated"
+    assert len(out)                                   # still served — flagged
+
+
+def test_audit_trail_records_every_decision(tmp_path):
+    spec = _spec(tmp_path)
+    dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="OVERALL")
+    dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="SOXX")
+    trail = dg.read_audit()
+    assert spec.key in trail
+    decisions = [e["decision"] for e in trail[spec.key]]
+    assert decisions[0] == "pinned" and decisions[1] == "refreshed"
+    assert {e["consumer"] for e in trail[spec.key]} == {"OVERALL", "SOXX"}
+    for e in trail[spec.key]:
+        assert e["sha256"] != "—" and e["rows"] > 0
+
+
+def test_tampered_snapshot_not_pinned(tmp_path):
+    """A snapshot rewritten outside save_snapshot (hash mismatch) must be
+    re-validated via a fresh fetch instead of being trusted."""
+    spec = _spec(tmp_path)
+    dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="UNIT")
+    snap = pd.read_csv(spec.snapshot_csv, index_col=0, parse_dates=True)
+    snap.iloc[-1, snap.columns.get_loc("px_close")] *= 1.001   # silent edit
+    dg._atomic_write(spec.snapshot_csv, dg._norm_index(snap).to_csv())
+    out = dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="UNIT")
+    assert out.attrs["data_gate"]["decision"] == "refreshed"   # not "pinned"

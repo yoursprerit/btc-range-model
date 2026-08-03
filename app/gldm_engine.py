@@ -118,8 +118,53 @@ def _attach_nugt(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _gldm_gate_spec():
+    """GateSpec for the shared gold dataset (see app/data_gate.py) — the
+    GLDM/UGL/GDX columns from gldm_core.fetch_daily plus the NUGT columns
+    attached by ``_attach_nugt`` (all four sleeves trade off this one frame)."""
+    import data_gate as dg
+    traded = [f"gldm_{s}" for s in ("open", "high", "low", "close")]
+    traded += [f"{t.lower()}_close" for t in gc.LEVERAGED_SYMBOLS]
+    if "nugt_close" not in traded:      # older configs attach NUGT separately
+        traded.append("nugt_close")
+    return dg.GateSpec(key="GLDM", price_col="gldm_close",
+                       traded_close_cols=traded,
+                       macro_close_cols=[f"{n}_close" for n in gc.MACRO_SYMS],
+                       snapshot_csv=gc.DAILY_CACHE_CSV)
+
+
+def _fetch_recent_gldm() -> pd.DataFrame:
+    """Last few daily rows (incl. the in-progress bar) for the live overlay
+    on the pinned gold snapshot — mirrors ticker_core.fetch_recent_daily."""
+    syms = {"gldm": gc.PRIMARY_SYMBOL}
+    syms.update({t.lower(): t for t in gc.LEVERAGED_SYMBOLS})
+    syms.update(gc.MACRO_SYMS)
+    syms["nugt"] = "NUGT"
+    df = gc._merge(syms, "1d", range_="5d")
+    if df.empty:
+        return df
+    df.index = pd.to_datetime(df.index).normalize()
+    return df[~df.index.duplicated(keep="last")]
+
+
 def _load_daily() -> pd.DataFrame:
-    df = pd.DataFrame()
+    # Quality-gated, snapshot-pinned load (app/data_gate.py): validated
+    # completed history is pinned per session-roll so the gold back-tests are
+    # identical between page loads; rejected fetches serve the last known-good
+    # snapshot; every decision lands in runtime/dataset_audit.json.
+    try:
+        import data_gate as dg
+        df = dg.gated_daily(
+            _gldm_gate_spec(),
+            fetch_full=lambda: _attach_nugt(gc.fetch_daily(start="2018-06-26")),
+            fetch_recent=_fetch_recent_gldm,
+            consumer="GLDM/GDXM")
+        if (df is not None and not df.empty and "gldm_close" in df.columns
+                and len(df) > 260):
+            return _attach_nugt(df)       # no-op when nugt_close already there
+    except Exception:
+        pass
+    df = pd.DataFrame()                    # gate unavailable — legacy path
     try:
         d = gc.fetch_daily(start="2018-06-26")
         if d is not None and not d.empty and "gldm_close" in d.columns and len(d) > 260:
