@@ -1793,6 +1793,18 @@ with tab_live:
                         sata_daily=ov.SATA_DAILY)
                 return _dpl_memo["v"]
 
+            # exact per-sleeve ledger (realized/unrealized/deployed) —
+            # shared by 💰 realized P&L, 🥧 capital traded and ⚡ capital
+            # efficiency, computed once on first use
+            _rlz_memo = {}
+
+            def _get_rlz():
+                if "v" not in _rlz_memo:
+                    _rlz_memo["v"] = ov.realized_pnl_by_asset(
+                        _wf["weights"], _wf["sata"], _start_sel, _rets_win,
+                        active=_wf.get("active"))
+                return _rlz_memo["v"]
+
             # ── daily trade log — every buy/sell the daily book ordered ──────
             # (both sources: the source radio above decides which weight
             # matrix — as-published books or walk-forward replay — feeds it)
@@ -1946,9 +1958,10 @@ with tab_live:
                     f"💰 Realized P&L by asset {_win_lbl} — % and $ locked "
                     "in by daily tilt trims & sell signals (toggle to show)",
                     key="overall_realized_pnl_by_asset"):
-                _rlz = ov.realized_pnl_by_asset(
-                    _wf["weights"], _wf["sata"], _start_sel, _rets_win,
-                    active=_wf.get("active"))
+                # the ledger reports every held sleeve — this chart shows
+                # only the ones that actually listed a sale ticket
+                _rlz = {k: r for k, r in _get_rlz().items()
+                        if r["n_trims"] + r["n_sells"] > 0}
                 if not _rlz:
                     st.info("No position was trimmed or sold in this window — "
                             "nothing realized yet.")
@@ -2470,42 +2483,57 @@ with tab_live:
                     f"🥧 Capital traded by asset {_win_lbl} — % of total "
                     "deployed capital (toggle to show)",
                     key="overall_capital_by_asset"):
-                st.caption("Each round-trip in the trade log above (open positions "
-                           "included) deploys its sleeve's blend weight of the 💼 "
-                           "portfolio value at entry. Summing those entry notionals "
-                           "per instrument shows **where the strategy actually put "
-                           "capital to work** since the start date. The percentage "
-                           "shares are independent of the portfolio value entered — "
-                           "only the dollar figures scale with it.")
-                if not _tl:
+                st.caption("**Every dollar the book cycled into each sleeve** "
+                           "since the start date, off the same exact ledger "
+                           "as the 💰 realized chart: the anchor-day holding "
+                           "plus every buy flow — 🚦 signal opens, ⚖️ tilt "
+                           "adds and the daily re-balance buys between "
+                           "listed trades — on the blend's compounding value "
+                           "path, scaled by the 💼 portfolio value. A sleeve "
+                           "that trades repeatedly redeploys capital, so its "
+                           "slice can exceed its largest single position. "
+                           "The percentage shares are independent of the "
+                           "portfolio value entered — only the dollar "
+                           "figures scale with it.")
+                _capled = {k: r for k, r in _get_rlz().items()
+                           if r["deployed"] > 1e-9}
+                if not _capled:
                     st.info("No sleeve the blend holds traded in this window — "
                             "nothing was deployed.")
                 else:
-                    _cap, _cnt, _tl_meta = {}, {}, {}
-                    for t in _tl:
-                        _cap[t["key"]] = _cap.get(t["key"], 0.0) + t["weight"] * portfolio_value
-                        _cnt[t["key"]] = _cnt.get(t["key"], 0) + 1
-                        _tl_meta[t["key"]] = t
+                    _cap = {k: r["deployed"] * portfolio_value
+                            for k, r in _capled.items()}
                     _ck = sorted(_cap, key=_cap.get, reverse=True)
                     _cap_tot = sum(_cap.values())
+
+                    def _cap_meta(k):
+                        return by_key.get(k) or ov.ASSET_META.get(k, {})
+
+                    def _cap_hov(k):
+                        _r = _capled[k]
+                        _nt = _r["n_trims"] + _r["n_sells"]
+                        _oc_ = _r["cost_open"] * portfolio_value
+                        return (f"{_nt} sale ticket{'s' if _nt != 1 else ''} "
+                                f"· peak wt {_wmax.get(k, 0)*100:.1f}% · "
+                                f"${_oc_:,.0f} still invested")
                     # fold sleeves under 2.5% of the total into one "Other" slice so
                     # the pie stays readable — their split lives in the Other hover
                     _big = [k for k in _ck if _cap[k] / _cap_tot >= 0.025]
                     _small = [k for k in _ck if k not in _big]
                     if len(_small) == 1:          # folding a single sleeve saves nothing
                         _big, _small = _ck, []
-                    _lbls = [f"{_tl_meta[k]['emoji']} {k}" for k in _big]
+                    _lbls = [f"{_cap_meta(k).get('emoji', '')} {k}".strip()
+                             for k in _big]
                     _vals = [_cap[k] for k in _big]
-                    _cols = [_tl_meta[k]["accent"] for k in _big]
-                    _hov = [f"{_cnt[k]} trade{'s' if _cnt[k] != 1 else ''} · peak wt "
-                            f"{_tl_meta[k]['weight']*100:.1f}%" for k in _big]
+                    _cols = [_cap_meta(k).get("accent", "#64748b") for k in _big]
+                    _hov = [_cap_hov(k) for k in _big]
                     if _small:
                         _lbls.append(f"Other ({len(_small)} sleeves)")
                         _vals.append(sum(_cap[k] for k in _small))
                         _cols.append("#94a3b8")
                         _hov.append("<br>".join(
-                            f"{_tl_meta[k]['emoji']} {k}: {_cap[k]/_cap_tot*100:.1f}%"
-                            f" · {_cnt[k]} trade{'s' if _cnt[k] != 1 else ''}"
+                            f"{_cap_meta(k).get('emoji', '')} {k}: "
+                            f"{_cap[k]/_cap_tot*100:.1f}% · {_cap_hov(k)}"
                             for k in _small))
                     fig_cap = go.Figure(go.Pie(
                         labels=_lbls, values=_vals,
@@ -2519,8 +2547,9 @@ with tab_live:
                     fig_cap.update_layout(
                         height=430, margin=dict(t=40, b=10, l=10, r=10),
                         title=dict(text=f"Share of deployed capital per instrument — "
-                                        f"total ≈ ${_cap_tot:,.0f} across {len(_tl)} "
-                                        f"trade{'s' if len(_tl) != 1 else ''}",
+                                        f"total ≈ ${_cap_tot:,.0f} cycled across "
+                                        f"{len(_capled)} sleeve"
+                                        f"{'s' if len(_capled) != 1 else ''}",
                                    font_size=13))
                     st.plotly_chart(fig_cap, use_container_width=True)
 
@@ -2605,38 +2634,41 @@ with tab_live:
                     "per $ of capital traded (toggle to show)",
                     key="overall_capital_efficiency"):
                 st.caption("Each sleeve's **exact-attribution P&L** (the chart "
-                           "above) divided by the **total capital it deployed** "
-                           "— the sum of every round-trip's entry notional "
-                           "(blend weight × 💼 portfolio value, as in the 🥧 "
-                           "capital-traded chart; a sleeve that traded several "
-                           "times redeploys capital, so its denominator can "
-                           "exceed its blend weight). A high % means the sleeve "
-                           "earned a lot per dollar it put at risk; the ratio "
-                           "is independent of the portfolio value entered. "
-                           "**SATA** isn't shown — its yield accrues on idle "
-                           "cash, not traded capital.")
+                           "above) divided by the **total capital it cycled** "
+                           "— the same tilt-exact deployed figure as the 🥧 "
+                           "capital-traded chart: the anchor holding plus "
+                           "every buy flow (signal opens, tilt adds, daily "
+                           "re-balance buys), so numerator and denominator "
+                           "come from one ledger. A sleeve that trades "
+                           "repeatedly redeploys capital, so its denominator "
+                           "can exceed its largest single position. A high % "
+                           "means the sleeve earned a lot per dollar it put "
+                           "at risk; the ratio is independent of the "
+                           "portfolio value entered. **SATA** isn't shown — "
+                           "its yield accrues on idle cash, not traded "
+                           "capital.")
                 _eff_att = ov.pnl_attribution_replay(
                     _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                     sata_daily=ov.SATA_DAILY)
-                if not _tl or _eff_att is None:
+                _effled = {k: r for k, r in _get_rlz().items()
+                           if r["deployed"] > 1e-9}
+                if not _effled or _eff_att is None:
                     st.info("No sleeve the blend holds traded in this window — "
                             "nothing was deployed.")
                 else:
-                    _ecap, _ecnt = {}, {}
-                    for t in _tl:
-                        _ecap[t["key"]] = (_ecap.get(t["key"], 0.0)
-                                           + t["weight"] * portfolio_value)
-                        _ecnt[t["key"]] = _ecnt.get(t["key"], 0) + 1
                     _ebars = []
-                    for k, cap in _ecap.items():
-                        if cap <= 0:
-                            continue
+                    for k, _r in _effled.items():
+                        cap = _r["deployed"] * portfolio_value
                         _pnl_k = _eff_att["per_key"].get(k, 0.0) * portfolio_value
+                        _em = (by_key.get(k)
+                               or ov.ASSET_META.get(k, {})).get("emoji", "")
+                        _nt = _r["n_trims"] + _r["n_sells"]
                         _ebars.append((
-                            f"{by_key[k]['emoji']} {k}", _pnl_k / cap * 100,
+                            f"{_em} {k}".strip(), _pnl_k / cap * 100,
                             C_BUY if _pnl_k >= 0 else C_EXIT,
-                            f"${_pnl_k:+,.0f} P&L on ${cap:,.0f} deployed · "
-                            f"{_ecnt[k]} trade{'s' if _ecnt[k] != 1 else ''}"))
+                            f"${_pnl_k:+,.0f} P&L on ${cap:,.0f} cycled · "
+                            f"{_nt} sale ticket{'s' if _nt != 1 else ''} · "
+                            f"peak wt {_wmax.get(k, 0)*100:.1f}%"))
                     # most efficient sleeve on top, least efficient at the bottom
                     _ebars.sort(key=lambda b: b[1])
                     fig_eff = go.Figure(go.Bar(
