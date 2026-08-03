@@ -231,25 +231,37 @@ def test_active_mask_optimizer_zero_is_a_tilt_and_resets_the_basis():
     assert trim["entry_date"] == IDX[2]
 
 
-def test_realized_pnl_by_asset_aggregates_trims_and_sells():
+def test_realized_pnl_reconciles_with_attribution_when_flat():
     # AAA: bought at IDX0 close, trimmed at IDX2 close, sold at IDX3 close
+    # — flat at window end, so its realized P&L must EQUAL the exact
+    # attribution bar (window-anchored, all flows, compounded-$)
     w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.0])
     rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.01])
-    rlz = oc.realized_pnl_by_asset(w, _sata([1.0, 0.6, 0.6, 0.8, 1.0]),
-                                   IDX[0], rets)
+    sata = _sata([1.0, 0.6, 0.6, 0.8, 1.0])
+    rlz = oc.realized_pnl_by_asset(w, sata, IDX[0], rets, sata_daily=0.0)
+    att = oc.pnl_attribution_replay(rets, w, sata, IDX[0], sata_daily=0.0)
     r = rlz["AAA"]
-    # trim slice: proceeds 0.2, return (1.10·1.05)−1; sell slice: proceeds
-    # 0.2, return (1.10·1.05·0.98)−1 — pnl = Σ(proceeds − proceeds/(1+ret))
-    g_trim, g_sell = 1.10 * 1.05, 1.10 * 1.05 * 0.98
-    c_trim, c_sell = 0.2 / g_trim, 0.2 / g_sell
-    assert np.isclose(r["pnl"], (0.2 - c_trim) + (0.2 - c_sell))
-    assert np.isclose(r["proceeds"], 0.4)
-    assert np.isclose(r["cost"], c_trim + c_sell)
-    assert np.isclose(r["ret"], 0.4 / (c_trim + c_sell) - 1)
-    assert (r["n_trims"], r["n_sells"]) == (1, 1)
-    assert np.isclose(r["pnl_tilt"], 0.2 - c_trim)
-    assert np.isclose(r["pnl_signal"], 0.2 - c_sell)
+    assert np.isclose(r["unrealized"], 0.0)
+    assert np.isclose(r["pnl"], att["per_key"]["AAA"])
+    assert np.isclose(r["total"], att["per_key"]["AAA"])
     assert np.isclose(r["pnl"], r["pnl_tilt"] + r["pnl_signal"])
+    assert (r["n_trims"], r["n_sells"]) == (1, 1)
+    assert np.isclose(r["ret"], r["proceeds"] / r["cost"] - 1)
+
+
+def test_realized_plus_unrealized_equals_attribution_when_open():
+    # AAA still held at window end: realized + unrealized must telescope
+    # to the attribution bar — under the default SATA accrual too
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.2])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.04])
+    sata = _sata([1.0, 0.6, 0.6, 0.8, 0.8])
+    for sd in (0.0, oc.SATA_DAILY):
+        rlz = oc.realized_pnl_by_asset(w, sata, IDX[0], rets, sata_daily=sd)
+        att = oc.pnl_attribution_replay(rets, w, sata, IDX[0], sata_daily=sd)
+        r = rlz["AAA"]
+        assert abs(r["unrealized"]) > 0
+        assert np.isclose(r["pnl"] + r["unrealized"], att["per_key"]["AAA"])
+        assert np.isclose(r["total"], att["per_key"]["AAA"])
 
 
 def test_realized_pnl_by_asset_omits_never_sold_keys():
