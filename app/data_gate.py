@@ -80,6 +80,18 @@ _OVERLAP_DAYS = 120              # most recent shared sessions compared
 _OVERLAP_RET_TOL = 1e-3          # |Δ log-return| below this is "agreeing"
 _OVERLAP_MAX_BAD = 6             # >6 disagreeing days out of 120 → reject
 
+# Independent cross-check: a session being added to the snapshot for the first
+# time has no prior reference to agree with, so its traded closes are verified
+# against Nasdaq's independent tape (app/market_fallback.py) where served.
+# Empirically the two providers agree to fractions of a basis point (see
+# DATA_CONSISTENCY.md), so 50 bps is a generous bound that still catches any
+# materially wrong day-one print.  Nasdaq is raw (split-unadjusted); the
+# comparison first aligns bases via the median close ratio over the sessions
+# just before the new ones, so a recent split cannot masquerade as an error.
+NASDAQ_XCHECK_TOL = 0.005        # 0.5% relative close disagreement → reject
+_XCHECK_MAX_SESSIONS = 5         # newest new sessions verified per refresh
+_XCHECK_REF_DAYS = 10            # prior overlap sessions used to align bases
+
 
 @dataclass
 class GateSpec:
@@ -92,6 +104,9 @@ class GateSpec:
     manifest_json: Path | None = None # defaults next to the CSV
     min_rows: int = 260               # engines need ≥260 bars to run at all
     required_extra_cols: list[str] = field(default_factory=list)
+    # close column → listed ticker, for the independent Nasdaq cross-check of
+    # newly-added sessions; empty dict disables the check for this dataset.
+    symbol_by_col: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.snapshot_csv = Path(self.snapshot_csv)
@@ -111,9 +126,12 @@ def ticker_spec(cfg) -> GateSpec:
     traded = [f"px_{s}" for s in ("open", "high", "low", "close")]
     traded += [f"{nm}_close" for nm in cfg.extra_syms]
     macro = [f"{nm}_close" for nm in cfg.macro_syms]
+    syms = {"px_close": cfg.primary_symbol}
+    syms.update({f"{nm}_close": s for nm, s in cfg.extra_syms.items()})
     return GateSpec(key=cfg.key, price_col="px_close",
                     traded_close_cols=traded, macro_close_cols=macro,
-                    snapshot_csv=tc.cache_paths(cfg)["daily"])
+                    snapshot_csv=tc.cache_paths(cfg)["daily"],
+                    symbol_by_col=syms)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -336,6 +354,81 @@ def read_audit() -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# Independent cross-check of newly-added sessions (Nasdaq's free tape)
+# ════════════════════════════════════════════════════════════════════════
+def _nasdaq_crosscheck(spec: GateSpec, hist: pd.DataFrame,
+                       prev: pd.DataFrame | None) -> dict | None:
+    """Verify the traded closes of sessions being ADDED to the snapshot
+    against Nasdaq's independent quote API — the one moment a print has no
+    prior reference to agree with (`history_agreement` covers everything
+    else from the next refresh onward).
+
+    Best-effort by design: returns a check dict only when at least one
+    (column, session) pair could actually be verified; returns ``None`` on
+    bootstrap (no previous snapshot), nothing new, no symbol map, or when
+    Nasdaq serves nothing — an unreachable second opinion must never block
+    a refresh, it just isn't evidence either way (the skip is recorded in
+    the check detail when a partial check ran)."""
+    if not spec.symbol_by_col or prev is None or not len(prev):
+        return None
+    try:
+        import market_fallback as mf
+    except Exception:
+        return None
+    prev_last = pd.Timestamp(prev.index.max())
+    new_idx = hist.index[hist.index > prev_last]
+    if not len(new_idx):
+        return None
+    new_idx = new_idx[-_XCHECK_MAX_SESSIONS:]
+    start = (pd.Timestamp(new_idx.min())
+             - pd.Timedelta(days=45)).strftime("%Y-%m-%d")
+    checked, skipped, bad = 0, 0, []
+    for col, sym in spec.symbol_by_col.items():
+        if col not in hist.columns or not mf.supports(sym):
+            skipped += len(new_idx)
+            continue
+        try:
+            nq = mf.daily_ohlcv(sym, start)
+        except Exception:
+            nq = pd.DataFrame()
+        if nq is None or nq.empty:
+            skipped += len(new_idx)
+            continue
+        nq = nq.copy()
+        nq.index = pd.DatetimeIndex(nq.index).normalize()
+        y = pd.to_numeric(hist[col], errors="coerce")
+        # align adjustment bases (Nasdaq is raw, Yahoo split-adjusted) on the
+        # sessions just before the new ones — a recent split shows up as a
+        # constant ratio there and is divided out, not flagged
+        ref = nq.index.intersection(y.dropna().index)
+        ref = ref[ref < new_idx.min()][-_XCHECK_REF_DAYS:]
+        if len(ref) < 3:
+            skipped += len(new_idx)
+            continue
+        scale = float((y.loc[ref] / nq.loc[ref, "close"]).median())
+        if not np.isfinite(scale) or scale <= 0:
+            skipped += len(new_idx)
+            continue
+        for d in new_idx:
+            yd = y.get(d)
+            if d not in nq.index or yd is None or pd.isna(yd) or yd <= 0:
+                skipped += 1
+                continue
+            rel = abs(float(yd) - float(nq.loc[d, "close"]) * scale) / float(yd)
+            checked += 1
+            if rel > NASDAQ_XCHECK_TOL:
+                bad.append(f"{col}@{pd.Timestamp(d).date()} "
+                           f"({rel * 100:.2f}% vs Nasdaq)")
+    if checked == 0:
+        return None                       # no independent evidence available
+    detail = (f"{checked} new-session close(s) verified against Nasdaq"
+              + (f", {skipped} skipped (not served)" if skipped else ""))
+    if bad:
+        detail = f"disagrees with Nasdaq beyond {NASDAQ_XCHECK_TOL*100:.1f}%: {bad}"
+    return dict(name="nasdaq_crosscheck", passed=not bad, detail=detail)
+
+
+# ════════════════════════════════════════════════════════════════════════
 # The gate
 # ════════════════════════════════════════════════════════════════════════
 def _append_partial_bar(hist: pd.DataFrame, recent: pd.DataFrame | None,
@@ -441,6 +534,19 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
         hist = _fr.drop_in_progress_us_bar(fresh, basis_now)
         report = run_quality_checks(spec, hist, snapshot=snap)
         if report["passed"]:
+            # sessions entering the snapshot for the first time get a second
+            # opinion from Nasdaq's independent tape (best-effort; a failed
+            # verification rejects the fetch like any other check)
+            try:
+                xc = _nasdaq_crosscheck(spec, hist, snap)
+            except Exception:
+                xc = None
+            if xc is not None:
+                report["checks"].append(xc)
+                if not xc["passed"]:
+                    report["failed"] = list(report["failed"]) + [xc["name"]]
+                    report["passed"] = False
+                    continue                    # retry once, then fall back
             save_snapshot(spec, hist, report)
             out = hist
             n_part = 0

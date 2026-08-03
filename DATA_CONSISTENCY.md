@@ -71,6 +71,16 @@ snapshots**:
   regression versus the snapshot, and per-day return agreement with the
   snapshot over the overlapping history (kills cause #4 silently rewriting
   the past).
+* **Independent cross-check** — a session entering the snapshot for the
+  first time has no prior reference for `history_agreement` to compare
+  against, so its **traded closes are verified against Nasdaq's independent
+  tape** (`app/market_fallback.py`) before the refresh is accepted: bases are
+  aligned on the sessions just before the new ones (so a split can't
+  masquerade as an error), and a disagreement beyond 0.5% rejects the fetch
+  like any other failed check. Best-effort where Nasdaq can't serve the
+  symbol or is unreachable — an absent second opinion never blocks a refresh,
+  it just isn't recorded as verification. (Empirically the two tapes agree to
+  fractions of a basis point — see the source-comparison study below.)
 * **Fallback** — a rejected fetch never reaches the models; the last
   known-good snapshot is served and the failure is visible (kills causes
   #1–#2 as sources of silent drift).
