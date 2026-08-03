@@ -1110,6 +1110,51 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
     return days
 
 
+def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
+                          returns: pd.DataFrame,
+                          min_delta: float = 0.0005) -> dict:
+    """Per-asset REALIZED P&L locked in by the book's sell-side trades
+    since ``start`` — the 🧾 daily trade log's ⚖️ tilt trims and 🚦 sell
+    signals rolled up by sleeve.  Each sold slice realizes ``proceeds −
+    cost``: proceeds are ``|Δweight|`` per $1 of portfolio (the
+    trade-ticket convention — scale by the portfolio value for dollars)
+    and cost is ``proceeds / (1 + pnl)`` off the slice's entry-close cost
+    basis (``daily_trade_log``'s ``pnl``).
+
+    Returns ``{key: {...}}`` with per-sleeve ``pnl`` (Σ realized, per $1),
+    ``ret`` (Σproceeds/Σcost − 1 — the cost-weighted realized % return),
+    ``proceeds``/``cost``, the tilt-vs-signal split
+    (``pnl_tilt``/``pnl_signal``, ``n_trims``/``n_sells``).  Keys that
+    never sold are omitted; ``{}`` when nothing was sold.  A per-trade
+    approximation by construction: unrealized P&L on positions still held
+    is excluded and dollars are un-compounded, so these figures
+    deliberately do NOT reconcile to ``pnl_attribution_replay``'s exact
+    curve attribution."""
+    out: dict[str, dict] = {}
+    for day in daily_trade_log(weights, sata, start, min_delta=min_delta,
+                               returns=returns):
+        for a in day["actions"]:
+            if a["delta"] >= 0 or a["pnl"] is None or a["pnl"] <= -1:
+                continue
+            proceeds = -a["delta"]
+            cost = proceeds / (1.0 + a["pnl"])
+            r = out.setdefault(a["key"], dict(
+                pnl=0.0, proceeds=0.0, cost=0.0, pnl_tilt=0.0,
+                pnl_signal=0.0, n_trims=0, n_sells=0))
+            r["proceeds"] += proceeds
+            r["cost"] += cost
+            r["pnl"] += proceeds - cost
+            if a["signal_change"]:
+                r["pnl_signal"] += proceeds - cost
+                r["n_sells"] += 1
+            else:
+                r["pnl_tilt"] += proceeds - cost
+                r["n_trims"] += 1
+    for r in out.values():
+        r["ret"] = (r["proceeds"] / r["cost"] - 1.0) if r["cost"] > 0 else 0.0
+    return out
+
+
 def sata_slice_metrics(index: pd.Index, start) -> dict | None:
     """The SATA idle-cash sleeve since ``start`` on the blend's calendar: a
     constant ``SATA_DAILY`` yield on a flat $100 par — so no drawdown, every
