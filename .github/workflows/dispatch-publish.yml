@@ -1,0 +1,61 @@
+name: Dispatch publish (external-scheduler relay)
+
+# RELAY for the "Publish target book" workflow's workflow_dispatch — the
+# external-scheduler hardening described in publish-target-book.yml.
+#
+# WHY A RELAY: GitHub's `on: schedule` is best-effort and this repo's fires
+# are routinely delivered 1-3 h late or dropped outright (2026-08-03: every
+# slot dropped for 2.5+ h and the day's book sat unpublished all morning).
+# The precise fix is an external scheduler calling the workflow_dispatch API
+# — but the tokens available to Claude Code sessions (the scheduler used
+# here) carry contents:write only, not the Actions write scope that endpoint
+# needs. A push-triggered workflow's own GITHUB_TOKEN does have it (granted
+# below), and workflow_dispatch runs created with GITHUB_TOKEN are exempt
+# from GitHub's no-runs-from-GITHUB_TOKEN-events recursion rule. So: the
+# external scheduler pushes a marker commit to this branch → this relay fires
+# within seconds → it dispatches the real publish workflow on main.
+#
+# GUARD: only commits whose message contains [dispatch-publish] trigger the
+# dispatch, so ordinary development pushes to this branch never fire a
+# publish. The publish workflow itself treats a dispatch as an explicit
+# manual publish (it bypasses the once-per-day guard), and its data basis is
+# pinned to the day's 7:15 AM CT anchor — so a relay fire publishes exactly
+# the book the scheduled run would have.
+#
+# SCHEDULER SIDE: the primary external scheduler is a cron-job.org job that
+# calls the workflow_dispatch API directly with a PAT at 7:16 AM
+# America/Chicago (see docs/EXTERNAL_SCHEDULER.md) — it does not need this
+# relay. The relay stays as the fallback path for automation whose
+# credentials lack the Actions scope (e.g. Claude Code sessions, whose
+# GitHub tokens carry contents:write only): push the marker commit and this
+# workflow performs the dispatch.
+#
+# `publish-trigger` is listed alongside this development branch so the relay
+# keeps working from a stable, dedicated branch if this one is ever merged
+# and deleted — create that branch from main and point the scheduler's
+# pushes at it.
+
+on:
+  push:
+    branches:
+      - claude/targetbook-715-ct-delay-h3cck6
+      - publish-trigger
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    if: contains(github.event.head_commit.message, '[dispatch-publish]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch publish-target-book on main
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/publish-target-book.yml/dispatches" \
+            -d '{"ref":"main"}'
+          echo "Dispatched publish-target-book.yml on main." >> "$GITHUB_STEP_SUMMARY"

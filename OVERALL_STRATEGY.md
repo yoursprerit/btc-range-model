@@ -353,7 +353,7 @@ blends of the strategies. Numbers and the full walk-forward are in
 | Live execution on IBKR | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) |
 | Signal-freshness source of truth (closes, audit, refresh log) | `app/freshness.py` |
 | 🕵️ Daily Audit tab | `app/daily_audit_app.py` |
-| Scheduled ≈7:15-AM-CT publish (audit-gated) | `.github/workflows/publish-target-book.yml` · `scripts/publish_target_book.py` |
+| Scheduled ≈7:15-AM-CT publish (audit-gated) | `.github/workflows/publish-target-book.yml` · `scripts/publish_target_book.py` · [`docs/EXTERNAL_SCHEDULER.md`](docs/EXTERNAL_SCHEDULER.md) |
 
 ---
 
@@ -368,11 +368,15 @@ The daily cycle:
 1. **12:00 UTC** — the Bitcoin bar closes; minutes later the
    *Refresh backtest dataset* workflow pulls the fresh BTC feature CSV.
 2. **≈7:15 AM US Central** — the *Publish target book* workflow runs the full
-   Overall engine, **once per day**. Both DST variants are scheduled (12:15 &
-   13:15 UTC) with an `America/Chicago` guard so it always fires at the
-   7-o'clock Central hour (with hourly same-day catch-up slots if the first
-   fire was delayed or its audit failed — the guard skips every slot once the
-   day's book is published).
+   Overall engine, **once per day**. The punctual fire comes from an
+   **external scheduler** (a cron-job.org job calling `workflow_dispatch` at
+   7:16 AM America/Chicago — setup in
+   [`docs/EXTERNAL_SCHEDULER.md`](docs/EXTERNAL_SCHEDULER.md)), because
+   GitHub delivers its own `on: schedule` fires minutes-to-hours late and
+   sometimes drops a whole day. GitHub's cron slots stay on as backup: both
+   DST variants (12:15 & 13:15 UTC) plus hourly same-day catch-ups, all
+   behind an `America/Chicago` guard that skips every slot once the day's
+   book is published.
 3. **Audit before anything else** — every signal app's newest bar is validated
    against the freshest close its asset class can possibly have
    (`freshness.audit_universe`). A failed audit forces one full data refresh +
