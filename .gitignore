@@ -50,3 +50,5 @@ data/backtest/.last_feature_pull
 
 # per-deployment page-refresh log (written by the apps, read by 🕵️ Daily Audit)
 runtime/freshness_log.json
+# per-deployment dataset audit trail (app/data_gate.py) — server-local state
+runtime/dataset_audit.json

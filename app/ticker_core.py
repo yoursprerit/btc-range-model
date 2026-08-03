@@ -201,6 +201,22 @@ def fetch_daily(cfg: TickerConfig, start: str | None = None) -> pd.DataFrame:
     return df
 
 
+def fetch_recent_daily(cfg: TickerConfig) -> pd.DataFrame:
+    """The last few daily rows only (including any in-progress *today* bar).
+
+    Used by the data gate (``app/data_gate.py``) to overlay the live partial
+    bar on top of a pinned known-good snapshot — a tiny fetch instead of the
+    full multi-year history, so intraday refreshes stop re-downloading (and
+    re-trusting) the entire past."""
+    syms = _primary_map(cfg)
+    syms.update(cfg.macro_syms)
+    df = _merge(syms, "1d", range_="5d")
+    if df.empty:
+        return df
+    df.index = pd.to_datetime(df.index).normalize()
+    return df[~df.index.duplicated(keep="last")]
+
+
 def fetch_hourly(cfg: TickerConfig, range_: str = "730d") -> pd.DataFrame:
     syms = {"px": cfg.primary_symbol}
     syms.update(cfg.macro_syms)

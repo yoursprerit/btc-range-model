@@ -1,0 +1,99 @@
+{
+ "key": "PBW",
+ "source": "yahoo-live",
+ "saved_at_utc": "2026-08-03T00:18:04+00:00",
+ "rows": 4169,
+ "date_from": "2010-01-04",
+ "date_to": "2026-07-31",
+ "columns": [
+  "px_open",
+  "px_high",
+  "px_low",
+  "px_close",
+  "px_volume",
+  "icln_open",
+  "icln_high",
+  "icln_low",
+  "icln_close",
+  "icln_volume",
+  "tan_open",
+  "tan_high",
+  "tan_low",
+  "tan_close",
+  "tan_volume",
+  "qcln_open",
+  "qcln_high",
+  "qcln_low",
+  "qcln_close",
+  "qcln_volume",
+  "cper_open",
+  "cper_high",
+  "cper_low",
+  "cper_close",
+  "cper_volume",
+  "tnx_open",
+  "tnx_high",
+  "tnx_low",
+  "tnx_close",
+  "tnx_volume",
+  "spx_open",
+  "spx_high",
+  "spx_low",
+  "spx_close",
+  "spx_volume",
+  "vix_open",
+  "vix_high",
+  "vix_low",
+  "vix_close",
+  "vix_volume"
+ ],
+ "checksum_sha256": "2461371eefc1e8ad",
+ "qc_passed": true,
+ "qc_checks": [
+  {
+   "name": "non_empty",
+   "passed": true,
+   "detail": "4169 rows"
+  },
+  {
+   "name": "min_rows",
+   "passed": true,
+   "detail": "4169 rows (need \u2265 260)"
+  },
+  {
+   "name": "index_sane",
+   "passed": true,
+   "detail": "sorted, no duplicate sessions"
+  },
+  {
+   "name": "price_positive_finite",
+   "passed": true,
+   "detail": "px_close: 4169 non-null values"
+  },
+  {
+   "name": "required_columns",
+   "passed": true,
+   "detail": "all present"
+  },
+  {
+   "name": "no_extreme_traded_moves",
+   "passed": true,
+   "detail": "all daily moves plausible"
+  },
+  {
+   "name": "no_row_regression",
+   "passed": true,
+   "detail": "4169 rows vs snapshot 4164"
+  },
+  {
+   "name": "no_span_regression",
+   "passed": true,
+   "detail": "last 2026-07-31 vs snapshot 2026-07-24"
+  },
+  {
+   "name": "history_agreement",
+   "passed": true,
+   "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
+  }
+ ]
+}

@@ -132,7 +132,20 @@ def load_model(path_str: str):
 @st.cache_data(ttl=300, show_spinner="Fetching daily data…")
 def get_daily(key: str):
     c = ticker_config.get_config(key)
-    d = tc.fetch_daily(c)
+    # Quality-gated, snapshot-pinned load (app/data_gate.py): the completed
+    # history is validated once per session-roll and pinned, so the strategy
+    # back-test below computes the SAME numbers all day; only the in-progress
+    # bar is overlaid live. Rejected fetches fall back to the last known-good
+    # snapshot; every decision is recorded in runtime/dataset_audit.json and
+    # shown in the 🕵️ Daily Audit app.
+    try:
+        import data_gate as dg
+        d = dg.gated_daily(dg.ticker_spec(c),
+                           fetch_full=lambda: tc.fetch_daily(c),
+                           fetch_recent=lambda: tc.fetch_recent_daily(c),
+                           consumer=key)
+    except Exception:
+        d = tc.fetch_daily(c)                 # gate unavailable — legacy path
     paths = tc.cache_paths(c)
     if d is None or d.empty:
         if paths["daily"].exists():

@@ -1,0 +1,99 @@
+{
+ "key": "WGMI",
+ "source": "yahoo-live",
+ "saved_at_utc": "2026-08-03T00:18:02+00:00",
+ "rows": 1123,
+ "date_from": "2022-02-08",
+ "date_to": "2026-07-31",
+ "columns": [
+  "px_open",
+  "px_high",
+  "px_low",
+  "px_close",
+  "px_volume",
+  "btc_open",
+  "btc_high",
+  "btc_low",
+  "btc_close",
+  "btc_volume",
+  "mara_open",
+  "mara_high",
+  "mara_low",
+  "mara_close",
+  "mara_volume",
+  "riot_open",
+  "riot_high",
+  "riot_low",
+  "riot_close",
+  "riot_volume",
+  "coin_open",
+  "coin_high",
+  "coin_low",
+  "coin_close",
+  "coin_volume",
+  "eth_open",
+  "eth_high",
+  "eth_low",
+  "eth_close",
+  "eth_volume",
+  "qqq_open",
+  "qqq_high",
+  "qqq_low",
+  "qqq_close",
+  "qqq_volume",
+  "vix_open",
+  "vix_high",
+  "vix_low",
+  "vix_close",
+  "vix_volume"
+ ],
+ "checksum_sha256": "a826fb4d4c82fd0d",
+ "qc_passed": true,
+ "qc_checks": [
+  {
+   "name": "non_empty",
+   "passed": true,
+   "detail": "1123 rows"
+  },
+  {
+   "name": "min_rows",
+   "passed": true,
+   "detail": "1123 rows (need \u2265 260)"
+  },
+  {
+   "name": "index_sane",
+   "passed": true,
+   "detail": "sorted, no duplicate sessions"
+  },
+  {
+   "name": "price_positive_finite",
+   "passed": true,
+   "detail": "px_close: 1123 non-null values"
+  },
+  {
+   "name": "required_columns",
+   "passed": true,
+   "detail": "all present"
+  },
+  {
+   "name": "no_extreme_traded_moves",
+   "passed": true,
+   "detail": "all daily moves plausible"
+  },
+  {
+   "name": "no_row_regression",
+   "passed": true,
+   "detail": "1123 rows vs snapshot 1118"
+  },
+  {
+   "name": "no_span_regression",
+   "passed": true,
+   "detail": "last 2026-07-31 vs snapshot 2026-07-24"
+  },
+  {
+   "name": "history_agreement",
+   "passed": true,
+   "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
+  }
+ ]
+}

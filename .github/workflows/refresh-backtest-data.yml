@@ -82,6 +82,35 @@ jobs:
             -m "Automated refresh via .github/workflows/refresh-backtest-data.yml"
           git push
 
+      - name: Refresh + QC-pin the equity/gold sleeve snapshots
+        # Runs the same quality gate the apps use (app/data_gate.py) for every
+        # ticker sleeve + the shared gold dataset: a fetch that passes QC
+        # replaces data/<sleeve>/macro_daily.csv and writes a checksummed
+        # manifest beside it; a fetch that fails QC is discarded and the last
+        # known-good snapshot stays (that sleeve is reported, not committed).
+        # Committing the pinned vintage means every deployment boots from the
+        # SAME validated history instead of re-trusting a live Yahoo fetch —
+        # which is what kept making the backtest numbers drift intraday.
+        continue-on-error: true
+        run: python scripts/refresh_sleeve_snapshots.py
+
+      - name: Commit & push refreshed sleeve snapshots
+        run: |
+          set -euo pipefail
+          PATHS="data/arty data/gldm data/grid data/pbw data/remx data/soxx data/wgmi data/xle"
+          # porcelain (not diff) so brand-new manifest files count as changes
+          if [ -z "$(git status --porcelain -- $PATHS)" ]; then
+            echo "No sleeve snapshot changes — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add $PATHS
+          git commit \
+            -m "chore(data): refresh QC-pinned sleeve snapshots" \
+            -m "Automated refresh via scripts/refresh_sleeve_snapshots.py (quality-gated; see app/data_gate.py)"
+          git push
+
       - name: Alarm if dataset is stale
         # Runs whether or not anything was committed: surfaces a silently broken
         # pipeline (e.g. the pull crashing for days) before the app degrades.

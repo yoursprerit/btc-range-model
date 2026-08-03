@@ -1,0 +1,109 @@
+{
+ "key": "GLDM",
+ "source": "yahoo-live",
+ "saved_at_utc": "2026-08-03T00:18:09+00:00",
+ "rows": 2035,
+ "date_from": "2018-06-26",
+ "date_to": "2026-07-31",
+ "columns": [
+  "gldm_open",
+  "gldm_high",
+  "gldm_low",
+  "gldm_close",
+  "gldm_volume",
+  "ugl_open",
+  "ugl_high",
+  "ugl_low",
+  "ugl_close",
+  "ugl_volume",
+  "gdx_open",
+  "gdx_high",
+  "gdx_low",
+  "gdx_close",
+  "gdx_volume",
+  "nugt_open",
+  "nugt_high",
+  "nugt_low",
+  "nugt_close",
+  "nugt_volume",
+  "gc_open",
+  "gc_high",
+  "gc_low",
+  "gc_close",
+  "gc_volume",
+  "slv_open",
+  "slv_high",
+  "slv_low",
+  "slv_close",
+  "slv_volume",
+  "dxy_open",
+  "dxy_high",
+  "dxy_low",
+  "dxy_close",
+  "dxy_volume",
+  "tnx_open",
+  "tnx_high",
+  "tnx_low",
+  "tnx_close",
+  "tnx_volume",
+  "vix_open",
+  "vix_high",
+  "vix_low",
+  "vix_close",
+  "vix_volume",
+  "spx_open",
+  "spx_high",
+  "spx_low",
+  "spx_close",
+  "spx_volume"
+ ],
+ "checksum_sha256": "5336597a56bc8d42",
+ "qc_passed": true,
+ "qc_checks": [
+  {
+   "name": "non_empty",
+   "passed": true,
+   "detail": "2035 rows"
+  },
+  {
+   "name": "min_rows",
+   "passed": true,
+   "detail": "2035 rows (need \u2265 260)"
+  },
+  {
+   "name": "index_sane",
+   "passed": true,
+   "detail": "sorted, no duplicate sessions"
+  },
+  {
+   "name": "price_positive_finite",
+   "passed": true,
+   "detail": "gldm_close: 2035 non-null values"
+  },
+  {
+   "name": "required_columns",
+   "passed": true,
+   "detail": "all present"
+  },
+  {
+   "name": "no_extreme_traded_moves",
+   "passed": true,
+   "detail": "all daily moves plausible"
+  },
+  {
+   "name": "no_row_regression",
+   "passed": true,
+   "detail": "2035 rows vs snapshot 2030"
+  },
+  {
+   "name": "no_span_regression",
+   "passed": true,
+   "detail": "last 2026-07-31 vs snapshot 2026-07-24"
+  },
+  {
+   "name": "history_agreement",
+   "passed": true,
+   "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
+  }
+ ]
+}

@@ -387,14 +387,28 @@ def compute_priorities(results: list[dict], keys: list[str]) -> dict:
 # PER-ASSET RUN — fetch → predict → simulate each traded instrument
 # ════════════════════════════════════════════════════════════════════════
 def _load_daily(cfg: TickerConfig) -> pd.DataFrame:
-    """Daily OHLCV+macro for one config, live from Yahoo with a CSV fallback.
+    """Daily OHLCV+macro for one config, via the QUALITY-GATED pinned loader
+    (``app/data_gate.py``): once a fetch passes quality control and covers the
+    last completed session it is pinned as the sleeve's snapshot, and every
+    later load that day reuses the identical history — so the back-tests stop
+    drifting between page loads as Yahoo's free feed wobbles.  A fetch that
+    fails validation (missing macro columns, shrunken history, rewritten
+    returns, absurd prints) is rejected and the last known-good snapshot is
+    served instead; every decision lands in ``runtime/dataset_audit.json``.
     Traded-sibling price columns are forward-filled so equity assets don't leave
     NaN gaps on days their market is shut (e.g. weekends when BTC still trades)."""
     df = pd.DataFrame()
     try:
-        df = tc.fetch_daily(cfg)
+        import data_gate as dg
+        df = dg.gated_daily(dg.ticker_spec(cfg),
+                            fetch_full=lambda: tc.fetch_daily(cfg),
+                            fetch_recent=lambda: tc.fetch_recent_daily(cfg),
+                            consumer="OVERALL")
     except Exception:
-        df = pd.DataFrame()
+        try:
+            df = tc.fetch_daily(cfg)          # gate unavailable — legacy path
+        except Exception:
+            df = pd.DataFrame()
     if df is None or df.empty or "px_close" not in df.columns or len(df) < 260:
         csv = tc.cache_paths(cfg)["daily"]
         if Path(csv).exists():
