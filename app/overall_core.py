@@ -2281,6 +2281,44 @@ from strategy_version import (STRATEGY_VERSION,        # noqa: E402,F401
 BOOK_VERSIONS_JSON = _REPO_ROOT / "data" / "overall" / "book_versions.json"
 
 
+def data_vintage() -> dict:
+    """Compact provenance stamp for the headline back-test numbers: the BTC
+    vintage (data/backtest manifest) plus one combined hash over every pinned
+    sleeve snapshot manifest.  Every number the Overall app shows is a pure
+    function of (strategy version, these hashes) — so when a figure changes,
+    this stamp changes with it, and an unchanged stamp guarantees unchanged
+    back-tests.  Best-effort: missing manifests appear as '—'."""
+    import hashlib as _hl
+    import json as _json
+    out = dict(btc_sha="—", btc_to="—", sleeves_sha="—", n_sleeves=0)
+    try:
+        man = _json.loads((_REPO_ROOT / "data" / "backtest"
+                           / "manifest.json").read_text())
+        rf = (man.get("datasets") or {}).get("raw_features_daily") or {}
+        out["btc_sha"] = str(rf.get("checksum_sha256", "—"))[:8]
+        out["btc_to"] = rf.get("date_to", "—")
+    except Exception:
+        pass
+    try:
+        import data_gate as _dg
+        parts = []
+        for key in ticker_config.APP_KEYS:
+            m = _dg.read_manifest(_dg.ticker_spec(get_config(key)))
+            if m.get("checksum_sha256"):
+                parts.append(f"{key}:{m['checksum_sha256']}")
+        gman = _dg.read_manifest(_REPO_ROOT / "data" / "gldm"
+                                 / "gldm_macro_daily_manifest.json")
+        if gman.get("checksum_sha256"):
+            parts.append(f"GLDM:{gman['checksum_sha256']}")
+        if parts:
+            out["sleeves_sha"] = _hl.sha256(
+                "|".join(sorted(parts)).encode()).hexdigest()[:8]
+            out["n_sleeves"] = len(parts)
+    except Exception:
+        pass
+    return out
+
+
 def load_book_version_map(path: Path | None = None) -> dict:
     """The backfilled ``as_of → {code_sha, strategy_version}`` side-car for
     archived books that predate inline version stamping.  ``{}`` when absent —
