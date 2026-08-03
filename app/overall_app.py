@@ -1512,7 +1512,10 @@ with tab_live:
                           if _n_old else "")
                        + "Dollar figures scale the 💼 portfolio value entered "
                          "above.")
-            _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"]}
+            # no separate signal record exists for archived books — the trade
+            # log falls back to weight-inferred signal-vs-tilt classification
+            _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"],
+                   "active": None}
             _strat_label = STRAT_CURVE_ACTUAL
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
                             **_PF["curves"]}
@@ -1575,7 +1578,11 @@ with tab_live:
         _curve_all = _curve_all.loc[:_end_ts]
         _curves_view = {k: v.loc[:_end_ts] for k, v in _curves_view.items()}
         _wf = {"weights": _wf["weights"].loc[:_end_ts],
-               "sata": _wf["sata"].loc[:_end_ts]}
+               "sata": _wf["sata"].loc[:_end_ts],
+               # replay source: per-day signal truth (funded set); absent on
+               # older cached replays and the as-published record
+               "active": (_wf.get("active").loc[:_end_ts]
+                          if _wf.get("active") is not None else None)}
         _rets_win = _PF["rets"].loc[:_end_ts]
         # sleeve-inclusion gate + per-trade notionals under a daily-weight book
         _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
@@ -1794,7 +1801,8 @@ with tab_live:
                     "& sold day by day, with each day's P&L (toggle on/off)",
                     key="overall_daily_trade_log"):
                 _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"],
-                                          _start_sel, returns=_rets_win)
+                                          _start_sel, returns=_rets_win,
+                                          active=_wf.get("active"))
                 _dtl_buys = sum(d["n_buys"] for d in _dtl)
                 _dtl_sells = sum(d["n_sells"] for d in _dtl)
                 _dtl_resz = sum(d["n_resize"] for d in _dtl)
@@ -1816,14 +1824,23 @@ with tab_live:
                            "(green) or fully close (red) a sleeve when its "
                            "Action signal flips, while **⚖️ daily tilt "
                            "adjustments** re-size positions already held — "
-                           "the daily optimizer's adds and trims. Tilt trims "
-                           "also carry the **realized P&L on the slice "
-                           "sold**: the sleeve's % return from the "
-                           "position's entry close to that sale close "
-                           "(positions already held at the record's first "
-                           "bar measure from that bar's close), and the "
-                           "≈ $ gain or loss locked in on the dollars sold, "
-                           "scaled by the 💼 portfolio value. Each row is "
+                           "the daily optimizer's adds and trims"
+                           + (" (inferred from the archived weights — no "
+                              "separate signal record exists for published "
+                              "books)" if _actual else
+                              " (classified off the actual signal record, "
+                              "so an optimizer re-size through zero stays a "
+                              "tilt)")
+                           + ". Tilt sales also carry the **realized P&L "
+                           "on the slice sold** — measured over the "
+                           "position's **average cost**: tilt adds raise "
+                           "the basis at the price actually paid, daily "
+                           "re-balance flows included, and a position that "
+                           "fully closes restarts its basis on re-entry "
+                           "(held-at-first-bar positions start theirs at "
+                           "that bar's close) — plus the ≈ $ gain or loss "
+                           "locked in on the dollars sold, scaled by the "
+                           "💼 portfolio value. Each row is "
                            "the trade ticket executed at that bar's close "
                            "(the book earns from the next bar — the "
                            "decided-at-previous-close convention), newest "
@@ -1854,16 +1871,19 @@ with tab_live:
                             _lbl = (f"{a['key']} {a['w0']*100:.1f}→"
                                     f"{a['w1']*100:.1f}% "
                                     f"<b>({a['delta']*100:+.1f})</b>")
-                            if (a["delta"] < 0 and a.get("pnl") is not None
-                                    and a["pnl"] > -1):
-                                # realized P&L on the slice sold: proceeds
-                                # |Δw|·💼 minus their entry-close cost basis
-                                _sold = abs(a["delta"]) * portfolio_value
-                                _pd = _sold - _sold / (1 + a["pnl"])
-                                _pc = C_BUY if a["pnl"] >= 0 else C_EXIT
-                                _lbl += (f" · <span style='color:{_pc}'>"
-                                         f"P&amp;L {a['pnl']*100:+.1f}% "
-                                         f"≈ ${_pd:+,.0f}</span>")
+                        # every tilt-column sale — partial trim or a re-size
+                        # through zero — shows what the slice realized
+                        if (a["delta"] < 0 and not a["signal_change"]
+                                and a.get("pnl") is not None
+                                and a["pnl"] > -1):
+                            # realized P&L on the slice sold: proceeds
+                            # |Δw|·💼 minus their average-cost basis
+                            _sold = abs(a["delta"]) * portfolio_value
+                            _pd = _sold - _sold / (1 + a["pnl"])
+                            _pc = C_BUY if a["pnl"] >= 0 else C_EXIT
+                            _lbl += (f" · <span style='color:{_pc}'>"
+                                     f"P&amp;L {a['pnl']*100:+.1f}% "
+                                     f"≈ ${_pd:+,.0f}</span>")
                         return f"<span style='color:{_cc}'>{_lbl}</span>"
 
                     _dh = ("<tr style='background:#f1f5f9;font-size:12px;"
@@ -1927,7 +1947,8 @@ with tab_live:
                     "in by daily tilt trims & sell signals (toggle to show)",
                     key="overall_realized_pnl_by_asset"):
                 _rlz = ov.realized_pnl_by_asset(
-                    _wf["weights"], _wf["sata"], _start_sel, _rets_win)
+                    _wf["weights"], _wf["sata"], _start_sel, _rets_win,
+                    active=_wf.get("active"))
                 if not _rlz:
                     st.info("No position was trimmed or sold in this window — "
                             "nothing realized yet.")
@@ -1940,7 +1961,9 @@ with tab_live:
                                + " ordered since the start date, rolled up "
                                "per asset — the 🧾 trade log's sell tickets "
                                "aggregated. Each bar sums slice proceeds "
-                               "minus their entry-close cost basis, scaled "
+                               "minus their **average-cost basis** (tilt "
+                               "adds raise the basis at the price actually "
+                               "paid), scaled "
                                "by the 💼 portfolio value; the % label is "
                                "the cost-weighted realized return "
                                "(Σproceeds/Σcost − 1). Hover for the "
