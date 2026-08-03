@@ -134,6 +134,13 @@ st.markdown(
     "<style>"
     "[data-testid='stMainBlockContainer'], .main .block-container, .block-container"
     "{padding-left:2rem;padding-right:2rem;max-width:100%;}"
+    # st.metric clips long labels/deltas to one line with an ellipsis — in a
+    # 6-column row that hides e.g. the winning-days confidence interval.
+    # Let them wrap instead.
+    "[data-testid='stMetricLabel'] p, [data-testid='stMetricDelta'],"
+    "[data-testid='stMetricDelta'] div"
+    "{white-space:normal !important;overflow:visible !important;"
+    "text-overflow:clip !important;line-height:1.25;}"
     "</style>",
     unsafe_allow_html=True)
 
@@ -1611,7 +1618,7 @@ with tab_live:
             else:
                 pm2[0].metric(
                     "Winning days (invested)", f"{_dw['win_rate']*100:.0f}%",
-                    delta=(f"{_dw['wins']}/{_dw['n_active']} days · 95% CI "
+                    delta=(f"{_dw['wins']}/{_dw['n_active']}d · CI "
                            f"{_dw['ci_lo']*100:.0f}–{_dw['ci_hi']*100:.0f}%"),
                     delta_color="off",
                     help="Share of days the blend closed up, counting ONLY days "
@@ -1627,8 +1634,8 @@ with tab_live:
             else:
                 pm2[3].metric(
                     "Daily edge (invested)", f"{_dw['expectancy']*100:+.2f}%",
-                    delta=(f"win {_dw['avg_win']*100:+.2f}% / "
-                           f"loss {_dw['avg_loss']*100:+.2f}%"),
+                    delta=(f"W {_dw['avg_win']*100:+.2f}% · "
+                           f"L {_dw['avg_loss']*100:+.2f}%"),
                     delta_color="off",
                     help="Mean return per invested day — win rate × average "
                          "winning day + loss rate × average losing day. The "
