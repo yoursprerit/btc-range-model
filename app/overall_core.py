@@ -997,7 +997,8 @@ def trade_log_since(results: list[dict], weights: dict, start,
 
 
 def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
-                    min_delta: float = 0.0005) -> list[dict]:
+                    min_delta: float = 0.0005,
+                    returns: pd.DataFrame | None = None) -> list[dict]:
     """Day-by-day BUY/SELL log implied by the daily-weight book since
     ``start`` — the positions bought and sold at each close as Action
     signals open/close sleeves and the daily optimizer's tilt adjustments
@@ -1025,16 +1026,53 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
     traded at that close), one-way ``turnover`` (½·(Σ|Δw| + |Δcash|) —
     the published-book trim convention), the cash weight before/after,
     and per-day ``n_buys``/``n_sells``/``n_resize`` counts.  Days where
-    nothing moved beyond ``min_delta`` are omitted."""
-    w = weights.loc[pd.Timestamp(start):].fillna(0.0)
+    nothing moved beyond ``min_delta`` are omitted.
+
+    With ``returns`` (per-sleeve daily % returns on the same keys), every
+    sell-side action (``sell`` and ``trim``) also carries ``pnl`` — the
+    sleeve's cumulative % return from the position's entry close to this
+    execution close, i.e. the realized P&L on the slice sold — and
+    ``entry_date``, the close it is measured from.  The entry is found on
+    the FULL weight matrix (not the ``start`` slice), so a position opened
+    before the window anchor still measures from its true buy close; a
+    position already held at the matrix's first row measures from that
+    first close (the anchor-bar-is-cost-basis convention).  Buy-side
+    actions — and every action when ``returns`` is omitted or the key has
+    no return column — carry ``pnl``/``entry_date`` of ``None``."""
+    wf = weights.fillna(0.0)
+    w = wf.loc[pd.Timestamp(start):]
     if len(w) < 2:
         return []
-    cash = sata.reindex(w.index).fillna(0.0).astype(float)
+    cash = sata.reindex(wf.index).fillna(0.0).astype(float)
+    growth = None
+    if returns is not None:
+        growth = (1.0 + returns.reindex(wf.index).fillna(0.0)
+                  .astype(float)).cumprod()
+
+    # per-column memo: first row of the held streak containing each row —
+    # a sell-side action walks it back to its position's entry close
+    streak0: dict[str, np.ndarray] = {}
+
+    def _entry_row(k, i):
+        if k not in streak0:
+            held = wf[k].to_numpy() >= min_delta
+            s0 = np.empty(len(held), dtype=int)
+            s = 0
+            for j, h in enumerate(held):
+                if not h:
+                    s = j + 1
+                s0[j] = s
+            streak0[k] = s0
+        # buy executed at the close BEFORE the first earning row; a streak
+        # open at row 0 measures from the first close (anchor = cost basis)
+        return max(int(streak0[k][i]) - 1, 0)
+
     days = []
-    for i in range(1, len(w)):
-        prev, cur = w.iloc[i - 1], w.iloc[i]
+    off = wf.index.get_loc(w.index[0])
+    for i in range(off + 1, len(wf)):
+        prev, cur = wf.iloc[i - 1], wf.iloc[i]
         actions = []
-        for k in w.columns:
+        for k in wf.columns:
             w0, w1 = float(prev[k]), float(cur[k])
             d = w1 - w0
             if abs(d) < min_delta:
@@ -1045,15 +1083,24 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
                 act = "sell"
             else:
                 act = "add" if d > 0 else "trim"
+            pnl = entry = None
+            if d < 0 and growth is not None and k in growth.columns:
+                e = _entry_row(k, i - 1)
+                g0 = float(growth[k].iloc[e])
+                g1 = float(growth[k].iloc[i - 1])
+                if np.isfinite(g0) and g0 > 0 and np.isfinite(g1):
+                    pnl = g1 / g0 - 1.0
+                    entry = wf.index[e]
             actions.append(dict(key=k, w0=w0, w1=w1, delta=d, action=act,
-                                signal_change=act in ("buy", "sell")))
+                                signal_change=act in ("buy", "sell"),
+                                pnl=pnl, entry_date=entry))
         if not actions:
             continue
         actions.sort(key=lambda a: -abs(a["delta"]))
         gross = float((cur - prev).abs().sum())
         d_cash = float(cash.iloc[i] - cash.iloc[i - 1])
         days.append(dict(
-            date=w.index[i - 1], actions=actions, gross=gross,
+            date=wf.index[i - 1], actions=actions, gross=gross,
             turnover=0.5 * (gross + abs(d_cash)),
             cash0=float(cash.iloc[i - 1]), cash1=float(cash.iloc[i]),
             n_buys=sum(a["action"] == "buy" for a in actions),
