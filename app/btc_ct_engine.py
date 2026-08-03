@@ -82,8 +82,27 @@ def _features_last_bar() -> "pd.Timestamp | None":
         return None
 
 
+# The in-process self-pull is DISABLED by default: it fired an unvalidated
+# background refresh (bypassing scripts/validate_refreshed_data.py entirely)
+# whenever a long-lived server's CSV looked stale, silently swapping the BTC
+# vintage under the running app — one half of the "+950% vs +1205%" incident.
+# The vintage now refreshes only through the guarded daily workflow (pull →
+# freeze → validate → commit), and the deploy platform redeploys on that
+# commit.  Set BTC_ALLOW_SELF_PULL=1 only on a self-hosted box that has no
+# other refresh path; the pull it fires is at least history-frozen now.
+_SELF_PULL_ENV = "BTC_ALLOW_SELF_PULL"
+
+
+def _self_pull_allowed() -> bool:
+    import os
+    return os.environ.get(_SELF_PULL_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _ensure_fresh_features() -> None:
     try:
+        if not _self_pull_allowed():
+            return          # app consumes the committed, validated vintage only
         if not _FEATURES_CSV.exists() or not _PULL_SCRIPT.exists():
             return
         now = pd.Timestamp.utcnow().tz_localize(None)

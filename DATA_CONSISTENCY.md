@@ -129,6 +129,62 @@ moves, regression, rewritten history), the pin/refetch/fallback flows, the
 completed-vs-in-progress split, snapshot tamper detection, and the audit
 trail.
 
+## The BTC vintage freeze (the "+950% vs +1205%" incident, 2026-08-03)
+
+After the equity gate shipped, the headline still jumped between reboots
+(Balanced ~950% → ~1205%) with "all QC passed". Forensics (fully reproduced
+offline) traced 100% of the movement to the **BTC/MSTR/MSTU/ETH sleeve's
+dataset restating its own history on every daily pull**:
+
+* `scripts/pull_backtest_data.py` fetched on-chain series with
+  blockchain.info's `sampled=true` — a ~1,500-point sampling grid **anchored
+  to "now"**, so the grid shifts every day. Measured between two consecutive
+  vintages: `oc_mempool_size` changed on **all 1,005 rows** (median 15.5%,
+  max ~5,960%) and `oc_market_cap` on all rows (median 0.7%); every other
+  column was byte-stable. The CT model's signals recompute on the shifted
+  features → historical gate decisions flip → sleeve totals swing (observed:
+  ETH +182.5% → +40.0%, BTC +84.5% → +58.0%).
+* `mstu_synthetic_daily.csv` (pre-inception MSTU, OLS on MSTR) was **re-fit
+  on every pull** as the overlap window grew — 220 historical rows changed
+  per day (MSTU sleeve +587.8% → +677.0%).
+* `btc_ct_engine._ensure_fresh_features` fired this pull **in-process,
+  unvalidated** (bypassing `validate_refreshed_data.py`) whenever a server's
+  CSV looked stale — so a reboot could silently swap the vintage.
+
+**Which number is correct?** Neither vintage was *wrong* — both are valid
+samplings of the same underlying series on different grids (verified: both
+match the unsampled `hash-rate` truth exactly; mempool at daily granularity
+is inherently a sampling choice). The defect was that the sampling grid
+moved daily, restating history. **Decision: the current vintage
+(`raw_features` sha `6745c502`, through 2026-08-02 — the one producing
+Balanced ≈ +1205%) is pinned as the baseline**, because it is the freshest
+(includes the newest completed bar), its synthetic-MSTU fit uses the most
+real overlap data (objectively the better estimate), and reverting to an
+older sampling would itself be a restatement. From here, history is frozen.
+
+The fix, mirroring the equity-side pin philosophy:
+
+1. **Vintage freeze in the pull** (`_freeze_history`): committed rows keep
+   their pinned values; only the newest 5 rows (correction window) and
+   genuinely new rows take fresh values; rows a fetch loses are restored;
+   the synthetic series is fully pinned (tail=0). MSTR/MSTU actual stay
+   unfrozen (a split legitimately rescales adjusted prices). Measured
+   effect: the daily diff dropped from 1,006 + 220 restated lines to ≤5.
+2. **Validator enforcement** (`validate_refreshed_data.py`):
+   `check_frozen_history` fails the workflow if any pinned value, row or
+   column changed; `check_returns_agreement` (scale-invariant) guards the
+   split-adjusted MSTR/MSTU files. A deliberate re-baseline requires BOTH
+   `PULL_UNFROZEN=1` and `VALIDATE_ALLOW_RESTATEMENT=1` — always an
+   explicit, visible, two-step decision.
+3. **In-app self-pull disabled** by default (`BTC_ALLOW_SELF_PULL=1` opt-in
+   for self-hosted boxes with no other refresh path): the app consumes the
+   committed, validated vintage only.
+4. **Data-vintage stamp** (`overall_core.data_vintage`, shown under the
+   strategy-version badge in the Overall app): every backtest figure is a
+   pure function of (strategy version, BTC-vintage hash, sleeve-snapshot
+   hash) — a changed number now always arrives with a changed stamp, and an
+   unchanged stamp guarantees unchanged numbers.
+
 ## What can still move intraday (by design)
 
 * The **live row** (in-progress bar), spot prices, and today's action plan —

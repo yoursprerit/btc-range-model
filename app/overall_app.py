@@ -91,6 +91,8 @@ def _stale_core(mod) -> bool:
             return True
         if not hasattr(mod, "pnl_attribution_replay"):
             return True
+        if not hasattr(mod, "data_vintage"):
+            return True
         return False
     except (ValueError, TypeError, AttributeError):
         return False
@@ -331,6 +333,18 @@ if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
     import importlib                           # stale hot-loaded module (the
     _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()                             # visible above every tab
+# 📦 data-vintage stamp — every back-test figure on this page is a pure
+# function of (strategy version, these dataset hashes).  If a number changed
+# since your last visit, this line changed with it: same stamp ⇒ same numbers.
+try:
+    _dv = ov.data_vintage()
+    st.caption(f"📦 **Data vintage** — BTC features `{_dv['btc_sha']}` "
+               f"(through {_dv['btc_to']}) · equity/gold snapshots "
+               f"`{_dv['sleeves_sha']}` ({_dv['n_sleeves']} pinned datasets). "
+               "Back-tests change only when this stamp changes "
+               "(🕵️ Daily Audit → Dataset audit trail has the full detail).")
+except Exception:
+    pass
 st.caption(f"Every asset app, fused into one portfolio spanning {N_ALL} instruments "
            "(each app's 1× primary plus its higher-beta / leveraged siblings). "
            "Live entry/exit signals, current positions, the historically-optimal "

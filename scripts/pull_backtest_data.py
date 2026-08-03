@@ -20,7 +20,7 @@ The UI reads manifest.json to display the dataset version badge and uses
 raw_features_daily.csv to build CT model predictions without live API calls.
 """
 
-import hashlib, json, sys, time
+import hashlib, json, os, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -193,6 +193,64 @@ def _yf(ticker: str, start: str, retries: int = 3) -> pd.DataFrame:
 
 def _checksum(df: pd.DataFrame) -> str:
     return hashlib.sha256(df.to_csv().encode()).hexdigest()[:16]
+
+
+# ─── vintage freeze ──────────────────────────────────────────────────────────
+# Historical bars are PINNED: once a row has been committed, later pulls keep
+# its values verbatim and may only (a) revise the newest FREEZE_TAIL rows (the
+# legitimate correction window for late prints / ffill catch-ups) and
+# (b) append genuinely new rows.  Without this, restate-prone sources rewrote
+# the entire history on every pull — blockchain.info's `sampled=true` grid is
+# anchored to *now*, so oc_mempool_size / oc_market_cap changed on ALL ~1,005
+# rows daily (observed 2026-08-03: median 15.5% / 0.7% restatements), flipping
+# historical CT gate decisions and swinging the Overall headline backtest by
+# hundreds of points between vintages (the "+950% vs +1205%" incident).
+#
+# NOT applied to the yfinance-adjusted equity CSVs (MSTR / MSTU actual): a
+# split legitimately rescales their whole history, which a freeze would
+# corrupt.  Those are guarded by a scale-invariant returns-agreement check in
+# scripts/validate_refreshed_data.py instead.
+#
+# Set PULL_UNFROZEN=1 for a deliberate full re-baseline (documented in
+# DATA_CONSISTENCY.md) — the validator will reject the restatement unless it
+# is bypassed too, so a re-baseline is always an explicit two-step decision.
+FREEZE_TAIL = 5
+
+
+def _freeze_enabled() -> bool:
+    return os.environ.get("PULL_UNFROZEN", "").strip().lower() not in (
+        "1", "true", "yes", "on")
+
+
+def _freeze_history(name: str, new_df: pd.DataFrame, csv_path: Path,
+                    tail: int = FREEZE_TAIL) -> pd.DataFrame:
+    """Merge a fresh pull onto the pinned on-disk vintage: committed rows older
+    than the last ``tail`` keep their pinned values; the tail and new rows take
+    the fresh values; rows the fresh pull lost entirely are restored."""
+    if not _freeze_enabled():
+        print(f"  [freeze] {name}: DISABLED via PULL_UNFROZEN — full restatement")
+        return new_df
+    try:
+        prev = pd.read_csv(csv_path, index_col=0, parse_dates=True,
+                           float_precision="round_trip")
+    except Exception:
+        return new_df                              # first pull — nothing pinned
+    prev = prev[~prev.index.duplicated(keep="last")].sort_index()
+    if prev.empty:
+        return new_df
+    out = new_df.copy()
+    frozen_idx = (prev.index[:-tail] if tail else prev.index).intersection(out.index)
+    cols = [c for c in prev.columns if c in out.columns]
+    if len(frozen_idx) and cols:
+        out.loc[frozen_idx, cols] = prev.loc[frozen_idx, cols].to_numpy()
+    lost = prev.index.difference(out.index)
+    if len(lost):
+        out = pd.concat([out, prev.loc[lost, cols]]).sort_index()
+    n_new = len(out.index.difference(prev.index))
+    print(f"  [freeze] {name}: {len(frozen_idx)} historical rows pinned, "
+          f"{min(tail, len(prev))} tail rows refreshable, {n_new} appended"
+          + (f", {len(lost)} lost rows restored" if len(lost) else ""))
+    return out
 
 
 # ─── quality checks ─────────────────────────────────────────────────────────
@@ -389,6 +447,17 @@ def main() -> int:
     # scripts/ibkr_symbols.py), exactly as the BTC sleeve executes via IBIT.
     print("Downloading ETH-USD (Binance hourly → 12:00-UTC daily bars) …")
     eth = fetch_12utc(FETCH_FROM, symbol="ETHUSDT")[["open","high","low","close","volume"]].ffill()
+
+    # ── 6b. Vintage freeze — pinned history, append-only + tail corrections ──
+    # (see _freeze_history; MSTR/MSTU actual stay unfrozen for split safety)
+    print("\nApplying vintage freeze:")
+    df       = _freeze_history("raw_features",   df,       DATA_DIR / "raw_features_daily.csv")
+    btc      = _freeze_history("btc_usd_daily",  btc,      DATA_DIR / "btc_usd_daily.csv")
+    eth      = _freeze_history("eth_usd_daily",  eth,      DATA_DIR / "eth_usd_daily.csv")
+    # the OLS synthetic is pre-inception history — a re-fit rewrites the past
+    # by definition, so it is fully pinned (tail=0) once committed
+    mstu_syn = _freeze_history("mstu_synthetic", mstu_syn, DATA_DIR / "mstu_synthetic_daily.csv",
+                               tail=0)
 
     # ── 7. Quality checks ─────────────────────────────────────────────────────
     print("\nQuality checks:")
