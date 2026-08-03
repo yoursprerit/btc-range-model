@@ -1158,50 +1158,104 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
                           min_delta: float = 0.0005,
                           active: pd.DataFrame | None = None,
                           sata_daily: float = SATA_DAILY) -> dict:
-    """Per-asset REALIZED P&L locked in by the book's sell-side trades
-    since ``start`` — the 🧾 daily trade log's ⚖️ tilt trims and 🚦 sell
-    signals rolled up by sleeve.  Each sold slice realizes ``proceeds −
-    cost``: proceeds are ``|Δweight|`` per $1 of portfolio (the
-    trade-ticket convention — scale by the portfolio value for dollars)
-    and cost is ``proceeds / (1 + pnl)`` off the slice's AVERAGE-COST
-    basis (``daily_trade_log``'s lot ledger — tilt adds raise the basis
-    at the price actually paid).  ``active``/``sata_daily`` pass through
-    to ``daily_trade_log`` (real signal flips for the tilt-vs-signal
-    split when the source provides them; SATA accrual on the blend's
-    value path).
+    """Per-asset realized + unrealized P&L of the daily-weight book since
+    ``start`` under WINDOW-ANCHORED exact accounting — built to reconcile
+    with ``pnl_attribution_replay`` to float precision.
 
-    Returns ``{key: {...}}`` with per-sleeve ``pnl`` (Σ realized, per $1),
-    ``ret`` (Σproceeds/Σcost − 1 — the cost-weighted realized % return),
-    ``proceeds``/``cost``, the tilt-vs-signal split
-    (``pnl_tilt``/``pnl_signal``, ``n_trims``/``n_sells``).  Keys that
-    never sold are omitted; ``{}`` when nothing was sold.  A per-trade
-    approximation by construction: unrealized P&L on positions still held
-    is excluded and dollars are un-compounded, so these figures
-    deliberately do NOT reconcile to ``pnl_attribution_replay``'s exact
-    curve attribution."""
-    out: dict[str, dict] = {}
+    An average-cost ledger runs per sleeve over the window: a position
+    already held at the anchor takes its basis at the anchor close (the
+    same anchor-is-cost-basis convention as the attribution), buys add
+    cost at that close's value, sells remove cost pro-rata — and EVERY
+    implied daily re-balance flow is counted, including the sub-ticket
+    drift the 🧾 trade log's ``min_delta`` floor hides, all on the
+    blend's compounded value path (figures are per $1 at the anchor
+    close — scale by the portfolio value for dollars).  Consequently,
+    per sleeve::
+
+        pnl (realized)  +  unrealized (still held)  ==  attribution $
+
+    exactly, and a sleeve flat at the window end has ``pnl`` equal to
+    its 📊 P&L-by-asset bar.  (The 🧾 trade-log chips instead measure
+    each ticket from the position's own entry — trade-LIFETIME
+    accounting — so individual chips need not sum to these figures.)
+
+    Returns ``{key: {...}}`` with ``pnl`` (realized), ``unrealized``,
+    ``total`` (their sum — the attribution dollars), ``ret``
+    (Σproceeds/Σcost-sold − 1, the money-weighted realized % return on
+    the capital sold), ``proceeds``/``cost``, the signal-vs-tilt split
+    of the realized dollars (``pnl_signal`` — flows executed at closes
+    where the listed ticket was a real signal sale, per ``active`` when
+    the source provides it; ``pnl_tilt`` — everything else, re-balance
+    drift included) and the listed sale-ticket counts
+    ``n_trims``/``n_sells``.  Sleeves with no listed sale ticket in the
+    window are omitted (their — typically tiny — drift P&L stays in the
+    attribution); ``{}`` with <2 bars on/after ``start``."""
+    sub = returns.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return {}
+    W = weights.reindex(index=sub.index, columns=sub.columns) \
+        .fillna(0.0).to_numpy(float)
+    R = np.nan_to_num(sub.to_numpy(float))
+    # identical blend-value path to pnl_attribution_replay, or the parts
+    # stop reconciling
+    biz = np.asarray(sub.index.dayofweek < 5)
+    sata_term = (sata.reindex(sub.index).fillna(1.0).to_numpy(float)
+                 * sata_daily * biz)
+    contrib = W * R
+    contrib[0, :] = 0.0
+    sata_term[0] = 0.0
+    port = contrib.sum(axis=1) + sata_term
+    V = np.cumprod(1.0 + port)                  # blend value at each close
+
+    # listed sale tickets: the visibility gate + the signal/tilt labels
+    sig_sale: set[tuple] = set()
+    listed: dict[str, list] = {}
     for day in daily_trade_log(weights, sata, start, min_delta=min_delta,
-                               returns=returns, active=active,
-                               sata_daily=sata_daily):
+                               active=active):
         for a in day["actions"]:
-            if a["delta"] >= 0 or a["pnl"] is None or a["pnl"] <= -1:
+            if a["delta"] < 0:
+                listed.setdefault(a["key"], []).append(a)
+                if a["signal_change"]:
+                    sig_sale.add((day["date"], a["key"]))
+
+    out: dict[str, dict] = {}
+    n = len(sub)
+    for ci, k in enumerate(sub.columns):
+        if k not in listed:
+            continue
+        wk = W[:, ci]
+        rk = R[:, ci]
+        cost = a_val = wk[0]                    # basis = the anchor close
+        realized = rl_sig = proceeds = cost_sold = 0.0
+        for j in range(n):
+            if j > 0:                           # pre-re-balance value
+                a_val = wk[j] * V[j - 1] * (1.0 + rk[j])
+            if j + 1 >= n:                      # no re-balance after last close
+                break
+            h_val = wk[j + 1] * V[j]            # post-re-balance value
+            if a_val <= 0:
+                cost = h_val if h_val > 0 else 0.0   # fresh lot (or stay flat)
                 continue
-            proceeds = -a["delta"]
-            cost = proceeds / (1.0 + a["pnl"])
-            r = out.setdefault(a["key"], dict(
-                pnl=0.0, proceeds=0.0, cost=0.0, pnl_tilt=0.0,
-                pnl_signal=0.0, n_trims=0, n_sells=0))
-            r["proceeds"] += proceeds
-            r["cost"] += cost
-            r["pnl"] += proceeds - cost
-            if a["signal_change"]:
-                r["pnl_signal"] += proceeds - cost
-                r["n_sells"] += 1
-            else:
-                r["pnl_tilt"] += proceeds - cost
-                r["n_trims"] += 1
-    for r in out.values():
-        r["ret"] = (r["proceeds"] / r["cost"] - 1.0) if r["cost"] > 0 else 0.0
+            if h_val >= a_val:
+                cost += h_val - a_val           # buy: cost added at value
+                continue
+            sold = a_val - h_val                # sell flow at this close
+            gain = sold * (1.0 - cost / a_val) if cost > 0 else sold
+            realized += gain
+            proceeds += sold
+            cost_sold += sold - gain
+            if (sub.index[j], k) in sig_sale:
+                rl_sig += gain
+            cost *= h_val / a_val               # pro-rata cost removal
+        unreal = (a_val - cost) if a_val > 0 else 0.0
+        n_sig = sum(a["signal_change"] for a in listed[k])
+        out[k] = dict(pnl=realized, unrealized=unreal,
+                      total=realized + unreal,
+                      ret=(proceeds / cost_sold - 1.0) if cost_sold > 0
+                      else 0.0,
+                      proceeds=proceeds, cost=cost_sold,
+                      pnl_signal=rl_sig, pnl_tilt=realized - rl_sig,
+                      n_trims=len(listed[k]) - n_sig, n_sells=n_sig)
     return out
 
 

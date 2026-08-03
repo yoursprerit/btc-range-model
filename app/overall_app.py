@@ -1953,70 +1953,110 @@ with tab_live:
                     st.info("No position was trimmed or sold in this window — "
                             "nothing realized yet.")
                 else:
-                    st.caption("**Only the P&L locked in by sales**: every "
-                               "**⚖️ daily tilt trim** and **🚦 sell-signal "
-                               "close** the "
+                    st.caption("**The P&L locked in by sales — "
+                               "window-anchored so it reconciles.** An "
+                               "average-cost ledger runs per sleeve on the "
                                + ("**as-published books**" if _actual
                                   else "**walk-forward replay**")
-                               + " ordered since the start date, rolled up "
-                               "per asset — the 🧾 trade log's sell tickets "
-                               "aggregated. Each bar sums slice proceeds "
-                               "minus their **average-cost basis** (tilt "
-                               "adds raise the basis at the price actually "
-                               "paid), scaled "
-                               "by the 💼 portfolio value; the % label is "
-                               "the cost-weighted realized return "
-                               "(Σproceeds/Σcost − 1). Hover for the "
-                               "tilt-vs-signal split, trade counts and the "
-                               "dollars sold. **Unrealized P&L on positions "
-                               "still held is NOT included**, and dollars "
-                               "use the trade-ticket convention "
-                               "(un-compounded, static 💼 scaling) — so "
-                               "these bars deliberately do **not** sum to "
-                               "the exact 📊 P&L-by-asset attribution "
-                               "below, which counts every day's earnings, "
-                               "held or sold, off the compounding blend "
-                               "curve.")
+                               + " from the start date: a position already "
+                               "held at the anchor takes its basis at the "
+                               "anchor close (the same convention as the "
+                               "headline P&L), buys raise the basis at the "
+                               "price actually paid, and **every implied "
+                               "daily re-balance flow is counted** — "
+                               "including the small drift trades below the "
+                               "🧾 log's listing threshold — on the blend's "
+                               "compounding value path. Each solid bar "
+                               "(**realized**) plus its lighter extension "
+                               "(**unrealized** on a still-open position) "
+                               "therefore **equals that sleeve's 📊 "
+                               "P&L-by-asset bar to float precision**; a "
+                               "sleeve flat at the window end shows "
+                               "realized = attribution exactly. The % "
+                               "label is the money-weighted realized "
+                               "return on the capital sold "
+                               "(Σproceeds/Σcost − 1); hover for the "
+                               "tilt-vs-signal split (tilt includes "
+                               "re-balance flows), ticket counts and "
+                               "dollars sold. Sleeves that never listed a "
+                               "sale are omitted. (The 🧾 trade-log chips "
+                               "measure each ticket from the position's "
+                               "own entry — trade-lifetime accounting — so "
+                               "individual chips won't sum to these bars.) "
+                               "Dollar figures scale the 💼 portfolio "
+                               "value.")
                     _rb = []
                     for k, r in _rlz.items():
                         _em = (by_key.get(k)
                                or ov.ASSET_META.get(k, {})).get("emoji", "")
                         _n_t, _n_s = r["n_trims"], r["n_sells"]
+                        _unrl = r["unrealized"] * portfolio_value
+                        _hov = (
+                            f"{_n_t} tilt trim{'s' if _n_t != 1 else ''} "
+                            f"(${r['pnl_tilt']*portfolio_value:+,.0f} incl. "
+                            f"re-balance flows) · "
+                            f"{_n_s} signal sell{'s' if _n_s != 1 else ''} "
+                            f"(${r['pnl_signal']*portfolio_value:+,.0f}) · "
+                            f"${r['proceeds']*portfolio_value:,.0f} sold")
+                        if abs(_unrl) >= 0.5:
+                            _hov += (f"<br>still open: ${_unrl:+,.0f} "
+                                     f"unrealized · total "
+                                     f"${r['total']*portfolio_value:+,.0f} "
+                                     f"= its 📊 P&L-by-asset bar")
+                        else:
+                            _hov += ("<br>position closed — equals its "
+                                     "📊 P&L-by-asset bar")
                         _rb.append((
                             f"{_em} {k}".strip(),
                             r["pnl"] * portfolio_value,
                             r["ret"],
                             C_BUY if r["pnl"] >= 0 else C_EXIT,
-                            f"{_n_t} tilt trim{'s' if _n_t != 1 else ''} "
-                            f"(${r['pnl_tilt']*portfolio_value:+,.0f}) · "
-                            f"{_n_s} signal sell{'s' if _n_s != 1 else ''} "
-                            f"(${r['pnl_signal']*portfolio_value:+,.0f}) · "
-                            f"${r['proceeds']*portfolio_value:,.0f} sold"))
+                            _hov, _unrl))
                     _rb.sort(key=lambda b: b[1])
                     _rlz_tot = sum(b[1] for b in _rb)
+                    _unrl_tot = sum(b[5] for b in _rb)
                     _rlz_cost = sum(r["cost"] for r in _rlz.values())
                     _rlz_ret = (sum(r["proceeds"] for r in _rlz.values())
                                 / _rlz_cost - 1) if _rlz_cost > 0 else 0.0
                     fig_rlz = go.Figure(go.Bar(
                         y=[b[0] for b in _rb],
                         x=[b[1] for b in _rb],
-                        orientation="h",
+                        orientation="h", name="realized",
                         marker_color=[b[3] for b in _rb],
                         text=[f"${v:+,.0f} · {rr*100:+.1f}%"
-                              for _, v, rr, _c, _h in _rb],
+                              for _, v, rr, _c, _h, _u in _rb],
                         textposition="outside", cliponaxis=False,
                         customdata=[[b[4]] for b in _rb],
-                        hovertemplate="%{y}: <b>$%{x:+,.0f}</b><br>"
-                                      "%{customdata[0]}<extra></extra>"))
+                        hovertemplate="%{y}: <b>$%{x:+,.0f}</b> realized"
+                                      "<br>%{customdata[0]}<extra></extra>"))
+                    _has_unrl = any(abs(b[5]) >= 0.5 for b in _rb)
+                    if _has_unrl:
+                        # lighter stacked extension: realized + unrealized
+                        # = the sleeve's exact 📊 attribution bar
+                        fig_rlz.add_trace(go.Bar(
+                            y=[b[0] for b in _rb],
+                            x=[b[5] for b in _rb],
+                            orientation="h", name="unrealized (open)",
+                            marker=dict(color="#94a3b8", opacity=0.45),
+                            hovertemplate="%{y}: <b>$%{x:+,.0f}</b> "
+                                          "unrealized on the open position"
+                                          "<extra></extra>"))
                     fig_rlz.add_vline(x=0, line_color="#94a3b8", line_width=1)
                     fig_rlz.update_layout(
+                        barmode="relative",
                         height=max(280, 26 * len(_rb) + 80),
                         margin=dict(t=40, b=10, l=10, r=110),
-                        xaxis_title="$ realized on sales since start",
+                        showlegend=_has_unrl,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.0,
+                                    xanchor="right", x=1.0),
+                        xaxis_title="$ P&L since start (realized + open)",
                         title=dict(text=f"Realized P&L per asset — "
                                         f"${_rlz_tot:+,.0f} locked in "
                                         f"({_rlz_ret*100:+.1f}% on the "
-                                        f"capital sold)",
+                                        f"capital sold)"
+                                        + (f" · ${_unrl_tot:+,.0f} "
+                                           f"unrealized on open positions"
+                                           if _has_unrl else ""),
                                    font_size=13))
                     st.plotly_chart(fig_rlz, use_container_width=True)
 
