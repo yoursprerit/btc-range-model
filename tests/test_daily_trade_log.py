@@ -187,6 +187,50 @@ def test_pnl_restarts_at_reentry():
     assert trim["entry_date"] == IDX[1]
 
 
+def test_tilt_adds_raise_the_average_cost_basis():
+    # open 20% at the IDX0 close, tilt-add to 40% at the IDX2 close (after
+    # +10%), trim at the IDX3 close (after +25%): the sold slice measures
+    # over the AVERAGE cost — the add bought in at the higher price — not
+    # the original entry price
+    w = _frame(AAA=[0.0, 0.2, 0.2, 0.4, 0.2])
+    rets = _frame(AAA=[0.0, 0.10, 0.0, 0.25, 0.0])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.8, 0.8, 0.6, 0.8]), IDX[0],
+                             returns=rets, sata_daily=0.0)
+    trim = next(a for d in log for a in d["actions"] if a["action"] == "trim")
+    # ledger: entry cost 0.2 → day-1 re-balance sells pro-rata (V grew
+    # 1.02, position 1.10 → cost·(0.204/0.22)) → the add buys 0.204 more
+    # at value → pre-trim value 0.4·1.02·1.25 = 0.51 over that basis
+    exp_cost = 0.2 * (0.204 / 0.22) + 0.204
+    assert np.isclose(trim["pnl"], 0.51 / exp_cost - 1)
+    # far below the old since-entry price return (1.10·1.25 − 1 = 37.5%)
+    assert trim["pnl"] < 0.32
+    assert trim["entry_date"] == IDX[0]        # lot never closed
+
+
+def test_active_mask_optimizer_zero_is_a_tilt_and_resets_the_basis():
+    # signal is ON from IDX1 onward the whole time, but the optimizer
+    # re-sizes the sleeve through zero on row 2 — with the active mask
+    # those moves are tilts, not signal changes, and the full sale still
+    # closes the lot so the re-buy starts a fresh basis
+    w = _frame(AAA=[0.0, 0.4, 0.0, 0.4, 0.2])
+    act = _frame(AAA=[False, True, True, True, True]).astype(bool)
+    rets = _frame(AAA=[0.0, 0.10, 0.05, 0.02, 0.0])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.6, 1.0, 0.6, 0.8]), IDX[0],
+                             returns=rets, active=act, sata_daily=0.0)
+    by_date = {d["date"]: d for d in log}
+    buy = by_date[IDX[0]]["actions"][0]        # 0 → 0.4 with a real flip
+    assert buy["action"] == "buy" and buy["signal_change"]
+    sell = by_date[IDX[1]]["actions"][0]       # 0.4 → 0, signal still on
+    assert sell["action"] == "sell" and not sell["signal_change"]
+    assert np.isclose(sell["pnl"], 0.10)       # realized at the zeroing
+    assert (by_date[IDX[1]]["n_sells"], by_date[IDX[1]]["n_resize"]) == (0, 1)
+    rebuy = by_date[IDX[2]]["actions"][0]      # 0 → 0.4, signal still on
+    assert rebuy["action"] == "buy" and not rebuy["signal_change"]
+    trim = by_date[IDX[3]]["actions"][0]       # basis restarted at IDX2
+    assert np.isclose(trim["pnl"], 0.02)       # only day-3's return counts
+    assert trim["entry_date"] == IDX[2]
+
+
 def test_realized_pnl_by_asset_aggregates_trims_and_sells():
     # AAA: bought at IDX0 close, trimmed at IDX2 close, sold at IDX3 close
     w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.0])
