@@ -644,12 +644,13 @@ with tab_live:
                 f"{' ◄ active' if on else ''}</div>"
                 f"<div style='font-size:12px;margin-top:2px'>ret "
                 f"<b style='color:{C_BUY}'>{r['total_ret']*100:,.0f}%</b> · "
+                f"CAGR <b style='color:{C_BUY}'>{r['cagr']*100:.0f}%</b> · "
                 f"dd <b style='color:{C_EXIT}'>{r['mdd']*100:.0f}%</b> · "
                 f"Sharpe <b>{r['sharpe']:.2f}</b></div></div>")
         st.markdown(
             "<div style='display:flex;gap:8px;align-items:stretch'>" + "".join(cells) + "</div>",
             unsafe_allow_html=True)
-        # period behind the ret/dd/Sharpe figures above — the end date rolls
+        # period behind the ret/CAGR/dd/Sharpe figures above — the end date rolls
         # forward automatically as each new daily close lands in the data
         _per0, _per1 = _PF["rets"].index[0], _PF["rets"].index[-1]
         st.caption(f"📅 Figures computed over **{_per0.strftime('%b %d, %Y')} → "
