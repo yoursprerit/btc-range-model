@@ -428,6 +428,38 @@ def close_label(kind: str, asof, now=None) -> str:
     return lbl
 
 
+def next_session_date(kind: str, asof) -> pd.Timestamp:
+    """The bar AFTER ``asof`` — the session an "exits/enters next bar" decision
+    executes on.  Crypto bars run every calendar day; equity sessions skip
+    weekends and NYSE holidays."""
+    d = pd.Timestamp(asof).tz_localize(None).normalize()
+    if kind == "crypto":
+        return d + pd.Timedelta(days=1)
+    nd = d.date() + timedelta(days=1)
+    while not is_us_trading_day(nd):
+        nd += timedelta(days=1)
+    return pd.Timestamp(nd)
+
+
+def next_close_label(kind: str, asof, now=None) -> str:
+    """When a pending "next bar" decision actually executes: the close moment
+    of the bar AFTER ``asof``, phrased relative to now so "next bar" stops
+    reading as "tomorrow" when it means the session already underway — e.g.
+    ``today, Aug 4, 4:00 PM EDT`` mid-session, or ``Aug 5, 4:00 PM EST`` after
+    the close.  The strategies decide at a close and execute at the NEXT
+    close, so this is the sell/buy moment of an exits/enters-next-bar flag."""
+    cm = close_moment(kind, next_session_date(kind, asof))
+    tz = CT if kind == "crypto" else ET
+    local = cm.tz_convert(tz)
+    lbl = local.strftime("%b %d, %I:%M %p %Z").replace(" 0", " ")
+    today = _as_utc(now or now_utc()).tz_convert(tz).date()
+    if local.date() == today:
+        return "today, " + lbl
+    if local.date() == today + timedelta(days=1):
+        return "tomorrow, " + lbl
+    return lbl
+
+
 def signal_close_caption(kind: str, asof, now=None, extra: str = "") -> str:
     """The standard two-part freshness line every app shows under its title:
     the close its signals are generated from + when this page's data was last

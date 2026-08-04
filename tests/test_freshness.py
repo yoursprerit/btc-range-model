@@ -478,3 +478,40 @@ def test_merge_missing_sessions_degrades_safely():
     assert len(fr.merge_missing_sessions(daily, pd.DataFrame(), "px_close", now=now)) == 2
     alt = _daily(["2026-07-24"], [104.0]).rename(columns={"px_close": "nope"})
     assert len(fr.merge_missing_sessions(daily, alt, "px_close", now=now)) == 2
+
+
+# ── pending "next bar" execution moment (next_session_date / next_close_label) ─
+def test_next_session_date_skips_weekends_and_holidays():
+    # Fri Jul 2 2026 → Mon Jul 6 (Jul 3 is the observed July-4th closure)
+    assert fr.next_session_date("us_equity", "2026-07-02") == \
+        pd.Timestamp("2026-07-06")
+    # plain weekday → next weekday
+    assert fr.next_session_date("us_equity", "2026-08-03") == \
+        pd.Timestamp("2026-08-04")
+    # crypto bars run every calendar day
+    assert fr.next_session_date("crypto", "2026-08-01") == \
+        pd.Timestamp("2026-08-02")
+
+
+def test_next_close_label_says_today_while_that_session_is_underway():
+    # signal committed at Mon Aug 3's close; Tue Aug 4 10:30 ET mid-session —
+    # the pending exit sells at TODAY's 4 PM close, and the label says so
+    lbl = fr.next_close_label("us_equity", "2026-08-03",
+                              now="2026-08-04T14:30:00Z")
+    assert lbl.startswith("today, ")
+    assert "Aug 4" in lbl and "4:00 PM" in lbl
+
+
+def test_next_close_label_says_tomorrow_after_the_close():
+    # looking on Mon Aug 3 after its close: the next bar is tomorrow's session
+    lbl = fr.next_close_label("us_equity", "2026-08-03",
+                              now="2026-08-03T22:00:00Z")
+    assert lbl.startswith("tomorrow, ")
+    assert "Aug 4" in lbl
+
+
+def test_next_close_label_crypto_uses_ct_bar_close():
+    # crypto bar D closes D+1 12:00 UTC → next bar (D+1) closes D+2 12:00 UTC
+    lbl = fr.next_close_label("crypto", "2026-08-01",
+                              now="2026-08-02T18:00:00Z")
+    assert "Aug 3" in lbl and "7:00 AM" in lbl
