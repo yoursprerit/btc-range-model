@@ -545,6 +545,22 @@ def net_signal_div(sigs, pos=None):
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
                     reason="Exit signal: " + " + ".join(parts) + note)
+    if pos is not None and pos.get("in_pos_now"):
+        # Long with NO exit signal active: the strategy simply holds, whatever
+        # the flat-side context reads say — a U1 watch, a pending gate, even a
+        # fresh entry trigger (meaningless while already long).  Word for word
+        # the Overall app's committed decision, so this banner can never show
+        # a flat-side WATCH label while the cockpit, action plan and
+        # Targetbook all say LONG — HOLDING (observed: ARTY).
+        ctx = ("entry signal active (already long)" if entry else
+               "U1 pressure firing, gate not met — a re-entry read, not an exit"
+               if u1 else
+               "D1 pressure building — not an exit trigger" if d1 else
+               "no active signal")
+        return dict(state="HOLD", label="LONG — HOLDING", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason="Strategy is long and no exit signal is active — "
+                           f"hold ({ctx}).")
     if entry:
         gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
                                 ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
