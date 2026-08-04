@@ -72,8 +72,8 @@ def _trend_decision(long_now: bool, in_pos: bool):
     if in_pos:
         if long_now:
             return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
-        return dict(state="EXIT", label="EXIT — MA CROSS-DOWN", ico="🔴", tone="exit",
-                    exits_next_bar=True)
+        return dict(state="EXIT", label="EXIT NEXT BAR — MA CROSS-DOWN",
+                    ico="🔴", tone="exit", exits_next_bar=True)
     if long_now:
         return dict(state="ENTRY", label="ENTER — DUAL-MA CROSS-UP", ico="🟢", tone="buy")
     return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
@@ -94,8 +94,8 @@ def _decision(sigs, in_pos):
             # decided at the close, executed next bar (backtest_gldm lags the
             # signals one bar) — flag it so the Overall action table's
             # exits-next-bar banner covers the miners sleeves (GDX/NUGT) too.
-            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit",
-                        exits_next_bar=True)
+            return dict(state="EXIT", label=f"EXIT NEXT BAR — {why}",
+                        ico="🔴", tone="exit", exits_next_bar=True)
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
     if exit_sig:
         return dict(state="AVOID", label=f"STAND ASIDE — EXIT ACTIVE ({why})",

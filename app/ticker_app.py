@@ -534,10 +534,11 @@ def net_signal_div(sigs, pos=None):
         note = " — entry is blocked while an exit is active" if entry else ""
         if pos is not None and pos.get("in_pos_now"):
             # in position + exit signal — decided at the close, executed on the
-            # next bar (the sim lags signals one bar), so mirror the trend apps'
-            # and the Overall action table's timing words for the same state.
-            return dict(state="EXIT", label="EXIT — EXITS NEXT BAR", ico="🔴",
-                        bg="#fef2f2", brd="#dc2626",
+            # next bar (the sim lags signals one bar): the unified
+            # "EXIT NEXT BAR — <cause>" label, dominant cause first (D3 → D2 →
+            # D1, same precedence the Overall decision uses).
+            return dict(state="EXIT", label=f"EXIT NEXT BAR — {parts[0]}",
+                        ico="🔴", bg="#fef2f2", brd="#dc2626",
                         reason="Exit signal: " + " + ".join(parts) + note +
                                ". The exit was decided at the close; "
                                f"{_exit_note()}.")
@@ -603,15 +604,16 @@ def net_signal_ma(mst, pos=None):
                         reason=f"Strategy is long; {desc} — hold.")
         # Long, but the latest close broke the trend: the filter decides at the
         # close and acts on the NEXT bar, so the position is still open today
-        # and closes on the next bar.  Surface that pending exit — same label,
-        # word for word, as the Overall app's committed decision — instead of a
-        # bare "LONG — HOLDING" that contradicts the Overall action table's
-        # "exits next bar" flag for the identical committed state.
+        # and closes on the next bar.  Surface that pending exit with the ONE
+        # label every engine family uses for this state — "EXIT NEXT BAR —
+        # <cause>", word for word the Overall app's committed decision — so a
+        # trend app can never phrase the identical committed pending exit
+        # differently from a divergence app (e.g. GDX/NUGT vs REMX).
         return dict(state="EXIT",
-                    label="LONG — HOLDING (below trend → exits next bar)",
-                    ico="🟡", bg="#fefce8", brd="#ca8a04",
-                    reason=f"Strategy is long but {desc} — the exit was decided "
-                           f"at the close; {_exit_note()}.")
+                    label="EXIT NEXT BAR — BELOW TREND",
+                    ico="🔴", bg="#fef2f2", brd="#dc2626",
+                    reason=f"Strategy is still long today but {desc} — the exit "
+                           f"was decided at the close; {_exit_note()}.")
     if above:
         # Flat but the trend signal is bullish → a COMMITTED entry, decided at
         # the close and executed next bar.  Same label, colour and timing words

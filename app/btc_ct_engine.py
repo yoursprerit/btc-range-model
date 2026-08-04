@@ -425,8 +425,8 @@ def _decision(sigs, i, in_pos):
             # decided at the close, executed next bar — same flag as every
             # other engine so the Overall action table's exits-next-bar banner
             # is uniform across the BTC/MSTR/MSTU sleeves too.
-            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit",
-                        exits_next_bar=True)
+            return dict(state="EXIT", label=f"EXIT NEXT BAR — {why}",
+                        ico="🔴", tone="exit", exits_next_bar=True)
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
     if exit_sig:
         return dict(state="AVOID", label=f"STAND ASIDE — EXIT ACTIVE ({why})",
