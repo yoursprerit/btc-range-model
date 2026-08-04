@@ -668,13 +668,35 @@ def net_signal(sigs, pos=None):
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
                     reason="Exit signal: " + " + ".join(parts) + note)
+    if pos is not None and pos.get("in_pos_now"):
+        # Long with NO exit signal active: the strategy simply holds — the
+        # flat-side reads (U1 watch, entry gate, D1 pressure) are re-entry
+        # context, not decisions, while a position is open.  Word for word the
+        # Overall app's committed decision for this state.
+        ctx = ("entry signal active (already long)" if entry else
+               "U1 pressure firing, gate not met — a re-entry read, not an exit"
+               if u1 else
+               "D1 pressure building — not an exit trigger" if d1 else
+               "no active signal")
+        return dict(state="HOLD", label="LONG — HOLDING", ico="🟢",
+                    bg="#f0fdf4", brd="#16a34a",
+                    reason="Strategy is long and no exit signal is active — "
+                           f"hold ({ctx}).")
     if entry:
         gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
                                 ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
                                 ("⚡ V-reversal", sigs.get("v_recent_gate"))] if f]
+        reason = "U1 confirmed inside the Pure-Regime gate: " + " + ".join(gates)
+        if pos is not None:
+            # flat + committed entry — same execution-timing words as the
+            # ticker divergence apps and the Overall action plan
+            return dict(state="ENTRY", label="ENTRY / GO LONG — ENTERS NEXT BAR",
+                        ico="🟢", bg="#f0fdf4", brd="#16a34a",
+                        reason=reason + ". Strategy is FLAT today; the entry was "
+                               "decided at the close and the position opens on "
+                               "the next bar.")
         return dict(state="ENTRY", label="ENTRY / GO LONG", ico="🟢",
-                    bg="#f0fdf4", brd="#16a34a",
-                    reason="U1 confirmed inside the Pure-Regime gate: " + " + ".join(gates))
+                    bg="#f0fdf4", brd="#16a34a", reason=reason)
     if u1:
         return dict(state="WATCH_UP", label="U1 WATCH — GATE NOT MET", ico="🟡",
                     bg="#fefce8", brd="#ca8a04",
