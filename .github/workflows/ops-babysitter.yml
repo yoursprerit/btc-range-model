@@ -1,0 +1,203 @@
+name: Ops babysitter agent
+
+# 🤖 AGENT 2 — diagnoses failures of the daily data/publish pipeline. Full
+# runbook: docs/AI_AGENTS.md.
+#
+# WHY workflow_run AND NOT ISSUES: Issues are DISABLED on this repository (the
+# publish workflow's "Report failure" step already degrades to the job summary
+# for exactly that reason — HTTP 410), so the babysitter listens for the
+# monitored workflows' FAILED runs directly and delivers its findings as a job
+# summary and, when a code fix is warranted, a pull request.
+#
+# WHAT IT DOES on each failed run of the publish / data-refresh workflow:
+#   1. Pulls the failed run's metadata + failing-step logs + recent run
+#      history (a pre-step does this with `gh`, so the agent starts with the
+#      evidence in hand).
+#   2. Classifies the failure:
+#        (a) WITHHELD — the freshness audit failed and the book was
+#            deliberately not published. This is the DESIGNED SAFE PATH
+#            (stale signals never publish; catch-up slots retry all day);
+#        (b) TRANSIENT — upstream feed lag / rate limit / network flake that
+#            a later slot will clear;
+#        (c) REAL — an engine, dependency or workflow bug.
+#   3. For (a)/(b) on the first occurrence: writes a diagnosis to the job
+#      summary and STOPS — no PR, no noise. It escalates to investigation
+#      only when the failure REPEATS (≥3 failures the same day, or the same
+#      root cause on ≥2 consecutive days).
+#   4. For (c) or an escalated repeat: reproduces locally where feasible
+#      (the runner installs the full engine stack), implements a minimal fix
+#      on an ops-fix/* branch touching ONLY pipeline code, and opens a PR.
+#      It never touches strategy parameters, configs, or published books.
+#
+# SETUP: requires the ANTHROPIC_API_KEY repo secret and the Claude GitHub App
+# installed on this repo (see docs/AI_AGENTS.md §2).
+
+on:
+  workflow_run:
+    workflows:
+      - "Publish target book (IBKR Option C)"
+      - "Refresh backtest dataset"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Failed run id to diagnose (blank = newest failed run of a monitored workflow)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: ops-babysitter
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    # workflow_run fires on EVERY completion; only failures proceed (manual
+    # dispatch always proceeds — it exists to re-diagnose on demand).
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Collect failure context
+        id: ctx
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ops_ctx
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+          else
+            RUN_ID="${{ github.event.inputs.run_id }}"
+            if [ -z "$RUN_ID" ]; then
+              RUN_ID="$(gh run list --status failure --limit 30 \
+                --json databaseId,workflowName \
+                --jq '[.[] | select(.workflowName=="Publish target book (IBKR Option C)"
+                               or .workflowName=="Refresh backtest dataset")][0].databaseId // empty')"
+            fi
+            if [ -z "$RUN_ID" ]; then
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              echo "No failed run of a monitored workflow found — nothing to diagnose."
+              exit 0
+            fi
+          fi
+          echo "found=true"     >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          gh run view "$RUN_ID" \
+            --json name,workflowName,displayTitle,conclusion,event,createdAt,url,headBranch,headSha \
+            > /tmp/ops_ctx/run_meta.json
+          # --log-failed can 404 while logs are still being archived — tolerate.
+          gh run view "$RUN_ID" --log-failed > /tmp/ops_ctx/run_faillog.txt \
+            || echo "(failed-step logs unavailable — inspect the run URL)" \
+                 > /tmp/ops_ctx/run_faillog.txt
+          WF="$(jq -r .workflowName /tmp/ops_ctx/run_meta.json)"
+          gh run list --workflow "$WF" --limit 20 \
+            --json databaseId,conclusion,createdAt,event,displayTitle \
+            > /tmp/ops_ctx/run_history.json
+          echo "Context collected for run $RUN_ID ($WF):"
+          wc -c /tmp/ops_ctx/*
+
+      - name: Set up Python
+        if: steps.ctx.outputs.found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the engine stack (for local reproduction)
+        if: steps.ctx.outputs.found == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the babysitter agent
+        if: steps.ctx.outputs.found == 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --max-turns 80
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(git:*),Bash(gh:*),Bash(jq:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(find:*),Bash(mkdir:*),Bash(wc:*),Bash(date:*),Bash(echo:*),Bash(curl:*)"
+          prompt: |
+            You are the ops babysitter for this trading platform's daily
+            data/publish pipeline. A monitored workflow run FAILED and your job
+            is to diagnose it, decide whether it needs action, and either
+            explain it (job summary) or fix it (pull request). Run shell
+            commands ONE at a time — no && chains.
+
+            ## Evidence already collected for you
+            - /tmp/ops_ctx/run_meta.json — the failed run's metadata
+            - /tmp/ops_ctx/run_faillog.txt — its failing steps' logs
+            - /tmp/ops_ctx/run_history.json — the last 20 runs of that workflow
+            Also read from the repo: data/overall/daily_audit.json (committed
+            even on failed publishes — it records the audit verdict and stale
+            apps) and the workflow file that failed under .github/workflows/.
+
+            ## Classify the failure first
+            (a) WITHHELD — publish_target_book.py exits 2 when the freshness
+                audit fails; the book is deliberately not published. This is
+                the DESIGNED SAFE PATH: stale signals never publish, the
+                executor keeps the previous verified book, and idempotent
+                catch-up slots retry all day. The publish workflow's own
+                "Classify" step marks this kind in its summary.
+            (b) TRANSIENT — upstream feed lag (Yahoo daily bars often trail
+                intraday, especially weekend/Monday BTC-only sessions),
+                rate-limiting on shared runner IPs, network flakes. See
+                app/market_fallback.py and DATA_CONSISTENCY.md for the
+                existing fallback design before assuming something is broken.
+            (c) REAL — an engine/dependency/workflow bug (import errors,
+                schema regressions, pinned-version breakage, a bug in the
+                fetch/validate scripts).
+
+            ## Then act by class
+            - (a) or (b), FIRST occurrence (check run_history.json): append a
+              short diagnosis to the job summary — the file named by the
+              GITHUB_STEP_SUMMARY environment variable (append with
+              `echo ... >> "$GITHUB_STEP_SUMMARY"` or the Write tool) —
+              covering what failed, why it is expected-safe, and what will
+              retry it. Then STOP. No PR.
+            - ESCALATE (a)/(b) to a full investigation when the pattern
+              repeats: ≥3 failures so far today, or the same root cause on
+              ≥2 consecutive days. A feed that stays stale across a whole day
+              is no longer transient — investigate which asset/provider and
+              whether the fallback chain (Yahoo daily → Yahoo hourly → Nasdaq)
+              actually engaged, reproducing with
+              `python scripts/pull_backtest_data.py` and
+              `python scripts/validate_refreshed_data.py` (full engine stack
+              is installed; network is available).
+            - (c) or an escalated repeat: reproduce, then implement the
+              MINIMAL fix on a branch named ops-fix/<YYYY-MM-DD>-<short-slug>.
+              You may touch ONLY pipeline code: scripts/ fetch/validate/publish
+              helpers, .github/workflows/, app/market_fallback.py,
+              app/freshness.py, app/data_gate.py. Commit, push with
+              `git push -u origin <branch>`, and open a PR with `gh pr create`
+              explaining root cause, evidence (quote the failing log lines),
+              the fix, and how you verified it. Include — verbatim, for
+              dedupe — the marker line `ops-babysitter-fix` in the PR body.
+            - Before opening ANY PR, dedupe:
+              `gh pr list --state open --search "ops-babysitter-fix in:body" --json number,title,headRefName`
+              — if an open PR already addresses the same root cause, append
+              your new evidence to the job summary instead of duplicating it.
+
+            ## Hard guardrails
+            - NEVER touch strategy behaviour: no changes to strategy
+              parameters/configs, app/overall_core.py, app engines,
+              ticker_config.py, models/, or anything under data/ (the books,
+              archives and health artifacts are pipeline OUTPUT — if data is
+              wrong, fix the producer, don't hand-edit the artifact).
+            - Never run scripts/publish_target_book.py against the real
+              branch, never push to main/master directly, never merge a PR.
+            - If the logs point at secrets/credentials (e.g. a missing
+              OVERALL_BOOK_SECRET), describe the finding in the summary —
+              never attempt to read, print, or work around secrets.

@@ -1,0 +1,211 @@
+name: Health triage agent
+
+# 🤖 AGENT 1 — automates the *first pass* of the STRATEGY_HEALTH.md review
+# protocol ("re-run the sleeve's honest-fill re-sweep and decide — retune,
+# de-rate, or retire"). Full runbook: docs/AI_AGENTS.md.
+#
+# HOW IT RUNS
+#   * Fires after every completed "Publish target book" run (that workflow also
+#     rebuilds data/overall/strategy_health.json), plus manual dispatch.
+#   * A CHEAP GATE goes first: scripts/health_alarm_gate.py (stdlib-only,
+#     seconds) parses the committed health snapshot. The expensive agent job
+#     only launches when the gate finds an actionable alarm — a 🔴 monitor, or
+#     a 🟡 that has persisted ≥14 days — exactly the "act on red, or on a
+#     yellow that persists" rule from STRATEGY_HEALTH.md.
+#   * DEDUPE: the gate computes a stable fingerprint of the current alarm set
+#     (keyed on each breach's first_breach_date, so it does not change while
+#     the same episode persists). If any PR already carries that fingerprint,
+#     the day's run skips — one alarm episode → one triage PR, not one per day.
+#
+# WHAT THE AGENT DOES (and does not do)
+#   * Investigates each alarmed sleeve with the repo's OWN eval harness
+#     (scripts/eval_*.py, health_history.csv, the sleeve's *_EVAL.md history).
+#   * Writes a triage report under reports/health_triage/ and opens a PR with
+#     a RETUNE / DE-RATE / RETIRE / WATCH recommendation per sleeve.
+#   * It NEVER changes strategy code, configs, weights or published books —
+#     the monitor's design rule (alarms trigger a *human* decision) still
+#     holds; the agent only compresses the investigation, the human merges.
+#
+# SETUP: requires the ANTHROPIC_API_KEY repo secret and the Claude GitHub App
+# installed on this repo (see docs/AI_AGENTS.md §2).
+
+on:
+  workflow_run:
+    workflows: ["Publish target book (IBKR Option C)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      persist_days:
+        description: "Treat a yellow this many days old as actionable"
+        required: false
+        default: "14"
+      skip_dedupe:
+        description: "Run even if a PR for this alarm fingerprint already exists"
+        type: boolean
+        required: false
+        default: false
+
+# The agent pushes a report branch and opens a PR; id-token lets the Claude
+# action exchange OIDC for its GitHub-App token; actions:read lets it inspect
+# run context. It never needs OVERALL_BOOK_SECRET — publishing stays out of
+# reach by construction.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+# Queue, never cancel: a queued fire re-runs the gate afterwards and the
+# fingerprint dedupe makes it a cheap no-op once the first run's PR exists.
+concurrency:
+  group: health-triage
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      triage_needed: ${{ steps.gate.outputs.triage_needed }}
+      fingerprint: ${{ steps.gate.outputs.fingerprint }}
+      n_alarms: ${{ steps.gate.outputs.n_alarms }}
+      summary: ${{ steps.gate.outputs.summary }}
+      dedupe_skip: ${{ steps.dedupe.outputs.skip }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Alarm gate (stdlib-only — costs seconds)
+        id: gate
+        run: |
+          python3 scripts/health_alarm_gate.py \
+            --persist-days "${{ github.event.inputs.persist_days || '14' }}"
+
+      - name: Dedupe — has this alarm episode already been triaged?
+        id: dedupe
+        if: steps.gate.outputs.triage_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FP: ${{ steps.gate.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.skip_dedupe }}" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Dedupe bypassed by dispatch input."
+            exit 0
+          fi
+          # Any PR (open OR closed — a closed triage still covered the episode;
+          # a NEW episode gets a new first_breach_date → a new fingerprint)
+          # whose body carries this fingerprint marker means we're done today.
+          N="$(gh pr list --state all \
+                 --search "health-triage-${FP} in:body" \
+                 --json number --jq length)"
+          if [ "$N" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Alarm episode ${FP} already has a triage PR — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "No triage PR for episode ${FP} yet — proceeding."
+          fi
+
+  triage:
+    needs: gate
+    if: needs.gate.outputs.triage_needed == 'true' && needs.gate.outputs.dedupe_skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout (full history — evals and health references need it)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"          # the app's pinned interpreter
+          cache: pip
+
+      - name: Install the engine stack (the agent runs real eval scripts)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the triage agent
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --max-turns 100
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(git:*),Bash(gh:*),Bash(jq:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(find:*),Bash(mkdir:*),Bash(wc:*),Bash(date:*),Bash(echo:*)"
+          prompt: |
+            You are the health-triage agent for this quant trading platform.
+            The 🩺 Strategy Health monitor has actionable alarms and you run the
+            FIRST PASS of the human review protocol defined in
+            STRATEGY_HEALTH.md: investigate each alarm with the repo's own eval
+            harness and produce a recommendation. A human makes the decision by
+            reviewing your PR — you never change strategy behaviour yourself.
+
+            Alarm episode fingerprint: ${{ needs.gate.outputs.fingerprint }}
+            Gate summary: ${{ needs.gate.outputs.summary }}
+
+            ## Protocol
+            1. Regenerate the alarm detail:
+               `python scripts/health_alarm_gate.py --out /tmp/alarms.json`
+               then read /tmp/alarms.json. Read STRATEGY_HEALTH.md fully first —
+               it defines every monitor (M1–M4), threshold and the review
+               protocol you are executing.
+            2. For each alarmed scope, build the evidence before judging:
+               - the sleeve's rows in data/overall/health_history.csv (trend:
+                 fresh spike vs slow bleed);
+               - the sleeve's strategy spec + past evals (OVERALL_STRATEGY.md
+                 §2 maps each sleeve; *_EVAL.md docs at the repo root record
+                 how its current config was chosen);
+               - the monitor's numbers in data/overall/strategy_health.json
+                 (e.g. for M2: current dd vs ref_mdd, cur_uw_days vs
+                 ref_max_uw_days).
+            3. Where it sharpens the verdict, run the existing eval scripts
+               (full Python stack is installed; network is available; run
+               commands ONE at a time, no && chains; long runs are fine):
+               - scripts/eval_oos_walkforward.py — walk-forward OOS check
+               - scripts/eval_hyperparam_search.py — per-sleeve config sweep
+               - scripts/eval_lev_siblings_stop.py — stop re-sweep (lev/beta)
+               - scripts/eval_gated_replay.py — portfolio replay layers
+               - scripts/build_strategy_health.py — refresh the snapshot
+               If a script needs unavailable data or errors, degrade to the
+               history-based analysis and say so explicitly in the report.
+            4. Judge each alarm: DECAY (the edge is gone / regime ended) vs
+               BAD LUCK (within the sleeve's own historical variance) vs
+               ARTIFACT (threshold/warm-up/data quirk — e.g. a breach whose
+               reference history barely arms the monitor). Remember the
+               family-wise caveat: ~18 sleeves means occasional flags by chance.
+            5. Write the report to
+               `reports/health_triage/<as_of>-${{ needs.gate.outputs.fingerprint }}.md`
+               with: an alarm table; per-sleeve evidence and analysis; and ONE
+               recommendation per sleeve — RETUNE (re-sweep suggests a better
+               config: name it), DE-RATE (cut its cap/weight pending recovery),
+               RETIRE (remove from the universe), or WATCH (bad luck/artifact —
+               keep monitoring), each with a confidence and the concrete
+               follow-up command a human would run.
+            6. Ship it as a PR:
+               - `git checkout -b health-triage/<as_of>-${{ needs.gate.outputs.fingerprint }}`
+               - commit ONLY the new report file (nothing else may be staged)
+               - `git push -u origin <branch>`
+               - `gh pr create` with title
+                 "🩺 Health triage: <short alarm summary>" and a body containing
+                 the recommendation table, a link-style mention of the report
+                 file, and — verbatim, required for dedupe — the marker line:
+                 `health-triage-${{ needs.gate.outputs.fingerprint }}`
+
+            ## Hard guardrails
+            - Modify NOTHING outside reports/health_triage/. No app/ code, no
+              configs, no workflows, no data/, no docs — recommendations live
+              in the report, as text.
+            - Never run scripts/publish_target_book.py or touch
+              data/overall/target_book*; never merge the PR.
+            - If, after investigation, every alarm is clearly an ARTIFACT and
+              no human action is warranted, still open the PR (the report says
+              WATCH everywhere) — the fingerprint marker is what stops
+              tomorrow's duplicate run.

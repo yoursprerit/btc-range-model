@@ -42,8 +42,11 @@ models/backups/
 # Bulky legacy model artefact (35 MB), regeneratable via legacy/train_7d_model.py
 legacy/models/inference_assets_7d.joblib
 
-# Claude Code internal metadata
-.claude/
+# Claude Code internal metadata — but the shared slash commands
+# (.claude/commands/, used by the research fan-out agents: docs/AI_AGENTS.md)
+# ARE versioned; only session-local state stays ignored.
+.claude/*
+!.claude/commands/
 
 # runtime marker for the CT feature auto-refresh (btc_ct_engine._ensure_fresh_features)
 data/backtest/.last_feature_pull
