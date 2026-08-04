@@ -634,10 +634,17 @@ def render_gldm_gate_signatures(sigs):
         unsafe_allow_html=True)
 
 
-def net_signal(sigs):
+def net_signal(sigs, pos=None):
     """Resolve the many raw signatures into ONE actionable state with a clear
     precedence — exit ALWAYS overrides entry — so the UI can never show an
     entry and an exit as simultaneously active (matches backtest execution).
+
+    With ``pos`` supplied (the primary miner's sim state), an exit while a
+    position is OPEN is labelled with the unified execution-timing convention
+    every engine and app uses for that state — "EXIT NEXT BAR — <cause>" —
+    instead of the flat-side "EXIT / STAND ASIDE", so the Miners app can never
+    phrase the identical committed pending exit differently from the trend
+    apps or the Overall cockpit.
 
     Returns dict(state, label, ico, bg, brd, reason).  state ∈
     {EXIT, ENTRY, WATCH_UP, WATCH_DN, NEUTRAL}.
@@ -650,10 +657,17 @@ def net_signal(sigs):
     if d2 or d3:                                   # EXIT overrides everything
         parts = [p for p, f in [("D3 exhaustion", d3), ("D2 momentum fade", d2)] if f]
         note = " — entry is blocked while an exit is active" if entry else ""
+        if pos is not None and pos.get("in_pos_now"):
+            # in position: decided at the close, executed next bar — dominant
+            # cause first (D3 → D2), same precedence as the Overall decision
+            return dict(state="EXIT", label=f"EXIT NEXT BAR — {parts[0]}",
+                        ico="🔴", bg="#fef2f2", brd="#dc2626",
+                        reason="Exit signal: " + " + ".join(parts) + note +
+                               ". The exit was decided at the close; "
+                               f"{_exit_note()}.")
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
-                    reason="Exit signal: " + " + ".join(parts) + note +
-                           f". For an open position, {_exit_note()}.")
+                    reason="Exit signal: " + " + ".join(parts) + note)
     if entry:
         gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
                                 ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
@@ -792,11 +806,13 @@ def render_strategy_card():
 </div>""", unsafe_allow_html=True)
 
 
-def render_conditions_box(sigs, d_df=None):
+def render_conditions_box(sigs, d_df=None, pos=None):
     """Dynamic checklist: every entry & exit condition with its live on/off
     state, and the single resolved net decision (mode-aware: SOXX-style
-    LONG/EXIT boxes for the Gold Trend app, divergence checklist for Miners)."""
-    ns = net_signal(sigs)
+    LONG/EXIT boxes for the Gold Trend app, divergence checklist for Miners).
+    ``pos`` (the primary miner's sim state) makes the Miners net banner
+    position-aware — an exit with an open position reads "EXIT NEXT BAR"."""
+    ns = net_signal(sigs, pos)
     if not IS_MINERS:
         # ── Gold Trend app: SOXX-style LONG / EXIT condition boxes — the
         #    dual-MA cross is the ONE traded condition, the stop the guard ──
@@ -911,11 +927,11 @@ def render_conditions_box(sigs, d_df=None):
 </div>""", unsafe_allow_html=True)
 
 
-def render_gldm_signatures(sigs):
+def render_gldm_signatures(sigs, pos=None):
     if not sigs:
         st.info("Not enough completed bars for trend signatures yet (need ≥ 3).")
         return
-    ns = net_signal(sigs)
+    ns = net_signal(sigs, pos)
     as_of = pd.Timestamp(sigs["as_of_date"]).strftime("%Y-%m-%d")
     # Single composite banner driven by the ONE resolved net signal (no separate
     # "entry active" text that could contradict an active exit).
@@ -1884,11 +1900,14 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         d4c.metric("GLDM daily High (pred)", "—"); d5c.metric("GLDM daily Low (pred)", "—")
 
     end = None if is_live else as_of_date
+    # primary miner's sim state, so the miners' net banners distinguish an
+    # in-position pending exit ("EXIT NEXT BAR") from a flat stand-aside
+    _pos_gdx = strategy_position("GDX", end=end) if IS_MINERS else None
     if IS_MINERS:
         # ── trend-signature alert (the BTC-style card block) — the miners'
         #    trading signal, derived from the GLDM daily H/L model ──
         st.markdown("### 🔔 Trend-Signature Alert  ·  _signals derived from the GLDM daily H/L model_")
-        render_gldm_signatures(sigs)
+        render_gldm_signatures(sigs, pos=_pos_gdx)
         st.markdown("#### 🚪 Entry-gate conditions  ·  _what turns a U1 pressure signal into an actual entry_")
         render_gldm_gate_signatures(sigs)
         st.markdown("### 🎯 Strategy — Divergence Pure-Regime (GDX & NUGT)")
@@ -1904,7 +1923,7 @@ def render_live_dashboard(as_of_date=None, is_live=True):
         st.markdown(f"### 🎯 Strategy — Dual-MA {gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW} Trend (GLDM & UGL)")
     render_strategy_card()
     st.markdown("#### Strategy conditions (live)")
-    render_conditions_box(sigs, d_df=d_fc)
+    render_conditions_box(sigs, d_df=d_fc, pos=_pos_gdx)
     st.markdown("#### Current positions")
     pcols = st.columns(len(APP_ASSETS))
     for _asset, _pc in zip(APP_ASSETS, pcols):

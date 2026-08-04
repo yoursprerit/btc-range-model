@@ -40,8 +40,24 @@ def _trend_cfg():
 def test_net_decision_trend_pending_exit_sets_flag():
     dec = oc._net_decision(_trend_cfg(), None, in_pos=True,
                            last_close=90.0, ma_val=100.0, long_now=False)
-    assert dec["state"] == "HOLD" and dec["tone"] == "hold"
+    # unified pending-exit convention: EXIT NEXT BAR — <cause>, red, tone exit
+    assert dec["state"] == "EXIT" and dec["tone"] == "exit"
+    assert dec["label"] == "EXIT NEXT BAR — BELOW TREND"
     assert dec.get("exits_next_bar") is True
+
+
+def test_pending_exit_labels_share_one_convention():
+    sigs = dict(d1_triggered=False, d2_triggered=True, d3_triggered=False,
+                entry_triggered=False, u1_triggered=False)
+    div = oc._net_decision(_div_cfg(), sigs, in_pos=True,
+                           last_close=90.0, ma_val=None)
+    gld = ge._decision(sigs, in_pos=True)
+    gldt = ge._trend_decision(long_now=False, in_pos=True)
+    btc = be._decision(dict(d2=[True], d3=[False], bull_regime=[False],
+                            u1=[False], tf2_entry=[False]), 0, in_pos=True)
+    for dec in (div, gld, gldt, btc):
+        assert dec["label"].startswith("EXIT NEXT BAR — ")
+        assert dec["tone"] == "exit" and dec.get("exits_next_bar") is True
 
 
 def test_net_decision_trend_holding_above_has_no_flag():

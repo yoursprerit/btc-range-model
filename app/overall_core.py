@@ -443,15 +443,16 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
             (ma_val is not None) and (last_close > ma_val))
         if in_pos:
             # The MA filter decides at the close and acts on the NEXT bar, so a
-            # position is still open the day its close first drops below the SMA
-            # (it exits next bar). Mirror the source app's net_signal_ma: while
-            # in position the state is always HOLD — flag the pending exit rather
-            # than closing a bar early, so the Overall app agrees with the app.
+            # position is still open the day its close first drops below the
+            # trend (it exits next bar).  One convention for that state across
+            # EVERY engine family and app: "EXIT NEXT BAR — <cause>", red,
+            # tone "exit" — matching the divergence engines and the source
+            # apps' net signals word for word, so no two surfaces can describe
+            # the identical committed pending exit differently.
             if above:
                 return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
-            return dict(state="HOLD",
-                        label="LONG — HOLDING (below trend → exits next bar)",
-                        ico="🟡", tone="hold", exits_next_bar=True)
+            return dict(state="EXIT", label="EXIT NEXT BAR — BELOW TREND",
+                        ico="🔴", tone="exit", exits_next_bar=True)
         if above:
             return dict(state="ENTRY", label="ENTER — ABOVE TREND", ico="🟢", tone="buy")
         return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
@@ -469,10 +470,10 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
         if exit_sig:
             # Divergence exits are decided at the close and executed on the NEXT
             # bar (backtest_ticker.simulate lags signals one bar), exactly like
-            # the trend family's pending exit above — carry the same flag so the
-            # action table's "exits next bar" banner covers both engine families.
-            return dict(state="EXIT", label=f"EXIT — {why}", ico="🔴", tone="exit",
-                        exits_next_bar=True)
+            # the trend family's pending exit above — same flag, same
+            # "EXIT NEXT BAR — <cause>" label convention.
+            return dict(state="EXIT", label=f"EXIT NEXT BAR — {why}",
+                        ico="🔴", tone="exit", exits_next_bar=True)
         return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
     # flat — an active exit signal blocks entry (net-exit), even if U1 is firing
     if exit_sig:
@@ -1572,10 +1573,9 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
             # The action column is an INSTRUCTION list ("what to do now"), and
             # for a committed pending exit the instruction is CLOSE: the book
             # zero-weights it and the executor sells it this session, exactly
-            # like a tone-"exit" divergence close.  The decision label keeps
-            # the state description ("LONG — HOLDING (below trend → exits
-            # next bar)") — previously the action stayed HOLD, so a sleeve the
-            # book itself had dropped to 0% still rendered a HOLD pill.
+            # like a tone-"exit" divergence close.  (Previously the action
+            # stayed HOLD, so a sleeve the book itself had dropped to 0% still
+            # rendered a HOLD pill.)
             act = "CLOSE"
         elif res["pos"]["in_pos"]:
             act = "HOLD"
