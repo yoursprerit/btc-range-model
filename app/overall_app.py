@@ -1110,7 +1110,12 @@ with tab_live:
                    "they still **hold/open today** but **exit on the next bar** "
                    "(the last close already crossed the trend, a committed exit "
                    "signal fired at today's close — e.g. a divergence app's D2/D3 — "
-                   "or the live price has since slipped below the trend). Rows "
+                   "or the live price has since slipped below the trend). "
+                   "Strategies decide at a close and **execute at the NEXT "
+                   "close**, so once the following session is underway the "
+                   "'next bar' is *that* session: the position stays LONG "
+                   "through the day and is sold at its 4:00 PM ET close — the "
+                   "red flag spells out the exact sell moment. Rows "
                    "shaded **green** 🟢 are "
                    "the mirror on the way in: committed fresh buys that **enter on the "
                    "next bar**, plus flat names whose **live price now satisfies the "
@@ -1263,15 +1268,27 @@ with tab_live:
                              "box-shadow:inset 3px 0 0 #16a34a")
             else:
                 row_style = "border-bottom:1px solid #eef2f7"
+            # say WHEN the pending bar closes — "next bar" alone reads as
+            # "tomorrow", but for a signal committed at yesterday's close the
+            # next bar is the session already underway: the position is still
+            # held right now and the strategy sells at ITS close (today
+            # 4:00 PM ET), matching the backtest's next-bar-close execution.
+            _sell_at = ""
+            if exit_next:
+                try:
+                    _sell_at = " — sells at the close: " + fr.next_close_label(
+                        fr.PARENT_CLASS.get(a["parent"], "us_equity"), _r["as_of"])
+                except Exception:
+                    _sell_at = ""
             if _book_masked_exit:                      # fired after the morning publish
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
-                        "⚠️ signal exited at today's close — exits next bar</div>")
+                        f"⚠️ signal exited at today's close — exits next bar{_sell_at}</div>")
             elif _committed_exit:                      # last close already signalled the exit
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
-                        "⚠️ exits next bar</div>")
+                        f"⚠️ exits next bar{_sell_at}</div>")
             elif _live_exit:                           # live-driven (hold or fresh entry)
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
-                        "⚠️ live px below trend — exits next bar</div>")
+                        f"⚠️ live px below trend — exits next bar{_sell_at}</div>")
             elif _book_masked_entry:                   # fired after the morning publish
                 warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
                         "🟢 signal fired at today's close — enters next bar</div>")
@@ -1423,6 +1440,23 @@ with tab_live:
                             f"@ ${float(pos['entry_px']):,.2f} · {pos['days']}d<br>"
                             f"P&amp;L <b style='color:{pcol}'>{_pct(pos['upnl'])}</b> · "
                             f"{exit_txt}</div>")
+                        # a committed pending exit: the position IS still long
+                        # (the strategy decides at a close and sells at the
+                        # NEXT close), so say so — and say when it sells —
+                        # instead of leaving a bare LONG that looks like it
+                        # contradicts the parent's EXIT / exits-next-bar pill.
+                        _pdec = res.get("decision") or {}
+                        if _pdec.get("exits_next_bar") or _pdec.get("tone") == "exit":
+                            try:
+                                _sell_lbl = fr.next_close_label(
+                                    fr.PARENT_CLASS.get(res.get("parent"), "us_equity"),
+                                    res["as_of"])
+                            except Exception:
+                                _sell_lbl = "the next close"
+                            body.append(
+                                "<div style='font-size:10.5px;color:#dc2626;"
+                                "font-weight:700;margin-top:2px'>⚠️ exit signal "
+                                f"committed — sells at the close: {_sell_lbl}</div>")
                     elif res["last_trade"]:
                         lt = res["last_trade"]; r_ = lt["ret"] * 100
                         rc = C_BUY if r_ >= 0 else C_EXIT

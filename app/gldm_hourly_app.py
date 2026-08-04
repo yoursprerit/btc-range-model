@@ -350,6 +350,18 @@ def dual_ma_state(d_df=None):
                 gap=(f / s - 1) * 100, slow_rising=s > s_prev)
 
 
+def _next_close_phrase():
+    """When a pending "next bar" decision executes: the close of the session
+    AFTER the last committed bar (e.g. "today, Aug 4, 4:00 PM EDT" while that
+    session is underway) — the strategies decide at a close and execute at the
+    NEXT close, so "exits next bar" means this moment, not tomorrow."""
+    try:
+        return freshness.next_close_label(
+            "us_equity", pd.Timestamp(daily_completed.index.max()))
+    except Exception:
+        return "the next daily close"
+
+
 def net_signal_trend(dm, pos=None):
     """One resolved state for the Gold Trend app (dual-MA mode), reconciling
     the instantaneous cross read with the strategy's actual executed position
@@ -368,7 +380,7 @@ def net_signal_trend(dm, pos=None):
         return dict(state="EXIT", label="EXIT NEXT BAR — MA CROSS-DOWN", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
                     reason=f"{desc}: the cross has flipped bearish — the strategy "
-                           "exits at the next close.")
+                           f"exits at the next close — {_next_close_phrase()}.")
     if long_now:
         return dict(state="ENTRY", label="ENTERS NEXT BAR — CROSS BULLISH", ico="🟢",
                     bg="#f0fdf4", brd="#16a34a",
@@ -641,7 +653,9 @@ def net_signal(sigs):
         note = " — entry is blocked while an exit is active" if entry else ""
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
-                    reason="Exit signal: " + " + ".join(parts) + note)
+                    reason="Exit signal: " + " + ".join(parts) + note +
+                           ". An open position sells at the next close — "
+                           f"{_next_close_phrase()}.")
     if entry:
         gates = [g for g, f in [("🐂 Bull Regime", sigs.get("bull_regime")),
                                 ("🧹 Clean Breakout", sigs["clean_10d"] and not sigs["above_ma20"]),
