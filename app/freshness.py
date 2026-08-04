@@ -460,6 +460,36 @@ def next_close_label(kind: str, asof, now=None) -> str:
     return lbl
 
 
+# the live IBKR executor's once-daily rebalance slot (crontab `45 9 * * 1-5`,
+# 9:45 AM ET — see IBKR_PAPER_TRADING.md): committed signal changes are TRADED
+# here, the morning after they commit, while the engine/backtest books them at
+# the pending bar's close.  Display-only — nothing schedules off this.
+REBALANCE_CT = (8, 45)
+
+
+def exit_execution_note(kind: str, asof, now=None) -> str:
+    """Both timelines of a pending "exits next bar" decision, in one phrase:
+    when the LIVE EXECUTOR actually sells (the ≈8:45 AM CT morning rebalance of
+    the pending session — past tense once that moment has passed) and when the
+    ENGINE/backtest books the exit (the pending bar's close).  Answers "it said
+    exits next bar yesterday — why is it still LONG?": the executor sold at the
+    morning rebalance; the engine's position runs to the close by design."""
+    nxt_close = next_close_label(kind, asof, now)
+    if kind == "crypto":
+        return f"engine books the exit at the bar close — {nxt_close}"
+    sess = next_session_date(kind, asof)
+    reb = sess.tz_localize(CT) + pd.Timedelta(hours=REBALANCE_CT[0],
+                                              minutes=REBALANCE_CT[1])
+    n = _as_utc(now or now_utc())
+    n_ct = n.tz_convert(CT)
+    day = ("today" if reb.date() == n_ct.date() else
+           "tomorrow" if reb.date() == (n_ct + pd.Timedelta(days=1)).date() else
+           reb.strftime("%b %d").replace(" 0", " "))
+    verb = "sold" if n >= reb.tz_convert("UTC") else "sells"
+    return (f"executor {verb} at {day}'s ≈8:45 AM CT rebalance · "
+            f"engine books the exit at the close — {nxt_close}")
+
+
 def signal_close_caption(kind: str, asof, now=None, extra: str = "") -> str:
     """The standard two-part freshness line every app shows under its title:
     the close its signals are generated from + when this page's data was last

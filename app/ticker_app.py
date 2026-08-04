@@ -502,16 +502,15 @@ def _gate_card(title, icon, fired, rows, interpretation):
         f"<b>📊 What it means:</b> {interpretation}</div></div>")
 
 
-def _next_close_phrase():
-    """When a pending "next bar" decision executes: the close of the session
-    AFTER the last committed bar — e.g. "today, Aug 4, 4:00 PM EDT" while that
-    session is underway.  The strategies decide at a close and execute at the
-    NEXT close, so "exits/enters next bar" means THIS moment, not tomorrow."""
+def _exit_note():
+    """Both timelines of a pending exit: the live IBKR executor's ≈8:45 AM CT
+    morning rebalance (where the position is actually sold) and the engine/
+    backtest booking at the pending bar's close."""
     try:
-        return freshness.next_close_label(
+        return freshness.exit_execution_note(
             "us_equity", pd.Timestamp(preds["target_date"].iloc[-1]))
     except Exception:
-        return "the next daily close"
+        return "the position exits on the next bar"
 
 
 def net_signal_div(sigs, pos=None):
@@ -540,9 +539,8 @@ def net_signal_div(sigs, pos=None):
             return dict(state="EXIT", label="EXIT — EXITS NEXT BAR", ico="🔴",
                         bg="#fef2f2", brd="#dc2626",
                         reason="Exit signal: " + " + ".join(parts) + note +
-                               ". The position is still open; the exit was "
-                               "decided at the close and the strategy sells at "
-                               f"the next close — {_next_close_phrase()}.")
+                               ". The exit was decided at the close; "
+                               f"{_exit_note()}.")
         return dict(state="EXIT", label="EXIT / STAND ASIDE", ico="🔴",
                     bg="#fef2f2", brd="#dc2626",
                     reason="Exit signal: " + " + ".join(parts) + note)
@@ -613,8 +611,7 @@ def net_signal_ma(mst, pos=None):
                     label="LONG — HOLDING (below trend → exits next bar)",
                     ico="🟡", bg="#fefce8", brd="#ca8a04",
                     reason=f"Strategy is long but {desc} — the exit was decided "
-                           "at the close and the position sells at the next "
-                           f"close — {_next_close_phrase()}.")
+                           f"at the close; {_exit_note()}.")
     if above:
         # Flat but the trend signal is bullish → a COMMITTED entry, decided at
         # the close and executed next bar.  Same label, colour and timing words
