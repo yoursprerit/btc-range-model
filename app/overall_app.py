@@ -1286,7 +1286,7 @@ with tab_live:
             _sell_at = ""
             if exit_next:
                 try:
-                    _sell_at = " — sells at the close: " + fr.next_close_label(
+                    _sell_at = " — " + fr.exit_execution_note(
                         fr.PARENT_CLASS.get(a["parent"], "us_equity"), _r["as_of"])
                 except Exception:
                     _sell_at = ""
@@ -1458,15 +1458,17 @@ with tab_live:
                         _pdec = res.get("decision") or {}
                         if _pdec.get("exits_next_bar") or _pdec.get("tone") == "exit":
                             try:
-                                _sell_lbl = fr.next_close_label(
+                                _sell_lbl = fr.exit_execution_note(
                                     fr.PARENT_CLASS.get(res.get("parent"), "us_equity"),
                                     res["as_of"])
                             except Exception:
-                                _sell_lbl = "the next close"
+                                _sell_lbl = "sells on the next bar"
                             body.append(
                                 "<div style='font-size:10.5px;color:#dc2626;"
                                 "font-weight:700;margin-top:2px'>⚠️ exit signal "
-                                f"committed — sells at the close: {_sell_lbl}</div>")
+                                f"committed — {_sell_lbl}. The LONG above is the "
+                                "engine's book (runs to the close); the live "
+                                "account is out after the rebalance.</div>")
                     elif res["last_trade"]:
                         lt = res["last_trade"]; r_ = lt["ret"] * 100
                         rc = C_BUY if r_ >= 0 else C_EXIT
