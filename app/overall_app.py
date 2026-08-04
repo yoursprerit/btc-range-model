@@ -1158,6 +1158,16 @@ with tab_live:
             # published-book cells (frozen at publish) with live-engine fallback
             _ba = _book_actions.get(a["key"])
             _act = (_ba.get("action") or a["action"]) if _ba else a["action"]
+            # decode legacy book rows recorded before the pending-exit action
+            # fix: a held sleeve the book itself zero-weighted with
+            # exits_next_bar recorded IS a close instruction — the engine now
+            # emits action CLOSE for that state, but books published under the
+            # old logic stored HOLD next to a 0% target, rendering a HOLD pill
+            # on a row the book had already dropped from the allocation.
+            if (_ba and _act == "HOLD" and _ba.get("in_pos")
+                    and _ba.get("exits_next_bar")
+                    and not (_ba.get("target") or 0) > 0.0005):
+                _act = "CLOSE"
             _dec = (_ba.get("decision") or a["decision"]) if _ba else a["decision"]
             _prio = _ba["priority"] if _ba else a["priority"]
             # colour the decision by the (possibly book-sourced) action so the

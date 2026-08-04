@@ -89,7 +89,9 @@ def test_btc_engine_decision_sets_flag():
 
 # ── gate: committed pending exits leave the recommended book ─────────────
 def _res(key, in_pos=True, tone="hold", exits_next_bar=False, kind="core"):
-    dec = dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone=tone)
+    # real engines emit state EXIT whenever tone is "exit" (divergence/CT)
+    dec = dict(state=("EXIT" if tone == "exit" else "HOLD"),
+               label="LONG — HOLDING", ico="🟢", tone=tone)
     if exits_next_bar:
         dec["exits_next_bar"] = True
     return dict(key=key, parent=key, name=key, kind=kind, emoji="🧲",
@@ -111,11 +113,13 @@ def test_gate_drops_committed_pending_exit_from_target():
     assert gate["target"].get("GDX", 0.0) == 0.0
     assert gate["target"]["SOXX"] > 0
     assert gate["n_close"] == 2
-    # the action row still reads HOLD (the strategy holds today, sells next
-    # bar) but carries the flag the table's ⚠️ banner renders
+    # the action row is an INSTRUCTION: a committed pending exit reads CLOSE
+    # (the book zero-weights it and the executor sells it this session), and
+    # carries the flag the table's ⚠️ banner renders
     by = {a["key"]: a for a in gate["actions"]}
-    assert by["REMX"]["action"] == "HOLD" and by["REMX"]["exits_next_bar"]
-    assert not by["SOXX"]["exits_next_bar"]
+    assert by["REMX"]["action"] == "CLOSE" and by["REMX"]["exits_next_bar"]
+    assert by["GDX"]["action"] == "CLOSE"
+    assert by["SOXX"]["action"] == "HOLD" and not by["SOXX"]["exits_next_bar"]
 
 
 def test_freeze_drops_pending_exit_like_a_close():

@@ -1568,7 +1568,14 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     actions = []
     for res in results:
         k = res["key"]; dec = res["decision"]; stt = dec["state"]
-        if res["pos"]["in_pos"] and stt == "EXIT":
+        if res["pos"]["in_pos"] and (stt == "EXIT" or dec.get("exits_next_bar")):
+            # The action column is an INSTRUCTION list ("what to do now"), and
+            # for a committed pending exit the instruction is CLOSE: the book
+            # zero-weights it and the executor sells it this session, exactly
+            # like a tone-"exit" divergence close.  The decision label keeps
+            # the state description ("LONG — HOLDING (below trend → exits
+            # next bar)") — previously the action stayed HOLD, so a sleeve the
+            # book itself had dropped to 0% still rendered a HOLD pill.
             act = "CLOSE"
         elif res["pos"]["in_pos"]:
             act = "HOLD"
