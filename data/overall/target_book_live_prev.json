@@ -1,58 +1,55 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-03T14:53:04+00:00",
- "as_of": "2026-08-02",
+ "generated_at_utc": "2026-08-04T12:17:43+00:00",
+ "as_of": "2026-08-03",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
-  "GDX": 0.18,
-  "NUGT": 0.1,
-  "SOXX": 0.18181142612916976,
+  "SOXX": 0.26529918233921246,
   "SOXL": 0.1,
-  "XLE": 0.022893219348599503,
-  "OIH": 0.03694433781545784,
+  "GRID": 0.164319299844264,
+  "XLE": 0.037694012651620264,
+  "OIH": 0.06026499039669101,
   "ERX": 0.1,
-  "REMX": 0.009458678621934787,
-  "GRID": 0.10051285018667648,
-  "ARTY": 0.16837948789816154
+  "ARTY": 0.2724225147682123
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GDX": 75.09,
-  "NUGT": 114.0,
-  "SOXX": 507.13,
-  "SOXL": 116.37,
-  "XLE": 58.94,
-  "OIH": 381.615,
-  "ERX": 92.74,
-  "REMX": 67.46,
-  "GRID": 181.845,
-  "ARTY": 68.3
+  "SOXX": 507.68,
+  "SOXL": 116.71,
+  "GRID": 182.02,
+  "XLE": 58.79,
+  "OIH": 382.13,
+  "ERX": 92.25,
+  "ARTY": 68.91
  },
  "actions": [
   {
-   "key": "GRID",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 ABOVE TREND",
-   "target": 0.10051285018667648,
-   "in_pos": false,
-   "priority": 0.5405869234472861
+   "key": "GDX",
+   "action": "CLOSE",
+   "decision": "EXIT \u2014 D2 momentum fade",
+   "target": 0.0,
+   "in_pos": true,
+   "priority": null,
+   "exits_next_bar": true
   },
   {
-   "key": "ARTY",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 PURE-REGIME BUY",
-   "target": 0.16837948789816154,
-   "in_pos": false,
-   "priority": 0.4483066579911285
+   "key": "NUGT",
+   "action": "CLOSE",
+   "decision": "EXIT \u2014 D2 momentum fade",
+   "target": 0.0,
+   "in_pos": true,
+   "priority": null,
+   "exits_next_bar": true
   },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.022893219348599503,
+   "target": 0.037694012651620264,
    "in_pos": true,
-   "priority": 0.8743603422951911
+   "priority": 0.854333003946261,
+   "exits_next_bar": false
   },
   {
    "key": "ERX",
@@ -60,31 +57,35 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8729595173687013
+   "priority": 0.8526608594710503,
+   "exits_next_bar": false
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.03694433781545784,
+   "target": 0.06026499039669101,
    "in_pos": true,
-   "priority": 0.7974355468027022
+   "priority": 0.7666666666666667,
+   "exits_next_bar": false
   },
   {
-   "key": "GDX",
+   "key": "GRID",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.18,
+   "target": 0.164319299844264,
    "in_pos": true,
-   "priority": 0.5976684601214225
+   "priority": 0.5181334264911259,
+   "exits_next_bar": false
   },
   {
-   "key": "NUGT",
+   "key": "ARTY",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1,
+   "target": 0.2724225147682123,
    "in_pos": true,
-   "priority": 0.5778090841665942
+   "priority": 0.41825215770235863,
+   "exits_next_bar": false
   },
   {
    "key": "SOXL",
@@ -92,23 +93,26 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.43709355712288334
+   "priority": 0.31964196175994647,
+   "exits_next_bar": false
   },
   {
    "key": "SOXX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.18181142612916976,
+   "target": 0.26529918233921246,
    "in_pos": true,
-   "priority": 0.3992752273559451
+   "priority": 0.28535626479212556,
+   "exits_next_bar": false
   },
   {
    "key": "REMX",
    "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.009458678621934787,
+   "decision": "LONG \u2014 HOLDING (below trend \u2192 exits next bar)",
+   "target": 0.0,
    "in_pos": true,
-   "priority": 0.14095238095238094
+   "priority": null,
+   "exits_next_bar": true
   },
   {
    "key": "PBW",
@@ -116,7 +120,8 @@
    "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "BTC",
@@ -124,7 +129,8 @@
    "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "MSTR",
@@ -132,7 +138,8 @@
    "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "MSTU",
@@ -140,7 +147,8 @@
    "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "ETH",
@@ -148,7 +156,8 @@
    "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "GLDM",
@@ -156,7 +165,8 @@
    "decision": "FLAT \u2014 BELOW TREND",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "UGL",
@@ -164,7 +174,8 @@
    "decision": "FLAT \u2014 BELOW TREND",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   },
   {
    "key": "WGMI",
@@ -172,23 +183,24 @@
    "decision": "FLAT \u2014 BELOW TREND",
    "target": 0.0,
    "in_pos": false,
-   "priority": null
+   "priority": null,
+   "exits_next_bar": false
   }
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-03T14:53:03+00:00",
+  "checked_at_utc": "2026-08-04T12:17:42+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Aug 3, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-07-31",
-  "btc_bar_close_utc": "2026-08-03T12:00:00+00:00"
+  "anchor_ct": "Aug 4, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-08-03",
+  "btc_bar_close_utc": "2026-08-04T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "9a7b11a51311",
+ "code_sha": "18cb2f72257a",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "29a269ab6257ff3595ee6e9dee85c98c72a99067889fb4ae6241422761afb15d"
+  "value": "312aa487b9aa2776a087200285adeaece68b92f9995de12b11619a5b6156044f"
  }
 }
