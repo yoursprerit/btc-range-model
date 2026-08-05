@@ -1,10 +1,10 @@
 {
  "key": "GLDM",
  "source": "yahoo-live",
- "saved_at_utc": "2026-08-04T14:36:00+00:00",
- "rows": 2036,
+ "saved_at_utc": "2026-08-05T14:28:34+00:00",
+ "rows": 2037,
  "date_from": "2018-06-26",
- "date_to": "2026-08-03",
+ "date_to": "2026-08-04",
  "columns": [
   "gldm_open",
   "gldm_high",
@@ -57,18 +57,18 @@
   "spx_close",
   "spx_volume"
  ],
- "checksum_sha256": "c677f28eb688597a",
+ "checksum_sha256": "9fe73b8d4c55965b",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "2036 rows"
+   "detail": "2037 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "2036 rows (need \u2265 260)"
+   "detail": "2037 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -78,7 +78,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "gldm_close: 2036 non-null values"
+   "detail": "gldm_close: 2037 non-null values"
   },
   {
    "name": "required_columns",
@@ -93,12 +93,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "2036 rows vs snapshot 2035"
+   "detail": "2037 rows vs snapshot 2036"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-08-03 vs snapshot 2026-07-31"
+   "detail": "last 2026-08-04 vs snapshot 2026-08-03"
   },
   {
    "name": "history_agreement",
