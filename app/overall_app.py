@@ -1939,11 +1939,14 @@ with tab_live:
                            "re-balance flows included, and a position that "
                            "fully closes restarts its basis on re-entry "
                            "(held-at-first-bar positions start theirs at "
-                           "that bar's close) — plus the ≈ $ gain or loss "
-                           "locked in on the dollars sold, scaled by the "
-                           "💼 portfolio value; an exit-signal sale also "
-                           "lists the **average-cost basis** of the "
-                           "position it closed. Each row is "
+                           "that bar's close) — plus the **exact $ gain or "
+                           "loss locked in on the dollars sold**, from the "
+                           "ledger's actual flows on the blend's compounded "
+                           "value path (not a weight×portfolio-value "
+                           "approximation), scaled by the 💼 portfolio "
+                           "value; an exit-signal sale also lists the "
+                           "**average-cost basis** of the position it "
+                           "closed. Each row is "
                            "the trade ticket executed at that bar's close "
                            "(the book earns from the next bar — the "
                            "decided-at-previous-close convention), newest "
@@ -1956,18 +1959,24 @@ with tab_live:
                            "over that bar, in dollars on the 💼 portfolio "
                            "value and in % — set up by the *previous* close's "
                            "book; the row's own trades start earning from the "
-                           "next bar. **P&L breakdown** splits that same "
+                           "next bar. **Day P&L breakdown** splits that same "
                            "figure by what the row's ticket did to each "
-                           "sleeve: the bar's P&L **locked in by 🚦 sell "
-                           "signals** (positions that earned through the bar "
-                           "and closed at its close), the P&L on **⚖️ "
+                           "sleeve: **that single bar's** P&L on positions "
+                           "closed by **🚦 sell signals**, on **⚖️ "
                            "tilt-adjusted** positions (re-sized at the close "
                            "— partly realized, partly still held), the "
                            "**unrealized** move on positions simply **📦 "
                            "held** that day, and 💵 SATA interest on idle "
                            "cash — the parts sum to the Day P&L (zero parts "
                            "are omitted; positions bought at the close show "
-                           "up from the next bar). The anchor bar's opening "
+                           "up from the next bar). **The two P&L views "
+                           "purposely differ**: a sale chip's P&L is the "
+                           "trade's realized gain **since its entry** "
+                           "(lifetime, over average cost), while the "
+                           "breakdown's 🚦/⚖️ lines are that one day's move "
+                           "on those sleeves — a position can lose money on "
+                           "its final bar yet still close at a lifetime "
+                           "profit. The anchor bar's opening "
                            "book is the cost basis, so the log starts with "
                            "the changes after it. (The 📆 Daily P&L toggle "
                            "below charts every day, quiet ones included.)")
@@ -1987,23 +1996,27 @@ with tab_live:
                                     f"<b>({a['delta']*100:+.1f})</b>")
                         # every sale — an 🚦 exit-signal close or a ⚖️ tilt
                         # trim / re-size through zero — shows what the slice
-                        # realized
+                        # actually realized: the ledger's exact dollar flows
+                        # on the compounded value path (per $1 at the anchor
+                        # close, scaled by the 💼 portfolio value)
                         if (a["delta"] < 0 and a.get("pnl") is not None
                                 and a["pnl"] > -1):
-                            # realized P&L on the slice sold: proceeds
-                            # |Δw|·💼 minus their average-cost basis
-                            _sold = abs(a["delta"]) * portfolio_value
-                            _basis = _sold / (1 + a["pnl"])
+                            if a.get("sold") is not None:
+                                _sold = a["sold"] * portfolio_value
+                                _basis = a["basis"] * portfolio_value
+                            else:      # ledger flow unavailable — approximate
+                                _sold = abs(a["delta"]) * portfolio_value
+                                _basis = _sold / (1 + a["pnl"])
                             _pd = _sold - _basis
                             _pc = C_BUY if a["pnl"] >= 0 else C_EXIT
                             _lbl += (f" · <span style='color:{_pc}'>"
                                      f"P&amp;L {a['pnl']*100:+.1f}% "
-                                     f"≈ ${_pd:+,.0f}</span>")
+                                     f"${_pd:+,.0f}</span>")
                             if a["signal_change"]:
                                 # exit-signal close: also show the average-
                                 # cost basis of the position sold
                                 _lbl += (f" · <span style='color:#64748b'>"
-                                         f"cost basis ≈ ${_basis:,.0f}</span>")
+                                         f"cost basis ${_basis:,.0f}</span>")
                         return f"<span style='color:{_cc}'>{_lbl}</span>"
 
                     _dh = ("<tr style='background:#f1f5f9;font-size:12px;"
@@ -2016,7 +2029,7 @@ with tab_live:
                            "<th style='text-align:right'>Turnover</th>"
                            "<th style='text-align:right'>≈ $ traded</th>"
                            "<th style='text-align:right;padding-left:10px'>"
-                           "P&amp;L breakdown</th>"
+                           "Day P&amp;L breakdown</th>"
                            "<th style='text-align:right'>Day P&amp;L</th></tr>")
                     _drs = []
                     for _d in _dtl:

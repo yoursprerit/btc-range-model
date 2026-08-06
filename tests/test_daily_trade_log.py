@@ -141,6 +141,62 @@ def test_full_sell_also_carries_pnl():
     assert sell["entry_date"] == IDX[0]
 
 
+def test_full_sell_carries_exact_dollar_flows():
+    # ``sold``/``basis`` are the ledger's EXACT flows on the compounded
+    # value path — NOT |Δweight| × anchor value, which drifts once the
+    # blend has moved
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.0, 0.0])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.01])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.6, 0.6, 1.0, 1.0]), IDX[0],
+                             returns=rets, sata_daily=0.0)
+    sell = next(a for d in log for a in d["actions"] if a["action"] == "sell")
+    V1 = 1 + 0.4 * 0.10                  # blend value after day 1
+    # slice sold = pre-re-balance value at the execution close
+    assert np.isclose(sell["sold"], 0.4 * V1 * 1.05)
+    # basis: entry lot 0.4, day-1 re-balance drift-sold pro-rata first
+    assert np.isclose(sell["basis"], 0.4 * (0.4 * V1) / (0.4 * 1.10))
+    # the three fields are mutually consistent
+    assert np.isclose(sell["sold"] / sell["basis"] - 1, sell["pnl"])
+    # the exact dollars differ from the naive |Δweight| approximation
+    assert not np.isclose(sell["sold"], abs(sell["delta"]))
+    # buys carry no flows
+    buy = next(a for d in log for a in d["actions"] if a["action"] == "buy")
+    assert buy["sold"] is None and buy["basis"] is None
+
+
+def test_trim_carries_exact_partial_flows():
+    w = _frame(AAA=[0.5, 0.5, 0.3, 0.3, 0.3])
+    rets = _frame(AAA=[0.20, 0.10, 0.05, 0.0, 0.0])
+    log = oc.daily_trade_log(w, _sata([0.5, 0.5, 0.7, 0.7, 0.7]), IDX[0],
+                             returns=rets, sata_daily=0.0)
+    a = log[0]["actions"][0]
+    V1 = 1 + 0.5 * 0.10                  # anchor bar earns nothing
+    a_val = 0.5 * 1.10                   # pre-re-balance value at the close
+    h_val = 0.3 * V1                     # post-re-balance target
+    assert np.isclose(a["sold"], a_val - h_val)
+    assert np.isclose(a["basis"], 0.5 * (1 - h_val / a_val))
+    assert np.isclose(a["sold"] / a["basis"] - 1, a["pnl"])
+
+
+def test_exact_flows_for_every_asset_in_the_log():
+    # the ledger runs per sleeve — EVERY sell-side action in the log
+    # carries consistent exact flows, whichever asset or day it is on
+    w = _frame(AAA=[0.0, 0.3, 0.3, 0.0, 0.0],
+               BBB=[0.4, 0.4, 0.2, 0.2, 0.0],
+               CCC=[0.2, 0.2, 0.2, 0.4, 0.1])
+    rets = _frame(AAA=[0.01, 0.08, -0.03, 0.02, 0.00],
+                  BBB=[0.02, -0.05, 0.06, 0.01, -0.02],
+                  CCC=[0.00, 0.04, 0.02, -0.03, 0.05])
+    sata = 1.0 - w.sum(axis=1)
+    log = oc.daily_trade_log(w, sata, IDX[0], returns=rets, sata_daily=0.0)
+    sells = [a for d in log for a in d["actions"] if a["delta"] < 0]
+    assert len(sells) >= 4               # covers all three sleeves
+    for a in sells:
+        assert a["sold"] is not None and a["basis"] is not None
+        assert a["sold"] > 0 and a["basis"] > 0
+        assert np.isclose(a["sold"] / a["basis"] - 1, a["pnl"])
+
+
 def test_pnl_none_without_returns_or_return_column():
     w = _frame(AAA=[0.5, 0.5, 0.3, 0.3, 0.3])
     sata = _sata([0.5, 0.5, 0.7, 0.7, 0.7])

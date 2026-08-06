@@ -1051,8 +1051,19 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
     matrix's first row starts its basis at that first close (the
     anchor-bar-is-cost-basis convention); ``sata_daily`` feeds the blend's
     value path the same business-day SATA accrual as the replays.
+    Sell-side actions additionally carry the ledger's EXACT dollar flows,
+    per $1 invested at the anchor close (scale by the portfolio value for
+    dollars): ``sold`` — the slice's value at the execution close, on the
+    blend's compounded value path — and ``basis`` — the average-cost basis
+    removed by the sale (pro-rata for a trim, the whole lot for a full
+    close), so ``sold − basis`` is the realized gain and
+    ``sold/basis − 1 == pnl``.  These are exact where a naive
+    ``|Δweight| × anchor portfolio value`` is not: weights are fractions
+    of the COMPOUNDING blend, so once the blend has moved since the
+    anchor the two diverge.
     Buy-side actions — and every action when ``returns`` is omitted or the
-    key has no return column — carry ``pnl``/``entry_date`` of ``None``.
+    key has no return column — carry ``pnl``/``entry_date``/``sold``/
+    ``basis`` of ``None``.
 
     With ``active`` (bool DataFrame, per-day signal/position state on the
     same keys — ``replay_gated_allocation`` returns one),
@@ -1074,8 +1085,14 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
     # snap_pnl[k][j]: sleeve k's % gain over its average cost at the close
     # of row j, BEFORE that close's re-balance — exactly what a sale at
     # that close realizes.  lot_entry[k][j]: row where the open lot began.
+    # sell_val/sell_cost[k][j]: the EXACT dollars (per $1 at the anchor
+    # close) the re-balance at close j sold, and the average-cost basis
+    # those dollars carried — the actual realized flows on the compounded
+    # value path.
     snap_pnl: dict[str, np.ndarray] = {}
     lot_entry: dict[str, np.ndarray] = {}
+    sell_val: dict[str, np.ndarray] = {}
+    sell_cost: dict[str, np.ndarray] = {}
     if returns is not None:
         wz = wf.where(wf >= min_delta, 0.0)      # same flat floor as actions
         kcols = [k for k in wf.columns if k in returns.columns]
@@ -1090,6 +1107,8 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
             rk = R[k].to_numpy(float)
             sp = np.full(len(wk), np.nan)
             le = np.full(len(wk), -1, dtype=int)
+            sv = np.full(len(wk), np.nan)
+            sc = np.full(len(wk), np.nan)
             cost = wk[0]                         # basis = value at row-0 close
             ent = 0 if wk[0] > 0 else -1
             for j in range(len(wk)):
@@ -1104,13 +1123,18 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
                         if h_val > 0:            # fresh lot
                             cost, ent = h_val, j
                     elif h_val <= 0:             # emptied — lot closed
+                        sv[j], sc[j] = a_val, cost
                         cost, ent = 0.0, -1
                     elif h_val > a_val:          # buy: cost added at value
                         cost += h_val - a_val
                     else:                        # sell: cost removed pro-rata
+                        sv[j] = a_val - h_val
+                        sc[j] = cost * (1.0 - h_val / a_val)
                         cost *= h_val / a_val
             snap_pnl[k] = sp
             lot_entry[k] = le
+            sell_val[k] = sv
+            sell_cost[k] = sc
 
     days = []
     off = wf.index.get_loc(w.index[0])
@@ -1132,15 +1156,21 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
                 sig = bool(act_f[k].iloc[i]) != bool(act_f[k].iloc[i - 1])
             else:
                 sig = act in ("buy", "sell")
-            pnl = entry = None
+            pnl = entry = sold = basis = None
             if d < 0 and k in snap_pnl:
                 v = snap_pnl[k][i - 1]
                 if np.isfinite(v):
                     pnl = float(v)
                     e = int(lot_entry[k][i - 1])
                     entry = wf.index[e] if e >= 0 else None
+                # the exact flows the re-balance at this close sold
+                sv = sell_val[k][i - 1]
+                if np.isfinite(sv):
+                    sold = float(sv)
+                    basis = float(sell_cost[k][i - 1])
             actions.append(dict(key=k, w0=w0, w1=w1, delta=d, action=act,
-                                signal_change=sig, pnl=pnl, entry_date=entry))
+                                signal_change=sig, pnl=pnl, entry_date=entry,
+                                sold=sold, basis=basis))
         if not actions:
             continue
         actions.sort(key=lambda a: -abs(a["delta"]))
