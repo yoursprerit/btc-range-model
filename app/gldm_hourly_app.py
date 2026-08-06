@@ -597,6 +597,11 @@ def render_gldm_gate_signatures(sigs):
     vdn = float(sigs.get("dn_score_raw") or 0.0)
     close_s = f"${close:,.2f}" if close is not None else "—"
     ma_s = f"${ma20:,.2f}" if ma20 is not None else "—"
+    if close is not None and ma20:
+        pct = (close - ma20) / ma20 * 100.0
+        cmp_s = f"{close_s} {'>' if above else '<'} {ma_s} ({pct:+.1f}%)"
+    else:
+        cmp_s = f"{close_s} vs {ma_s}"
     gate_ok = bull or clean_gate or vgate
 
     st.markdown(
@@ -612,14 +617,14 @@ def render_gldm_gate_signatures(sigs):
     g1, g2, g3 = st.columns(3)
     g1.markdown(_gate_card(
         "Bull Regime", "🐂", bull,
-        [("close vs 20-day SMA", close_s, f"> {ma_s}", above, "threshold"),
+        [("close vs 20-day SMA", cmp_s, "close above SMA", above, "threshold"),
          ("20-day SMA slope", "rising" if slope else "falling", "rising", slope, "threshold")],
         "Price sits above a rising 20-day average — an established uptrend. Satisfies "
         "the entry gate on its own."), unsafe_allow_html=True)
     g2.markdown(_gate_card(
         "Clean Breakout", "🧹", clean_gate,
         [("no D1/D2 last ~8 bars", "clean" if clean else "recent damage", "clean", clean, "threshold"),
-         ("close vs 20-day SMA", close_s, f"< {ma_s}", (not above), "threshold")],
+         ("close vs 20-day SMA", cmp_s, "close below SMA", (not above), "threshold")],
         "A fresh breakout from <i>below</i> the average with no recent downside damage — "
         "lets U1 fire early, before the regime formally turns bullish."),
         unsafe_allow_html=True)
