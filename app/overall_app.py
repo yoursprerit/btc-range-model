@@ -1931,7 +1931,8 @@ with tab_live:
                               " (classified off the actual signal record, "
                               "so an optimizer re-size through zero stays a "
                               "tilt)")
-                           + ". Tilt sales also carry the **realized P&L "
+                           + ". Every sale — a 🚦 sell signal or a ⚖️ tilt "
+                           "trim — also carries the **realized P&L "
                            "on the slice sold** — measured over the "
                            "position's **average cost**: tilt adds raise "
                            "the basis at the price actually paid, daily "
@@ -1940,7 +1941,9 @@ with tab_live:
                            "(held-at-first-bar positions start theirs at "
                            "that bar's close) — plus the ≈ $ gain or loss "
                            "locked in on the dollars sold, scaled by the "
-                           "💼 portfolio value. Each row is "
+                           "💼 portfolio value; an exit-signal sale also "
+                           "lists the **average-cost basis** of the "
+                           "position it closed. Each row is "
                            "the trade ticket executed at that bar's close "
                            "(the book earns from the next bar — the "
                            "decided-at-previous-close convention), newest "
@@ -1971,19 +1974,25 @@ with tab_live:
                             _lbl = (f"{a['key']} {a['w0']*100:.1f}→"
                                     f"{a['w1']*100:.1f}% "
                                     f"<b>({a['delta']*100:+.1f})</b>")
-                        # every tilt-column sale — partial trim or a re-size
-                        # through zero — shows what the slice realized
-                        if (a["delta"] < 0 and not a["signal_change"]
-                                and a.get("pnl") is not None
+                        # every sale — an 🚦 exit-signal close or a ⚖️ tilt
+                        # trim / re-size through zero — shows what the slice
+                        # realized
+                        if (a["delta"] < 0 and a.get("pnl") is not None
                                 and a["pnl"] > -1):
                             # realized P&L on the slice sold: proceeds
                             # |Δw|·💼 minus their average-cost basis
                             _sold = abs(a["delta"]) * portfolio_value
-                            _pd = _sold - _sold / (1 + a["pnl"])
+                            _basis = _sold / (1 + a["pnl"])
+                            _pd = _sold - _basis
                             _pc = C_BUY if a["pnl"] >= 0 else C_EXIT
                             _lbl += (f" · <span style='color:{_pc}'>"
                                      f"P&amp;L {a['pnl']*100:+.1f}% "
                                      f"≈ ${_pd:+,.0f}</span>")
+                            if a["signal_change"]:
+                                # exit-signal close: also show the average-
+                                # cost basis of the position sold
+                                _lbl += (f" · <span style='color:#64748b'>"
+                                         f"cost basis ≈ ${_basis:,.0f}</span>")
                         return f"<span style='color:{_cc}'>{_lbl}</span>"
 
                     _dh = ("<tr style='background:#f1f5f9;font-size:12px;"
