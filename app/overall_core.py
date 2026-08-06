@@ -1586,9 +1586,15 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
         else:                            # AVOID (exit active / downtrend) or FLAT
             act = "STAND ASIDE"
         p = prio.get(k)
+        # ``state`` rides along so the action table can tell a live flat-side
+        # AVOID (exit signal active / D1 downtrend — entry blocked) from a plain
+        # FLAT without parsing labels: both render the same STAND ASIDE action,
+        # but only AVOID must be flagged when a frozen morning book still shows
+        # WATCH for the sleeve (the PBW case).  The published payload trims to
+        # its fixed field set, so the extra key never reaches the artifact.
         actions.append(dict(key=k, name=res["name"], emoji=res["emoji"],
                             kemoji=res["kemoji"], kind=res["kind"], parent=res["parent"],
-                            action=act, tone=dec["tone"], decision=dec["label"],
+                            action=act, state=stt, tone=dec["tone"], decision=dec["label"],
                             target=target.get(k, 0.0), in_pos=res["pos"]["in_pos"],
                             upnl=res["pos"]["upnl"], alert=res["alert"],
                             last_close=res["last_close"],

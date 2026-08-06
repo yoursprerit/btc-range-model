@@ -104,10 +104,11 @@ def test_btc_engine_decision_sets_flag():
 
 
 # ── gate: committed pending exits leave the recommended book ─────────────
-def _res(key, in_pos=True, tone="hold", exits_next_bar=False, kind="core"):
+def _res(key, in_pos=True, tone="hold", exits_next_bar=False, kind="core",
+         state=None, label="LONG — HOLDING"):
     # real engines emit state EXIT whenever tone is "exit" (divergence/CT)
-    dec = dict(state=("EXIT" if tone == "exit" else "HOLD"),
-               label="LONG — HOLDING", ico="🟢", tone=tone)
+    dec = dict(state=(state or ("EXIT" if tone == "exit" else "HOLD")),
+               label=label, ico="🟢", tone=tone)
     if exits_next_bar:
         dec["exits_next_bar"] = True
     return dict(key=key, parent=key, name=key, kind=kind, emoji="🧲",
@@ -136,6 +137,24 @@ def test_gate_drops_committed_pending_exit_from_target():
     assert by["REMX"]["action"] == "CLOSE" and by["REMX"]["exits_next_bar"]
     assert by["GDX"]["action"] == "CLOSE"
     assert by["SOXX"]["action"] == "HOLD" and not by["SOXX"]["exits_next_bar"]
+
+
+def test_gate_actions_carry_live_state_for_flat_sleeves():
+    """The action table's masked-avoid flag reads the live state off the action
+    row — a flat sleeve with an active exit signal (state AVOID) renders the
+    same STAND ASIDE action as a plain FLAT, but only AVOID must be flagged
+    when the frozen morning book still shows WATCH (the PBW case: the source
+    app's banner says EXIT / STAND ASIDE while the book pill reads WATCH —
+    UPTREND (GATE PENDING))."""
+    avoid = _res("PBW", in_pos=False, tone="watch", state="AVOID",
+                 label="STAND ASIDE — EXIT ACTIVE (D2 momentum fade)")
+    flat = _res("SOXX", in_pos=False, tone="flat", state="FLAT",
+                label="FLAT — NO SIGNAL")
+    gate = oc.signal_gated_allocation([avoid, flat], {"PBW": 0.3, "SOXX": 0.3})
+    by = {a["key"]: a for a in gate["actions"]}
+    assert by["PBW"]["action"] == "STAND ASIDE" and by["PBW"]["state"] == "AVOID"
+    assert by["PBW"]["decision"] == "STAND ASIDE — EXIT ACTIVE (D2 momentum fade)"
+    assert by["SOXX"]["action"] == "STAND ASIDE" and by["SOXX"]["state"] == "FLAT"
 
 
 def test_freeze_drops_pending_exit_like_a_close():

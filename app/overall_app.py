@@ -1103,7 +1103,11 @@ with tab_live:
                    "engine (they fall back to the live engine's values only when "
                    "nothing has been published yet, or for an instrument added since "
                    "the last publish). Intraday drift shows up only in the live "
-                   "columns and the red ⚠️ / green 🟢 flags. Held/opened risk assets "
+                   "columns and the red ⚠️ / green 🟢 flags. A flat name whose "
+                   "signal flipped to an **active exit / stand-aside** at a close "
+                   "the published book predates keeps its book pill (e.g. WATCH) "
+                   "but carries an amber ⚠️ flag with today's signal — matching "
+                   "the source app's banner. Held/opened risk assets "
                    "total "
                    "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
                    "**red** ⚠️ are holds **or fresh entries** with a pending exit — "
@@ -1268,8 +1272,24 @@ with tab_live:
             # action isn't OPEN) gets called out — the pill and flag disagree
             # on purpose: the pill is the book, the flag is today's signal.
             _book_masked_entry = _committed_entry and _ba and _act != "OPEN"
+            # …and the flat-side mask: a FLAT sleeve whose committed signal
+            # flipped to AVOID (an active exit signal / D1 downtrend — entry
+            # blocked) at a close the frozen morning book predates, so the
+            # book pill still reads WATCH while the source app's banner says
+            # EXIT / STAND ASIDE (observed: PBW — a D2/D3 fired after the
+            # publish).  Same convention as _book_masked_exit /
+            # _book_masked_entry: the pill is the book, the flag is today's
+            # signal.  The live state comes off the engine's action row —
+            # never parsed out of the decision label.
+            _flat_avoid = (not a["in_pos"]) and a.get("state") == "AVOID"
+            _book_masked_avoid = (_flat_avoid and _ba
+                                  and _act not in ("STAND ASIDE", "CLOSE"))
             _live_entry = a["key"] in _live_entries
-            enter_next = (not exit_next) and (_committed_entry or _live_entry)
+            # an exit-active flat sleeve never renders a green likely-enters
+            # row — entries are blocked while an exit signal is live, so the
+            # avoid flag wins, mirroring "a pending exit always wins".
+            enter_next = (not exit_next) and (not _flat_avoid) and (
+                _committed_entry or _live_entry)
             if exit_next:
                 row_style = ("border-bottom:1px solid #fecaca;background:#fef2f2;"
                              "box-shadow:inset 3px 0 0 #dc2626")
@@ -1299,6 +1319,10 @@ with tab_live:
             elif _live_exit:                           # live-driven (hold or fresh entry)
                 warn = ("<div style='font-size:10px;color:#dc2626;font-weight:700'>"
                         f"⚠️ live px below trend — exits next bar{_sell_at}</div>")
+            elif _book_masked_avoid:                   # flipped after the morning publish
+                warn = ("<div style='font-size:10px;color:#d97706;font-weight:700'>"
+                        f"⚠️ signal flipped at a later close — now {a['decision']};"
+                        " entry blocked</div>")
             elif _book_masked_entry:                   # fired after the morning publish
                 warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
                         "🟢 signal fired at today's close — enters next bar</div>")
