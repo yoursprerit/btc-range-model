@@ -1956,10 +1956,21 @@ with tab_live:
                            "over that bar, in dollars on the 💼 portfolio "
                            "value and in % — set up by the *previous* close's "
                            "book; the row's own trades start earning from the "
-                           "next bar. The anchor bar's opening book is the "
-                           "cost basis, so the log starts with the changes "
-                           "after it. (The 📆 Daily P&L toggle below charts "
-                           "every day, quiet ones included.)")
+                           "next bar. **P&L breakdown** splits that same "
+                           "figure by what the row's ticket did to each "
+                           "sleeve: the bar's P&L **locked in by 🚦 sell "
+                           "signals** (positions that earned through the bar "
+                           "and closed at its close), the P&L on **⚖️ "
+                           "tilt-adjusted** positions (re-sized at the close "
+                           "— partly realized, partly still held), the "
+                           "**unrealized** move on positions simply **📦 "
+                           "held** that day, and 💵 SATA interest on idle "
+                           "cash — the parts sum to the Day P&L (zero parts "
+                           "are omitted; positions bought at the close show "
+                           "up from the next bar). The anchor bar's opening "
+                           "book is the cost basis, so the log starts with "
+                           "the changes after it. (The 📆 Daily P&L toggle "
+                           "below charts every day, quiet ones included.)")
                 if not _dtl:
                     st.info("The book never changed in this window — no daily "
                             "trades to list.")
@@ -2004,6 +2015,8 @@ with tab_live:
                            "adjustments (re-sizes)</th>"
                            "<th style='text-align:right'>Turnover</th>"
                            "<th style='text-align:right'>≈ $ traded</th>"
+                           "<th style='text-align:right;padding-left:10px'>"
+                           "P&amp;L breakdown</th>"
                            "<th style='text-align:right'>Day P&amp;L</th></tr>")
                     _drs = []
                     for _d in _dtl:
@@ -2012,7 +2025,7 @@ with tab_live:
                         _tilt = " · ".join(_dtl_chip(a) for a in _d["actions"]
                                            if not a["signal_change"])
                         _none = "<span style='color:#94a3b8'>—</span>"
-                        _pl_s = _none
+                        _pl_s = _bd_s = _none
                         if _dpl is not None and _d["date"] in _dpl["total"].index:
                             _pl_v = float(_dpl["total"].loc[_d["date"]]) \
                                 * portfolio_value
@@ -2022,6 +2035,39 @@ with tab_live:
                                      f"font-weight:700'>${_pl_v:+,.0f}</span>"
                                      f"<div style='font-size:10px;"
                                      f"color:#94a3b8'>{_pl_r*100:+.2f}%</div>")
+                            # split the same Day P&L by what this row's
+                            # ticket did to each sleeve — the parts sum to
+                            # the Day P&L column exactly
+                            _row_pk = _dpl["per_key"].loc[_d["date"]]
+                            _sig_k = [a["key"] for a in _d["actions"]
+                                      if a["signal_change"]]
+                            _tlt_k = [a["key"] for a in _d["actions"]
+                                      if not a["signal_change"]]
+                            _v_sig = float(_row_pk.reindex(_sig_k)
+                                           .fillna(0.0).sum()) \
+                                * portfolio_value
+                            _v_tlt = float(_row_pk.reindex(_tlt_k)
+                                           .fillna(0.0).sum()) \
+                                * portfolio_value
+                            _v_hld = float(_row_pk.drop(_sig_k + _tlt_k,
+                                                        errors="ignore")
+                                           .sum()) * portfolio_value
+                            _v_csh = float(_dpl["sata"].loc[_d["date"]]) \
+                                * portfolio_value
+                            _bd_parts = [
+                                (_bl, _bv) for _bl, _bv in
+                                (("🚦 sold", _v_sig), ("⚖️ tilt", _v_tlt),
+                                 ("📦 held", _v_hld), ("💵 cash", _v_csh))
+                                if abs(_bv) >= 0.5]
+                            if _bd_parts:
+                                _bd_s = "".join(
+                                    f"<div style='white-space:nowrap'>"
+                                    f"<span style='color:#64748b'>{_bl}</span> "
+                                    f"<span style='color:"
+                                    f"{C_BUY if _bv >= 0 else C_EXIT};"
+                                    f"font-weight:600'>${_bv:+,.0f}</span>"
+                                    f"</div>"
+                                    for _bl, _bv in _bd_parts)
                         _drs.append(
                             f"<tr style='border-bottom:1px solid #eef2f7'>"
                             f"<td style='padding:6px 10px;font-weight:700;"
@@ -2037,6 +2083,9 @@ with tab_live:
                             f"<td style='text-align:right;"
                             f"font-variant-numeric:tabular-nums'>"
                             f"${_d['gross']*portfolio_value:,.0f}</td>"
+                            f"<td style='text-align:right;padding:6px 0 6px "
+                            f"10px;font-size:10.5px;"
+                            f"font-variant-numeric:tabular-nums'>{_bd_s}</td>"
                             f"<td style='text-align:right;"
                             f"font-variant-numeric:tabular-nums'>{_pl_s}</td>"
                             f"</tr>")
