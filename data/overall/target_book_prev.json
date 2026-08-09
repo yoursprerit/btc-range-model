@@ -1,56 +1,38 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-07T12:17:14+00:00",
- "as_of": "2026-08-06",
+ "generated_at_utc": "2026-08-08T12:17:31+00:00",
+ "as_of": "2026-08-07",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
-  "SOXX": 0.2634941905834125,
-  "SOXL": 0.1,
-  "GRID": 0.17045409799721956,
-  "XLE": 0.03312018905670009,
-  "OIH": 0.05293152236266788,
-  "ERX": 0.1,
   "GDX": 0.18,
-  "NUGT": 0.1
+  "NUGT": 0.1,
+  "SOXX": 0.26811458187590737,
+  "SOXL": 0.1,
+  "GRID": 0.16488180327710558,
+  "XLE": 0.033433677327782144,
+  "OIH": 0.05356993751920509,
+  "ERX": 0.1
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "SOXX": 532.52,
-  "SOXL": 132.33,
-  "GRID": 185.59,
-  "XLE": 58.16,
-  "OIH": 392.08,
-  "ERX": 90.28,
-  "GDX": 83.92,
-  "NUGT": 141.12
+  "GDX": 89.89,
+  "NUGT": 160.84,
+  "SOXX": 543.27,
+  "SOXL": 140.25,
+  "GRID": 186.43,
+  "XLE": 57.5,
+  "OIH": 388.28,
+  "ERX": 88.24
  },
  "actions": [
-  {
-   "key": "GDX",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 PURE-REGIME BUY",
-   "target": 0.18,
-   "in_pos": false,
-   "priority": 0.6504347678348745,
-   "exits_next_bar": false
-  },
-  {
-   "key": "NUGT",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 PURE-REGIME BUY",
-   "target": 0.1,
-   "in_pos": false,
-   "priority": 0.6282423987438438,
-   "exits_next_bar": false
-  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.03312018905670009,
+   "target": 0.033433677327782144,
    "in_pos": true,
-   "priority": 0.7305857940402424,
+   "priority": 0.7399854695076024,
    "exits_next_bar": false
   },
   {
@@ -59,25 +41,43 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.7290299721563913,
+   "priority": 0.7384716749563368,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GDX",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.18,
+   "in_pos": true,
+   "priority": 0.6783883319086786,
    "exits_next_bar": false
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.05293152236266788,
+   "target": 0.05356993751920509,
    "in_pos": true,
-   "priority": 0.6504761904761905,
+   "priority": 0.6622451681210885,
+   "exits_next_bar": false
+  },
+  {
+   "key": "NUGT",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.1,
+   "in_pos": true,
+   "priority": 0.6565473521370856,
    "exits_next_bar": false
   },
   {
    "key": "GRID",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.17045409799721956,
+   "target": 0.16488180327710558,
    "in_pos": true,
-   "priority": 0.5921683005140344,
+   "priority": 0.5545525063085474,
    "exits_next_bar": false
   },
   {
@@ -86,16 +86,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.34129197785521626,
+   "priority": 0.3544114926965385,
    "exits_next_bar": false
   },
   {
    "key": "SOXX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.2634941905834125,
+   "target": 0.26811458187590737,
    "in_pos": true,
-   "priority": 0.30661788178587934,
+   "priority": 0.31927668290607925,
    "exits_next_bar": false
   },
   {
@@ -182,7 +182,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -191,18 +191,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-07T12:17:13+00:00",
+  "checked_at_utc": "2026-08-08T12:17:30+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Aug 7, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-08-06",
-  "btc_bar_close_utc": "2026-08-07T12:00:00+00:00"
+  "anchor_ct": "Aug 8, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-08-07",
+  "btc_bar_close_utc": "2026-08-08T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "5ae2aba840f4",
+ "code_sha": "6dab32e5e424",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "54ced1bd75146053063551625a8317ae25c1c19312c8abcc127a27561a0e247a"
+  "value": "f4027ea485a596dcbb54e9ab776ae9cb1388b1767f97a1de4eecb99ae45eb7c7"
  }
 }
