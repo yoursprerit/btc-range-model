@@ -678,8 +678,11 @@ with tab_live:
     _live_exits = ov.live_exit_keys(results, _spot, include_entries=True)
     # mirror set for likely ENTRIES: flat names with no committed buy whose live
     # price now satisfies the trend's real long condition — if it holds into the
-    # close they signal today and open next bar. Used only to flag rows green in
-    # the action table (the live book never pre-funds an uncommitted signal).
+    # close they signal today and open next bar. Flags rows green in the action
+    # table AND is force-funded into the Recommended Live Possible Targetbook
+    # (force_entry below), so the live book reflects the possible target book
+    # the live prices point to — entries and exits alike. The published Current
+    # Targetbook still never carries a signal before it commits at the close.
     _live_entries = ov.live_entry_keys(results, _spot)
 
     def _load_published_book(*paths: Path) -> dict | None:
@@ -711,7 +714,7 @@ with tab_live:
     try:
         gate_live = ov.signal_gated_allocation(
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
-            force_exit=_live_exits)
+            force_exit=_live_exits, force_entry=_live_entries)
         # weekend / holiday guard: on days the US market is closed, the daily
         # tilt must not re-size sleeves whose signal apps got no new bar (the
         # cross-set priority normalisation would let the crypto sleeves' fresh
@@ -745,9 +748,13 @@ with tab_live:
                "change during the day — only the 🚀 **Publish new target "
                "book** button in the 📋 Target Book app (or a manual workflow "
                "run) replaces it. **Recommended Live Possible Targetbook** = "
-               "what today's committed signals plus *live* prices recommend "
-               "right now; it can drift through the day because today's market "
-               "bar and BTC bar have not closed yet.")
+               "the possible target book **today's live prices point to**: "
+               "committed signals re-run with each asset's live price as the "
+               "provisional close — a held name whose live price breaks its "
+               "trend is dropped, and a flat name whose live price satisfies "
+               "its entry condition is funded as a likely entry. It can drift "
+               "through the day because today's market bar and BTC bar have "
+               "not closed yet.")
     # (_live_exits / gate_live computed above, before the action table)
 
     def _alloc_donut(alloc: dict, sata: float, title: str):
@@ -847,22 +854,26 @@ with tab_live:
         st.plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
                                      "Recommended Live Possible Targetbook"),
                         use_container_width=True)
-        st.caption("⚡ Live recommendation — **could change** until today's "
+        st.caption("⚡ Live recommendation — the possible Targetbook **today's "
+                   "live prices point to**; **could change** until today's "
                    "market-day bar (4:00 PM ET) and BTC bar (7:00 AM CT "
                    "tomorrow) close; it becomes official only when published "
                    "as a Targetbook."
                    + (" **Live-adjusted:** pending exits removed." if _live_exits
-                      else " No pending live exits."))
+                      else " No pending live exits.")
+                   + (" **Likely live entries funded:** "
+                      + ", ".join(sorted(_live_entries)) + "."
+                      if _live_entries else ""))
     _frz = gate_live.get("freeze")
     if _frz:
         st.info("🧊 **US market closed today** (weekend/holiday) — the "
                 "Recommended Live book is **pinned to the published Current "
                 "Targetbook**. Sleeves whose signal apps got no new bar keep "
                 "their published weight exactly; only **committed signal "
-                "changes** from apps whose bar still closes today (the ₿ BTC "
-                "and ⟠ ETH apps — 7:00 AM CT bar, every day) can move the "
-                "book. No daily-tilt re-sizing of positions that cannot "
-                "trade. "
+                "changes and live-price signals** from apps whose asset still "
+                "trades today (the ₿ BTC and ⟠ ETH apps — 7:00 AM CT bar, "
+                "every day) can move the book. No daily-tilt re-sizing of "
+                "positions that cannot trade. "
                 + (f"Dropped on signal: **{', '.join(_frz['closed'])}**. "
                    if _frz["closed"] else "")
                 + (f"Opened on signal: **{', '.join(_frz['opened'])}**. "
@@ -883,8 +894,10 @@ with tab_live:
                    + ("it" if len(_live_exits) == 1 else "them") +
                    " and reallocates to the survivors and SATA.")
     else:
-        st.caption("No held position's live price is below its trend filter — the "
-                   "**Recommended Live Possible Targetbook** matches the book "
+        st.caption("No held position's live price is below its trend filter — "
+                   + ("aside from the likely live entries it funds (below), the "
+                      if _live_entries else "the ")
+                   + "**Recommended Live Possible Targetbook** matches the book "
                    "today's committed signals would publish.")
     if _live_entries:
         st.success("🟢 **Likely entries:** " + ", ".join(sorted(_live_entries)) +
@@ -894,9 +907,13 @@ with tab_live:
                    "app's entry gate firing on the live bar) — if it holds into "
                    "the close, the signal fires today and " +
                    ("it enters" if len(_live_entries) == 1 else "they enter") +
-                   " on the next bar. Flagged green in the action plan below; the "
-                   "live book never pre-funds a signal before it commits at the "
-                   "close.")
+                   " on the next bar. Flagged green in the action plan below and "
+                   "**funded in the Recommended Live Possible Targetbook** at " +
+                   ("its" if len(_live_entries) == 1 else "their") +
+                   " priority-tilted size, so the pie shows the possible book "
+                   "today's live prices point to. The **published Current "
+                   "Targetbook never pre-funds** a signal before it commits at "
+                   "the close.")
     # committed entries the frozen morning book predates: the ENGINE's latest
     # close fired the buy (action OPEN) but the published book still records a
     # different action — the signal committed after the morning publish (e.g. a
@@ -1126,8 +1143,11 @@ with tab_live:
                    "entry condition** — a trend filter crossed, or a divergence app's "
                    "entry gate (e.g. ARTY's U1 + regime confirm) firing with the live "
                    "price as the provisional bar — if it holds into the close, the "
-                   "signal fires today and they **likely enter next bar** (an "
-                   "uncommitted signal is never pre-funded in the live columns). "
+                   "signal fires today and they **likely enter next bar**; the "
+                   "**Target % / $ (Live)** columns fund these likely entries at their "
+                   "priority-tilted size, matching the Recommended Live Possible "
+                   "Targetbook pie (the last-bar columns and the published book never "
+                   "pre-fund a signal before it commits at the close). "
                    "**Price (Close of Last Bar)** "
                    "is the official close of the last completed daily bar the signals run "
                    "on; **Live Price** is the current spot quote (coloured green/red vs "
@@ -1137,9 +1157,9 @@ with tab_live:
                    "of the **published Current Targetbook** — the same values as the "
                    "donut above (falling back to the engine's last-close targets only "
                    "when nothing has been published yet); **Target % / $ (Live)** re-runs it "
-                   "against the current live price, dropping any position exiting next "
-                   "bar and reallocating to the survivors and SATA (differences are "
-                   "coloured green/red).")
+                   "against the current live price — dropping any position exiting next "
+                   "bar, funding likely live entries, and reallocating to the survivors "
+                   "and SATA (differences are coloured green/red).")
         _pv_cols = st.columns([1, 2])
         with _pv_cols[0]:
             portfolio_value = st.number_input(

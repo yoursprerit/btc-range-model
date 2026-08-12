@@ -1547,7 +1547,8 @@ def _waterfill(raw: dict[str, float], caps: dict) -> dict[str, float]:
 
 def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             caps: dict | None = None,
-                            force_exit: set | None = None) -> dict:
+                            force_exit: set | None = None,
+                            force_entry: set | None = None) -> dict:
     """Today's actionable allocation.
 
     Capital is deployed only to instruments the strategy is long (or opening a
@@ -1557,9 +1558,21 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     water-filled to the per-instrument caps.  The deployed book sums to 100% when
     the caps allow; whatever cannot be deployed is parked in **SATA** (the idle
     -cash preferred, ~13% yield).  With no open positions the whole book is SATA.
+
+    ``force_exit`` / ``force_entry`` are the LIVE-price overrides (from
+    :func:`live_exit_keys` / :func:`live_entry_keys`) that make the result the
+    *possible* target book the live prices point to: a forced exit is dropped
+    from the book exactly like a committed close, and a forced entry — a flat
+    name with no committed buy whose live price satisfies the mode's real entry
+    condition — is funded exactly like a committed fresh open (priority-tilted,
+    water-filled).  Force-funded entries are marked ``live_entry=True`` on their
+    action row so callers can tell a live "likely" open from a committed one;
+    a key in both sets is treated as an exit (it would open into a broken
+    trend).  Committed-only callers (the publisher) pass neither.
     """
     caps = caps or CAP_BY_KEY
     force_exit = force_exit or set()
+    force_entry = (force_entry or set()) - force_exit
 
     def _b(k):
         return max(base_weights.get(k, 0.0), 1e-6)
@@ -1581,9 +1594,13 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     keep = [res for res in in_pos if res["key"] not in closing]
     # a fresh entry whose live price has already broken the trend (in force_exit)
     # would reverse straight back out next bar — don't fund it in the live book.
+    # force_entry mirrors that on the way in: a flat name whose LIVE price
+    # already satisfies the entry condition is funded like a committed open, so
+    # the live book reflects the possible target book the live prices point to.
     opens = [res for res in results
-             if (not res["pos"]["in_pos"]) and res["decision"]["tone"] == "buy"
-             and res["key"] not in force_exit]
+             if (not res["pos"]["in_pos"]) and res["key"] not in force_exit
+             and (res["decision"]["tone"] == "buy" or res["key"] in force_entry)]
+    live_open = {res["key"] for res in opens if res["decision"]["tone"] != "buy"}
 
     target_keys = [res["key"] for res in keep] + [res["key"] for res in opens]
     prio = compute_priorities(results, target_keys)
@@ -1622,6 +1639,9 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
         # but only AVOID must be flagged when a frozen morning book still shows
         # WATCH for the sleeve (the PBW case).  The published payload trims to
         # its fixed field set, so the extra key never reaches the artifact.
+        # ``live_entry`` marks a row funded ONLY because the live price
+        # satisfies the entry condition (no committed buy yet) — the freeze
+        # funds it like an OPEN, and the UI can label it a likely entry.
         actions.append(dict(key=k, name=res["name"], emoji=res["emoji"],
                             kemoji=res["kemoji"], kind=res["kind"], parent=res["parent"],
                             action=act, state=stt, tone=dec["tone"], decision=dec["label"],
@@ -1629,6 +1649,7 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             upnl=res["pos"]["upnl"], alert=res["alert"],
                             last_close=res["last_close"],
                             exits_next_bar=bool(dec.get("exits_next_bar")),
+                            live_entry=(k in live_open),
                             priority=(p["score"] if p else None),
                             prio_comp=(p if p else None)))
     order = {"CLOSE": 0, "OPEN": 1, "HOLD": 2, "WATCH": 3, "STAND ASIDE": 4}
@@ -1661,9 +1682,11 @@ def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
 
     * a sleeve whose gate action is CLOSE (committed exit, or a live-price
       forced exit) is dropped — its weight goes to SATA;
-    * a sleeve whose gate action is OPEN is funded from idle capital at
-      the gate's own tilted target size (in the gate's priority order,
-      capped by the idle remaining);
+    * a sleeve whose gate action is OPEN — or a flat sleeve the gate
+      force-funded on a live-price entry (``live_entry``, necessarily from
+      an app whose signal asset still trades on a closed US day) — is
+      funded from idle capital at the gate's own tilted target size (in
+      the gate's priority order, capped by the idle remaining);
     * every other sleeve keeps its published weight EXACTLY — no tilt
       re-sizing on a day it cannot trade.
 
@@ -1699,7 +1722,7 @@ def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
     opened = []
     for a in gate["actions"]:                 # OPENs come priority-ranked
         k = a["key"]
-        if a["action"] != "OPEN" or k in target:
+        if (a["action"] != "OPEN" and not a.get("live_entry")) or k in target:
             continue
         w = min(float(gate["target"].get(k, 0.0)), idle)
         if w <= 0.0005:
