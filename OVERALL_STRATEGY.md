@@ -289,14 +289,20 @@ historically-optimal weight.
     close (yesterday) and BTC · MSTR · MSTU · ETH as of the 7:00-AM-CT Bitcoin bar
     close today. Frozen until the next 7:15-AM-CT publish (or a manual 🚀
     publish from the UI).
-  - **Recommended Live Possible Targetbook** — the committed last-close
-    signals, priority-tilted, and additionally dropping any position whose
-    **live** price has fallen below its trend filter (`live_exit_keys` re-runs
-    each mode's real long condition — e.g. a `dual_ma` death-cross, not a naïve
-    price-vs-line proxy — so a golden-cross name isn't mis-flagged),
-    reallocating to the survivors and SATA. It can change through the day
-    because today's market and BTC bars have not closed; it becomes official
-    only when published.
+  - **Recommended Live Possible Targetbook** — the possible target book
+    **today's live prices point to**: the committed last-close signals,
+    priority-tilted, re-run with each asset's live price as the provisional
+    close. A held position whose **live** price has fallen below its trend
+    filter is dropped (`live_exit_keys` re-runs each mode's real long
+    condition — e.g. a `dual_ma` death-cross, not a naïve price-vs-line
+    proxy — so a golden-cross name isn't mis-flagged), and a flat name whose
+    **live** price now satisfies its real entry condition is funded as a
+    likely entry at its priority-tilted size (`live_entry_keys` →
+    `signal_gated_allocation(force_entry=…)`), reallocating the remainder to
+    the survivors and SATA. It can change through the day because today's
+    market and BTC bars have not closed; it becomes official only when
+    published — the published book never pre-funds a signal before it
+    commits at the close.
 - **Action plan.** Every instrument gets a ranked action — **CLOSE** (exits
   first), then **OPEN** / **HOLD**, then **WATCH** / **STAND ASIDE** — each with
   its priority, live price, unrealised P&L vs the real entry-bar cost basis, and
