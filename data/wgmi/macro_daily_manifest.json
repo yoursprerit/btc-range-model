@@ -1,10 +1,10 @@
 {
  "key": "WGMI",
  "source": "yahoo-live",
- "saved_at_utc": "2026-08-12T13:36:15+00:00",
- "rows": 1130,
+ "saved_at_utc": "2026-08-13T13:37:05+00:00",
+ "rows": 1131,
  "date_from": "2022-02-08",
- "date_to": "2026-08-11",
+ "date_to": "2026-08-12",
  "columns": [
   "px_open",
   "px_high",
@@ -47,18 +47,18 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "9980922c08dd6d82",
+ "checksum_sha256": "d939d4ca7b0e4929",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "1130 rows"
+   "detail": "1131 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "1130 rows (need \u2265 260)"
+   "detail": "1131 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -68,7 +68,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "px_close: 1130 non-null values"
+   "detail": "px_close: 1131 non-null values"
   },
   {
    "name": "required_columns",
@@ -83,17 +83,17 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "1130 rows vs snapshot 1129"
+   "detail": "1131 rows vs snapshot 1130"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-08-11 vs snapshot 2026-08-10"
+   "detail": "last 2026-08-12 vs snapshot 2026-08-11"
   },
   {
    "name": "history_agreement",
    "passed": true,
-   "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
+   "detail": "1/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
   },
   {
    "name": "nasdaq_crosscheck",
