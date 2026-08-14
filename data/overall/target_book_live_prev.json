@@ -1,65 +1,67 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-12T12:17:28+00:00",
- "as_of": "2026-08-11",
+ "generated_at_utc": "2026-08-13T12:17:30+00:00",
+ "as_of": "2026-08-12",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
   "GDX": 0.18,
   "NUGT": 0.1,
-  "SOXX": 0.25649005561470944,
+  "SOXX": 0.16106651361486043,
   "SOXL": 0.1,
-  "GRID": 0.17336360798857223,
-  "XLE": 0.034634011735527444,
-  "OIH": 0.05551232466119092,
-  "ERX": 0.1
+  "GRID": 0.10529374815728026,
+  "XLE": 0.02126887792973316,
+  "OIH": 0.03409960437740937,
+  "ERX": 0.0979467396865722,
+  "ARTY": 0.20032451623414446
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GDX": 90.12,
-  "NUGT": 161.83,
-  "SOXX": 534.2,
-  "SOXL": 133.0,
-  "GRID": 187.42,
-  "XLE": 60.93,
-  "OIH": 415.3,
-  "ERX": 98.88
+  "GDX": 90.96,
+  "NUGT": 164.62,
+  "SOXX": 546.61,
+  "SOXL": 142.16,
+  "GRID": 188.9,
+  "XLE": 61.03,
+  "OIH": 413.24,
+  "ERX": 98.96,
+  "ARTY": 76.03
  },
  "actions": [
+  {
+   "key": "ARTY",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 PURE-REGIME BUY",
+   "target": 0.20032451623414446,
+   "in_pos": false,
+   "priority": 0.6727157568564673,
+   "exits_next_bar": false
+  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.034634011735527444,
+   "target": 0.02126887792973316,
    "in_pos": true,
-   "priority": 0.832642811836956,
+   "priority": 0.8272030364701255,
    "exits_next_bar": false
   },
   {
    "key": "ERX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1,
+   "target": 0.0979467396865722,
    "in_pos": true,
-   "priority": 0.8310557841493484,
+   "priority": 0.8253916550585596,
    "exits_next_bar": false
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.05551232466119092,
+   "target": 0.03409960437740937,
    "in_pos": true,
-   "priority": 0.7495238095238096,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GRID",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.17336360798857223,
-   "in_pos": true,
-   "priority": 0.6503551164447773,
+   "priority": 0.7447619047619048,
    "exits_next_bar": false
   },
   {
@@ -68,7 +70,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.6218729380862829,
+   "priority": 0.6412992903812136,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GRID",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.10529374815728026,
+   "in_pos": true,
+   "priority": 0.6330743384478918,
    "exits_next_bar": false
   },
   {
@@ -77,7 +88,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.5993359224773939,
+   "priority": 0.6190331169532015,
    "exits_next_bar": false
   },
   {
@@ -86,25 +97,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.34711434671908836,
+   "priority": 0.3626431938636251,
    "exits_next_bar": false
   },
   {
    "key": "SOXX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.25649005561470944,
+   "target": 0.16106651361486043,
    "in_pos": true,
-   "priority": 0.3131285388752382,
-   "exits_next_bar": false
-  },
-  {
-   "key": "PBW",
-   "action": "WATCH",
-   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
+   "priority": 0.3280866002878332,
    "exits_next_bar": false
   },
   {
@@ -180,7 +182,7 @@
    "exits_next_bar": false
   },
   {
-   "key": "ARTY",
+   "key": "PBW",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
@@ -191,18 +193,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-12T12:17:27+00:00",
+  "checked_at_utc": "2026-08-13T12:17:29+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Aug 12, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-08-11",
-  "btc_bar_close_utc": "2026-08-12T12:00:00+00:00"
+  "anchor_ct": "Aug 13, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-08-12",
+  "btc_bar_close_utc": "2026-08-13T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "e10eb251efc2",
+ "code_sha": "d56be64a576d",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "b6a1bbcc17dd92e1163f8c3db721c453f6ecefa8c1b6b33bdf9e4a42413bb88c"
+  "value": "6442893406fdcf23f3849bbe55d706dae8d2998f242d0f954c0ff5292a8881af"
  }
 }
