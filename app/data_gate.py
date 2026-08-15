@@ -26,10 +26,18 @@ WHAT IT DOES
 2. **Validate** — a fresh fetch is accepted only if it passes the quality
    checks below (required columns present, sane index, positive finite
    prices, no absurd one-day traded-price moves, no regression versus the
-   snapshot, and per-day return agreement with the snapshot on the
+   snapshot, no completed session the snapshot already carries silently
+   dropped, and per-day return agreement with the snapshot on the
    overlapping history).  A failed fetch is retried once, then REJECTED.
 3. **Fall back** — a rejected fetch never reaches the models: the last
    known-good snapshot is served instead, and the rejection is recorded.
+   A sleeve therefore stops advancing while the provider keeps serving a
+   corrupt vintage — deliberately: a frozen dataset shows up as a stale app
+   in the daily audit, whereas a silently altered one changes the signals.
+   Should a session ever be *legitimately* withdrawn upstream (so the
+   dropped-session check can never pass again), re-pin from scratch by
+   deleting that sleeve's snapshot CSV + manifest; with no snapshot there is
+   nothing to regress against and the next clean fetch becomes the baseline.
 4. **Audit** — every load appends a record (decision, source, span, rows,
    SHA-256 content hash, failed checks, consumer app) to
    ``runtime/dataset_audit.json``; the 🕵️ Daily Audit app renders the trail.
@@ -79,6 +87,21 @@ MAX_ABS_TRADED_MOVE = 0.75
 _OVERLAP_DAYS = 120              # most recent shared sessions compared
 _OVERLAP_RET_TOL = 1e-3          # |Δ log-return| below this is "agreeing"
 _OVERLAP_MAX_BAD = 6             # >6 disagreeing days out of 120 → reject
+
+# Dropped-session guard: a completed session the snapshot already carries must
+# still be there on the next fetch.  Yahoo intermittently serves a frame with a
+# single recent session MISSING while back-filling older gaps in the same
+# response, so the row count can RISE while recent history loses a bar — every
+# other check passes (the total is bigger, the last date is newer, and the
+# overlap comparison only ever looks at dates present in BOTH frames, so a hole
+# is invisible to it).  That is not cosmetic: the signature engines read the
+# last ~150 completed bars positionally, and one absent bar re-links a
+# consecutive-break streak — e.g. ARTY 2026-08-14, where dropping 2026-08-11
+# moved the high-break streak from 3 to 2 and flipped D3 exhaustion (the
+# published book booked "EXIT NEXT BAR — D3 exhaustion" on a bar whose pinned
+# vintage no longer carries it).  The window covers the whole signature
+# lookback; older provider corrections stay the overlap check's business.
+_RECENT_SESSION_DAYS = 150       # snapshot sessions that must not disappear
 
 # Independent cross-check: a session being added to the snapshot for the first
 # time has no prior reference to agree with, so its traded closes are verified
@@ -217,6 +240,19 @@ def run_quality_checks(spec: GateSpec, df: pd.DataFrame | None,
         add("no_span_regression", df.index.max() >= snapshot.index.max(),
             f"last {pd.Timestamp(df.index.max()).date()} vs snapshot "
             f"{pd.Timestamp(snapshot.index.max()).date()}")
+        # a session inside the signature lookback can never legitimately vanish
+        # from a later fetch — see _RECENT_SESSION_DAYS.  Compared only over the
+        # span the fetch actually covers, so a short/backdated frame is left to
+        # the span/row regression checks above rather than double-reported.
+        recent = pd.DatetimeIndex(snapshot.index)[-_RECENT_SESSION_DAYS:]
+        recent = recent[recent <= df.index.max()]
+        dropped = recent.difference(pd.DatetimeIndex(df.index))
+        shown = ", ".join(str(pd.Timestamp(d).date()) for d in dropped[:5])
+        add("no_missing_recent_sessions", len(dropped) == 0,
+            f"all {len(recent)} recent snapshot sessions still served"
+            if len(dropped) == 0 else
+            f"{len(dropped)} session(s) the snapshot carries are missing from "
+            f"the fetch: {shown}{' …' if len(dropped) > 5 else ''}")
         if (spec.price_col in df.columns
                 and spec.price_col in snapshot.columns):
             a = pd.to_numeric(df[spec.price_col], errors="coerce")

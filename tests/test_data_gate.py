@@ -96,6 +96,61 @@ def test_checks_fail_on_regression_vs_snapshot(tmp_path):
     # min_rows also fires at 200 < 260 — but the regression checks are the point
 
 
+def test_checks_fail_on_dropped_recent_session(tmp_path):
+    """A completed session the snapshot carries must not vanish from a later
+    fetch — the ARTY 2026-08-11 case.  Yahoo served a frame that back-filled
+    two older gaps while dropping one recent session, so the row count ROSE and
+    every other check passed; positionally-read signature math then re-linked a
+    high-break streak and fired a phantom D3 exhaustion exit."""
+    spec = _spec(tmp_path)
+    base = _frame(n=322)
+    snap = base.iloc[2:]                          # 320 rows, ends at CUT
+    fresh = base.drop(base.index[-4])             # 321: +2 old, −1 recent
+    rep = dg.run_quality_checks(spec, fresh, snapshot=snap)
+    assert "no_missing_recent_sessions" in rep["failed"]
+    # …and it is the ONLY check that catches it: this is the blind spot
+    assert set(rep["failed"]) == {"no_missing_recent_sessions"}
+    detail = next(c["detail"] for c in rep["checks"]
+                  if c["name"] == "no_missing_recent_sessions")
+    assert str(pd.Timestamp(base.index[-4]).date()) in detail
+
+
+def test_dropped_session_check_passes_on_growing_history(tmp_path):
+    """The normal case must not trip it: a fetch that keeps every snapshot
+    session and adds a new one."""
+    spec = _spec(tmp_path)
+    base = _frame(n=321)
+    rep = dg.run_quality_checks(spec, base, snapshot=base.iloc[1:])
+    assert rep["passed"], rep["failed"]
+
+
+def test_gate_rejects_fetch_that_drops_a_recent_session(tmp_path):
+    """End to end: the corrupt vintage never reaches the models, and the pinned
+    snapshot (with the session intact) is served and left untouched."""
+    spec = _spec(tmp_path)
+    base = _frame(n=322)
+    dg.gated_daily(spec, fetch_full=lambda: base.iloc[2:], consumer="UNIT")
+    # age the pinned snapshot so the gate MUST take the refresh path
+    man_p = Path(spec.manifest_json)
+    man = json.loads(man_p.read_text())
+    stale = dg._norm_index(pd.read_csv(spec.snapshot_csv, index_col=0,
+                                       parse_dates=True)).iloc[:-2]
+    dg._atomic_write(spec.snapshot_csv, stale.to_csv())
+    man["checksum_sha256"] = dg.frame_sha(stale)
+    man_p.write_text(json.dumps(man))
+
+    dropped_date = stale.index[-4]
+    out = dg.gated_daily(spec, fetch_full=lambda: base.drop(dropped_date),
+                         consumer="UNIT")
+    gi = out.attrs["data_gate"]
+    assert gi["decision"] == "fallback_snapshot"
+    assert "no_missing_recent_sessions" in gi["failed_checks"]
+    assert dropped_date in out.index                 # served history is intact
+    # the corrupt vintage is never pinned — the snapshot stays where it was,
+    # so the sleeve visibly stops advancing instead of silently changing shape
+    assert dg.frame_sha(dg.load_snapshot(spec)[0]) == dg.frame_sha(stale)
+
+
 def test_checks_fail_on_rewritten_history(tmp_path):
     spec = _spec(tmp_path)
     snap = _frame()
