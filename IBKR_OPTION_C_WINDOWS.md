@@ -104,7 +104,6 @@ can wake it — see §7.)
    cd C:\
    git clone https://github.com/yoursprerit/btc-range-model.git
    cd C:\btc-range-model
-   git checkout claude/trading-signals-ibkr-paper-jwyvrc
 
    py -3.12 -m venv .venv
    .\.venv\Scripts\Activate.ps1
@@ -167,16 +166,18 @@ $env:OVERALL_BOOK_SECRET
 
 ## 5. Get a target book and run the executor by hand
 
-### 5a. Publish a book (on the cloud/model side — once, to test)
-Trigger the GitHub Action **Publish target book (IBKR Option C)** from the
-Actions tab (*Run workflow* → pick the `claude/trading-signals-ibkr-paper-jwyvrc`
-branch). It commits `data/overall/target_book.json` to that branch. (See
-`IBKR_PAPER_TRADING.md` → *Option C* for running the publisher yourself instead.)
+### 5a. Publish a book (on the cloud/model side)
+The publisher runs on `main` on its own daily schedule, so a fresh signed book is
+normally already committed to `data/overall/target_book.json` — you usually just
+pull it. To force one now, trigger the GitHub Action **Publish target book (IBKR
+Option C)** from the Actions tab (*Run workflow* → `main`), or use the app's
+**🚀 Publish new target book** button. (See `IBKR_PAPER_TRADING.md` → *Option C*
+for running the publisher yourself instead.)
 
 ### 5b. Pull it onto the laptop
 ```powershell
 cd C:\btc-range-model
-git pull --ff-only origin claude/trading-signals-ibkr-paper-jwyvrc
+git pull --ff-only origin main
 ```
 
 ### 5c. Dry-run first (NO orders)
@@ -268,9 +269,10 @@ Register-ScheduledTask -TaskName "IBKR Option C executor" `
 ```
 
 Notes:
-- The task runs `ibkr_execute_daily.ps1`, which honors `IBKR_BRANCH`, `IBKR_BAND`,
-  `IBKR_PORT`, `IBKR_BOOK`, `IBKR_PYTHON` env vars if you want to override
-  defaults.
+- The task runs `ibkr_execute_daily.ps1`, which pulls the book from **`main`** by
+  default (where the publisher commits it). Override with `-Branch <name>` or the
+  `IBKR_BRANCH` env var; `IBKR_BAND`, `IBKR_PORT`, `IBKR_BOOK`, `IBKR_PYTHON`
+  override the other defaults.
 - `OVERALL_BOOK_SECRET` must exist as a **user/system** env var (set via `setx`
   in §4) so the task inherits it.
 - **The weekday-only + holiday logic lives in the executor**, so a Saturday fire
