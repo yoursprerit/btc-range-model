@@ -63,6 +63,66 @@ GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.
 
 ---
 
+## Prerequisites — do these before ANY setup script
+
+None of the setup tooling in this repo can create or configure an IBKR account:
+the Windows script and the cloud compose file only *consume* credentials you
+already hold. Work through this list first, on **every** topology (Windows
+laptop, cloud VM, Option A or C). Client Portal menu labels move between IBKR's
+UI revisions — the items matter, the exact paths may not match verbatim.
+
+### 1. An IBKR paper account
+
+1. **Create the paper account** — Client Portal → *Settings* → *Account
+   Settings* → **Paper Trading Account**. IBKR generally requires an approved
+   live account before it will issue a paper one.
+2. **Record the paper username and set its password.** The paper login is a
+   **separate username** from your live one with an independently set password.
+   These are the credentials every setup path here asks for (`-IbUser` /
+   `-IbPassword` on Windows, `TWS_USERID` / `TWS_PASSWORD` in the Docker `.env`).
+3. **Confirm the account id starts with `DU`.** This is enforced, not cosmetic:
+   `PAPER_ACCT_PREFIX = "DU"` in `scripts/ibkr_common.py` aborts the run on any
+   other account, so a live login is refused rather than traded.
+
+### 2. Disable 2FA on the paper login (required for automation)
+
+IBKR's daily two-factor prompt is what breaks unattended login. A scheduled task
+or timer cannot answer a phone tap, so it hangs and the rebalance silently
+misses. Use a **standalone paper login with 2FA disabled** — ideally one with no
+live trading permission attached, since IBC stores its password in plaintext
+(see below). If you must keep 2FA, follow the IBC second-factor docs before
+automating anything.
+
+### 3. Share market data with the paper account (recommended)
+
+Client Portal → *Settings* → **Market Data Subscriptions**. Without live quotes
+the executor cannot price its marketable limits: each affected leg logs a
+`WARN … falling back to MARKET` (`scripts/ibkr_common.py`) and trades as an
+unprotected market order. It still trades — you just lose the price ceiling. If
+you would rather not share data, widen the cap instead
+(`--slippage-cap 0.015` / `IBKR_SLIPPAGE_CAP=0.015`).
+
+### 4. The shared signing secret
+
+`OVERALL_BOOK_SECRET` must be **the same value** on the publisher (the GitHub
+repo/environment secret), the Streamlit app, and the executor host. A mismatch
+aborts the run at signature verification. Have the value in hand before setup —
+for Option C the executor is useless without it. (Option A computes signals
+locally and needs no secret.)
+
+### 5. Accept the plaintext-password trade-off
+
+IBC stores the paper password unencrypted in its `config.ini` (Windows) or the
+compose `.env` (cloud). That is IBC's design, not a choice this repo makes. It
+is the main argument for a paper-only login that carries no live permissions.
+
+**Only once all five are done** should you run
+`scripts\setup_windows_option_c.ps1` (Windows — see
+[`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)) or bring up the Docker
+gateway (cloud — see [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md)).
+
+---
+
 ## One-time setup
 
 ### 1. Python environment (on the host that will run IB Gateway)

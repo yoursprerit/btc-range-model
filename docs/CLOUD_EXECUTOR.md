@@ -28,11 +28,30 @@ orders**, so it stays small and cheap — or free.
 Use **Ubuntu 22.04/24.04**. Only **outbound** access to IBKR is needed — no
 inbound ports; keep the firewall closed and SSH key-only.
 
+---
+
+## 1b. Prerequisites — settle these BEFORE building the VM
+
+Nothing here provisions anything on IBKR's side; the compose file only consumes
+credentials you already hold. Full detail in
+[`IBKR_PAPER_TRADING.md` → *Prerequisites*](../IBKR_PAPER_TRADING.md#prerequisites--do-these-before-any-setup-script).
+
+| # | Prerequisite | Why it matters on a VM |
+|---|---|---|
+| 1 | An IBKR **paper account** and its **separate username/password** | Become `TWS_USERID` / `TWS_PASSWORD` in `deploy/ibkr-gateway/.env` |
+| 2 | Account id starts with **`DU`** | Enforced by `PAPER_ACCT_PREFIX` in `scripts/ibkr_common.py`; also what the healthcheck asserts (§6c) |
+| 3 | **2FA disabled** on that paper login | **The** thing that breaks a headless box — see below |
+| 4 | **Market data shared** to the paper account | Without quotes, marketable limits degrade to unprotected market orders (§6) |
+| 5 | The publisher's **`OVERALL_BOOK_SECRET`** | A mismatch aborts every run at signature verification |
+| 6 | **Git write credentials** *(only for the Executed Book write-back)* | Deploy key or fine-grained token — see §6d |
+
 > **The 2FA gotcha (read this).** IBKR's daily two-factor auth is what breaks
 > unattended login. Use a **standalone paper-trading account with 2FA disabled**
 > (register a separate paper login, not the paper user tied to a funded account).
 > With 2FA off, IBC logs the gateway in on its own — the whole thing then runs
-> untouched.
+> untouched. On a headless VM there is no one to tap the prompt, so this is not
+> optional in practice; the healthcheck in §6c exists precisely to catch a
+> gateway that is up but silently *not logged in*.
 
 ---
 
@@ -132,10 +151,36 @@ CRON_TZ=America/Chicago
 - Env overrides (see the script header): `IBKR_PYTHON`, `IBKR_BRANCH`, `IBKR_BOOK`,
   `IBKR_BAND`, `IBKR_HOST`, `IBKR_PORT`, `IBKR_EXTRA`, `IBKR_NO_PULL`,
   `IBKR_ORDER_TYPE`, `IBKR_SLIPPAGE_CAP`.
-- Orders default to **marketable limits** (a limit priced 0.5% through the touch,
-  with an automatic market-order escalation for anything left unfilled). Set
-  `IBKR_ORDER_TYPE=moc` to fill in the 4:00 PM ET closing auction instead — the
-  price the backtest books against. See IBKR_PAPER_TRADING.md § Order routing.
+- **Book source defaults to `main`** — where the publisher commits the daily
+  book. Override with `IBKR_BRANCH` only if you are testing off a feature branch;
+  pointing it at a stale branch means the freshness guard refuses to trade, which
+  presents as a silent daily no-op.
+- **Freshness:** the executor rejects a book generated more than
+  `--max-age-hours` ago (**default 36**). That spans the 7:15-AM-CT publish
+  anchor to the *next* day's 2:30-PM-CT slot (31.25 h), so a withheld publish
+  still trades yesterday's book rather than nothing — but a genuinely dead
+  publisher stops trading instead of acting on stale signals.
+
+### Order routing on this host
+
+Orders default to **marketable limits**: a limit priced `IBKR_SLIPPAGE_CAP`
+(0.5%) through the touch, with automatic market-order escalation for anything
+unfilled inside the fill timeout. Full rationale in
+[`IBKR_PAPER_TRADING.md` § Order routing](../IBKR_PAPER_TRADING.md#order-routing).
+Two VM-specific consequences:
+
+- **Delayed-only market data** (no subscription shared to the paper account)
+  means legs that can't be priced log `WARN … falling back to MARKET` and go out
+  unprotected. Either share the data (§1b) or widen the cap:
+  `IBKR_SLIPPAGE_CAP=0.015`.
+- **`IBKR_ORDER_TYPE=moc`** fills in the 4:00 PM ET closing auction — the price
+  the backtest books against — but the executor then **holds the connection
+  ~32 minutes** waiting for the print. Keep `TimeoutStartSec` in
+  `ibkr-executor.service` comfortably above that; it ships at `3600`. MOC also
+  requires entry before the **15:50 ET** cutoff (the 2:30-PM-CT slot clears it by
+  20 min; past it the executor falls back to a marketable limit) and accepts
+  **whole shares only** — `--fractional` / `IBKR_EXTRA=--fractional` is ignored
+  for MOC, with a warning.
 
 Check the log after the first scheduled run:
 
