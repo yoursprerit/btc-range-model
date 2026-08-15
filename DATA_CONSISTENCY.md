@@ -68,7 +68,9 @@ snapshots**:
   beyond ±75% (bad prints / large-ratio split splices; the bound clears the
   worst real 3× leveraged-ETF day on record — ERX −60% on 2020-03-09), no
   row-count or span
-  regression versus the snapshot, and per-day return agreement with the
+  regression versus the snapshot, **no completed session inside the last 150
+  the snapshot already carries missing from the fetch** (see the dropped-session
+  hole below), and per-day return agreement with the
   snapshot over the overlapping history (kills cause #4 silently rewriting
   the past).
 * **Independent cross-check** — a session entering the snapshot for the
@@ -122,12 +124,50 @@ CSV before a snapshot is trusted for pinning), with full history and
 rollback. Every deployment boots from the same committed vintage instead of
 re-trusting a live fetch.
 
+### The dropped-session hole (ARTY phantom D3, 2026-08-15)
+
+The row-count and span checks are both *aggregate*: a fetch that **back-fills
+older gaps while dropping a recent session** grows the total and keeps the last
+date, so it passed. `history_agreement` could not see it either — it compares
+only dates present in **both** frames, and a hole simply isn't compared.
+
+That is not cosmetic, because the signature engines read the last ~150 completed
+bars **positionally**. On 2026-08-14 the ARTY refresh restored 07-21, 07-22 and
+07-31 and dropped **2026-08-11** (2038 → 2041 rows, every check green). Removing
+that bar re-links the high-break run: `consec_hi` 3 → 2, which is exactly the D3
+exhaustion threshold. The ≈7:15 AM CT publish on 08-15 still saw a vintage
+*with* 08-11 and booked ARTY `CLOSE` / `EXIT NEXT BAR — D3 exhaustion`; 37
+minutes later the pinned snapshot was written *without* it, so every app read
+`LONG — HOLDING` with no D3 anywhere — the action plan and the ARTY app
+contradicted each other all day off one absent session.
+
+`no_missing_recent_sessions` closes the hole: any session in the snapshot's last
+150 that a later fetch fails to serve rejects the fetch, and the sleeve keeps
+serving its known-good snapshot (visibly frozen in the daily audit) rather than
+silently changing shape. The UI half of the fix is
+`overall_core.book_phantom_actions` — see *Book vs engine* below.
+
+### Book vs engine
+
+A published book is frozen at the morning publish, so the action plan's pinned
+Action / Signal cells can legitimately run *behind* the engine (a signal that
+committed at a later close — flagged `_book_masked_exit` / `_book_masked_entry` /
+`_book_masked_avoid`). `overall_core.book_phantom_actions` catches the opposite:
+a book instruction the engine cannot derive from the **same as-of bar at all** —
+a `CLOSE` on a position still held with no exit signal, or an `OPEN` on a sleeve
+still flat. Neither state is reachable through the normal publish→execute
+lifecycle, so it means the publish ran on a different data vintage. The plan
+keeps the published pill (it is what the executor traded) and adds an amber ⚠️
+flag with today's engine read, plus a callout above the table.
+
 ### Tests
 
 `tests/test_data_gate.py` covers the checks (missing/dead columns, extreme
-moves, regression, rewritten history), the pin/refetch/fallback flows, the
-completed-vs-in-progress split, snapshot tamper detection, and the audit
-trail.
+moves, regression, rewritten history, dropped recent sessions), the
+pin/refetch/fallback flows, the completed-vs-in-progress split, snapshot tamper
+detection, and the audit trail. `tests/test_book_phantom_actions.py` pins the
+book-vs-engine mismatch flag — including that ordinary publish-lag and executed
+book instructions stay unflagged.
 
 ## The BTC vintage freeze (the "+950% vs +1205%" incident, 2026-08-03)
 

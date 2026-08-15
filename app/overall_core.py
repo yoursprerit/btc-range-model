@@ -1740,6 +1740,61 @@ def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
                                           if k not in opened)))
 
 
+def book_phantom_actions(book_payload: dict | None, gate: dict,
+                         live_exits=(), live_entries=()) -> dict:
+    """Published-book instructions today's engine cannot reproduce.
+
+    The action plan pins its Action / Signal / Priority cells to the *published*
+    Current Targetbook so they match the donut and never drift intraday.  The
+    app's flags already cover the book running BEHIND the engine (a signal that
+    committed at a close after the morning publish — ``_book_masked_exit`` /
+    ``_book_masked_entry`` / ``_book_masked_avoid``).  This is the other
+    direction: the book carries an instruction the engine does not derive from
+    the SAME as-of bar at all, which happens when the publish ran on a different
+    data vintage than the pinned snapshot the apps now read (see
+    ``data_gate._RECENT_SESSION_DAYS`` — a session served at publish time and
+    dropped from a later fetch re-links a break streak and flips a hair-trigger
+    signature).  Observed: ARTY 2026-08-14, published ``CLOSE`` /
+    ``EXIT NEXT BAR — D3 exhaustion`` while every live surface read
+    ``LONG — HOLDING`` with no D3 anywhere.
+
+    Two mismatches are reported, both restricted to states the ordinary
+    publish→execute lifecycle cannot produce:
+
+    * ``exits``   — the book says CLOSE (or records ``exits_next_bar``) while
+      the engine still holds the position and sees no exit, committed or live.
+      A genuinely executed book exit leaves the sim flat on the next bar, so a
+      still-held position means the exit never existed on today's data.
+    * ``entries`` — the book says OPEN while the engine has no position and no
+      entry, committed or live.  A genuinely executed book entry fills at the
+      next bar's close regardless of that bar's signal, so a still-flat sleeve
+      means the entry never existed either.
+
+    Returns ``dict(exits=[...], entries=[...])``, sorted keys.  An unpublished
+    book (or one without an ``actions`` list) yields empty lists.
+    """
+    book = {a.get("key"): a for a in ((book_payload or {}).get("actions") or [])
+            if a.get("key")}
+    if not book:
+        return dict(exits=[], entries=[])
+    live_exits, live_entries = set(live_exits or ()), set(live_entries or ())
+    exits, entries = [], []
+    for a in gate.get("actions") or []:
+        k = a.get("key")
+        ba = book.get(k)
+        if not ba:
+            continue
+        b_act = ba.get("action")
+        if (b_act == "CLOSE" or ba.get("exits_next_bar")) and a.get("in_pos") \
+                and a.get("action") != "CLOSE" and not a.get("exits_next_bar") \
+                and k not in live_exits:
+            exits.append(k)
+        elif b_act == "OPEN" and not a.get("in_pos") \
+                and a.get("action") != "OPEN" and k not in live_entries:
+            entries.append(k)
+    return dict(exits=sorted(exits), entries=sorted(entries))
+
+
 def rebalancing_moves(base_weights: dict, base_idle: float,
                       target: dict, target_idle: float,
                       idle_key: str = "SATA") -> list[dict]:

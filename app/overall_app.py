@@ -914,13 +914,19 @@ with tab_live:
                    "today's live prices point to. The **published Current "
                    "Targetbook never pre-funds** a signal before it commits at "
                    "the close.")
+    # The published book's per-key rows — the source of every book-vs-engine
+    # reconciliation from here down (the action plan pins its Action / Signal /
+    # Priority cells to them, and the callouts below name where book and engine
+    # part company in either direction).
+    _book_actions = {a["key"]: a
+                     for a in ((_cur_book.get("actions") or []) if _cur_book else [])
+                     if a.get("key")}
+    _book_act_now = {k: x.get("action") for k, x in _book_actions.items()}
     # committed entries the frozen morning book predates: the ENGINE's latest
     # close fired the buy (action OPEN) but the published book still records a
     # different action — the signal committed after the morning publish (e.g. a
     # divergence pure-regime buy at today's close). The action table flags the
     # row green; say it here too so it isn't lost behind the book-pinned pill.
-    _book_act_now = {x.get("key"): x.get("action")
-                     for x in ((_cur_book or {}).get("actions") or [])}
     _new_commits = sorted(
         a["key"] for a in gate["actions"]
         if a["action"] == "OPEN" and not a["in_pos"]
@@ -936,6 +942,38 @@ with tab_live:
                    ("gets" if len(_new_commits) == 1 else "get") +
                    " funded at the next ≈7:15 AM CT publish (or a manual 🚀 "
                    "publish).")
+
+    # …and the mismatch that is NOT a lifecycle lag: an instruction the frozen
+    # book carries that today's engine cannot derive from the same as-of bar,
+    # because the publish ran on a different data vintage (a provider session
+    # served at publish time and dropped from the pinned snapshot afterwards
+    # flips a hair-trigger signature — see overall_core.book_phantom_actions).
+    # The book-pinned pill stays as published (it is what the executor traded),
+    # so this has to be called out or the plan silently contradicts the source
+    # app's banner. The action table flags the row amber; say it here too, since
+    # the plan expander is collapsed by default.
+    _phantom = ov.book_phantom_actions(_cur_book, gate, _live_exits, _live_entries)
+    _phantom_keys = _phantom["exits"] + _phantom["entries"]
+    if _phantom_keys:
+        _pw = []
+        if _phantom["exits"]:
+            _pw.append("**" + ", ".join(_phantom["exits"]) + "** — the book says "
+                       "**close**, but the position is still held and no exit "
+                       "signal (committed or live) is active today")
+        if _phantom["entries"]:
+            _pw.append("**" + ", ".join(_phantom["entries"]) + "** — the book says "
+                       "**open**, but the sleeve is flat with no entry signal today")
+        st.warning(
+            "⚠️ **Published book disagrees with today's signals:** " +
+            "; ".join(_pw) + ". Both books cover the same last completed bar, so "
+            "this is not the usual publish-lag — the ≈7:15 AM CT publish ran on a "
+            "different data vintage than the pinned snapshot the apps read now "
+            "(a provider dropping a completed session re-links a break streak and "
+            "can flip a signature such as D3 exhaustion). **Trust the source "
+            "app's banner**, not the pinned pill: the affected rows below keep "
+            "their published Action / Signal cells but carry an amber flag with "
+            "today's engine read. The next publish re-derives the book from the "
+            "current dataset.")
 
     # ── 1b. USER INCLUDE / EXCLUDE overlay on the live-adjusted book ─────
     # Same control as the 📋 Target Book viewer: untick a position and its weight
@@ -1099,9 +1137,8 @@ with tab_live:
     # The published payload records each instrument's action, decision and
     # priority at publish time; keys the book doesn't carry (an instrument
     # added since the last publish) fall back to the live engine's cells.
-    _book_actions = {a["key"]: a
-                     for a in ((_cur_book.get("actions") or []) if _cur_book else [])
-                     if a.get("key")}
+    # (``_book_actions`` is built with the other book-vs-engine reconciliations,
+    # above the live gate's callouts.)
     _plan_actions = gate["actions"]
     if _book_actions:
         _book_rank = {k: i for i, k in enumerate(_book_actions)}
@@ -1124,7 +1161,14 @@ with tab_live:
                    "signal flipped to an **active exit / stand-aside** at a close "
                    "the published book predates keeps its book pill (e.g. WATCH) "
                    "but carries an amber ⚠️ flag with today's signal — matching "
-                   "the source app's banner. Held/opened risk assets "
+                   "the source app's banner. The same amber ⚠️ marks the rarer "
+                   "reverse case: a pill the engine **cannot reproduce on the "
+                   "same bar at all** (a CLOSE on a position still held with no "
+                   "exit signal, an OPEN on a sleeve still flat) — the publish "
+                   "ran on a different data vintage than the pinned snapshot the "
+                   "apps read now, so the flag carries today's engine read and "
+                   "the source app's banner is the one to trust. "
+                   "Held/opened risk assets "
                    "total "
                    "100%; any capped-out remainder is parked in **SATA**. Rows shaded "
                    "**red** ⚠️ are holds **or fresh entries** with a pending exit — "
@@ -1304,6 +1348,13 @@ with tab_live:
             _flat_avoid = (not a["in_pos"]) and a.get("state") == "AVOID"
             _book_masked_avoid = (_flat_avoid and _ba
                                   and _act not in ("STAND ASIDE", "CLOSE"))
+            # …and the opposite direction to all three masks: the book carries
+            # an instruction today's engine cannot derive from the same as-of
+            # bar (a publish-time data vintage the pinned snapshot no longer
+            # matches — see overall_core.book_phantom_actions). The pill stays
+            # the book, the flag is today's signal, exactly like the masks; the
+            # row is NOT shaded, because there is nothing committed to act on.
+            _book_phantom = a["key"] in _phantom_keys
             _live_entry = a["key"] in _live_entries
             # an exit-active flat sleeve never renders a green likely-enters
             # row — entries are blocked while an exit signal is live, so the
@@ -1354,6 +1405,10 @@ with tab_live:
                         else "live px fires entry signal")   # divergence apps (e.g. ARTY)
                 warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
                         f"🟢 {_why} — likely enters next bar</div>")
+            elif _book_phantom:                        # book ≠ engine on the SAME bar
+                warn = ("<div style='font-size:10px;color:#d97706;font-weight:700'>"
+                        "⚠️ published on a different data vintage — today's "
+                        f"signal reads {a['decision']}</div>")
             else:
                 warn = ""
             rows.append(
