@@ -71,17 +71,30 @@ def _payload_aged(hours_ago: float) -> dict:
 
 
 def test_validate_accepts_yesterdays_book():
-    """The book publishes ONCE daily; yesterday's book (≈25h old) must still
-    validate so the executor can fall back to it when today's publish was
-    withheld by a failed audit."""
+    """The book publishes ONCE daily; yesterday's book must still validate so
+    the executor can fall back to it when today's publish was withheld by a
+    failed audit.  At the 2:30-PM-CT executor slot that book is 31.25 h old
+    (published at yesterday's 7:15-AM-CT anchor) — the exact case the 36 h
+    window exists to admit, and one the old 30 h window would have rejected."""
     today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
-    ok, why = tb.validate(_payload_aged(25.0), today)
+    ok, why = tb.validate(_payload_aged(31.25), today)
     assert ok, why
 
 
 def test_validate_rejects_book_older_than_a_cycle():
+    """Two cycles back (the day-before-yesterday's anchor → today's 2:30-PM-CT
+    slot is 55.25 h) must still be refused — the widened window buys slack for
+    one skipped publish, not an unbounded fallback."""
     today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
-    ok, why = tb.validate(_payload_aged(31.0), today)
+    ok, why = tb.validate(_payload_aged(55.25), today)
+    assert not ok
+    assert "stale" in why
+
+
+def test_validate_rejects_book_just_past_the_window():
+    # the boundary itself: 36 h is the cap, so 37 h is out
+    today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+    ok, why = tb.validate(_payload_aged(37.0), today)
     assert not ok
     assert "stale" in why
 

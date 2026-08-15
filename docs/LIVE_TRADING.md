@@ -113,9 +113,10 @@ sudo systemctl enable --now ibkr-executor-live.timer
 systemctl list-timers 'ibkr-*'             # paper + live both scheduled
 ```
 
-Now both fire each weekday morning: paper (`4004`, no caps) and live (`4003`,
-25% cap). They write separate reports and appear under the Executed Book tab's
-**Paper / Live** selector.
+Now both fire each weekday at **2:30 PM US Central** (3:30 PM ET), the slot in
+`ibkr-executor.timer` the live copy inherits: paper (`4004`, no caps) and live
+(`4003`, 25% cap). They write separate reports and appear under the Executed
+Book tab's **Paper / Live** selector.
 
 ---
 

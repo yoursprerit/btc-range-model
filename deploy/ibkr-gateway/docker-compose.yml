@@ -28,7 +28,8 @@ services:
       READ_ONLY_API: "no"            # orders need write access
       # Let API clients on the container/host network connect without a popup.
       BYPASS_WARNING: "yes"
-      # Restart the gateway in the small hours, away from the 09:45-ET rebalance.
+      # Restart the gateway in the small hours, away from the 2:30-PM-CT
+      # (3:30 PM ET) rebalance.
       AUTO_RESTART_TIME: "03:00 AM"
       TZ: America/New_York
     ports:

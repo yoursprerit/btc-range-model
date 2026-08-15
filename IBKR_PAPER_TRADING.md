@@ -145,20 +145,25 @@ Useful flags:
 ## Automating the daily run
 
 The market timing: signals are computed on completed daily bars and act on the
-next bar, so rebalance shortly after the US open on trading days.
+next bar, so the rebalance runs **2:30 PM US Central** (3:30 PM ET) on trading
+days — inside regular trading hours, 30 minutes before the 3:00-PM-CT /
+4:00-PM-ET close, so the fills land near the close the engine books against.
 
 `scripts/ibkr_daily.sh` wraps a single `--execute` run with logging. Point cron
 at it (the script and the Python guards both skip weekends/holidays):
 
 ```cron
-CRON_TZ=America/New_York
-45 9 * * 1-5  /path/to/repo/scripts/ibkr_daily.sh >> /path/to/repo/logs/ibkr_cron.log 2>&1
+CRON_TZ=America/Chicago
+30 14 * * 1-5  /path/to/repo/scripts/ibkr_daily.sh >> /path/to/repo/logs/ibkr_cron.log 2>&1
 ```
+
+`CRON_TZ=America/Chicago` keeps the slot at 2:30 PM Central through the CDT/CST
+switch regardless of the host clock.
 
 Override behaviour via env vars (see the script header): `IBKR_PYTHON`,
 `IBKR_PROFILE`, `IBKR_BAND`, `IBKR_PORT`, `IBKR_EXTRA`.
 
-Ensure IB Gateway (under IBC) is up **before** 09:45 ET and that its
+Ensure IB Gateway (under IBC) is up **before** 2:30 PM CT and that its
 `AutoRestartTime` sits well outside the rebalance window.
 
 ---

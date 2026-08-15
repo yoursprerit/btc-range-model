@@ -35,7 +35,10 @@
 .PARAMETER IbUser          IBKR paper username, written into the IBC config.
 .PARAMETER IbPassword      IBKR paper password, written into the IBC config.
 .PARAMETER IbcDir          Where to install IBC (default C:\IBC).
-.PARAMETER TaskTime        Local time for the daily task (default 09:45).
+.PARAMETER TaskTime        Local time for the daily task (default 14:30 = the
+                           2:30 PM US Central slot on a Central-time machine;
+                           on another zone pass the local equivalent, e.g.
+                           15:30 on an Eastern box).
 .PARAMETER Branch          Branch carrying the published target book.
 
 .EXAMPLE
@@ -66,7 +69,7 @@ param(
     [string]$IbUser,
     [string]$IbPassword,
     [string]$IbcDir   = 'C:\IBC',
-    [string]$TaskTime = '09:45',
+    [string]$TaskTime = '14:30',
     [string]$Branch   = 'claude/trading-signals-ibkr-paper-jwyvrc',
     [string]$Port     = '4002'
 )

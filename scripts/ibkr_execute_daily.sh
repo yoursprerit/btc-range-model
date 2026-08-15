@@ -9,12 +9,13 @@
 # The executor itself guards against weekends / holidays / stale books and only
 # trades a paper (DU…) account, so a stray or early run is a safe no-op.
 #
-# Example crontab (weekdays 09:45 America/New_York — a few minutes after the US
-# open, after the cloud publisher has committed the morning's book). Set CRON_TZ
-# so the schedule tracks Eastern regardless of the host clock:
+# Example crontab (weekdays 14:30 America/Chicago = 2:30 PM US Central /
+# 3:30 PM ET — 30 minutes before the equity close, hours after the cloud
+# publisher committed the morning's book). Set CRON_TZ so the schedule tracks
+# US Central (and its DST switch) regardless of the host clock:
 #
-#     CRON_TZ=America/New_York
-#     45 9 * * 1-5  /path/to/repo/scripts/ibkr_execute_daily.sh >> /path/to/repo/logs/ibkr_cron.log 2>&1
+#     CRON_TZ=America/Chicago
+#     30 14 * * 1-5  /path/to/repo/scripts/ibkr_execute_daily.sh >> /path/to/repo/logs/ibkr_cron.log 2>&1
 #
 # Env overrides (see also the flags below):
 #   IBKR_PYTHON   interpreter to use (default: <repo>/.venv/bin/python)

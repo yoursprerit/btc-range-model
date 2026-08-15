@@ -209,7 +209,7 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--band 0.02` | widen the no-trade band (fraction of net-liq) |
 | `--fractional` | allow fractional shares (default: whole shares) |
 | `--port 4002` | IB Gateway API port (paper) |
-| `--max-age-hours 30` | reject a book generated longer ago than this (default spans the once-daily 7:15-AM-CT publish cycle) |
+| `--max-age-hours 36` | reject a book generated longer ago than this (default 36 spans the 7:15-AM-CT publish anchor → next day's 2:30-PM-CT executor slot, so yesterday's book still trades if today's publish was withheld) |
 | `--require-signature` | refuse an unsigned book |
 | `--force` | override the weekend/holiday & freshness guards |
 
@@ -250,9 +250,11 @@ $ps  = "powershell.exe"
 $arg = '-NoProfile -ExecutionPolicy Bypass -File "C:\btc-range-model\scripts\ibkr_execute_daily.ps1"'
 $act = New-ScheduledTaskAction -Execute $ps -Argument $arg -WorkingDirectory "C:\btc-range-model"
 
-# 09:45 America/New_York — a few minutes after the US open. Set your laptop's
-# clock/zone accordingly, or adjust this local time to equal 09:45 ET.
-$trg = New-ScheduledTaskTrigger -Daily -At 9:45AM
+# 2:30 PM US Central (3:30 PM ET) — 30 minutes before the equity close. Task
+# Scheduler triggers fire in the LAPTOP's local time, so this literal is right
+# on a Central-time machine; on any other zone set the local equivalent
+# (e.g. 3:30PM on Eastern, 12:30PM on Pacific).
+$trg = New-ScheduledTaskTrigger -Daily -At 2:30PM
 
 # Wake the laptop if asleep, and run whether or not you're logged in.
 $set = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
@@ -272,8 +274,8 @@ Notes:
 - **The weekday-only + holiday logic lives in the executor**, so a Saturday fire
   is a safe no-op — you don't need a weekday-only trigger, though you can add
   `-DaysOfWeek` to the trigger if you prefer.
-- Ensure **IB Gateway (under IBC) is up before 09:45** and that Windows sleep
-  settings allow `-WakeToRun` (Control Panel → Power Options).
+- Ensure **IB Gateway (under IBC) is up before 2:30 PM CT** and that Windows
+  sleep settings allow `-WakeToRun` (Control Panel → Power Options).
 
 **Test the task immediately:**
 ```powershell
@@ -288,7 +290,8 @@ Get-Content C:\btc-range-model\logs\ibkr_executor.log -Tail 40
 1. **Publisher** (cloud) emits a fresh signed `target_book.json` **every day** —
    weekends and holidays included, since Bitcoin keeps trading and the signals
    keep moving while the US market is closed.
-2. **Laptop** wakes ~09:45 ET → `git pull` → executor verifies + trades paper.
+2. **Laptop** wakes ~2:30 PM CT (3:30 PM ET) → `git pull` → executor verifies +
+   trades paper.
    The executor only ever trades on US market days: its weekend/holiday guard
    makes any Saturday/holiday fire a safe no-op.
 3. Guards keep it safe: weekend/holiday skip (executor side), stale-book

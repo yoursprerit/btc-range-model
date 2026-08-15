@@ -16,7 +16,7 @@ name: Publish target book (IBKR Option C)
 #     Overall strategy sees BTC's fresh 7:00-AM-CT bar AND every equity app's
 #     prior 4:00-PM-ET close. The DAILY AUDIT runs ONCE, first — and only a
 #     passing audit lets the Target Book publish. This is the book the
-#     09:45-ET executor trades.
+#     2:30-PM-CT (3:30 PM ET) executor trades.
 #
 # The book is published ONCE per day by this workflow and then stays frozen
 # until the next morning's cycle — it must NOT update again during the day.
