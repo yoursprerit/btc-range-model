@@ -21,6 +21,20 @@
 .PARAMETER NoPull
     Skip the `git pull` (use the book already on disk).
 
+.NOTES
+    Order routing (env only — see IBKR_PAPER_TRADING.md § Order routing):
+      IBKR_ORDER_TYPE    marketable-limit (default) | moc | market
+                         Default sends a LIMIT priced through the touch, so a
+                         bad quote can't run away with the order; anything left
+                         unfilled escalates to a market order in the same run.
+                         moc fills in the 4:00 PM ET closing auction instead —
+                         the price the backtest books against — and must be
+                         entered before the 15:50 ET cutoff (the 2:30 PM CT
+                         task clears it by 20 min).
+      IBKR_SLIPPAGE_CAP  how far through the touch a marketable limit prices
+                         (default 0.005 = 0.5%). Widen it on a laptop with
+                         delayed-only market data.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File C:\btc-range-model\scripts\ibkr_execute_daily.ps1
 
