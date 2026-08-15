@@ -39,7 +39,8 @@
                            2:30 PM US Central slot on a Central-time machine;
                            on another zone pass the local equivalent, e.g.
                            15:30 on an Eastern box).
-.PARAMETER Branch          Branch carrying the published target book.
+.PARAMETER Branch          Branch carrying the published target book (default
+                           main — where the publisher commits the daily book).
 
 .EXAMPLE
     # full setup, generate a secret, wire IBC with paper creds:
@@ -70,7 +71,7 @@ param(
     [string]$IbPassword,
     [string]$IbcDir   = 'C:\IBC',
     [string]$TaskTime = '14:30',
-    [string]$Branch   = 'claude/trading-signals-ibkr-paper-jwyvrc',
+    [string]$Branch   = 'main',
     [string]$Port     = '4002'
 )
 
@@ -212,7 +213,9 @@ if ($Task) {
     Section "Task Scheduler — daily executor"
     $wrapper = Join-Path $ScriptDir 'ibkr_execute_daily.ps1'
     if (-not (Test-Path $wrapper)) { throw "missing $wrapper" }
-    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`""
+    # Pass -Branch through explicitly: the task runs detached from this shell,
+    # so pinning the branch in the action is what makes -Branch mean anything.
+    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Branch `"$Branch`""
     $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $RepoRoot
     $trg = New-ScheduledTaskTrigger -Daily -At ([datetime]$TaskTime)
     $set = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
@@ -220,7 +223,7 @@ if ($Task) {
     Register-ScheduledTask -TaskName 'IBKR Option C executor' -Action $act -Trigger $trg `
         -Settings $set -RunLevel Highest -Force `
         -Description 'Pull the published target book and rebalance the IBKR paper account.' | Out-Null
-    Ok "registered task 'IBKR Option C executor' at $TaskTime daily (-WakeToRun)"
+    Ok "registered task 'IBKR Option C executor' at $TaskTime daily (-WakeToRun), branch $Branch"
     Info "test it now: Start-ScheduledTask -TaskName 'IBKR Option C executor'"
 }
 

@@ -11,7 +11,8 @@
     trades a paper (DU…) account, so a stray or early run is a safe no-op.
 
 .PARAMETER Branch
-    Git branch carrying the published target_book.json (env: IBKR_BRANCH).
+    Git branch carrying the published target_book.json (env: IBKR_BRANCH,
+    default main — where the publisher commits the daily book).
 .PARAMETER Book
     Path to the target book JSON (env: IBKR_BOOK).
 .PARAMETER Band
@@ -58,7 +59,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 
 $AccountMode = if ($env:IBKR_ACCOUNT_MODE) { $env:IBKR_ACCOUNT_MODE } else { 'paper' }
-if (-not $Branch) { $Branch = 'claude/trading-signals-ibkr-paper-jwyvrc' }
+if (-not $Branch) { $Branch = 'main' }
 if (-not $Book)   {
     # live parks idle capital in SATA (target_book_live.json); paper holds cash.
     $BookName = if ($AccountMode -eq 'live') { 'target_book_live.json' } else { 'target_book.json' }
