@@ -57,8 +57,8 @@ sys.path.insert(0, str(_REPO))
 import overall_core as oc                       # noqa: E402  headless engine
 import ibkr_symbols as sym                       # noqa: E402
 from ibkr_common import (                        # noqa: E402  shared broker/order plumbing
-    DEFAULT_PORT, Broker, build_order_plan, is_trading_day, print_plan,
-    signal_is_fresh,
+    DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP, ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
+    Broker, build_order_plan, is_trading_day, print_plan, signal_is_fresh,
 )
 
 
@@ -168,7 +168,17 @@ def main() -> int:
                     help=f"IB Gateway API port (default {DEFAULT_PORT} = paper)")
     ap.add_argument("--client-id", type=int, default=17)
     ap.add_argument("--fill-timeout", type=float, default=60.0,
-                    help="seconds to wait for each order leg to fill")
+                    help="seconds to wait for each order leg to fill (MOC ignores "
+                         "this and waits for the 4:00 PM ET auction)")
+    ap.add_argument("--order-type", choices=list(ORDER_TYPES),
+                    default=ORDER_MARKETABLE_LIMIT,
+                    help="marketable-limit (default): a limit priced through the "
+                         "touch by --slippage-cap; moc: market-on-close, filled in "
+                         "the 4:00 PM ET auction; market: unprotected")
+    ap.add_argument("--slippage-cap", type=float, default=DEFAULT_SLIPPAGE_CAP,
+                    help=f"how far THROUGH the touch a marketable limit is priced "
+                         f"(default {DEFAULT_SLIPPAGE_CAP} = "
+                         f"{DEFAULT_SLIPPAGE_CAP*100:.1f}%%)")
     ap.add_argument("--allow-nonpaper", action="store_true",
                     help="permit a non-DU account (DANGEROUS — disables the paper guard)")
     ap.add_argument("--force", action="store_true",
@@ -225,8 +235,10 @@ def main() -> int:
         print(f"\nAccount {broker.account} (PAPER).")
         print_plan(orders, net_liq)
         if orders:
-            print("\nTransmitting orders (sells → buys)…")
-            broker.place(orders, args.fractional, args.fill_timeout)
+            print(f"\nTransmitting orders ({args.order_type})…")
+            broker.place(orders, args.fractional, args.fill_timeout,
+                         order_type=args.order_type,
+                         slippage_cap=args.slippage_cap)
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()

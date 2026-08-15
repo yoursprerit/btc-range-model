@@ -210,6 +210,8 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--fractional` | allow fractional shares (default: whole shares) |
 | `--port 4002` | IB Gateway API port (paper) |
 | `--max-age-hours 36` | reject a book generated longer ago than this (default 36 spans the 7:15-AM-CT publish anchor → next day's 2:30-PM-CT executor slot, so yesterday's book still trades if today's publish was withheld) |
+| `--order-type` | `marketable-limit` (default), `moc`, or `market` — see IBKR_PAPER_TRADING.md § Order routing (env `IBKR_ORDER_TYPE`) |
+| `--slippage-cap 0.005` | how far through the touch a marketable limit prices (env `IBKR_SLIPPAGE_CAP`) |
 | `--require-signature` | refuse an unsigned book |
 | `--force` | override the weekend/holiday & freshness guards |
 

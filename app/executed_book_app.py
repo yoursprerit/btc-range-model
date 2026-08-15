@@ -145,9 +145,13 @@ def _render(payload: dict, *, source: str) -> None:
             avg = float(t.get("avg_fill_price") or 0.0)
             qty = float(t.get("qty") or 0.0)
             px = avg or float(t.get("price") or 0.0)
+            lmt = float(t.get("limit_price") or 0.0)
+            otype = {"marketable-limit": "LMT", "moc": "MOC",
+                     "market": "MKT"}.get(t.get("order_type") or "", "—")
             trows.append(dict(
                 Action=t.get("action"), Instrument=_name(t.get("key"), t.get("symbol")),
                 IBKR=t.get("symbol"), Qty=qty,
+                Type=(f"{otype} ${lmt:,.2f}" if lmt else otype),
                 Fill=(f"${avg:,.2f}" if avg else (f"~${float(t.get('price') or 0):,.2f}")),
                 Value=f"${qty * px:,.0f}",
                 Status=t.get("status") or "—",

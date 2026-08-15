@@ -24,5 +24,10 @@ WorkingDirectory=/home/ubuntu/btc-range-model
 # Secret / port / webhook live here (gitignored — never commit the real file).
 EnvironmentFile=/home/ubuntu/btc-range-model/deploy/systemd/executor.env
 ExecStart=/home/ubuntu/btc-range-model/scripts/ibkr_execute_daily.sh
-# Give the whole run a hard ceiling (universe pull + fills).
-TimeoutStartSec=900
+# Give the whole run a hard ceiling (universe pull + fills). This is a MAXIMUM,
+# not a fixed wait: a marketable-limit run still finishes in a couple of minutes.
+# It must exceed the MOC hold, though — with IBKR_ORDER_TYPE=moc the executor
+# submits at 2:30 PM CT and then holds the connection until the 4:00 PM ET
+# auction prints (~32 min), so the old 900 s ceiling would have killed the run
+# mid-auction, leaving orders live and no execution report written.
+TimeoutStartSec=3600

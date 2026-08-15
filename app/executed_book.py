@@ -17,7 +17,7 @@ Schema ``executed-book/v1``:
       "net_liq": 100000.0,
       "cash": 42000.0,
       "trades":    [ {key, symbol, action, qty, price, value, status, filled,
-                      avg_fill_price, reason} … ],
+                      avg_fill_price, order_type, limit_price, reason} … ],
       "positions": [ {key, symbol, shares, avg_cost, market_price, market_value,
                       unrealized_pnl} … ],
       "signature": { "alg": "HMAC-SHA256", "value": "…" }   # optional
@@ -51,6 +51,11 @@ def build_payload(*, as_of: str, profile: str, mode: str, account: str,
             "value": qty * price,
             "status": t.get("status"), "filled": float(t.get("filled") or 0.0),
             "avg_fill_price": float(t.get("avg_fill_price") or 0.0),
+            # what was actually SENT: marketable-limit / moc / market, plus the
+            # limit that capped it (0.0 for market and MOC). Reports written
+            # before these existed simply omit them — readers use .get().
+            "order_type": t.get("order_type") or "",
+            "limit_price": float(t.get("limit_price") or 0.0),
             "reason": t.get("reason"),
         }
 

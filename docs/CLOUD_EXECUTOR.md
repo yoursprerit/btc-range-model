@@ -130,7 +130,12 @@ CRON_TZ=America/Chicago
   make a stray or early run a safe no-op — nothing trades unless everything checks
   out.
 - Env overrides (see the script header): `IBKR_PYTHON`, `IBKR_BRANCH`, `IBKR_BOOK`,
-  `IBKR_BAND`, `IBKR_HOST`, `IBKR_PORT`, `IBKR_EXTRA`, `IBKR_NO_PULL`.
+  `IBKR_BAND`, `IBKR_HOST`, `IBKR_PORT`, `IBKR_EXTRA`, `IBKR_NO_PULL`,
+  `IBKR_ORDER_TYPE`, `IBKR_SLIPPAGE_CAP`.
+- Orders default to **marketable limits** (a limit priced 0.5% through the touch,
+  with an automatic market-order escalation for anything left unfilled). Set
+  `IBKR_ORDER_TYPE=moc` to fill in the 4:00 PM ET closing auction instead — the
+  price the backtest books against. See IBKR_PAPER_TRADING.md § Order routing.
 
 Check the log after the first scheduled run:
 

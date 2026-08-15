@@ -268,10 +268,66 @@ If you use the git-commit transport, the executor host just does `git pull` (to
 get the latest committed book) before running with `--file`.
 
 Executor-specific flags: `--file` / `--url` / stdin (source), `--max-age-hours`
-(reject a book generated too long ago, default 30 — spans the once-daily
-7:15-AM-CT publish cycle), `--require-signature`. The
+(reject a book generated too long ago, default 36 — spans the 7:15-AM-CT publish
+anchor to the next day's 2:30-PM-CT executor slot), `--require-signature`. The
 `--execute`, `--band`, `--fractional`, `--port`, `--allow-nonpaper`, `--force`
 flags behave exactly as in the all-in-one rebalancer.
+
+---
+
+## Order routing
+
+Both entry points place orders through the same `Broker.place()` in
+`scripts/ibkr_common.py`, so paper and live route identically — only the safety
+guards differ. Pick the order type with `--order-type` (env `IBKR_ORDER_TYPE`
+via the wrapper scripts):
+
+| `--order-type` | What is sent | When to use it |
+|---|---|---|
+| `marketable-limit` **(default)** | A LIMIT priced `--slippage-cap` **through** the touch — a BUY at 0.5% above the ask, a SELL at 0.5% below the bid | Everyday default. Fills like a market order in a normal book, but a stale quote, a flash dislocation or a bad print can't cost more than the cap |
+| `moc` | Market-on-close — filled in the official 4:00 PM ET closing auction | Tightest tracking to the backtest, which books fills at the close (see below) |
+| `market` | An unprotected market order (the pre-2026-08 behaviour) | Escape hatch; no price ceiling |
+
+**Why a marketable limit rather than a plain limit.** A resting limit that
+doesn't fill leaves the account holding the *wrong* exposure until tomorrow's
+run — an open-ended tracking error, far worse than paying a spread. So the
+limit is priced to cross immediately, and anything it still fails to fill
+inside `--fill-timeout` is **cancelled and re-sent as a market order in the
+same run** (partial fills escalate only the remainder). The ceiling therefore
+costs nothing in fill certainty — it only ever caps the first attempt. If a
+leg can't be priced at all (no market-data subscription, dead quote) it falls
+back to a market order and says so in the log.
+
+**Why MOC is worth considering.** Every backtest in this repo books fills at
+the **close**; the executor trades at 2:30 PM CT, 30 minutes earlier, so live
+results carry a structural 30-minute drift against those numbers. MOC removes
+it, and the closing auction is the deepest, tightest liquidity of the day. The
+trade-offs are real:
+
+- Orders must be entered before the **15:50 ET** exchange cutoff. The
+  2:30-PM-CT (3:30 PM ET) slot clears it by 20 minutes — this is exactly why
+  MOC wasn't an option at the old 8:45-AM-CT slot. Past the cutoff the executor
+  automatically falls back to a marketable limit rather than eat a rejection.
+- **Nothing fills until 4:00 PM ET**, so the executor holds the connection for
+  ~32 minutes to write a truthful execution report. Keep
+  `TimeoutStartSec` in `ibkr-executor.service` above ~35 min (it ships at 3600).
+- MOC can't be cancelled after the cutoff and accepts whole shares only
+  (`--fractional` is ignored for MOC, with a warning).
+
+```bash
+# default — protected limits, 0.5% cap
+python scripts/ibkr_execute_book.py --file data/overall/target_book.json --execute
+
+# closing auction instead
+python scripts/ibkr_execute_book.py --file data/overall/target_book.json --execute \
+    --order-type moc
+
+# wider cap for a host with delayed-only market data
+python scripts/ibkr_execute_book.py --file … --execute --slippage-cap 0.015
+```
+
+The Executed Book tab shows what was actually sent per trade (`LMT $251.66`,
+`MOC`, `MKT`), so an escalation or a market fallback is visible after the fact.
 
 ### Automating Option C
 - **Publish**: manual `workflow_dispatch` on the Action (or on the default

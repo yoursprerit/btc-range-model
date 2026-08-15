@@ -89,6 +89,9 @@ if ($AccountMode -eq 'live') {
     if ($env:IBKR_MAX_ORDER_NOTIONAL) { $ExecArgs += @('--max-order-notional', $env:IBKR_MAX_ORDER_NOTIONAL) }
 }
 if ($env:IBKR_KILL_SWITCH_FILE) { $ExecArgs += @('--kill-switch-file', $env:IBKR_KILL_SWITCH_FILE) }
+# Order routing: marketable-limit (default) | moc | market — see IBKR_PAPER_TRADING.md.
+if ($env:IBKR_ORDER_TYPE)   { $ExecArgs += @('--order-type', $env:IBKR_ORDER_TYPE) }
+if ($env:IBKR_SLIPPAGE_CAP) { $ExecArgs += @('--slippage-cap', $env:IBKR_SLIPPAGE_CAP) }
 Log "account mode: $AccountMode"
 
 # --execute places orders; the executor's own guards decide if it actually trades.

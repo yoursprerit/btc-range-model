@@ -46,7 +46,8 @@ import target_book as tb                           # noqa: E402  (light: stdlib 
 import executed_book as eb                          # noqa: E402
 import ibkr_symbols as sym                          # noqa: E402
 from ibkr_common import (                           # noqa: E402
-    DEFAULT_PORT, Broker, build_order_plan, is_trading_day, print_plan,
+    DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP, ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
+    Broker, build_order_plan, is_trading_day, print_plan,
 )
 
 DEFAULT_REPORT = _REPO / "data" / "overall" / "executed_book.json"
@@ -117,7 +118,20 @@ def main() -> int:
                     help=f"IB Gateway API port (default {DEFAULT_PORT} = paper)")
     ap.add_argument("--client-id", type=int, default=18)
     ap.add_argument("--fill-timeout", type=float, default=60.0,
-                    help="seconds to wait for each order leg to fill")
+                    help="seconds to wait for each order leg to fill (MOC ignores "
+                         "this and waits for the 4:00 PM ET auction)")
+    ap.add_argument("--order-type", choices=list(ORDER_TYPES),
+                    default=ORDER_MARKETABLE_LIMIT,
+                    help="marketable-limit (default): a limit priced through the "
+                         "touch by --slippage-cap — fills like a market order but "
+                         "caps what a bad quote can cost; moc: market-on-close, "
+                         "filled in the 4:00 PM ET auction (the price the engine "
+                         "books against, so it removes the drift between live and "
+                         "backtest); market: unprotected, no price ceiling")
+    ap.add_argument("--slippage-cap", type=float, default=DEFAULT_SLIPPAGE_CAP,
+                    help=f"how far THROUGH the touch a marketable limit is priced "
+                         f"(default {DEFAULT_SLIPPAGE_CAP} = "
+                         f"{DEFAULT_SLIPPAGE_CAP*100:.1f}%%)")
     ap.add_argument("--max-age-hours", type=float, default=36.0,
                     help="reject a book generated more than this many hours ago "
                          "(default 36 — spans the 7:15-AM-CT publish anchor to "
@@ -266,8 +280,10 @@ def main() -> int:
         print_plan(orders, net_liq)
         fills: list[dict] = []
         if orders:
-            print("\nTransmitting orders (sells → buys)…")
-            fills = broker.place(orders, args.fractional, args.fill_timeout)
+            print(f"\nTransmitting orders ({args.order_type})…")
+            fills = broker.place(orders, args.fractional, args.fill_timeout,
+                                 order_type=args.order_type,
+                                 slippage_cap=args.slippage_cap)
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,

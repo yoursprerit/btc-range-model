@@ -296,9 +296,9 @@
         <div class="step exec">
           <span class="badge">15</span>
           <h3>Place the orders</h3>
-          <p>Transmit market orders — sells leg first (await fills to free buying power), then the
+          <p>Transmit orders — marketable limits by default (unfilled remainder escalates to market), or MOC into the 4:00 PM ET auction. Sells leg first (await fills to free buying power), then the
              buys leg.</p>
-          <span class="ref"><b>ibkr_common</b>.Broker.place() → MarketOrder</span>
+          <span class="ref"><b>ibkr_common</b>.Broker.place() → LimitOrder / MOC / MarketOrder</span>
         </div>
 
         <div class="step exec">

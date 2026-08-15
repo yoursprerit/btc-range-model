@@ -33,7 +33,7 @@ flowchart TD
     S12["12 · 🛡️ Broker() connect → 127.0.0.1:4002<br/>paper-account (DU…) guard"]
     S13["13 · net_liq() + positions_by_key()<br/>read NAV + current holdings"]
     S14["14 · 📏 build_order_plan()<br/>shares = w×NAV/price · diff vs held · no-trade band · sells-first"]
-    S15["15 · Broker.place()<br/>market orders: sells leg → buys leg"]
+    S15["15 · Broker.place()<br/>marketable limits (or MOC): sells leg → buys leg"]
     S16["16 · IB Gateway → IBKR paper<br/>fills land"]
     S8 --> S9 --> S10 --> S11 --> S12 --> S13 --> S14 --> S15 --> S16
   end
@@ -73,7 +73,7 @@ flowchart TD
 | 12 | 💻 Laptop 🛡️ | `ibkr_common.Broker()` → `127.0.0.1:4002` | Open the paper-gateway socket and confirm the account is a paper (`DU…`) account — else abort. |
 | 13 | 💻 Laptop | `Broker.net_liq()` · `Broker.positions_by_key()` | Fetch net-liquidation value and current positions (IBKR symbols mapped back to signal keys — IBIT → BTC). |
 | 14 | 💻 Laptop 📏 | `ibkr_common.build_order_plan()` | `target_shares = weight × net_liq ÷ price`. Diff vs held → **delta > 0 buy**, **delta < 0 sell**; a held name at 0% is fully closed. Skip anything inside the no-trade band (1% of NAV). Sells first. |
-| 15 | 💻 Laptop | `ibkr_common.Broker.place()` | Transmit market orders — sells leg first (await fills to free buying power), then the buys leg. |
+| 15 | 💻 Laptop | `ibkr_common.Broker.place()` | Transmit orders — marketable limits by default (unfilled remainder escalates to market), or MOC into the 4:00 PM ET auction. Sells leg first (await fills to free buying power), then the buys leg; MOC submits both at once. |
 | 16 | 💻 Laptop | IB Gateway → IBKR paper | Gateway routes to IBKR; the paper portfolio now matches the target book. |
 
 ## What runs where

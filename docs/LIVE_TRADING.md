@@ -118,6 +118,14 @@ Now both fire each weekday at **2:30 PM US Central** (3:30 PM ET), the slot in
 (`4003`, 25% cap). They write separate reports and appear under the Executed
 Book tab's **Paper / Live** selector.
 
+Both also route orders identically — **marketable limits** by default, priced
+0.5% through the touch, with any unfilled remainder escalated to a market order
+in the same run. Keep that on for live: it is the only thing standing between a
+bad quote and an unbounded fill price, and it costs nothing when the book is
+normal. `IBKR_ORDER_TYPE=moc` in `executor-live.env` switches to the 4:00 PM ET
+closing auction (see IBKR_PAPER_TRADING.md § Order routing) — if you do, keep
+`TimeoutStartSec` above ~35 min so the run isn't killed mid-auction.
+
 ---
 
 ## Halting live fast

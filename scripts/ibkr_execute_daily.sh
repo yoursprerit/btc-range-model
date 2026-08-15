@@ -27,6 +27,9 @@
 #                 remaps paper to 4004 — set this to match)
 #   IBKR_EXTRA    extra flags passed through (e.g. "--fractional")
 #   IBKR_NO_PULL  set to 1 to skip the git pull (use the book already on disk)
+#   IBKR_ORDER_TYPE    marketable-limit (default) | moc | market
+#   IBKR_SLIPPAGE_CAP  how far through the touch a marketable limit prices
+#                      (default 0.005 = 0.5%)
 #
 # OVERALL_BOOK_SECRET must be exported (same value used to publish) so the book's
 # signature verifies before any order is placed.
@@ -72,6 +75,8 @@ fi
 # (deploy/systemd/executor-live.env), pointing IBKR_PORT at 4003.
 ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${PORT}"
       --account-mode "${ACCOUNT_MODE}")
+[ -n "${IBKR_ORDER_TYPE:-}" ]   && ARGS+=(--order-type "${IBKR_ORDER_TYPE}")
+[ -n "${IBKR_SLIPPAGE_CAP:-}" ] && ARGS+=(--slippage-cap "${IBKR_SLIPPAGE_CAP}")
 if [ "${ACCOUNT_MODE}" = "live" ]; then
   ARGS+=(--confirm-live)
   [ -n "${IBKR_EXPECTED_ACCOUNT:-}" ]   && ARGS+=(--expected-account "${IBKR_EXPECTED_ACCOUNT}")
