@@ -1,67 +1,76 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-13T12:17:30+00:00",
- "as_of": "2026-08-12",
+ "generated_at_utc": "2026-08-14T12:17:14+00:00",
+ "as_of": "2026-08-13",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
   "GDX": 0.18,
   "NUGT": 0.1,
-  "SOXX": 0.16106651361486043,
+  "SOXX": 0.1669449034869742,
   "SOXL": 0.1,
-  "GRID": 0.10529374815728026,
-  "XLE": 0.02126887792973316,
-  "OIH": 0.03409960437740937,
-  "ERX": 0.0979467396865722,
-  "ARTY": 0.20032451623414446
+  "GRID": 0.10230992226837082,
+  "XLE": 0.01960718191375224,
+  "OIH": 0.03136476445607931,
+  "ERX": 0.09030146114794278,
+  "ARTY": 0.20947176672688067
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GDX": 90.96,
-  "NUGT": 164.62,
-  "SOXX": 546.61,
-  "SOXL": 142.16,
-  "GRID": 188.9,
-  "XLE": 61.03,
-  "OIH": 413.24,
-  "ERX": 98.96,
-  "ARTY": 76.03
+  "GDX": 88.27,
+  "NUGT": 155.13,
+  "SOXX": 550.74,
+  "SOXL": 145.36,
+  "GRID": 188.21,
+  "XLE": 61.06,
+  "OIH": 410.57,
+  "ERX": 99.19,
+  "ARTY": 77.56
  },
  "actions": [
   {
    "key": "ARTY",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 PURE-REGIME BUY",
-   "target": 0.20032451623414446,
-   "in_pos": false,
-   "priority": 0.6727157568564673,
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.20947176672688067,
+   "in_pos": true,
+   "priority": 0.8068427673543752,
    "exits_next_bar": false
   },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.02126887792973316,
+   "target": 0.01960718191375224,
    "in_pos": true,
-   "priority": 0.8272030364701255,
+   "priority": 0.8039086046617008,
    "exits_next_bar": false
   },
   {
    "key": "ERX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.0979467396865722,
+   "target": 0.09030146114794278,
    "in_pos": true,
-   "priority": 0.8253916550585596,
+   "priority": 0.802231541423858,
    "exits_next_bar": false
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.03409960437740937,
+   "target": 0.03136476445607931,
    "in_pos": true,
-   "priority": 0.7447619047619048,
+   "priority": 0.72016387749654,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GRID",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.10230992226837082,
+   "in_pos": true,
+   "priority": 0.6733099621444594,
    "exits_next_bar": false
   },
   {
@@ -70,16 +79,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.6412992903812136,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GRID",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.10529374815728026,
-   "in_pos": true,
-   "priority": 0.6330743384478918,
+   "priority": 0.571263307290817,
    "exits_next_bar": false
   },
   {
@@ -88,7 +88,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.6190331169532015,
+   "priority": 0.5490805305752252,
    "exits_next_bar": false
   },
   {
@@ -97,16 +97,25 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.3626431938636251,
+   "priority": 0.4492004343475741,
    "exits_next_bar": false
   },
   {
    "key": "SOXX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.16106651361486043,
+   "target": 0.1669449034869742,
    "in_pos": true,
-   "priority": 0.3280866002878332,
+   "priority": 0.4147087836374507,
+   "exits_next_bar": false
+  },
+  {
+   "key": "PBW",
+   "action": "WATCH",
+   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
    "exits_next_bar": false
   },
   {
@@ -180,31 +189,22 @@
    "in_pos": false,
    "priority": null,
    "exits_next_bar": false
-  },
-  {
-   "key": "PBW",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
   }
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-13T12:17:29+00:00",
+  "checked_at_utc": "2026-08-14T12:17:12+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Aug 13, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-08-12",
-  "btc_bar_close_utc": "2026-08-13T12:00:00+00:00"
+  "anchor_ct": "Aug 14, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-08-13",
+  "btc_bar_close_utc": "2026-08-14T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "d56be64a576d",
+ "code_sha": "5d8cad178659",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "6442893406fdcf23f3849bbe55d706dae8d2998f242d0f954c0ff5292a8881af"
+  "value": "e8533551a42a736fd981fc6e6eab0ea0c8080a080632865ed34a67f87d0755ce"
  }
 }
