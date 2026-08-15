@@ -33,6 +33,38 @@ book** and trades the IBKR **paper** account.
 
 ---
 
+## 0.5 Prerequisites — have these ready BEFORE running the setup script
+
+The setup script cannot create or configure anything on IBKR's side; it only
+writes credentials you already hold into IBC's config. Running it without these
+in hand leaves you with a half-configured box.
+
+**On IBKR (do these first — full detail in
+[`IBKR_PAPER_TRADING.md` → *Prerequisites*](IBKR_PAPER_TRADING.md#prerequisites--do-these-before-any-setup-script)):**
+
+| # | Prerequisite | Why it blocks setup |
+|---|---|---|
+| 1 | A **paper account**, created in Client Portal | Nothing to trade against otherwise |
+| 2 | The **paper username + password** (separate from your live login) | These are `-IbUser` / `-IbPassword` |
+| 3 | Account id starts with **`DU`** | The executor aborts on any non-`DU` account |
+| 4 | **2FA disabled** on that paper login | The scheduled task can't answer a phone prompt |
+| 5 | **Market data shared** to the paper account *(recommended)* | Without quotes, marketable limits fall back to unprotected market orders |
+| 6 | The **`OVERALL_BOOK_SECRET`** value used by the publisher | A mismatch aborts at signature verification |
+
+**On the laptop:**
+
+| Prerequisite | Notes |
+|---|---|
+| **Windows 10/11 with `winget`** | The `-InstallPython` phase needs it. Missing? Install *App Installer* from the Microsoft Store, or install Python 3.12 + Git by hand (§2). |
+| **An elevated PowerShell** | Run as Administrator — required for the installer and scheduled-task phases. |
+| **The repo cloned** | `git clone https://github.com/yoursprerit/btc-range-model.git C:\btc-range-model` |
+| **Power settings that allow wake** | The daily task registers `-WakeToRun`, but Windows must permit it (§7). |
+| **Your machine's timezone** | The task trigger fires in **local** time; the target is 2:30 PM US Central. Pass `-TaskTime` accordingly (§7). |
+
+Only once all of the above is true should you run the quick start below.
+
+---
+
 ## ⚡ Quick start — automated setup (steps 2–7 in one script)
 
 Most of the setup below is scripted in **`scripts\setup_windows_option_c.ps1`**.
@@ -50,12 +82,12 @@ What it automates vs what stays manual:
 
 | Automated by the script | Stays manual (by design) |
 |---|---|
-| Install Python 3.12 + Git (winget) | IBKR **licence click-through** during install |
-| Create `.venv`, install `requirements-ibkr.txt` | **First IB Gateway login / 2FA** |
-| Set `OVERALL_BOOK_SECRET` (generates one if omitted) | Ticking the API settings (or let IBC enforce them) |
-| Download + launch the IB Gateway installer | Deciding to `--execute` |
-| Download IBC + template its `config.ini` (paper) | |
-| Register the daily Task Scheduler job | |
+| Install Python 3.12 + Git (winget) | **Creating the IBKR paper account** + login (§0.5) |
+| Create `.venv`, install `requirements-ibkr.txt` | IBKR **licence click-through** during install |
+| Set `OVERALL_BOOK_SECRET` (generates one if omitted) | **First IB Gateway login / 2FA** |
+| Download + launch the IB Gateway installer | Ticking the API settings (or let IBC enforce them) |
+| Download IBC + template its `config.ini` (paper) | Sharing market data to the paper account (§0.5) |
+| Register the daily Task Scheduler job | Deciding to `--execute` |
 | Verify the whole chain | |
 
 Run a single phase instead of everything, e.g. just rebuild the venv and
@@ -79,6 +111,7 @@ visible. Then jump to **§5** to publish/pull a book and do your first dry-run.
 
 | Component | Purpose |
 |---|---|
+| **An IBKR paper account (`DU…`) + its login** | what gets traded — create it first (§0.5) |
 | **Python 3.12** | run the executor |
 | **This repo** (cloned) | the executor scripts + the pulled target book |
 | **IB Gateway** | the authenticated bridge to IBKR (paper) |
