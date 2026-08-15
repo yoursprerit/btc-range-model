@@ -517,27 +517,27 @@ def test_next_close_label_crypto_uses_ct_bar_close():
     assert "Aug 3" in lbl and "7:00 AM" in lbl
 
 
-def test_exit_execution_note_past_tense_after_the_morning_rebalance():
-    # exit committed Mon Aug 3; Tue Aug 4 10:00 CT (15:00 UTC) — the 8:45 CT
+def test_exit_execution_note_past_tense_after_the_afternoon_rebalance():
+    # exit committed Mon Aug 3; Tue Aug 4 14:45 CT (19:45 UTC) — the 2:30 PM CT
     # rebalance has run: the executor has SOLD, the engine books today's close
     note = fr.exit_execution_note("us_equity", "2026-08-03",
-                                  now="2026-08-04T15:00:00Z")
-    assert note.startswith("executor sold at today's ≈8:45 AM CT rebalance")
+                                  now="2026-08-04T19:45:00Z")
+    assert note.startswith("executor sold at today's ≈2:30 PM CT rebalance")
     assert "today, Aug 4, 4:00 PM" in note
 
 
 def test_exit_execution_note_future_tense_before_the_rebalance():
-    # Tue Aug 4 7:00 CT (12:00 UTC) — before the 8:45 CT rebalance
+    # Tue Aug 4 10:00 CT (15:00 UTC) — before the 2:30 PM CT rebalance
     note = fr.exit_execution_note("us_equity", "2026-08-03",
-                                  now="2026-08-04T12:00:00Z")
-    assert note.startswith("executor sells at today's ≈8:45 AM CT rebalance")
+                                  now="2026-08-04T15:00:00Z")
+    assert note.startswith("executor sells at today's ≈2:30 PM CT rebalance")
 
 
 def test_exit_execution_note_tomorrow_after_the_signal_close():
     # Mon Aug 3 evening: the pending session is tomorrow
     note = fr.exit_execution_note("us_equity", "2026-08-03",
                                   now="2026-08-03T22:00:00Z")
-    assert note.startswith("executor sells at tomorrow's ≈8:45 AM CT rebalance")
+    assert note.startswith("executor sells at tomorrow's ≈2:30 PM CT rebalance")
     assert "tomorrow, Aug 4, 4:00 PM" in note
 
 
@@ -545,3 +545,10 @@ def test_exit_execution_note_crypto_keeps_bar_close_only():
     note = fr.exit_execution_note("crypto", "2026-08-01",
                                   now="2026-08-02T18:00:00Z")
     assert note.startswith("engine books the exit at the bar close")
+
+
+def test_rebalance_label_matches_the_scheduled_slot():
+    # the UI copy is derived from REBALANCE_CT, so the slot and the label can
+    # never drift apart when the schedule moves
+    assert fr.REBALANCE_CT == (14, 30)
+    assert fr.rebalance_label() == "2:30 PM CT"

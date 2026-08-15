@@ -503,9 +503,9 @@ def _gate_card(title, icon, fired, rows, interpretation):
 
 
 def _exit_note():
-    """Both timelines of a pending exit: the live IBKR executor's ≈8:45 AM CT
-    morning rebalance (where the position is actually sold) and the engine/
-    backtest booking at the pending bar's close."""
+    """Both timelines of a pending exit: the live IBKR executor's ≈2:30 PM CT
+    rebalance (where the position is actually sold) and the engine/backtest
+    booking at the pending bar's close."""
     try:
         return freshness.exit_execution_note(
             "us_equity", pd.Timestamp(preds["target_date"].iloc[-1]))

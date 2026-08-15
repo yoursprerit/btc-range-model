@@ -460,20 +460,31 @@ def next_close_label(kind: str, asof, now=None) -> str:
     return lbl
 
 
-# the live IBKR executor's once-daily rebalance slot (crontab `45 9 * * 1-5`,
-# 9:45 AM ET — see IBKR_PAPER_TRADING.md): committed signal changes are TRADED
-# here, the morning after they commit, while the engine/backtest books them at
-# the pending bar's close.  Display-only — nothing schedules off this.
-REBALANCE_CT = (8, 45)
+# the live IBKR executor's once-daily rebalance slot (crontab `30 14 * * 1-5`
+# with CRON_TZ=America/Chicago — 2:30 PM US Central / 3:30 PM ET, 30 minutes
+# before the 3:00-PM-CT equity close; see IBKR_PAPER_TRADING.md): committed
+# signal changes are TRADED here, the session after they commit, while the
+# engine/backtest books them at the pending bar's close.  Display-only —
+# nothing schedules off this.
+REBALANCE_CT = (14, 30)
+
+
+def rebalance_label() -> str:
+    """The executor's daily slot as shown in the UI, e.g. ``2:30 PM CT`` —
+    derived from ``REBALANCE_CT`` so the copy can never drift from the slot
+    the systemd timer / crontab actually fires."""
+    h, m = REBALANCE_CT
+    return (pd.Timestamp(2000, 1, 1, h, m).strftime("%I:%M %p").lstrip("0")
+            + " CT")
 
 
 def exit_execution_note(kind: str, asof, now=None) -> str:
     """Both timelines of a pending "exits next bar" decision, in one phrase:
-    when the LIVE EXECUTOR actually sells (the ≈8:45 AM CT morning rebalance of
-    the pending session — past tense once that moment has passed) and when the
+    when the LIVE EXECUTOR actually sells (the ≈2:30 PM CT rebalance of the
+    pending session — past tense once that moment has passed) and when the
     ENGINE/backtest books the exit (the pending bar's close).  Answers "it said
     exits next bar yesterday — why is it still LONG?": the executor sold at the
-    morning rebalance; the engine's position runs to the close by design."""
+    afternoon rebalance; the engine's position runs to the close by design."""
     nxt_close = next_close_label(kind, asof, now)
     if kind == "crypto":
         return f"engine books the exit at the bar close — {nxt_close}"
@@ -486,7 +497,7 @@ def exit_execution_note(kind: str, asof, now=None) -> str:
            "tomorrow" if reb.date() == (n_ct + pd.Timedelta(days=1)).date() else
            reb.strftime("%b %d").replace(" 0", " "))
     verb = "sold" if n >= reb.tz_convert("UTC") else "sells"
-    return (f"executor {verb} at {day}'s ≈8:45 AM CT rebalance · "
+    return (f"executor {verb} at {day}'s ≈{rebalance_label()} rebalance · "
             f"engine books the exit at the close — {nxt_close}")
 
 

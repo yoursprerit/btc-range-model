@@ -195,14 +195,18 @@ def verify_signature(payload: dict, secret: str | None) -> tuple[bool, str]:
 
 
 def validate(payload: dict, today: pd.Timestamp, *, max_bar_age_days: int = 4,
-             max_gen_age_hours: float = 30.0) -> tuple[bool, str]:
+             max_gen_age_hours: float = 36.0) -> tuple[bool, str]:
     """(ok, reason) structural + freshness checks, independent of the broker.
 
     The book is published ONCE daily (≈7:15 AM CT) and intentionally frozen
     until the next morning, so the generation-age window must span a full
-    publish cycle plus slack: 30 h accepts yesterday's book when today's
-    publish was withheld by a failed audit (the documented fallback), while
-    still rejecting anything older.
+    publish cycle plus slack — measured from the publish anchor to the
+    executor's slot.  With the executor at 2:30 PM CT, yesterday's book is
+    31.25 h old when today's publish was withheld by a failed audit (7:15 AM
+    CT → 2:30 PM CT next day), so the window is 36 h: it accepts that
+    documented fallback with slack, while still rejecting a two-day-old book
+    (55 h+).  It was 30 h while the executor ran at 8:45 AM CT; the two move
+    together, so re-derive it if the slot changes again.
 
     Rejects a wrong schema, a stale signal bar (dead feed), a book generated
     too long ago (so a forgotten/queued artifact can't trade an old decision),

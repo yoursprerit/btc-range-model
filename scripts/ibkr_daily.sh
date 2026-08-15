@@ -5,12 +5,13 @@
 # cron on US trading days (the Python script itself also guards against weekends
 # and holidays, so a stray weekend fire is a safe no-op).
 #
-# Example crontab (weekdays 09:45 America/New_York — a few minutes after the
-# open, so the strategy's "act on the next bar" executes on a fresh session).
-# Set CRON_TZ so the schedule tracks Eastern regardless of the host clock:
+# Example crontab (weekdays 14:30 America/Chicago = 2:30 PM US Central /
+# 3:30 PM ET — 30 minutes before the equity close, so the strategy's "act on
+# the next bar" executes late in that session). Set CRON_TZ so the schedule
+# tracks US Central (and its DST switch) regardless of the host clock:
 #
-#     CRON_TZ=America/New_York
-#     45 9 * * 1-5  /path/to/repo/scripts/ibkr_daily.sh >> /path/to/repo/logs/ibkr_cron.log 2>&1
+#     CRON_TZ=America/Chicago
+#     30 14 * * 1-5  /path/to/repo/scripts/ibkr_daily.sh >> /path/to/repo/logs/ibkr_cron.log 2>&1
 #
 # Prerequisites (see IBKR_PAPER_TRADING.md):
 #   * IB Gateway logged into the PAPER account (via IBC for unattended login)

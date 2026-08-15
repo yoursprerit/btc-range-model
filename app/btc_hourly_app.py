@@ -4313,7 +4313,7 @@ def _fill_after_signal(s: "pd.Series", dates) -> "np.ndarray":
     bar T's signal knowable.  The first price an equity trader can actually get
     on that signal is the close of the first exchange session on or after day
     T+1 (Monday for weekend bars) — the repo's own live procedure
-    (IBKR_PAPER_TRADING.md: act on the next bar, shortly after the US open).
+    (IBKR_PAPER_TRADING.md: act on the next bar, at the 2:30-PM-CT rebalance).
     The old ``reindex(dates).ffill()`` filled at day T's close — ~15 h (up to
     2.5 days over weekends) BEFORE the signal existed — systematically banking
     the correlated overnight/weekend gap (ETH_BMNR_STRATEGY_EVAL.md §5).

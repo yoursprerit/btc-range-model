@@ -118,12 +118,14 @@ account, and the order plan. When it looks right, place the paper orders:
 Tell it the container's paper port via `IBKR_PORT=4004`:
 
 ```cron
-CRON_TZ=America/New_York
-45 9 * * 1-5  IBKR_PORT=4004 /home/ubuntu/btc-range-model/scripts/ibkr_execute_daily.sh >> /home/ubuntu/btc-range-model/logs/ibkr_cron.log 2>&1
+CRON_TZ=America/Chicago
+30 14 * * 1-5  IBKR_PORT=4004 /home/ubuntu/btc-range-model/scripts/ibkr_execute_daily.sh >> /home/ubuntu/btc-range-model/logs/ibkr_cron.log 2>&1
 ```
 
-- Fires weekdays 09:45 ET — a few minutes after the US open and after the cloud
-  publisher's ~08:30-ET commit, so the `git pull` gets the morning's book.
+- Fires weekdays **2:30 PM US Central** (3:30 PM ET) — 30 minutes before the
+  equity close and hours after the cloud publisher's morning commit, so the
+  `git pull` gets the day's book. `CRON_TZ=America/Chicago` holds the slot
+  across the CDT/CST switch.
 - The executor's own guards (weekend/holiday, stale book, signature, paper-only)
   make a stray or early run a safe no-op — nothing trades unless everything checks
   out.
@@ -162,16 +164,20 @@ systemctl list-timers 'ibkr-*'                 # confirm next run times
 journalctl -u ibkr-executor.service -f         # watch the next rebalance
 ```
 
-- **`ibkr-executor.timer`** fires the executor weekdays 09:45 ET.
+- **`ibkr-executor.timer`** fires the executor weekdays 2:30 PM US Central
+  (3:30 PM ET).
 - **`ibkr-gateway-healthcheck.timer`** probes the gateway every 30 min, 08:00–16:30
   ET (skipping the nightly 03:00-ET restart window to avoid false alarms).
 - Both units carry `OnFailure=ibkr-alert@%n.service`, so a failed run also fires
   an alert — on top of the healthcheck's own webhook post.
 
-> The `America/New_York` suffix in the `.timer` files needs **systemd v252+**
-> (Ubuntu 24.04 has it). On older systemd, set the host clock to Eastern with
-> `sudo timedatectl set-timezone America/New_York` and delete the suffix from the
-> `OnCalendar=` lines.
+> The timezone suffix in the `.timer` files (`America/Chicago` on the executor,
+> `America/New_York` on the healthcheck) needs **systemd v252+** (Ubuntu 24.04
+> has it). On older systemd, set the host clock to the matching zone with
+> `sudo timedatectl set-timezone …` and delete the suffix from the
+> `OnCalendar=` lines — note the two units are anchored to different zones, so
+> on an older box convert the executor's 14:30 Central into the host's zone
+> before dropping the suffix.
 
 ## 6c. Gateway healthcheck & alerts
 
