@@ -389,6 +389,8 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--require-signature` | refuse an unsigned book |
 | `--force` | override the weekend/holiday & freshness guards |
 | `--outside-rth` | **manual after-hours trading.** Stamps `outsideRth` on the orders and forces marketable-limit, because IBKR *rejects* MARKET and MOC orders outside regular hours. With no live quote it prices off the book's own `exec_price`; a leg it still cannot price is skipped rather than sent blind. Unfilled limits stay working — the market-order escalation does not exist outside RTH. **The scheduled 2:30 PM CT wrapper never passes this**, so automation is unaffected. |
+| `--refresh-report` | **place no orders** — connect, read the account's real positions and today's fills from IBKR, and rewrite a **signed** report. Use it when late or partial fills print after the sending run's `--fill-timeout` expired (routine outside RTH), or to re-sign a report written from a shell that had no `OVERALL_BOOK_SECRET`. |
+| `--push-report` | commit + push the report the way the scheduled wrapper does. A manual run otherwise leaves the cloud app showing whatever the last *scheduled* run published. |
 | `--market-data-type 3` | request **delayed** quotes. Delayed data is free and needs no subscription, but IBKR only serves it when asked — use this if every leg logs error 10089 / `falling back to MARKET`. Pair with a wider `--slippage-cap` since the reference is 15 minutes stale. |
 
 ---
@@ -683,6 +685,8 @@ Then the specifics:
 | Task exists but never runs / `LastTaskResult` non-zero | Read `logs\ibkr_executor.log` — the wrapper logs every step. Work down the §9 pre-flight list. |
 | Orders don't fill | Outside US market hours, or the paper account lacks buying power / the symbol is halted. Market orders fill during RTH. |
 | Log stops right after `Published book …` with no `Signature:` line and no `done` | The classic detached-run failure, fixed in the wrapper as of 2026-08-17. Redirected stdout on Windows is encoded with the ANSI codepage, so the `→` in the book printout raised `UnicodeEncodeError`; `2>&1` then turned the traceback into a terminating error under `$ErrorActionPreference='Stop'`, killing the wrapper before it could log anything. `git pull` to get the fix. Note the same command works interactively — a console stdout takes the Unicode path, so this only ever shows up under Task Scheduler. |
+| Executed Book shows a **signature error** | The report was written by a process with no `OVERALL_BOOK_SECRET`, so it went out **unsigned** (the run now warns when this happens). Open a new PowerShell and re-run with `--refresh-report --push-report`. |
+| Executed Book shows **stale trades / allocation drift** after fills completed | Two causes. (a) A manual run writes the report locally but does **not** push — only the wrapper did, until `--push-report`. (b) The report is written when `--fill-timeout` expires, so fills that print later are missing. `--refresh-report` fixes both: it re-reads positions and today's fills from the broker. |
 | Log shows `ù` where `—` should be | Cosmetic mojibake from the same encoding mismatch (cp1252 out, cp437 in); fixed by the same change. |
 
 ---

@@ -33,6 +33,7 @@ import argparse
 import os
 import sys
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -86,6 +87,42 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
     out.write_text(tb.dumps(report, secret))
     print(f"Wrote execution report → {out_path} "
           f"({len(trades)} trade(s), {len(positions)} position(s))")
+    if not secret:
+        # Silently emitting an unsigned report is how "signature mismatch"
+        # shows up in the app hours later, with nothing in the run to explain
+        # it. Say so at the point it happens.
+        print("  WARN: report is UNSIGNED (OVERALL_BOOK_SECRET not set in this "
+              "shell). The Executed Book page will report a signature error. "
+              "Open a new PowerShell so setx reaches it, then re-run with "
+              "--refresh-report.")
+
+
+def _push_report(out_path: str) -> None:
+    """Commit and push the execution report, the way ibkr_execute_daily.ps1 does.
+
+    A manual run otherwise writes a perfectly good report that never leaves the
+    laptop, so the cloud app keeps showing whatever the last scheduled run
+    published. On any failure this resets the file rather than leaving the
+    branch diverged -- a stale report is recoverable, a wedged repo is a chore.
+    """
+    import subprocess
+    rel = str(Path(out_path).resolve().relative_to(_REPO))
+    def _git(*a):
+        return subprocess.run(("git",) + a, cwd=_REPO, capture_output=True, text=True)
+    branch = (_git("rev-parse", "--abbrev-ref", "HEAD").stdout or "main").strip()
+    _git("add", rel)
+    if _git("diff", "--cached", "--quiet", "--", rel).returncode == 0:
+        print("  report unchanged — nothing to publish")
+        return
+    _git("-c", "user.name=ibkr-executor", "-c", "user.email=executor@localhost",
+         "commit", "-q", "-m", f"chore(ibkr): execution report {date.today()}")
+    r = _git("push", "origin", f"HEAD:{branch}")
+    if r.returncode == 0:
+        print(f"  published execution report to origin/{branch}")
+    else:
+        print(f"  WARN: could not push ({r.stderr.strip().splitlines()[-1] if r.stderr.strip() else 'unknown'})")
+        print("  see IBKR_OPTION_C_WINDOWS.md section 8 — rolling back the commit")
+        _git("reset", "--hard", f"origin/{branch}")
 
 
 def _load_book(args, default_path: str) -> dict:
@@ -168,6 +205,16 @@ def main() -> int:
                          "(e.g. 0.25 = never deploy more than 25%%); the rest stays cash")
     ap.add_argument("--max-order-notional", type=float, default=0.0,
                     help="clamp any single order to this dollar cap (0 = no cap)")
+    ap.add_argument("--refresh-report", action="store_true",
+                    help="place NO orders: connect, read the account's real "
+                         "positions and today's fills straight from IBKR, and "
+                         "rewrite a SIGNED execution report. Use after late or "
+                         "partial fills print past the sending run's timeout, "
+                         "or to re-sign a report written without the secret")
+    ap.add_argument("--push-report", action="store_true",
+                    help="git commit + push the execution report after writing "
+                         "it, the way the scheduled wrapper does (a manual run "
+                         "otherwise leaves the cloud app showing a stale report)")
     ap.add_argument("--outside-rth", action="store_true",
                     help="allow fills outside regular trading hours: stamps "
                          "outsideRth on the orders and forces marketable-limit "
@@ -265,6 +312,28 @@ def main() -> int:
                           market_data_type=args.market_data_type)
     tag = args.account_mode.upper()
 
+    # ── report refresh: no orders, just re-state reality ─────────────────────
+    if args.refresh_report:
+        print("\n[refresh-report] Reading positions and today's fills — "
+              "no orders will be placed.")
+        try:
+            broker = Broker(args.host, args.port, args.client_id, **account_kwargs)
+        except Exception as e:
+            print(f"ABORT: could not connect to IB Gateway ({e}).")
+            return 1
+        try:
+            fills = broker.day_fills_by_symbol()
+            print(f"  {len(fills)} symbol(s) with executions today")
+            # mode stays 'execute': orders really were sent for this book, and
+            # the app's badge should reflect that rather than reading 'dry-run'.
+            _write_report(broker, payload, "execute", fills, report_out, secret,
+                          account_mode=args.account_mode)
+        finally:
+            broker.disconnect()
+        if args.push_report:
+            _push_report(report_out)
+        return 0
+
     # ── dry-run: connect only to diff against live positions ─────────────────
     if not args.execute:
         print("\n[dry-run] Connecting only to read positions for the plan preview…")
@@ -316,6 +385,8 @@ def main() -> int:
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()
+    if args.push_report:
+        _push_report(report_out)
     return 0
 
 

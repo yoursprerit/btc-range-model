@@ -410,6 +410,48 @@ class Broker:
                 unrealized_pnl=float(getattr(item, "unrealizedPNL", 0.0) or 0.0)))
         return out
 
+    def day_fills_by_symbol(self) -> list[dict]:
+        """Today's executions aggregated per symbol, in the shape the execution
+        report's ``trades`` list expects.
+
+        Read back from the broker rather than from what this process happened to
+        send, so a report written after the fact reflects what ACTUALLY filled --
+        including remainders that printed long after the sending run's
+        fill-timeout expired (routine outside RTH, where a limit can sit working
+        for hours).
+        """
+        agg: dict[str, dict] = {}
+        try:
+            fills = self.ib.fills()
+        except Exception as e:                       # pragma: no cover
+            print(f"    could not read fills: {e}")
+            return []
+        for f in fills:
+            ex = getattr(f, "execution", None)
+            con = getattr(f, "contract", None)
+            if ex is None or con is None:
+                continue
+            symbol = getattr(con, "symbol", "") or ""
+            shares = float(getattr(ex, "shares", 0.0) or 0.0)
+            price = float(getattr(ex, "price", 0.0) or 0.0)
+            side = "BUY" if str(getattr(ex, "side", "")).upper().startswith("B") else "SELL"
+            a = agg.setdefault(f"{symbol}:{side}", {
+                "key": sym.key_for_symbol(symbol) or symbol, "symbol": symbol,
+                "action": side, "qty": 0.0, "price": 0.0, "status": "Filled",
+                "filled": 0.0, "avg_fill_price": 0.0, "order_type": "",
+                "limit_price": 0.0, "reason": "reconstructed from broker fills",
+                "_notional": 0.0})
+            a["filled"] += shares
+            a["_notional"] += shares * price
+        out = []
+        for a in agg.values():
+            n = a.pop("_notional")
+            a["avg_fill_price"] = (n / a["filled"]) if a["filled"] else 0.0
+            a["qty"] = a["filled"]
+            a["price"] = a["avg_fill_price"]
+            out.append(a)
+        return sorted(out, key=lambda t: -abs(t["qty"] * t["price"]))
+
     def positions_by_key(self) -> dict[str, float]:
         """Current holdings as signal-key → shares (foreign symbols ignored)."""
         out: dict[str, float] = {}
