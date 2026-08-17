@@ -1,13 +1,13 @@
 {
  "schema": "executed-book/v1",
- "generated_at_utc": "2026-08-17T15:52:47+00:00",
+ "generated_at_utc": "2026-08-17T22:48:53+00:00",
  "as_of": "2026-08-16",
  "profile": "Balanced",
- "mode": "dry-run",
+ "mode": "execute",
  "account_mode": "paper",
  "account": "DUR917452",
- "net_liq": 1000000.0,
- "cash": 1000000.0,
+ "net_liq": 995388.26,
+ "cash": 343528.39,
  "trades": [
   {
    "key": "PBW",
@@ -16,11 +16,11 @@
    "qty": 8114.0,
    "price": 34.6,
    "value": 280744.4,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Filled",
+   "filled": 8114.0,
+   "avg_fill_price": 35.08,
+   "order_type": "marketable-limit",
+   "limit_price": 35.61,
    "reason": "\u2192 28.1% (hold 0\u21928114)"
   },
   {
@@ -30,11 +30,11 @@
    "qty": 1947.0,
    "price": 92.455,
    "value": 180009.885,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Submitted",
+   "filled": 200.0,
+   "avg_fill_price": 91.94,
+   "order_type": "marketable-limit",
+   "limit_price": 93.32,
    "reason": "\u2192 18.0% (hold 0\u21921947)"
   },
   {
@@ -44,11 +44,11 @@
    "qty": 1600.0,
    "price": 78.34,
    "value": 125344.0,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Submitted",
+   "filled": 298.0,
+   "avg_fill_price": 78.85,
+   "order_type": "marketable-limit",
+   "limit_price": 80.04,
    "reason": "\u2192 12.5% (hold 0\u21921600)"
   },
   {
@@ -58,11 +58,11 @@
    "qty": 184.0,
    "price": 564.185,
    "value": 103810.04,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Filled",
+   "filled": 184.0,
+   "avg_fill_price": 559.98,
+   "order_type": "marketable-limit",
+   "limit_price": 568.38,
    "reason": "\u2192 10.4% (hold 0\u2192184)"
   },
   {
@@ -72,11 +72,11 @@
    "qty": 544.0,
    "price": 169.65,
    "value": 92289.6,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Filled",
+   "filled": 544.0,
+   "avg_fill_price": 168.256342,
+   "order_type": "marketable-limit",
+   "limit_price": 170.79,
    "reason": "\u2192 9.2% (hold 0\u2192544)"
   },
   {
@@ -86,11 +86,11 @@
    "qty": 422.0,
    "price": 155.5,
    "value": 65621.0,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Filled",
+   "filled": 422.0,
+   "avg_fill_price": 151.994692,
+   "order_type": "marketable-limit",
+   "limit_price": 154.27,
    "reason": "\u2192 6.6% (hold 0\u2192422)"
   },
   {
@@ -100,11 +100,11 @@
    "qty": 332.0,
    "price": 189.265,
    "value": 62835.979999999996,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Submitted",
+   "filled": 113.0,
+   "avg_fill_price": 190.5,
+   "order_type": "marketable-limit",
+   "limit_price": 193.36,
    "reason": "\u2192 6.3% (hold 0\u2192332)"
   },
   {
@@ -114,11 +114,11 @@
    "qty": 556.0,
    "price": 102.64,
    "value": 57067.840000000004,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Submitted",
+   "filled": 216.0,
+   "avg_fill_price": 104.5,
+   "order_type": "marketable-limit",
+   "limit_price": 106.07,
    "reason": "\u2192 5.7% (hold 0\u2192556)"
   },
   {
@@ -128,11 +128,11 @@
    "qty": 47.0,
    "price": 420.905,
    "value": 19782.535,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Filled",
+   "filled": 47.0,
+   "avg_fill_price": 429.58,
+   "order_type": "marketable-limit",
+   "limit_price": 436.03,
    "reason": "\u2192 2.0% (hold 0\u219247)"
   },
   {
@@ -142,13 +142,104 @@
    "qty": 199.0,
    "price": 62.185,
    "value": 12374.815,
-   "status": "PLANNED",
-   "filled": 0.0,
-   "avg_fill_price": 0.0,
-   "order_type": "",
-   "limit_price": 0.0,
+   "status": "Submitted",
+   "filled": 110.0,
+   "avg_fill_price": 62.69,
+   "order_type": "marketable-limit",
+   "limit_price": 63.64,
    "reason": "\u2192 1.2% (hold 0\u2192199)"
   }
  ],
- "positions": []
+ "positions": [
+  {
+   "key": "GDX",
+   "symbol": "GDX",
+   "shares": 200.0,
+   "avg_cost": 91.945003,
+   "market_price": 91.9351425,
+   "market_value": 18387.03,
+   "unrealized_pnl": -1.97
+  },
+  {
+   "key": "PBW",
+   "symbol": "PBW",
+   "shares": 8114.0,
+   "avg_cost": 35.085003,
+   "market_price": 34.64256285,
+   "market_value": 281089.76,
+   "unrealized_pnl": -3589.96
+  },
+  {
+   "key": "SOXX",
+   "symbol": "SOXX",
+   "shares": 184.0,
+   "avg_cost": 559.9854378,
+   "market_price": 559.5999756,
+   "market_value": 102966.4,
+   "unrealized_pnl": -70.93
+  },
+  {
+   "key": "ARTY",
+   "symbol": "ARTY",
+   "shares": 298.0,
+   "avg_cost": 78.855003,
+   "market_price": 77.4771271,
+   "market_value": 23088.18,
+   "unrealized_pnl": -410.61
+  },
+  {
+   "key": "NUGT",
+   "symbol": "NUGT",
+   "shares": 544.0,
+   "avg_cost": 168.2613449,
+   "market_price": 167.71551515,
+   "market_value": 91237.24,
+   "unrealized_pnl": -296.93
+  },
+  {
+   "key": "GRID",
+   "symbol": "GRID",
+   "shares": 113.0,
+   "avg_cost": 190.50885255,
+   "market_price": 190.0,
+   "market_value": 21470.0,
+   "unrealized_pnl": -57.5
+  },
+  {
+   "key": "SOXL",
+   "symbol": "SOXL",
+   "shares": 422.0,
+   "avg_cost": 151.99969495,
+   "market_price": 152.0276184,
+   "market_value": 64155.65,
+   "unrealized_pnl": 11.78
+  },
+  {
+   "key": "ERX",
+   "symbol": "ERX",
+   "shares": 216.0,
+   "avg_cost": 104.505003,
+   "market_price": 104.25966645,
+   "market_value": 22520.09,
+   "unrealized_pnl": -52.99
+  },
+  {
+   "key": "XLE",
+   "symbol": "XLE",
+   "shares": 110.0,
+   "avg_cost": 62.6990939,
+   "market_price": 62.68878935,
+   "market_value": 6895.77,
+   "unrealized_pnl": -1.13
+  },
+  {
+   "key": "OIH",
+   "symbol": "OIH",
+   "shares": 47.0,
+   "avg_cost": 429.6012796,
+   "market_price": 426.59054565,
+   "market_value": 20049.76,
+   "unrealized_pnl": -141.5
+  }
+ ]
 }
