@@ -1,6 +1,6 @@
 {
  "schema": "strategy-health/v1",
- "generated_at_utc": "2026-08-16T12:17:48+00:00",
+ "generated_at_utc": "2026-08-17T05:25:14+00:00",
  "as_of": "2026-08-15",
  "live_anchor": "2026-07-16",
  "thresholds": {
@@ -50,7 +50,7 @@
    },
    "Growth": {
     "metrics": {
-     "total_ret": 17.9084,
+     "total_ret": 17.9088,
      "cagr": 0.6892,
      "mdd": -0.2965,
      "sharpe": 1.57,
