@@ -332,6 +332,8 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--slippage-cap 0.005` | how far through the touch a marketable limit prices (env `IBKR_SLIPPAGE_CAP`) |
 | `--require-signature` | refuse an unsigned book |
 | `--force` | override the weekend/holiday & freshness guards |
+| `--outside-rth` | **manual after-hours trading.** Stamps `outsideRth` on the orders and forces marketable-limit, because IBKR *rejects* MARKET and MOC orders outside regular hours. With no live quote it prices off the book's own `exec_price`; a leg it still cannot price is skipped rather than sent blind. Unfilled limits stay working — the market-order escalation does not exist outside RTH. **The scheduled 2:30 PM CT wrapper never passes this**, so automation is unaffected. |
+| `--market-data-type 3` | request **delayed** quotes. Delayed data is free and needs no subscription, but IBKR only serves it when asked — use this if every leg logs error 10089 / `falling back to MARKET`. Pair with a wider `--slippage-cap` since the reference is 15 minutes stale. |
 
 ---
 

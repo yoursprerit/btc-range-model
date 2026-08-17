@@ -314,7 +314,7 @@ class Broker:
 
     def __init__(self, host: str, port: int, client_id: int,
                  account_mode: str = "paper", expected_account: str | None = None,
-                 confirm_live: bool = False):
+                 confirm_live: bool = False, market_data_type: int = 1):
         """Connect and enforce the account guard for the chosen mode.
 
         account_mode:
@@ -328,6 +328,16 @@ class Broker:
         from ib_async import IB
         self.ib = IB()
         self.ib.connect(host, port, clientId=client_id, timeout=30)
+        # 1 = live (default), 2 = frozen, 3 = delayed, 4 = delayed-frozen.
+        # Delayed data is free and needs no subscription, but IBKR only serves
+        # it when the client asks — without this call an unsubscribed account
+        # gets NO quote at all and every marketable limit degrades to a market
+        # order. Left at 1 unless the caller opts in, so a subscribed account is
+        # unaffected.
+        if int(market_data_type) != 1:
+            self.ib.reqMarketDataType(int(market_data_type))
+            print(f"  market data type {market_data_type} requested "
+                  f"({'delayed' if int(market_data_type) in (3, 4) else 'frozen'})")
         accts = self.ib.managedAccounts()
         self.account = accts[0] if accts else ""
         self.account_mode = account_mode
@@ -424,7 +434,7 @@ class Broker:
                 "last": getattr(t, "last", None), "close": getattr(t, "close", None)}
 
     def _build_order(self, o: Order, qty: float, order_type: str,
-                     slippage_cap: float, contract):
+                     slippage_cap: float, contract, outside_rth: bool = False):
         """(ib_async order, type actually used, limit price or 0.0).
 
         Falls back to a plain MARKET order when a marketable limit cannot be
@@ -432,6 +442,14 @@ class Broker:
         is deliberate: an unpriceable limit that never fills leaves the account
         holding the WRONG exposure until the next run — an unbounded tracking
         error — whereas market slippage in this universe is bounded and small.
+
+        ``outside_rth`` flips both halves of that reasoning, because IBKR does
+        not accept a MARKET order outside regular hours at all — it is rejected,
+        not merely risky.  So an extended-hours run stamps ``outsideRth`` on a
+        LIMIT and, when no quote can be had, prices off the book's own
+        publish-time ``exec_price`` rather than degrading to an order the venue
+        will refuse.  A leg that cannot be priced even then is SKIPPED and
+        reported, never sent blind.
         """
         from ib_async import LimitOrder, MarketOrder, Order as IBOrder
         if order_type == ORDER_MOC:
@@ -440,17 +458,35 @@ class Broker:
         if order_type == ORDER_MARKETABLE_LIMIT:
             lmt, basis = marketable_limit_price(o.action, self.quote(contract),
                                                 slippage_cap)
+            if lmt is None and outside_rth:
+                # Extended hours with no live quote: the book's own exec_price
+                # is a real, recent print for this symbol and beats sending
+                # nothing. Widen the cap yourself if it fails to cross.
+                lmt, basis = marketable_limit_price(
+                    o.action, {"last": o.price}, slippage_cap)
+                if lmt is not None:
+                    basis = "book exec_price"
             if lmt is not None:
+                order = LimitOrder(o.action, qty, lmt)
+                if outside_rth:
+                    order.outsideRth = True
                 print(f"    limit {o.symbol}: {o.action} ≤ ${lmt:,.4f} "
-                      f"({basis} {slippage_cap*100:.2f}% through)")
-                return (LimitOrder(o.action, qty, lmt), ORDER_MARKETABLE_LIMIT,
-                        float(lmt))
+                      f"({basis} {slippage_cap*100:.2f}% through)"
+                      + (" [outside RTH]" if outside_rth else ""))
+                return order, ORDER_MARKETABLE_LIMIT, float(lmt)
+            if outside_rth:
+                print(f"    SKIP {o.symbol}: {basis}, and a MARKET order is "
+                      f"rejected outside RTH — nothing sent for this leg")
+                return None, ORDER_MARKETABLE_LIMIT, 0.0
             print(f"    WARN {o.symbol}: {basis} — falling back to MARKET "
                   f"(no price ceiling on this leg)")
+        if outside_rth:
+            print(f"    SKIP {o.symbol}: MARKET orders are rejected outside RTH")
+            return None, ORDER_MARKET, 0.0
         return MarketOrder(o.action, qty), ORDER_MARKET, 0.0
 
     def _resolve_order_type(self, order_type: str, fractional: bool,
-                            now=None) -> tuple[str, bool]:
+                            now=None, outside_rth: bool = False) -> tuple[str, bool]:
         """(effective order type, fractional) after the routing guards.
 
         MOC is refused after the exchange cutoff (it would simply be rejected)
@@ -459,6 +495,12 @@ class Broker:
         if order_type not in ORDER_TYPES:
             raise ValueError(f"unknown order type {order_type!r} "
                              f"(want one of {', '.join(ORDER_TYPES)})")
+        if outside_rth and order_type != ORDER_MARKETABLE_LIMIT:
+            # Neither MOC (there is no auction) nor MARKET (rejected by the
+            # venue) means anything outside regular hours.
+            print(f"  {order_type} is unavailable outside RTH — using "
+                  f"{ORDER_MARKETABLE_LIMIT}.")
+            return ORDER_MARKETABLE_LIMIT, fractional
         if order_type != ORDER_MOC:
             return order_type, fractional
         ok, why = moc_entry_open(now)
@@ -474,7 +516,7 @@ class Broker:
         return ORDER_MOC, fractional
 
     def _escalate_unfilled(self, trades: list, fractional: bool,
-                           wait: float) -> list:
+                           wait: float, outside_rth: bool = False) -> list:
         """Cancel any limit that did not fill in time and re-send the remainder
         as a MARKET order; returns the new trade tuples to report alongside.
 
@@ -484,6 +526,16 @@ class Broker:
         of leaving the book mismatched until tomorrow.
         """
         from ib_async import MarketOrder
+        if outside_rth:
+            # The market-order safety net does not exist outside RTH; an
+            # unfilled extended-hours limit simply stays unfilled.
+            stuck = [o.symbol for o, _q, used, _l, t in trades
+                     if not t.isDone() and used == ORDER_MARKETABLE_LIMIT]
+            if stuck:
+                print(f"    outside RTH: leaving {len(stuck)} unfilled "
+                      f"limit(s) working ({', '.join(stuck)}) — no MARKET "
+                      f"escalation is possible")
+            return []
         extra = []
         for o, qty, used, _lmt, t in trades:
             if t.isDone() or used != ORDER_MARKETABLE_LIMIT:
@@ -515,7 +567,7 @@ class Broker:
     def place(self, orders: list[Order], fractional: bool, wait: float,
               order_type: str = ORDER_MARKETABLE_LIMIT,
               slippage_cap: float = DEFAULT_SLIPPAGE_CAP,
-              now=None) -> list[dict]:
+              now=None, outside_rth: bool = False) -> list[dict]:
         """Transmit the order plan, sells first, waiting for fills.
 
         ``order_type`` is one of :data:`ORDER_TYPES`; see the module header for
@@ -525,7 +577,8 @@ class Broker:
         quantity and average fill price) so the caller can build the execution
         report.
         """
-        order_type, fractional = self._resolve_order_type(order_type, fractional, now)
+        order_type, fractional = self._resolve_order_type(order_type, fractional,
+                                                          now, outside_rth)
         results: list[dict] = []
         sells = [o for o in orders if o.action == "SELL"]
         buys = [o for o in orders if o.action == "BUY"]
@@ -545,9 +598,13 @@ class Broker:
                 if qty <= 0:
                     continue
                 order, used, lmt = self._build_order(o, qty, order_type,
-                                                     slippage_cap, contract)
+                                                     slippage_cap, contract,
+                                                     outside_rth)
+                if order is None:            # unsendable outside RTH — skipped
+                    continue
                 trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
-                print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}]")
+                print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}]"
+                      + (" outsideRth" if outside_rth else ""))
             if not trades:
                 continue
             if order_type == ORDER_MOC:
@@ -560,7 +617,8 @@ class Broker:
                 self.ib.sleep(1.0)
                 deadline -= 1.0
             if order_type == ORDER_MARKETABLE_LIMIT:
-                trades += self._escalate_unfilled(trades, fractional, wait)
+                trades += self._escalate_unfilled(trades, fractional, wait,
+                                                  outside_rth)
             for o, qty, used, lmt, t in trades:
                 st = t.orderStatus.status
                 filled = float(t.orderStatus.filled or 0.0)

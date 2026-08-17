@@ -168,6 +168,18 @@ def main() -> int:
                          "(e.g. 0.25 = never deploy more than 25%%); the rest stays cash")
     ap.add_argument("--max-order-notional", type=float, default=0.0,
                     help="clamp any single order to this dollar cap (0 = no cap)")
+    ap.add_argument("--outside-rth", action="store_true",
+                    help="allow fills outside regular trading hours: stamps "
+                         "outsideRth on the orders and forces marketable-limit "
+                         "(IBKR REJECTS market and MOC orders outside RTH). "
+                         "Manual use only -- the scheduled 2:30 PM CT wrapper "
+                         "never passes this, so automated runs are unchanged")
+    ap.add_argument("--market-data-type", type=int, default=1,
+                    choices=(1, 2, 3, 4),
+                    help="IBKR market-data type: 1 live (default), 2 frozen, "
+                         "3 delayed, 4 delayed-frozen. Delayed is FREE and needs "
+                         "no subscription, but IBKR only serves it when asked -- "
+                         "use 3 if quotes come back empty (error 10089)")
     ap.add_argument("--kill-switch-file",
                     help="if this file exists (or env IBKR_TRADING_DISABLED is set), "
                          "abort before placing any order")
@@ -249,7 +261,8 @@ def main() -> int:
 
     account_kwargs = dict(account_mode=args.account_mode,
                           expected_account=args.expected_account,
-                          confirm_live=args.confirm_live)
+                          confirm_live=args.confirm_live,
+                          market_data_type=args.market_data_type)
     tag = args.account_mode.upper()
 
     # ── dry-run: connect only to diff against live positions ─────────────────
@@ -294,7 +307,8 @@ def main() -> int:
             print(f"\nTransmitting orders ({args.order_type})…")
             fills = broker.place(orders, args.fractional, args.fill_timeout,
                                  order_type=args.order_type,
-                                 slippage_cap=args.slippage_cap)
+                                 slippage_cap=args.slippage_cap,
+                                 outside_rth=args.outside_rth)
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,
