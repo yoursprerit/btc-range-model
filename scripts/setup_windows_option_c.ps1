@@ -126,9 +126,18 @@ if ($Venv) {
     Info "installing requirements-ibkr.txt..."
     & $Venvpy -m pip install --upgrade pip | Out-Null
     & $Venvpy -m pip install -r (Join-Path $RepoRoot 'requirements-ibkr.txt')
-    # prove the broker layer imports
-    & $Venvpy -c "import ib_async, pandas; print('ib_async', ib_async.__version__)"
-    Ok "executor environment ready"
+    # A failing native command does NOT throw in PowerShell, so check the exit
+    # code explicitly -- otherwise a broken install still reported success and
+    # the failure only surfaced later as ModuleNotFoundError at run time.
+    if ($LASTEXITCODE -ne 0) {
+        Warn "pip install FAILED (exit $LASTEXITCODE) -- scroll up for the reason."
+        Warn "the executor will not run until this succeeds; re-run with -Venv."
+    } else {
+        # prove the broker layer AND pandas import
+        & $Venvpy -c "import ib_async, pandas; print('ib_async', ib_async.__version__, '| pandas', pandas.__version__)"
+        if ($LASTEXITCODE -ne 0) { Warn "dependencies installed but do not import -- re-run with -Venv" }
+        else { Ok "executor environment ready" }
+    }
 }
 
 # -- 4. shared secret ----------------------------------------------------------
@@ -231,8 +240,11 @@ if ($Task) {
 if ($Verify) {
     Section "Verify"
     if (Test-Path $Venvpy) { Ok "venv python present" } else { Warn "venv python MISSING - run -Venv" }
-    try { & $Venvpy -c "import ib_async" 2>$null; Ok "ib_async importable" }
-    catch { Warn "ib_async not importable - run -Venv" }
+    # native exit codes, not exceptions -- try/catch does not see these
+    & $Venvpy -c "import ib_async" 2>$null
+    if ($LASTEXITCODE -eq 0) { Ok "ib_async importable" } else { Warn "ib_async not importable - run -Venv" }
+    & $Venvpy -c "import pandas" 2>$null
+    if ($LASTEXITCODE -eq 0) { Ok "pandas importable" } else { Warn "pandas not importable - run -Venv" }
     if ([Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET','User')) { Ok "OVERALL_BOOK_SECRET set" }
     else { Warn "OVERALL_BOOK_SECRET not set - run -Secret" }
     # gateway reachability on the API port

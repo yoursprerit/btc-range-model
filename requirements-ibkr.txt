@@ -11,3 +11,13 @@
 # ib_async is the maintained community successor to the (now-unmaintained)
 # ib_insync, with the same API surface. Pinned to a recent minor.
 ib_async>=1.0.1,<2.0
+
+# pandas: the executor (scripts/ibkr_execute_book.py) and the shared
+# app/target_book.py, app/executed_book.py, scripts/ibkr_common.py modules all
+# import it. It is NOT pulled in by ib_async, and the executor host does not
+# install requirements.txt (it deliberately skips the model/Streamlit stack), so
+# it must be listed here or the venv is missing it at run time.
+# Bounds kept identical to requirements.txt so a machine that has both files
+# installed resolves to one consistent pandas/numpy pair.
+numpy>=1.26,<2.3
+pandas>=2.1,<2.3
