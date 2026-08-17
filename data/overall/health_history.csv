@@ -333,5 +333,5 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-08-15,sleeve,SOXX,warming,-0.1597,-0.0,,8.0
 2026-08-15,sleeve,UGL,warming,-0.2881,13.81,,11.0
 2026-08-15,sleeve,WGMI,yellow,-0.3155,-17.93,,18.0
-2026-08-15,sleeve,XLE,warming,-0.0104,0.0,,10.0
+2026-08-15,sleeve,XLE,warming,-0.0104,-0.0,,10.0
 2026-08-15,tracking,book_vs_replay,green,,-1.49,,30.0
