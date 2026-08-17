@@ -66,45 +66,101 @@ Only once all of the above is true should you run the quick start below.
 
 ---
 
-## ⚡ Quick start — automated setup (steps 2–7 in one script)
-
-Most of the setup below is scripted in **`scripts\setup_windows_option_c.ps1`**.
-It's idempotent (safe to re-run) and each phase is individually selectable.
+## ⚡ Quick start — the whole thing in four commands
 
 From an **elevated** PowerShell (Run as Administrator), in the cloned repo:
 
 ```powershell
-# full setup: Python 3.12 + Git, venv + deps, secret, IB Gateway installer,
-# IBC (with paper creds), and the daily scheduled task
-powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -All -IbUser myPaperUser -IbPassword 's3cret'
+# 1. install + configure everything scriptable
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -All `
+    -BookSecret "<the publisher's existing OVERALL_BOOK_SECRET>" `
+    -IbUser myPaperUser -IbPassword 's3cret'
+
+# 2. re-open PowerShell (setx only reaches NEW processes), then:
+
+# 3. is every link in the chain actually working?
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Preflight
+
+# 4. rehearse the real scheduled run — placing no orders
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Rehearse
 ```
 
-What it automates vs what stays manual:
+If step 3 says `no blocking problems` and step 4 says `wrapper ran to
+completion`, you are done. Both exit non-zero on failure, so you can gate on
+them rather than reading the output.
 
-| Automated by the script | Stays manual (by design) |
+> **`-BookSecret` is not optional in practice.** Without it (and with no
+> existing value) the script now *stops* rather than minting a secret nobody
+> else knows. Pass `-GenerateSecret` only if you intend to rotate all three
+> sides — see §4.
+
+### `-Preflight` — will tomorrow's run work?
+
+Safe to run any time, needs nothing running. It checks every link that has
+actually broken in practice:
+
+| Check | Catches |
 |---|---|
-| Install Python 3.12 + Git (winget) | **Creating the IBKR paper account** + login (§0.5) |
-| Create `.venv`, install `requirements-ibkr.txt` | IBKR **licence click-through** during install |
-| Set `OVERALL_BOOK_SECRET` (generates one if omitted) | **First IB Gateway login / 2FA** |
-| Download + launch the IB Gateway installer | Ticking the API settings (or let IBC enforce them) |
-| Download IBC + template its `config.ini` (paper) | Sharing market data to the paper account (§0.5) |
-| Register the daily Task Scheduler job | Deciding to `--execute` |
-| Verify the whole chain | |
+| `unicode-stdout` | the encoding crash that killed a run mid-plan under Task Scheduler |
+| `import-pandas` / `import-ib_async` | an incomplete venv |
+| `secret-set` | a secret missing from the environment — the executor would trade **unverified**, not fail |
+| **`secret-verifies`** | **the configured secret does not actually sign the book on disk** — the publisher/laptop mismatch, caught here instead of at 2:30 |
+| `book-present` / `book-audit` / `book-bar-age` / `book-gen-age` | no book, a failed publish-time audit, or a stale one |
+| `task-slot` | `-TaskTime` is **local** — it prints what your 14:30 maps to in CT/ET and fails if it lands outside market hours |
+| `kill-switch` | trading left disabled from an earlier rehearsal |
+| scheduled task | never registered (the `-Task` phase needs elevation) |
+| gateway TCP + autostart | gateway down, or won't come back after a reboot |
+| branch + headless `git push` | wrong branch; a push credential that only works interactively |
 
-Run a single phase instead of everything, e.g. just rebuild the venv and
-re-register the task:
+### `-Rehearse` — the full run, no orders
+
+The executor's kill switch aborts **after** the book print, signature check and
+freshness validation but **before** it connects to place anything. `-Rehearse`
+arms it, starts the *real* scheduled task, tails the log, asserts the three
+lines that matter, and disarms:
+
+```
+[ok] signature verified inside the task's own environment
+[ok] reached the order stage and stopped there (as intended)
+[ok] wrapper ran to completion
+```
+
+That exercises Task Scheduler, environment inheritance, `git pull`, the venv,
+the encoding path and the wrapper — everything except the broker round-trip —
+at any hour, with zero risk of a trade. Use it instead of waiting for 2:30.
+
+### Testing outside market hours
+
+`-Rehearse` deliberately places nothing. To actually put orders in after the
+close, the executor needs `--outside-rth`: IBKR **rejects** MARKET and MOC
+orders outside RTH, so it forces marketable-limit and stamps `outsideRth`.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\ibkr_execute_book.py `
+    --file data\overall\target_book.json --execute `
+    --outside-rth --market-data-type 3 --slippage-cap 0.015
+```
+
+`--market-data-type 3` requests **delayed** quotes, which are free and need no
+subscription but are only served when asked (§5e). The scheduled wrapper passes
+neither flag, so automation is unaffected.
+
+### Phases
+
+`-InstallPython -Venv -Secret -Gateway -IBC -Task -Autostart -Preflight`
+(`-All` runs all of them), plus `-Rehearse` on demand. Every phase is
+idempotent. Run one at a time to redo just that step, e.g.:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Venv -Task
 ```
 
-Phase flags: `-InstallPython -Venv -Secret -Gateway -IBC -Task -Verify` (or
-`-All`). Re-open PowerShell after the run so the new `OVERALL_BOOK_SECRET` is
-visible. Then jump to **§5** to publish/pull a book and do your first dry-run.
+What stays manual, by design: creating the IBKR paper account, the licence
+click-through, the first Gateway login/2FA, sharing market data to the paper
+account, and deciding to trade live.
 
-> Prefer to understand each step first, or not use winget? The manual walkthrough
-> for steps 2–7 follows below and remains fully supported. The script simply
-> automates it.
+> Prefer to understand each step first, or not use winget? The manual
+> walkthrough for steps 2–7 follows below and remains fully supported.
 
 ---
 
@@ -350,18 +406,17 @@ under **IBC**:
 3. Start IB Gateway via IBC's `StartGateway.bat` (point it at your config). Set
    `AutoRestartTime` in the config to the small hours so the daily restart never
    lands during your rebalance window.
-4. **Required for automation — make the gateway come back on its own.** Nothing
-   in `setup_windows_option_c.ps1` starts IB Gateway; it only installs it and
-   templates IBC's config. Task Scheduler will fire the executor at 2:30 PM
-   whether or not the gateway is up, and the run fails if it isn't. Put
-   `StartGateway.bat` in your Startup folder:
+4. **Required for automation — make the gateway come back on its own.** Task
+   Scheduler fires the executor at 2:30 PM whether or not the gateway is up,
+   and the run fails if it isn't. The `-Autostart` phase wires this for you:
    ```powershell
-   $s = (New-Object -ComObject WScript.Shell).CreateShortcut(
-          "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StartGateway.lnk")
-   $s.TargetPath = 'C:\IBC\StartGateway.bat'; $s.WorkingDirectory = 'C:\IBC'; $s.Save()
+   powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Autostart
    ```
-   This also covers IB Gateway's forced once-a-day restart: IBC re-logs-in only
-   while it is the process supervising the session.
+   It drops a `StartGateway.bat` shortcut in your Startup folder and sets
+   `IBKR_KILL_SWITCH_FILE` — the emergency stop, and what `-Rehearse` uses to
+   run the whole chain without placing orders. `-All` includes it. This also
+   covers IB Gateway's forced once-a-day restart: IBC re-logs-in only while it
+   is the process supervising the session.
 
 > **2FA tip:** unattended login is simplest with a paper username that has 2FA
 > disabled. If you must use IBKR Mobile 2FA, follow the IBC docs for
@@ -551,24 +606,36 @@ A defensible choice — it keeps any write credential off the trading laptop.
 
 ## 9. Pre-flight — will it actually fire today?
 
-A green dry-run proves the book and the gateway were fine *at that moment*. It
-does not prove the scheduled run will work. Walk this list once after setup:
+**Run this. Don't work the list by hand:**
 
-| # | Check | Command / where |
-|---|---|---|
-| 1 | Task exists and `NextRunTime` is today at your local equivalent of 2:30 PM CT | `Get-ScheduledTask -TaskName "IBKR Option C executor" \| Get-ScheduledTaskInfo` |
-| 2 | Machine timezone is what you assumed when you set `-TaskTime` | `Get-TimeZone` |
-| 3 | Secret is persisted **and** visible to a fresh shell | `[Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET','User')` |
-| 4 | Dry-run prints `Signature: signature OK` — *not* `no secret provided to verify` | §5c |
-| 5 | IB Gateway is listening, and will still be at 2:30 | `Test-NetConnection 127.0.0.1 -Port 4002` → `TcpTestSucceeded : True` |
-| 6 | Gateway restarts on its own after a reboot / IBKR's daily restart | §6 step 4 |
-| 7 | Repo is on `main` and fast-forwardable | `git branch --show-current`; `git pull --ff-only origin main` |
-| 8 | Push credential works headless *(only if you want the report)* | §8 |
-| 9 | Laptop will be **on and logged on** at 2:30 (locked is fine) | §7 |
-| 10 | Today's book published and audit passed | Streamlit Target Book tab, or `git log -1 --oneline origin/main -- data/overall/target_book.json` |
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Preflight
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Rehearse
+```
 
-The single most common gap is **#5/#6** — nothing in the setup script starts IB
-Gateway.
+`-Preflight` mechanically checks every item below and exits non-zero if any of
+them would break the run; `-Rehearse` then proves the scheduled path works
+end to end without placing an order. Both are described in the
+[Quick start](#-quick-start--the-whole-thing-in-four-commands).
+
+A green **dry-run proves nothing about the scheduled run** — it runs in your
+console, with your shell's environment, at a time you chose. Every failure this
+setup has actually hit came from a difference between those two worlds:
+
+| What differs under Task Scheduler | What it broke |
+|---|---|
+| stdout is a **pipe**, not a console | Python encoded with cp1252, `UnicodeEncodeError` on the first `→`, run killed mid-plan |
+| a **fresh** process environment | `OVERALL_BOOK_SECRET` absent → signature silently *skipped*, not failed |
+| **no console** to prompt at | a `git push` credential that only resolves interactively |
+| a **fixed local** clock time | `-TaskTime` in the wrong zone puts orders outside RTH, where IBKR rejects them |
+| **nothing else running** | IB Gateway not up, because nothing starts it |
+
+The portable checks live in `scripts/preflight_option_c.py` (stdlib-only, so it
+runs before the venv is finished); the Windows-only ones — scheduled task, TCP,
+autostart shortcut, headless push — live in the `-Preflight` phase itself.
+
+The single most common gap remains **IB Gateway not running**: nothing in the
+setup starts it unless you ran `-Autostart` (§6).
 
 ---
 
@@ -589,6 +656,14 @@ Gateway.
 ---
 
 ## 11. Troubleshooting (Windows)
+
+**Start here — it names the broken link for you:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Preflight
+```
+
+Then the specifics:
 
 | Symptom | Fix |
 |---|---|

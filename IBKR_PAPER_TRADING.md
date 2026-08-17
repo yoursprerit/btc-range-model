@@ -133,6 +133,11 @@ IBC stores the paper password unencrypted in its `config.ini` (Windows) or the
 compose `.env` (cloud). That is IBC's design, not a choice this repo makes. It
 is the main argument for a paper-only login that carries no live permissions.
 
+> **Windows shortcut:** after setup, `setup_windows_option_c.ps1 -Preflight`
+> mechanically checks every link in the chain (including whether your secret
+> actually signs the book on disk), and `-Rehearse` runs the real scheduled
+> task end to end without placing an order. Both exit non-zero on failure.
+
 **Only once all five are done** should you run
 `scripts\setup_windows_option_c.ps1` (Windows — see
 [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)) or bring up the Docker

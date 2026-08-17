@@ -12,10 +12,12 @@
       * install Python 3.12 + Git (winget)             * IBKR license click-through
       * create .venv, pip install broker deps          * first IB Gateway login / 2FA
       * set OVERALL_BOOK_SECRET (setx)                 * deciding to --execute live
+                                                       * sharing market data to paper
       * download + launch IB Gateway installer
       * download IBC + template its config.ini
       * register the daily Task Scheduler job
-      * verify the whole chain
+      * make IB Gateway start at logon + install the kill switch
+      * pre-flight the whole chain (and rehearse it without placing orders)
 
     Anything requiring an IBKR credential prompt or a license agreement cannot
     (and should not) be scripted - the script pauses and tells you exactly what
@@ -29,7 +31,18 @@
 .PARAMETER Gateway         Download + launch the IB Gateway installer.
 .PARAMETER IBC             Download IBC and template its config.ini (paper).
 .PARAMETER Task            Register the daily Task Scheduler job.
-.PARAMETER Verify          Check the end-to-end chain and report.
+.PARAMETER Autostart       Start IB Gateway at logon; set the kill-switch path.
+.PARAMETER Preflight       Check every link in the chain and report PASS/WARN/FAIL.
+                           Exits non-zero if anything would break the 2:30 run.
+.PARAMETER Rehearse        Run the REAL scheduled task with the kill switch armed:
+                           exercises pull, secret, encoding and the wrapper end to
+                           end, then stops before placing a single order. Safe at
+                           any hour - use it instead of waiting for 2:30.
+.PARAMETER Verify          Deprecated alias for -Preflight.
+.PARAMETER GenerateSecret  Required to MINT a new OVERALL_BOOK_SECRET. Without it,
+                           a missing secret is an error rather than a silent new
+                           value that desyncs the publisher.
+.PARAMETER KillSwitchFile  Path whose existence halts trading (default C:\IBC\HALT_TRADING).
 
 .PARAMETER BookSecret      Value for OVERALL_BOOK_SECRET (must match the publisher).
 .PARAMETER IbUser          IBKR paper username, written into the IBC config.
@@ -49,6 +62,14 @@
 .EXAMPLE
     # just (re)create the venv and re-register the scheduled task:
     powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Venv -Task
+
+.EXAMPLE
+    # is tomorrow's 2:30 run actually going to work? (run this any time)
+    powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Preflight
+
+.EXAMPLE
+    # full dress rehearsal of the scheduled run, without placing any order:
+    powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Rehearse
 
 .NOTES
     Run from an ELEVATED PowerShell (Run as Administrator) for the installer and
@@ -79,7 +100,11 @@ param(
     [switch]$Gateway,
     [switch]$IBC,
     [switch]$Task,
+    [switch]$Autostart,
+    [switch]$Preflight,
+    [switch]$Rehearse,
     [switch]$Verify,
+    [switch]$GenerateSecret,
 
     [string]$BookSecret,
     [string]$IbUser,
@@ -87,7 +112,8 @@ param(
     [string]$IbcDir   = 'C:\IBC',
     [string]$TaskTime = '14:30',
     [string]$Branch   = 'main',
-    [string]$Port     = '4002'
+    [string]$Port     = '4002',
+    [string]$KillSwitchFile = 'C:\IBC\HALT_TRADING'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,14 +124,35 @@ $RepoRoot  = Split-Path -Parent $ScriptDir
 $Venvpy    = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 
 # If no phase flags were passed, default to -All (nice bare-invocation UX).
-$anyPhase = $InstallPython -or $Venv -or $Secret -or $Gateway -or $IBC -or $Task -or $Verify
+$anyPhase = $InstallPython -or $Venv -or $Secret -or $Gateway -or $IBC -or $Task `
+            -or $Autostart -or $Preflight -or $Rehearse -or $Verify
 if (-not $anyPhase) { $All = $true }
-if ($All) { $InstallPython=$true; $Venv=$true; $Secret=$true; $Gateway=$true; $IBC=$true; $Task=$true; $Verify=$true }
+if ($All) { $InstallPython=$true; $Venv=$true; $Secret=$true; $Gateway=$true
+            $IBC=$true; $Task=$true; $Autostart=$true; $Preflight=$true }
+# -Verify is the old name for -Preflight; keep it working.
+if ($Verify) { $Preflight = $true }
+
+# Exit code carries the number of blocking problems, so CI/rehearsals can just
+# test the status instead of scraping the text.
+$script:FailCount = 0
 
 function Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Info($t)    { Write-Host "  $t" }
 function Ok($t)      { Write-Host "  [ok] $t" -ForegroundColor Green }
 function Warn($t)    { Write-Host "  [!] $t" -ForegroundColor Yellow }
+function Fail($t)    { Write-Host "  [FAIL] $t" -ForegroundColor Red
+                       $script:FailCount++ }
+# Render one 'STATUS<TAB>name<TAB>detail' line from preflight_option_c.py.
+function Report($line) {
+    $p = $line -split "`t", 3
+    if ($p.Count -lt 3) { Info $line; return }
+    switch ($p[0]) {
+        'PASS'  { Ok   "$($p[1]): $($p[2])" }
+        'WARN'  { Warn "$($p[1]): $($p[2])" }
+        'FAIL'  { Fail "$($p[1]): $($p[2])" }
+        default { Info $line }
+    }
+}
 function Have($cmd)  { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
 # -- 2a. Python 3.12 + Git (winget) -------------------------------------------
@@ -163,16 +210,31 @@ if ($Secret) {
         $val = $BookSecret
     } elseif ($existing) {
         $val = $existing; Info "keeping the existing user secret"
-    } else {
+    } elseif ($GenerateSecret) {
         # generate a 40-char URL-safe random secret
         $chars = (48..57) + (65..90) + (97..122)
         $val = -join ($chars | Get-Random -Count 40 | ForEach-Object {[char]$_})
-        Warn "generated a new secret - set the SAME value on the PUBLISHER"
-        Warn "(GitHub repo secret OVERALL_BOOK_SECRET):"
+        Warn "GENERATED A NEW SECRET. This is only half done:"
+        Warn "  1. copy the value below into the PUBLISHER's GitHub repo secret"
+        Warn "     (Settings > Secrets and variables > Actions > OVERALL_BOOK_SECRET)"
+        Warn "  2. re-run the 'Publish target book' Action -- changing the secret"
+        Warn "     does NOT re-sign the book already committed"
+        Warn "  3. set the same value in the Streamlit app's Secrets panel"
         Write-Host "      $val" -ForegroundColor Magenta
+        Warn "until all three are done, every verifier REJECTS every book."
+    } else {
+        # Minting a secret nobody else knows silently desyncs the publisher and
+        # breaks every verifier -- so it now takes an explicit opt-in.
+        Fail "no OVERALL_BOOK_SECRET set and none supplied."
+        Info "  Pass -BookSecret '<the publisher's existing value>' (normal case),"
+        Info "  or -GenerateSecret to mint a new one and rotate all three sides."
+        Info "  See IBKR_OPTION_C_WINDOWS.md section 4."
+        $val = $null
     }
-    setx OVERALL_BOOK_SECRET "$val" | Out-Null
-    Ok "OVERALL_BOOK_SECRET set for your user (re-open PowerShell to see it)"
+    if ($val) {
+        setx OVERALL_BOOK_SECRET "$val" | Out-Null
+        Ok "OVERALL_BOOK_SECRET set for your user (re-open PowerShell to see it)"
+    }
 }
 
 # -- 3. IB Gateway installer ---------------------------------------------------
@@ -251,27 +313,129 @@ if ($Task) {
     Info "test it now: Start-ScheduledTask -TaskName 'IBKR Option C executor'"
 }
 
-# -- verify --------------------------------------------------------------------
-if ($Verify) {
-    Section "Verify"
-    if (Test-Path $Venvpy) { Ok "venv python present" } else { Warn "venv python MISSING - run -Venv" }
-    # native exit codes, not exceptions -- try/catch does not see these
-    & $Venvpy -c "import ib_async" 2>$null
-    if ($LASTEXITCODE -eq 0) { Ok "ib_async importable" } else { Warn "ib_async not importable - run -Venv" }
-    & $Venvpy -c "import pandas" 2>$null
-    if ($LASTEXITCODE -eq 0) { Ok "pandas importable" } else { Warn "pandas not importable - run -Venv" }
-    if ([Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET','User')) { Ok "OVERALL_BOOK_SECRET set" }
-    else { Warn "OVERALL_BOOK_SECRET not set - run -Secret" }
-    # gateway reachability on the API port
+# -- 8. IB Gateway autostart ---------------------------------------------------
+if ($Autostart) {
+    Section "IB Gateway autostart + kill switch"
+    $bat = Join-Path $IbcDir 'StartGateway.bat'
+    if (-not (Test-Path $bat)) {
+        Warn "no $bat yet - run the -IBC phase first, then re-run -Autostart"
+    } else {
+        # Nothing else starts the gateway. Task Scheduler fires the executor at
+        # 2:30 regardless, and a run with no gateway is a guaranteed failure -
+        # so this is required for unattended operation, not optional polish.
+        $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\StartGateway.lnk'
+        $sh  = New-Object -ComObject WScript.Shell
+        $sc  = $sh.CreateShortcut($lnk)
+        $sc.TargetPath = $bat; $sc.WorkingDirectory = $IbcDir; $sc.Save()
+        Ok "IB Gateway will start at logon ($lnk)"
+    }
+    setx IBKR_KILL_SWITCH_FILE "$KillSwitchFile" | Out-Null
+    Ok "kill switch armed-by-file: create $KillSwitchFile to halt trading"
+    Info "  (also what -Rehearse uses to run the full chain without orders)"
+}
+
+# -- 9. pre-flight -------------------------------------------------------------
+if ($Preflight) {
+    Section "Pre-flight"
+
+    # The portable half: encoding, deps, book freshness/audit, and - the check
+    # that matters most - whether the configured secret ACTUALLY signed the book
+    # on disk, rather than merely being set to something.
+    if (Test-Path $Venvpy) {
+        $env:IBKR_TASK_TIME = $TaskTime
+        $env:PYTHONUTF8 = '1'
+        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        & $Venvpy (Join-Path $ScriptDir 'preflight_option_c.py') 2>&1 |
+            ForEach-Object { if ($_ -match "`t") { Report $_ } }
+        $ErrorActionPreference = $prevEAP
+    } else {
+        Fail "venv python MISSING at $Venvpy - run -Venv"
+    }
+
+    # The Windows-only half.
+    if (Get-ScheduledTask -TaskName 'IBKR Option C executor' -ErrorAction SilentlyContinue) {
+        $info = Get-ScheduledTask -TaskName 'IBKR Option C executor' | Get-ScheduledTaskInfo
+        Ok "scheduled task registered (next run $($info.NextRunTime))"
+        if ($info.LastTaskResult -and $info.LastTaskResult -ne 0 -and $info.LastTaskResult -ne 267011) {
+            Warn "last run exited $($info.LastTaskResult) - check logs\ibkr_executor.log"
+        }
+    } else {
+        Fail "scheduled task NOT registered - run -Task from an ELEVATED PowerShell"
+    }
+
     $tcp = Test-NetConnection -ComputerName 127.0.0.1 -Port ([int]$Port) -WarningAction SilentlyContinue
     if ($tcp.TcpTestSucceeded) { Ok "IB Gateway reachable on 127.0.0.1:$Port" }
-    else { Warn "nothing listening on 127.0.0.1:$Port - start IB Gateway (paper) / IBC" }
-    if (Get-ScheduledTask -TaskName 'IBKR Option C executor' -ErrorAction SilentlyContinue) {
-        Ok "scheduled task registered"
-    } else { Warn "scheduled task not found - run -Task" }
-    $book = Join-Path $RepoRoot 'data\overall\target_book.json'
-    if (Test-Path $book) { Ok "a target book is present ($book)" }
-    else { Warn "no target book yet - publish one and 'git pull' (guide section 5)" }
+    else { Fail "nothing listening on 127.0.0.1:$Port - start IB Gateway (paper) / IBC" }
+
+    $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\StartGateway.lnk'
+    if (Test-Path $lnk) { Ok "gateway autostart shortcut present" }
+    else { Warn "no gateway autostart - after a reboot the 2:30 run finds no gateway (-Autostart)" }
+
+    Push-Location $RepoRoot
+    $cur = (git rev-parse --abbrev-ref HEAD 2>$null)
+    if ($cur -eq $Branch) { Ok "repo on '$Branch' (the branch the wrapper pulls)" }
+    else { Warn "repo is on '$cur' but the wrapper pulls '$Branch' - git checkout $Branch" }
+
+    # A push that cannot prompt is the only honest test of the report credential:
+    # an interactive push can succeed via a dialog Task Scheduler never sees.
+    $prevPrompt = $env:GIT_TERMINAL_PROMPT; $env:GIT_TERMINAL_PROMPT = '0'
+    git push --dry-run origin "HEAD:$Branch" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Ok "git push works headless (execution reports will publish)" }
+    else { Warn "git push would fail unattended - see IBKR_OPTION_C_WINDOWS.md section 8 (cosmetic only)" }
+    $env:GIT_TERMINAL_PROMPT = $prevPrompt
+    Pop-Location
+
+    Section "Pre-flight result"
+    if ($script:FailCount -eq 0) {
+        Ok "no blocking problems - the $TaskTime run should trade"
+    } else {
+        Fail "$($script:FailCount) blocking problem(s) above - the run will NOT trade correctly"
+    }
+}
+
+# -- 10. rehearsal -------------------------------------------------------------
+if ($Rehearse) {
+    Section "Dress rehearsal (no orders)"
+    # The executor's kill switch aborts AFTER the book print, signature check and
+    # freshness validation, but BEFORE it connects to place anything - so arming
+    # it exercises the exact scheduled path that has to work, at any hour, with
+    # zero risk of a trade.
+    if (-not (Get-ScheduledTask -TaskName 'IBKR Option C executor' -ErrorAction SilentlyContinue)) {
+        Fail "no scheduled task to rehearse - run -Task first"
+    } else {
+        $ks = if ($env:IBKR_KILL_SWITCH_FILE) { $env:IBKR_KILL_SWITCH_FILE } else { $KillSwitchFile }
+        $armed = Test-Path $ks
+        New-Item -ItemType File -Force -Path $ks | Out-Null
+        Info "kill switch armed at $ks - running the real scheduled task..."
+        try {
+            $log = Join-Path $RepoRoot 'logs\ibkr_executor.log'
+            $before = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
+            Start-ScheduledTask -TaskName 'IBKR Option C executor'
+            $waited = 0
+            while ($waited -lt 120) {
+                Start-Sleep -Seconds 5; $waited += 5
+                if ((Test-Path $log) -and (Get-Content $log -Tail 1) -match 'done \(executor exit') { break }
+            }
+            if (Test-Path $log) {
+                Write-Host ""
+                Get-Content $log | Select-Object -Skip 0 | ForEach-Object { $_ } |
+                    Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" }
+                Write-Host ""
+                $tail = (Get-Content $log -Tail 25) -join "`n"
+                if ($tail -match 'signature OK') { Ok "signature verified inside the task's own environment" }
+                elseif ($tail -match 'no secret provided') { Fail "task ran WITHOUT the secret - the book would trade unverified" }
+                else { Warn "no signature line found - read the log above" }
+                if ($tail -match 'kill switch active') { Ok "reached the order stage and stopped there (as intended)" }
+                else { Warn "did not reach the kill-switch abort - read the log above" }
+                if ($tail -match 'done \(executor exit 0\)') { Ok "wrapper ran to completion" }
+                else { Fail "wrapper did not finish cleanly" }
+            } else { Fail "no log written at $log - the task never ran" }
+        } finally {
+            if (-not $armed) { Remove-Item $ks -ErrorAction SilentlyContinue
+                               Info "kill switch disarmed (trading re-enabled)" }
+            else { Warn "kill switch was ALREADY armed before this run - left armed" }
+        }
+    }
 }
 
 Section "Next steps"
@@ -282,3 +446,8 @@ Info "3. Dry-run once:"
 Info "     .\.venv\Scripts\python.exe scripts\ibkr_execute_book.py --file data\overall\target_book.json"
 Info "4. When it looks right, add --execute (during US market hours)."
 Write-Host ""
+
+# Exit non-zero when a phase found something that would break the daily run, so
+# -Preflight / -Rehearse can be used as a gate rather than eyeballed.
+if ($script:FailCount -gt 0) { exit 1 }
+exit 0
