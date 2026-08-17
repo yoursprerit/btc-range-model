@@ -37,6 +37,17 @@ from pathlib import Path
 
 import pandas as pd
 
+# Redirected stdout on Windows (a Task Scheduler pipe, `> out.txt`, a PowerShell
+# `|`) is encoded with the ANSI codepage, not UTF-8 — so the arrows and rules in
+# the printout below raise UnicodeEncodeError and abort the run, even though the
+# identical command works when typed at a console. Make our own streams UTF-8 so
+# the output never depends on how the caller redirected us.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):   # already-wrapped or non-reconfigurable stream
+        pass
+
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "app"))
 sys.path.insert(0, str(_REPO / "scripts"))

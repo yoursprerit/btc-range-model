@@ -605,6 +605,8 @@ Gateway.
 | Task fired at the wrong hour | `-TaskTime` is **local machine time**, not Central. `Get-TimeZone`, then re-register with the local equivalent (§7). |
 | Task exists but never runs / `LastTaskResult` non-zero | Read `logs\ibkr_executor.log` — the wrapper logs every step. Work down the §9 pre-flight list. |
 | Orders don't fill | Outside US market hours, or the paper account lacks buying power / the symbol is halted. Market orders fill during RTH. |
+| Log stops right after `Published book …` with no `Signature:` line and no `done` | The classic detached-run failure, fixed in the wrapper as of 2026-08-17. Redirected stdout on Windows is encoded with the ANSI codepage, so the `→` in the book printout raised `UnicodeEncodeError`; `2>&1` then turned the traceback into a terminating error under `$ErrorActionPreference='Stop'`, killing the wrapper before it could log anything. `git pull` to get the fix. Note the same command works interactively — a console stdout takes the Unicode path, so this only ever shows up under Task Scheduler. |
+| Log shows `ù` where `—` should be | Cosmetic mojibake from the same encoding mismatch (cp1252 out, cp437 in); fixed by the same change. |
 
 ---
 

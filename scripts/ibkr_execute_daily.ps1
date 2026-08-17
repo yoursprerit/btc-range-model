@@ -81,6 +81,18 @@ if (-not $Port)   { $Port   = '4002' }
 if ($env:IBKR_PYTHON) { $Python = $env:IBKR_PYTHON }
 else { $Python = Join-Path $RepoRoot '.venv\Scripts\python.exe' }
 
+# --- console/pipe encoding -------------------------------------------------
+# When Task Scheduler runs this detached, the executor's stdout is a PIPE, not a
+# console. Python then encodes stdout with the ANSI codepage (cp1252) instead of
+# using the console's UTF-16 API, and the first '->' arrow (U+2192) in the book
+# printout raises UnicodeEncodeError and kills the run -- while the same command
+# typed at an interactive prompt works fine, because a console stdout takes the
+# Unicode path. Force UTF-8 on both sides so redirected output matches the
+# console.
+$env:PYTHONUTF8      = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
 $LogDir = Join-Path $RepoRoot 'logs'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Log = Join-Path $LogDir 'ibkr_executor.log'
@@ -88,7 +100,7 @@ $Log = Join-Path $LogDir 'ibkr_executor.log'
 function Log($msg) {
     $line = "[{0}] {1}" -f (Get-Date -Format 'u'), $msg
     Write-Output $line
-    Add-Content -Path $Log -Value $line
+    Add-Content -Path $Log -Value $line -Encoding UTF8
 }
 
 Set-Location $RepoRoot
@@ -119,7 +131,17 @@ if ($env:IBKR_SLIPPAGE_CAP) { $ExecArgs += @('--slippage-cap', $env:IBKR_SLIPPAG
 Log "account mode: $AccountMode"
 
 # --execute places orders; the executor's own guards decide if it actually trades.
+# '2>&1' turns the executor's stderr into ErrorRecords, and under
+# $ErrorActionPreference='Stop' the FIRST such record is a TERMINATING error --
+# it would abort this script on the spot, skipping the exit-code log line and the
+# report push, leaving a log that just stops mid-run with no explanation. Drop to
+# 'Continue' for the call and judge the outcome by $LASTEXITCODE instead.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 & $Python "scripts\ibkr_execute_book.py" @ExecArgs 2>&1 | ForEach-Object { Log $_ }
+$ExecExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+if ($ExecExit -ne 0) { Log "WARN: executor exited $ExecExit - see the lines above" }
 
 # Publish the execution report back so the cloud app's "Executed Book" tab shows
 # it. Requires git WRITE credentials on this host. On push failure, reset to
@@ -141,5 +163,5 @@ if ($env:IBKR_NO_PUSH_REPORT -ne '1' -and (Test-Path $Report)) {
     } else { Log "no change to executed_book.json - nothing to publish" }
 }
 
-Log "done (exit $LASTEXITCODE)"
-exit $LASTEXITCODE
+Log "done (executor exit $ExecExit)"
+exit $ExecExit
