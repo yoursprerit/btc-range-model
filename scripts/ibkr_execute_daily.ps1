@@ -98,7 +98,10 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Log = Join-Path $LogDir 'ibkr_executor.log'
 
 function Log($msg) {
-    $line = "[{0}] {1}" -f (Get-Date -Format 'u'), $msg
+    # Get-Date -Format 'u' appends 'Z' but formats LOCAL time -- it does not
+    # convert. That mislabels every line as UTC and makes the log impossible to
+    # line up against IBKR's genuinely-UTC order stamps. Convert explicitly.
+    $line = "[{0}] {1}" -f (Get-Date).ToUniversalTime().ToString('u'), $msg
     Write-Output $line
     Add-Content -Path $Log -Value $line -Encoding UTF8
 }
