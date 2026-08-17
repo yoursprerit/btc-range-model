@@ -42,7 +42,16 @@
 .NOTES
     Requires OVERALL_BOOK_SECRET to be set (same value used to publish) so the
     book's signature can be verified before trading. Set it as a *user* or
-    *system* environment variable so Task Scheduler inherits it.
+    *system* environment variable so Task Scheduler inherits it. If it is NOT
+    set the executor SKIPS verification rather than failing -- it logs
+    "signed but no secret provided to verify" and trades anyway.
+
+    The report push at the end needs git WRITE access on this host, and runs
+    detached (no console), so the credential must resolve without a prompt --
+    an SSH deploy key or a stored PAT. Set IBKR_NO_PUSH_REPORT=1 to skip it.
+    See IBKR_OPTION_C_WINDOWS.md section 8.
+
+    KEEP THIS FILE PURE ASCII -- see the note in setup_windows_option_c.ps1.
 #>
 param(
     [string]$Branch = $env:IBKR_BRANCH,

@@ -49,7 +49,7 @@ in hand leaves you with a half-configured box.
 | 3 | Account id starts with **`DU`** | The executor aborts on any non-`DU` account |
 | 4 | **2FA disabled** on that paper login | The scheduled task can't answer a phone prompt |
 | 5 | **Market data shared** to the paper account *(recommended)* | Without quotes, marketable limits fall back to unprotected market orders |
-| 6 | The **`OVERALL_BOOK_SECRET`** value used by the publisher | A mismatch aborts at signature verification |
+| 6 | The **`OVERALL_BOOK_SECRET`** value used by the publisher | A mismatch aborts at signature verification. You **cannot read this back out of GitHub** — see §4 |
 
 **On the laptop:**
 
@@ -60,6 +60,7 @@ in hand leaves you with a half-configured box.
 | **The repo cloned** | `git clone https://github.com/yoursprerit/btc-range-model.git C:\btc-range-model` |
 | **Power settings that allow wake** | The daily task registers `-WakeToRun`, but Windows must permit it (§7). |
 | **Your machine's timezone** | The task trigger fires in **local** time; the target is 2:30 PM US Central. Pass `-TaskTime` accordingly (§7). |
+| **Git write credentials** *(optional)* | Only needed to publish the execution report back so the cloud app's *Executed Book* tab updates. Trading works without it (§8). |
 
 Only once all of the above is true should you run the quick start below.
 
@@ -142,6 +143,10 @@ can wake it — see §7.)
    .\.venv\Scripts\Activate.ps1
    pip install -r requirements-ibkr.txt
    ```
+   That file installs **`ib_async` + `pandas`/`numpy`** — the executor and the
+   shared `target_book` / `ibkr_common` modules all import pandas, and
+   `ib_async` does not pull it in. Do **not** install `requirements.txt` here:
+   that is the model/Streamlit stack and this host does not run the model.
    > If `Activate.ps1` is blocked, allow local scripts for your user once:
    > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 4. Smoke-test the executor (no gateway needed — it just prints the book if one
@@ -176,24 +181,98 @@ can wake it — see §7.)
 ## 4. Set the shared secret
 
 The book is HMAC-signed so the executor can prove it's authentic before trading.
-Set the **same** `OVERALL_BOOK_SECRET` value that the publisher uses. Make it a
-**user environment variable** so scheduled tasks inherit it:
+`OVERALL_BOOK_SECRET` must hold **one identical value in three places**, and only
+one of them signs:
+
+| Role | Where the value lives | What it does |
+|---|---|---|
+| **Publisher** | **GitHub repo secret** (`Settings → Secrets and variables → Actions`), consumed by `.github/workflows/publish-target-book.yml` | **Signs** the book |
+| Streamlit app | `st.secrets` (Manage app → Secrets), or an env var | Verifies |
+| **This laptop** | **user** environment variable, via `setx` | Verifies |
+
+Only the GitHub Action signs. **The Streamlit app is a verifier, not the
+publisher** — setting the value there does not change how any book is signed.
 
 ```powershell
-# one-time; opens a new value in the persistent user environment
+# one-time; writes a new value into the persistent user environment
 setx OVERALL_BOOK_SECRET "your-long-random-shared-secret"
 ```
 
-Close and reopen PowerShell after `setx` (it doesn't affect the current session).
-Verify:
+Close and reopen PowerShell after `setx` — it does not affect the current
+session. Verify:
 
 ```powershell
-$env:OVERALL_BOOK_SECRET
+[Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET','User')   # persisted value
+$env:OVERALL_BOOK_SECRET                                              # visible to THIS shell
 ```
 
-> If you skip signing, pass nothing and the executor will run but warn that the
-> book is unverified. Signing is strongly recommended since the transport (a git
-> branch) is readable by anyone with repo access.
+Both must be non-empty. The first is what Task Scheduler will inherit; the
+second is what your interactive dry-run will use.
+
+### ⚠️ The setup script mints a NEW secret if you don't give it one
+
+`setup_windows_option_c.ps1 -Secret` (and therefore `-All`) uses `-BookSecret`
+if supplied, keeps an existing user value if there is one, and **otherwise
+generates a fresh random 40-character secret** and prints it in magenta:
+
+```
+[warn] generated a new secret - set the SAME value on the PUBLISHER
+[warn] (GitHub repo secret OVERALL_BOOK_SECRET):
+```
+
+That warning is a required follow-up action, not a status message. Until you
+copy the value into the **GitHub repo secret** and re-publish, the publisher is
+still signing with the old key and both verifiers will reject every book.
+
+Avoid this entirely by passing the publisher's existing value:
+
+```powershell
+... setup_windows_option_c.ps1 -All -BookSecret "the-publishers-existing-value" -IbUser … -IbPassword …
+```
+
+### Rotating the secret
+
+**GitHub Actions secrets are write-only — you cannot read the old value back
+out.** If it isn't written down somewhere, your only route is forward. All three
+places must change, and a book must be re-signed:
+
+1. **GitHub → repo Settings → Secrets and variables → Actions →
+   `OVERALL_BOOK_SECRET` → Update** to the new value.
+2. **Re-publish.** Changing the secret does *not* re-sign the book already
+   committed — the signature is fixed at publish time. Run the **Publish target
+   book (IBKR Option C)** Action, or press **🚀 Publish new target book** in the
+   Target Book app.
+3. **Streamlit → Manage app → Secrets** → set the new value, then **reboot the
+   app**.
+4. **Laptop:** `setx OVERALL_BOOK_SECRET "…"`, then open a new PowerShell.
+5. `git pull` on the laptop and re-run the dry-run (§5c).
+
+> **Streamlit precedence:** `app/target_book_app.py` checks `st.secrets`
+> **first** and only then environment variables. A stale value in the Secrets
+> panel silently wins over a correct env var.
+
+> **Whitespace:** the comparison is over raw bytes. A trailing newline or space
+> pasted into any of the three places produces a mismatch.
+
+### ⚠️ No secret means the signature is NOT checked
+
+If `OVERALL_BOOK_SECRET` is unset, `verify_signature()` **returns success** with
+the message `signed but no secret provided to verify`, and the run continues.
+A dry-run that reports that line has verified nothing — it is not the same as
+`signature OK`. This bites most often when you run in a PowerShell window opened
+*before* `setx`, since `setx` only affects new processes.
+
+Pass `--require-signature` to refuse an unsigned book outright. Signing is
+strongly recommended: the transport (a git branch) is readable by anyone with
+repo access.
+
+### Checking a book against a candidate secret
+
+Stdlib only — works even before the venv exists:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import os,json,hmac,hashlib; p=json.load(open('data/overall/target_book.json')); b={k:v for k,v in p.items() if k!='signature'}; c=json.dumps(b,sort_keys=True,separators=(',',':')).encode(); print('MATCH' if hmac.compare_digest(hmac.new(os.environ['OVERALL_BOOK_SECRET'].encode(),c,hashlib.sha256).hexdigest(), p['signature']['value']) else 'MISMATCH')"
+```
 
 ---
 
@@ -224,6 +303,11 @@ signature, and diffs against your current paper positions:
 You should see the published book, `Signature: signature OK`, a freshness line,
 your `DU…` account, and the order plan. Compare it against the Overall app's
 **"Recommended Live Possible Targetbook"** panel — the target weights should match.
+
+> **Read the `Signature:` line, don't just check the exit code.** Only
+> `signature OK` means the book was cryptographically verified.
+> `signed but no secret provided to verify` means `OVERALL_BOOK_SECRET` was not
+> visible to this shell and **nothing was checked** — see §4.
 
 ### 5d. Execute against paper
 When the dry-run looks right, place the orders during US market hours:
@@ -264,8 +348,18 @@ under **IBC**:
 3. Start IB Gateway via IBC's `StartGateway.bat` (point it at your config). Set
    `AutoRestartTime` in the config to the small hours so the daily restart never
    lands during your rebalance window.
-4. Optionally add `StartGateway.bat` to a **logon** scheduled task or the Startup
-   folder so the gateway comes up whenever the laptop boots.
+4. **Required for automation — make the gateway come back on its own.** Nothing
+   in `setup_windows_option_c.ps1` starts IB Gateway; it only installs it and
+   templates IBC's config. Task Scheduler will fire the executor at 2:30 PM
+   whether or not the gateway is up, and the run fails if it isn't. Put
+   `StartGateway.bat` in your Startup folder:
+   ```powershell
+   $s = (New-Object -ComObject WScript.Shell).CreateShortcut(
+          "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StartGateway.lnk")
+   $s.TargetPath = 'C:\IBC\StartGateway.bat'; $s.WorkingDirectory = 'C:\IBC'; $s.Save()
+   ```
+   This also covers IB Gateway's forced once-a-day restart: IBC re-logs-in only
+   while it is the process supervising the session.
 
 > **2FA tip:** unattended login is simplest with a paper username that has 2FA
 > disabled. If you must use IBKR Mobile 2FA, follow the IBC docs for
@@ -292,7 +386,7 @@ $act = New-ScheduledTaskAction -Execute $ps -Argument $arg -WorkingDirectory "C:
 # (e.g. 3:30PM on Eastern, 12:30PM on Pacific).
 $trg = New-ScheduledTaskTrigger -Daily -At 2:30PM
 
-# Wake the laptop if asleep, and run whether or not you're logged in.
+# Wake the laptop if asleep; keep running on battery; catch up on a missed fire.
 $set = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
         -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 
@@ -307,12 +401,29 @@ Notes:
   `IBKR_BRANCH` env var; `IBKR_BAND`, `IBKR_PORT`, `IBKR_BOOK`, `IBKR_PYTHON`
   override the other defaults.
 - `OVERALL_BOOK_SECRET` must exist as a **user/system** env var (set via `setx`
-  in §4) so the task inherits it.
+  in §4) so the task inherits it. The task reads the environment fresh at each
+  fire, so setting it after registering the task is fine.
+- **The task runs only while you are logged on.** `Register-ScheduledTask`
+  without an explicit `-Principal` registers the current user with an
+  *interactive* logon type. A locked screen is fine; a signed-out or shut-down
+  machine is not. To run signed-out, re-register with
+  `-User "$env:USERNAME" -LogonType S4U`, but note that S4U breaks DPAPI — which
+  breaks Git Credential Manager, so pair it with the SSH deploy key in §8.
+- **Registering the task needs an elevated PowerShell** (`-RunLevel Highest`).
+  If your `-All` run died before phase 7, the task does not exist; re-run
+  `... setup_windows_option_c.ps1 -Task` as Administrator.
 - **The weekday-only + holiday logic lives in the executor**, so a Saturday fire
   is a safe no-op — you don't need a weekday-only trigger, though you can add
   `-DaysOfWeek` to the trigger if you prefer.
 - Ensure **IB Gateway (under IBC) is up before 2:30 PM CT** and that Windows
   sleep settings allow `-WakeToRun` (Control Panel → Power Options).
+
+**Confirm it registered, and when it will fire:**
+```powershell
+Get-ScheduledTask -TaskName "IBKR Option C executor" |
+    Get-ScheduledTaskInfo | Select-Object NextRunTime, LastRunTime, LastTaskResult
+Get-TimeZone      # NextRunTime is LOCAL time — confirm it lands on 2:30 PM US Central
+```
 
 **Test the task immediately:**
 ```powershell
@@ -320,9 +431,146 @@ Start-ScheduledTask -TaskName "IBKR Option C executor"
 Get-Content C:\btc-range-model\logs\ibkr_executor.log -Tail 40
 ```
 
+> This is the only test that exercises the whole chain, but note the wrapper
+> passes `--execute` — **it places real paper orders now**, not a dry-run. That
+> is safe (paper-only guard) but fills at the current price rather than your
+> 2:30 PM slot. When the scheduled fire comes around it will find you inside the
+> no-trade band and no-op.
+
 ---
 
-## 8. Daily operating picture
+## 8. Git write credentials for the execution report (optional)
+
+After trading, `ibkr_execute_daily.ps1` commits `data\overall\executed_book.json`
+and pushes it to `main` so the cloud app's **Executed Book** tab shows the fills.
+This is **cosmetic** — trades execute and the report is written locally either
+way. Without credentials the wrapper logs
+`WARN: could not push execution report … rolling back`, resets to `origin/main`,
+and carries on.
+
+The push runs from **Task Scheduler, detached — no console, no prompt**. The
+credential must therefore be readable non-interactively; anything that would pop
+a dialog just fails.
+
+You do **not** need a git identity: the wrapper commits with
+`git -c user.name="ibkr-executor" -c user.email="executor@localhost"`.
+
+Check which transport you're on first:
+
+```powershell
+cd C:\btc-range-model
+git remote -v
+git branch --show-current      # should be `main` — the wrapper pushes HEAD:main
+```
+
+### Option A — deploy key (scoped to this repo, no expiry)
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
+ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_btc_executor" -N '""' -C "btc-executor-laptop"
+Get-Content "$env:USERPROFILE\.ssh\id_btc_executor.pub"
+```
+
+`ssh-keygen` will **not** create `.ssh` for you — the `New-Item` line is what
+prevents `Saving key … failed: No such file or directory`.
+
+Paste the printed public key at repo **Settings → Deploy keys → Add deploy key**
+and tick **Allow write access**. Then:
+
+```powershell
+git remote set-url origin git@github.com:yoursprerit/btc-range-model.git
+Add-Content "$env:USERPROFILE\.ssh\config" @"
+
+Host github.com
+  IdentityFile ~/.ssh/id_btc_executor
+  IdentitiesOnly yes
+"@
+ssh -T git@github.com     # accept the host key ONCE, so the detached task never stalls on it
+```
+
+- Expect `Hi yoursprerit/btc-range-model! You've successfully authenticated…`.
+- **If it prompts for a passphrase**, the `-N '""'` quoting didn't take. Clear it
+  with `ssh-keygen -p -f "$env:USERPROFILE\.ssh\id_btc_executor"` (press Enter
+  twice) — a passphrased key cannot work unattended.
+- If OpenSSH complains the permissions are too open:
+  `icacls "$env:USERPROFILE\.ssh\id_btc_executor" /inheritance:r /grant:r "$($env:USERNAME):(R)"`
+
+### Option B — fine-grained PAT via Git Credential Manager
+
+GCM ships with Git for Windows and stores into Windows Credential Manager, which
+any process running as your user can read.
+
+Create the token at **GitHub → Settings → Developer settings → Personal access
+tokens → Fine-grained tokens**: repository access **only** `yoursprerit/btc-range-model`,
+permission **Contents: Read and write**. That single permission is all a push
+needs. Mind the expiry — when it lapses the push starts failing silently.
+
+Store it without any UI:
+
+```powershell
+$pat = 'github_pat_xxxxxxxx'
+@"
+protocol=https
+host=github.com
+username=yoursprerit
+password=$pat
+
+"@ | git credential approve
+```
+
+The blank line inside the here-string is required — it terminates the input.
+
+> Embedding the token in the remote URL (`https://<PAT>@github.com/…`) also
+> works but writes it in cleartext into `.git/config` and leaks it into verbose
+> git errors. Prefer A or B.
+
+### Verify it works *headless*
+
+An interactive push can succeed via a prompt the scheduler can never show, so
+force git to fail instead of asking:
+
+```powershell
+$env:GIT_TERMINAL_PROMPT = 0
+git push origin HEAD:main
+```
+
+`could not read Username for 'https://github.com'` means the credential is not
+stored and the scheduled push will fail the same way.
+
+### Or turn the push off
+
+```powershell
+setx IBKR_NO_PUSH_REPORT 1
+```
+
+A defensible choice — it keeps any write credential off the trading laptop.
+
+---
+
+## 9. Pre-flight — will it actually fire today?
+
+A green dry-run proves the book and the gateway were fine *at that moment*. It
+does not prove the scheduled run will work. Walk this list once after setup:
+
+| # | Check | Command / where |
+|---|---|---|
+| 1 | Task exists and `NextRunTime` is today at your local equivalent of 2:30 PM CT | `Get-ScheduledTask -TaskName "IBKR Option C executor" \| Get-ScheduledTaskInfo` |
+| 2 | Machine timezone is what you assumed when you set `-TaskTime` | `Get-TimeZone` |
+| 3 | Secret is persisted **and** visible to a fresh shell | `[Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET','User')` |
+| 4 | Dry-run prints `Signature: signature OK` — *not* `no secret provided to verify` | §5c |
+| 5 | IB Gateway is listening, and will still be at 2:30 | `Test-NetConnection 127.0.0.1 -Port 4002` → `TcpTestSucceeded : True` |
+| 6 | Gateway restarts on its own after a reboot / IBKR's daily restart | §6 step 4 |
+| 7 | Repo is on `main` and fast-forwardable | `git branch --show-current`; `git pull --ff-only origin main` |
+| 8 | Push credential works headless *(only if you want the report)* | §8 |
+| 9 | Laptop will be **on and logged on** at 2:30 (locked is fine) | §7 |
+| 10 | Today's book published and audit passed | Streamlit Target Book tab, or `git log -1 --oneline origin/main -- data/overall/target_book.json` |
+
+The single most common gap is **#5/#6** — nothing in the setup script starts IB
+Gateway.
+
+---
+
+## 10. Daily operating picture
 
 1. **Publisher** (cloud) emits a fresh signed `target_book.json` **every day** —
    weekends and holidays included, since Bitcoin keeps trading and the signals
@@ -338,22 +586,29 @@ Get-Content C:\btc-range-model\logs\ibkr_executor.log -Tail 40
 
 ---
 
-## 9. Troubleshooting (Windows)
+## 11. Troubleshooting (Windows)
 
 | Symptom | Fix |
 |---|---|
 | `Could not connect to IB Gateway` | Gateway not running / not logged in, or API not enabled on port 4002. Re-check §3. |
 | Connects but `not a paper account` abort | You're on a live login. Switch IB Gateway to **Paper Trading**. (Do **not** use `--allow-nonpaper` unless you truly intend live.) |
-| `signature MISMATCH` / `no signature present…` | `OVERALL_BOOK_SECRET` on the laptop doesn't match the publisher's, or the book was edited. Re-set the secret (§4). |
+| `signature MISMATCH` / `no signature present…` | The laptop's (or Streamlit's) `OVERALL_BOOK_SECRET` doesn't match the **publisher's**, or the book was edited. Usually means the setup script minted a new secret and the GitHub repo secret was never updated — full rotation procedure in §4. Remember to **re-publish**: changing the secret does not re-sign an already-committed book. |
+| `Signature: signed but no secret provided to verify` | Not an error, but **nothing was verified**. `OVERALL_BOOK_SECRET` isn't visible to that process — usually a shell opened before `setx`. Open a new PowerShell (§4). |
+| `ModuleNotFoundError: No module named 'pandas'` | The venv is incomplete. `.\.venv\Scripts\python.exe -m pip install -r requirements-ibkr.txt`, or re-run `... setup_windows_option_c.ps1 -Venv`. |
+| `The string is missing the terminator` / `Missing closing '}'` running a `.ps1` | The script file picked up non-ASCII characters. Windows PowerShell 5.1 reads BOM-less `.ps1` as ANSI, and a UTF-8 em dash decodes to a curly quote that opens a string. Keep these scripts pure ASCII, or save them UTF-8 **with** BOM. |
+| `Saving key … failed: No such file or directory` from `ssh-keygen` | `%USERPROFILE%\.ssh` doesn't exist yet — create it first (§8). |
+| `could not push execution report … rolling back` | No git write credential on this host. Trading still happened; only the cloud *Executed Book* tab is stale. Set one up (§8) or silence it with `setx IBKR_NO_PUSH_REPORT 1`. |
 | `book generated …h ago (> 30h) — stale` | The publisher didn't run today (or yesterday), or the pull failed. Re-publish, `git pull`, retry. Use `--max-age-hours` only if you understand the risk. |
 | `Not trading: … weekend/holiday` | Working as intended. `--force` overrides. |
 | `Activate.ps1 cannot be loaded` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. |
-| Scheduled task didn't run overnight | Laptop asleep without `-WakeToRun`, or on battery with battery guards. Re-check §7 power settings. |
+| Scheduled task didn't run overnight | Laptop asleep without `-WakeToRun`, on battery with battery guards, or **signed out** (the default principal only runs while logged on). Re-check §7. |
+| Task fired at the wrong hour | `-TaskTime` is **local machine time**, not Central. `Get-TimeZone`, then re-register with the local equivalent (§7). |
+| Task exists but never runs / `LastTaskResult` non-zero | Read `logs\ibkr_executor.log` — the wrapper logs every step. Work down the §9 pre-flight list. |
 | Orders don't fill | Outside US market hours, or the paper account lacks buying power / the symbol is halted. Market orders fill during RTH. |
 
 ---
 
-## 10. Safety recap
+## 12. Safety recap
 
 - **Paper only** — non-`DU` accounts are refused by default.
 - **Dry-run is the default** — orders require `--execute`.

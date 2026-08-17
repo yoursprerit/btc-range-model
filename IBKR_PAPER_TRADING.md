@@ -104,11 +104,28 @@ you would rather not share data, widen the cap instead
 
 ### 4. The shared signing secret
 
-`OVERALL_BOOK_SECRET` must be **the same value** on the publisher (the GitHub
-repo/environment secret), the Streamlit app, and the executor host. A mismatch
-aborts the run at signature verification. Have the value in hand before setup —
-for Option C the executor is useless without it. (Option A computes signals
-locally and needs no secret.)
+`OVERALL_BOOK_SECRET` must be **the same value** in three places, and only one
+of them signs:
+
+| Role | Where it lives | Does |
+|---|---|---|
+| **Publisher** | GitHub **repo secret** (used by `publish-target-book.yml`) | **signs** |
+| Streamlit app | `st.secrets`, else env | verifies |
+| Executor host | env var (`setx` on Windows) | verifies |
+
+A mismatch aborts the run at signature verification. Have the value in hand
+before setup — for Option C the executor is useless without it. (Option A
+computes signals locally and needs no secret.)
+
+Two traps worth knowing before you start:
+
+- **GitHub Actions secrets are write-only.** You cannot read the current value
+  back out, so if it isn't recorded somewhere, rotation is the only path.
+- **Changing the secret does not re-sign the committed book.** The signature is
+  fixed at publish time, so any rotation must be followed by a fresh publish.
+- **Setting the value in Streamlit changes nothing about signing** — Streamlit
+  is a verifier. Windows walkthrough:
+  [`IBKR_OPTION_C_WINDOWS.md` §4](IBKR_OPTION_C_WINDOWS.md#4-set-the-shared-secret).
 
 ### 5. Accept the plaintext-password trade-off
 
@@ -268,6 +285,12 @@ export OVERALL_BOOK_SECRET="a-long-random-string"   # same value on both sides
 On the publisher it signs the artifact; on the executor it verifies (a mismatch
 or a tampered book aborts the run). Pass `--require-signature` to the executor to
 refuse an unsigned book outright.
+
+> **If the secret is unset, verification is skipped, not failed.**
+> `verify_signature()` returns success with the message
+> `signed but no secret provided to verify` and the run continues. Check the
+> executor's `Signature:` line — only `signature OK` means the book was actually
+> verified.
 
 ### Publish
 

@@ -54,6 +54,21 @@
     Run from an ELEVATED PowerShell (Run as Administrator) for the installer and
     scheduled-task phases. Re-open PowerShell after the secret phase so the new
     environment variable is visible.
+
+    -Secret with no -BookSecret GENERATES a new random secret. That value must
+    then be copied into the PUBLISHER's GitHub repo secret AND a fresh book
+    published, or every verifier rejects the book. Pass -BookSecret to avoid it.
+    See IBKR_OPTION_C_WINDOWS.md section 4.
+
+    This script does NOT start IB Gateway. Task Scheduler fires the executor
+    whether or not the gateway is up. See IBKR_OPTION_C_WINDOWS.md section 6.
+
+    KEEP THIS FILE PURE ASCII. Windows PowerShell 5.1 decodes a BOM-less .ps1
+    using the machine's ANSI codepage, so a UTF-8 em dash (E2 80 94) arrives as
+    'a-circumflex, euro, RIGHT DOUBLE QUOTATION MARK' -- and PowerShell accepts
+    that curly quote as a string delimiter. One em dash inside a double-quoted
+    message silently opens a string and the whole file fails to parse with
+    "The string is missing the terminator" plus bogus "Missing closing '}'".
 #>
 [CmdletBinding()]
 param(
