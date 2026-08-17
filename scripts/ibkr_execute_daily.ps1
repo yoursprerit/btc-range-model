@@ -5,14 +5,14 @@
 .DESCRIPTION
     Pulls the latest published target book from the feature branch, then runs the
     lightweight executor to rebalance the IBKR *paper* account to match it. The
-    model never runs here — this host only consumes the pre-computed book.
+    model never runs here - this host only consumes the pre-computed book.
 
     The executor itself guards against weekends / holidays / stale books and only
-    trades a paper (DU…) account, so a stray or early run is a safe no-op.
+    trades a paper (DU...) account, so a stray or early run is a safe no-op.
 
 .PARAMETER Branch
     Git branch carrying the published target_book.json (env: IBKR_BRANCH,
-    default main — where the publisher commits the daily book).
+    default main - where the publisher commits the daily book).
 .PARAMETER Book
     Path to the target book JSON (env: IBKR_BOOK).
 .PARAMETER Band
@@ -23,13 +23,13 @@
     Skip the `git pull` (use the book already on disk).
 
 .NOTES
-    Order routing (env only — see IBKR_PAPER_TRADING.md § Order routing):
+    Order routing (env only - see IBKR_PAPER_TRADING.md section Order routing):
       IBKR_ORDER_TYPE    marketable-limit (default) | moc | market
                          Default sends a LIMIT priced through the touch, so a
                          bad quote can't run away with the order; anything left
                          unfilled escalates to a market order in the same run.
-                         moc fills in the 4:00 PM ET closing auction instead —
-                         the price the backtest books against — and must be
+                         moc fills in the 4:00 PM ET closing auction instead -
+                         the price the backtest books against - and must be
                          entered before the 15:50 ET cutoff (the 2:30 PM CT
                          task clears it by 20 min).
       IBKR_SLIPPAGE_CAP  how far through the touch a marketable limit prices
@@ -54,7 +54,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Resolve the repo root from this script's location (…\repo\scripts\*.ps1).
+# Resolve the repo root from this script's location (...\repo\scripts\*.ps1).
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 
@@ -83,7 +83,7 @@ function Log($msg) {
 }
 
 Set-Location $RepoRoot
-Log "──────────────────────────────────────────────"
+Log "----------------------------------------------"
 Log "starting IBKR paper executor (branch=$Branch port=$Port band=$Band)"
 
 if (-not $NoPull) {
@@ -104,7 +104,7 @@ if ($AccountMode -eq 'live') {
     if ($env:IBKR_MAX_ORDER_NOTIONAL) { $ExecArgs += @('--max-order-notional', $env:IBKR_MAX_ORDER_NOTIONAL) }
 }
 if ($env:IBKR_KILL_SWITCH_FILE) { $ExecArgs += @('--kill-switch-file', $env:IBKR_KILL_SWITCH_FILE) }
-# Order routing: marketable-limit (default) | moc | market — see IBKR_PAPER_TRADING.md.
+# Order routing: marketable-limit (default) | moc | market - see IBKR_PAPER_TRADING.md.
 if ($env:IBKR_ORDER_TYPE)   { $ExecArgs += @('--order-type', $env:IBKR_ORDER_TYPE) }
 if ($env:IBKR_SLIPPAGE_CAP) { $ExecArgs += @('--slippage-cap', $env:IBKR_SLIPPAGE_CAP) }
 Log "account mode: $AccountMode"
