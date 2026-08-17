@@ -344,8 +344,8 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-08-16,sleeve,GDX,red,-0.1309,22.31,5.9,97.0
 2026-08-16,sleeve,GLDM,warming,-0.1329,6.17,,9.0
 2026-08-16,sleeve,GRID,green,-0.0368,8.06,48.7,57.0
-2026-08-16,sleeve,MSTR,warming,-0.0378,65.58,,8.0
-2026-08-16,sleeve,MSTU,warming,-0.0713,138.74,,8.0
+2026-08-16,sleeve,MSTR,warming,-0.0378,61.88,,8.0
+2026-08-16,sleeve,MSTU,warming,-0.0713,137.35,,8.0
 2026-08-16,sleeve,NUGT,red,-0.3112,56.13,4.8,97.0
 2026-08-16,sleeve,OIH,warming,-0.0718,-0.0,,10.0
 2026-08-16,sleeve,PBW,green,-0.0211,16.23,97.8,79.0
@@ -354,5 +354,5 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-08-16,sleeve,SOXX,warming,-0.1597,-0.0,,8.0
 2026-08-16,sleeve,UGL,warming,-0.2881,13.81,,11.0
 2026-08-16,sleeve,WGMI,yellow,-0.3155,-17.93,,18.0
-2026-08-16,sleeve,XLE,warming,-0.0104,0.0,,10.0
+2026-08-16,sleeve,XLE,warming,-0.0104,-0.0,,10.0
 2026-08-16,tracking,book_vs_replay,green,,-1.49,,31.0
