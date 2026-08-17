@@ -337,6 +337,25 @@ if ($Autostart) {
 # -- 9. pre-flight -------------------------------------------------------------
 if ($Preflight) {
     Section "Pre-flight"
+    # Native commands below (git, python) write to stderr on entirely normal
+    # paths -- 'git push --dry-run' reports "Everything up-to-date" there on
+    # SUCCESS. With '2>&1' under $ErrorActionPreference='Stop' the first such
+    # line is a TERMINATING error and kills the phase before it can print its
+    # verdict. Diagnostics must never abort the diagnostic.
+    $preflightEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    # setx writes the persisted USER value but does not touch already-running
+    # processes, so a shell opened before setup shows an empty $env:. Task
+    # Scheduler reads the persisted value, so THAT is what predicts tomorrow's
+    # run -- hydrate from it rather than reporting a phantom failure.
+    $persistedSecret = [Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET', 'User')
+    if (-not $env:OVERALL_BOOK_SECRET -and $persistedSecret) {
+        $env:OVERALL_BOOK_SECRET = $persistedSecret
+        $env:IBKR_SECRET_FROM_PERSISTED = '1'
+    } else {
+        Remove-Item Env:\IBKR_SECRET_FROM_PERSISTED -ErrorAction SilentlyContinue
+    }
 
     # The portable half: encoding, deps, book freshness/audit, and - the check
     # that matters most - whether the configured secret ACTUALLY signed the book
@@ -344,10 +363,8 @@ if ($Preflight) {
     if (Test-Path $Venvpy) {
         $env:IBKR_TASK_TIME = $TaskTime
         $env:PYTHONUTF8 = '1'
-        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         & $Venvpy (Join-Path $ScriptDir 'preflight_option_c.py') 2>&1 |
             ForEach-Object { if ($_ -match "`t") { Report $_ } }
-        $ErrorActionPreference = $prevEAP
     } else {
         Fail "venv python MISSING at $Venvpy - run -Venv"
     }
@@ -379,11 +396,15 @@ if ($Preflight) {
     # A push that cannot prompt is the only honest test of the report credential:
     # an interactive push can succeed via a dialog Task Scheduler never sees.
     $prevPrompt = $env:GIT_TERMINAL_PROMPT; $env:GIT_TERMINAL_PROMPT = '0'
-    git push --dry-run origin "HEAD:$Branch" 2>&1 | Out-Null
+    # "Everything up-to-date" arrives on stderr and means SUCCESS -- judge by the
+    # exit code, and never let the text itself surface as a PowerShell error.
+    $null = (& git push --dry-run origin "HEAD:$Branch" 2>&1)
     if ($LASTEXITCODE -eq 0) { Ok "git push works headless (execution reports will publish)" }
     else { Warn "git push would fail unattended - see IBKR_OPTION_C_WINDOWS.md section 8 (cosmetic only)" }
     $env:GIT_TERMINAL_PROMPT = $prevPrompt
     Pop-Location
+
+    $ErrorActionPreference = $preflightEAP
 
     Section "Pre-flight result"
     if ($script:FailCount -eq 0) {

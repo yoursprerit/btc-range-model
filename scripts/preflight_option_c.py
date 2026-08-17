@@ -132,16 +132,29 @@ def check_secret(payload: dict | None) -> None:
     'is a secret set' but 'does THIS secret actually verify THIS book'."""
     secret = os.environ.get("OVERALL_BOOK_SECRET")
     if not secret:
+        # The caller (setup_windows_option_c.ps1 -Preflight) hydrates this from
+        # the persisted USER value when the shell lacks it, so reaching here
+        # means it is genuinely not set anywhere -- the scheduled task will not
+        # see it either.
         _add("FAIL", "secret-set",
-             "OVERALL_BOOK_SECRET is not in this process's environment -- the "
-             "executor SKIPS verification rather than failing, so the book "
-             "would be traded unverified")
+             "OVERALL_BOOK_SECRET is not set for this user -- the executor "
+             "SKIPS verification rather than failing, so the book would be "
+             "traded unverified. Set it with setx (section 4).")
         return
     if secret != secret.strip():
         _add("WARN", "secret-set",
              "value has leading/trailing whitespace -- the comparison is over "
              "raw bytes, so this will not match the publisher")
-    _add("PASS", "secret-set", f"present ({len(secret)} chars)")
+    elif os.environ.get("IBKR_SECRET_FROM_PERSISTED"):
+        # Persisted but absent from the calling shell: harmless for the
+        # scheduled run (Task Scheduler reads the persisted value), but a
+        # manual dry-run from THIS window would skip verification silently.
+        _add("WARN", "secret-set",
+             f"present ({len(secret)} chars) but NOT in the shell you ran this "
+             f"from -- the scheduled task is fine; re-open PowerShell before "
+             f"running the executor by hand, or it verifies nothing")
+    else:
+        _add("PASS", "secret-set", f"present ({len(secret)} chars)")
 
     if payload is None:
         return
