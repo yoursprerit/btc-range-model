@@ -57,9 +57,12 @@ sys.path.insert(0, str(_REPO))
 import target_book as tb                           # noqa: E402  (light: stdlib + pandas)
 import executed_book as eb                          # noqa: E402
 import ibkr_symbols as sym                          # noqa: E402
+import ibkr_common as ic                            # noqa: E402  (pure guards)
 from ibkr_common import (                           # noqa: E402
-    DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP, ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
-    Broker, build_order_plan, is_trading_day, print_plan,
+    DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
+    ORDER_MARKETABLE_LIMIT, ORDER_TYPES, Broker, PositionReadError,
+    bar_is_current, build_order_plan, check_exposure, is_trading_day, print_plan,
+    projected_exposure,
 )
 
 DEFAULT_REPORT = _REPO / "data" / "overall" / "executed_book.json"
@@ -101,6 +104,126 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
               "shell). The Executed Book page will report a signature error. "
               "Open a new PowerShell so setx reaches it, then re-run with "
               "--refresh-report.")
+
+
+def _preflight(broker, orders, current, weights, exec_price, net_liq, args
+               ) -> tuple[bool, str]:
+    """Every check that must pass between building the plan and sending it.
+
+    Each one answers a way the August-18 incident could repeat: an account that
+    is already geared, a plan that would gear it, a plan that churns the whole
+    book, a book price that no longer matches the market (a split), or a run
+    that landed outside the session. All of them are cheap and read-only; the
+    caller aborts on the first failure rather than trading a plan it cannot
+    explain.  Returns (ok, reason) — reason is empty when everything passed.
+    """
+    print("\nPre-flight:")
+    try:
+        cash = broker.cash()
+    except Exception:
+        cash = 0.0
+    gross = _gross(broker, current, exec_price)
+
+    checks: list[tuple[bool, str]] = [
+        ic.check_account_state(net_liq, cash, gross, args.allow_margin,
+                               args.max_gross_frac),
+        ic.market_session_open(allow_outside=args.outside_rth),
+        ic.check_turnover(orders, net_liq, args.max_turnover_frac),
+    ]
+    exposure = ic.projected_exposure(orders, current, exec_price, net_liq)
+    checks.append(check_exposure(exposure, args.max_gross_frac))
+
+    drift = _price_drift_check(broker, orders, args.max_price_drift)
+    checks.append(drift)
+
+    failed = ""
+    for ok, why in checks:
+        print(f"  {'✓' if ok else '✗'} {why}")
+        if not ok and not failed:
+            failed = why
+    return (not failed), failed
+
+
+def _gross(broker, current: dict, exec_price: dict) -> float:
+    """Gross position value on the broker's own marks, book prices as a fallback.
+
+    Book prices alone would UNDER-count a name that is held but no longer in the
+    book (it has no price there) — and under-counting exposure is the direction
+    that lets a geared account look fine."""
+    for read in (broker.gross_position_value, broker.read_value):
+        try:
+            v = float(read())
+            if v > 0:
+                return v
+        except Exception:
+            continue
+    return sum(abs(sh) * float(exec_price.get(k) or 0.0) for k, sh in current.items())
+
+
+def _price_drift_check(broker, orders, tol: float) -> tuple[bool, str]:
+    """Compare each order's sizing price against a live quote.
+
+    A corporate action between publish and execution (a split above all) leaves
+    the book's ``exec_price`` off by a multiple, so every share count computed
+    from it is wrong by that same multiple. Best-effort: a name we cannot quote
+    is not a reason to block the run, but a name quoting far from its sizing
+    price is."""
+    if tol <= 0:
+        return True, "price-drift check disabled"
+    worst = (0.0, "")
+    checked = 0
+    for o in orders:
+        try:
+            contract = sym.ibkr_contract(o.symbol)
+            broker.ib.qualifyContracts(contract)
+            q = broker.quote(contract)
+        except Exception:
+            continue
+        live = next((q.get(k) for k in ("last", "close", "ask", "bid")
+                     if ic._finite(q.get(k))), None)
+        if live is None:
+            continue
+        checked += 1
+        d = ic.price_drift(o.price, live)
+        if d > worst[0]:
+            worst = (d, f"{o.symbol} sized at ${o.price:,.2f} but quoting "
+                        f"${float(live):,.2f} ({d*100:.0f}% away)")
+    if not checked:
+        return True, "price-drift check skipped (no quotes available)"
+    if worst[0] > tol:
+        return False, (f"{worst[1]} — beyond the {tol*100:.0f}% limit; a split or "
+                       "a bad book price would size every order wrong")
+    return True, (f"sizing prices within {tol*100:.0f}% of the market "
+                  f"({checked} checked, worst {worst[0]*100:.1f}%)")
+
+
+def _post_trade_check(broker, weights, exec_price, args) -> None:
+    """Re-read the account AFTER trading and say whether it landed on target.
+
+    Nothing is auto-corrected here — a second corrective round of orders is
+    exactly the reflex that compounds a bad read. This reports, loudly, so the
+    run's log and the next run's guards can act on it."""
+    print("\nPost-trade:")
+    try:
+        net_liq = broker.net_liq()
+        after = broker.positions_by_key()
+    except Exception as e:
+        print(f"  could not verify the resulting account ({e})")
+        return
+    gross = _gross(broker, after, exec_price)
+    lev = gross / net_liq if net_liq > 0 else 0.0
+    flag = "✗" if lev > args.max_gross_frac else "✓"
+    print(f"  {flag} gross ${gross:,.0f} = {lev:.2f}x net liq ${net_liq:,.0f}")
+    if lev > args.max_gross_frac:
+        print("  WARNING: the account is geared above the cap after this run — "
+              "do NOT re-run the executor; reconcile the account first.")
+    rows = ic.weight_drift(ic.realised_weights(after, exec_price, net_liq), weights)
+    for key, tgt, got, dpp in rows[:3]:
+        print(f"    {key:6} target {tgt*100:5.1f}%  actual {got*100:5.1f}%  "
+              f"drift {dpp:+.1f} pp")
+    if rows and abs(rows[0][3]) > 5.0:
+        print("  WARNING: largest allocation drift is "
+              f"{rows[0][3]:+.1f} pp on {rows[0][0]} — check the fills above.")
 
 
 def _push_report(out_path: str) -> None:
@@ -215,6 +338,34 @@ def main() -> int:
                          "(e.g. 0.25 = never deploy more than 25%%); the rest stays cash")
     ap.add_argument("--max-order-notional", type=float, default=0.0,
                     help="clamp any single order to this dollar cap (0 = no cap)")
+    ap.add_argument("--max-gross-frac", type=float, default=DEFAULT_MAX_GROSS_FRAC,
+                    help="abort when the plan would leave gross exposure above "
+                         "this multiple of net liquidation (default %(default)s). "
+                         "The book is unlevered, so anything above ~1x means a "
+                         "bad positions read or a duplicate run")
+    ap.add_argument("--allow-margin", action="store_true",
+                    help="permit buys beyond settled cash + realised sell "
+                         "proceeds (i.e. on margin). OFF by default: the buy leg "
+                         "is trimmed to what the account can actually pay for")
+    ap.add_argument("--max-turnover-frac", type=float, default=1.5,
+                    help="abort when the plan would trade more than this multiple "
+                         "of net liquidation (default %(default)s) — a daily "
+                         "rebalance moves a few percent, a full liquidate-and-"
+                         "rebuy about 2x")
+    ap.add_argument("--max-price-drift", type=float, default=0.25,
+                    help="abort when a name's live quote is further than this "
+                         "from the book's sizing price (default %(default)s; 0 "
+                         "disables) — catches a split or a bad book price, which "
+                         "would size every order wrong")
+    ap.add_argument("--allow-stale-bar", action="store_true",
+                    help="trade a book whose signal bar is NOT the last completed "
+                         "session. Off by default — a withheld publish means no "
+                         "trade, never re-trading an older book")
+    ap.add_argument("--force-rerun", action="store_true",
+                    help="execute even though this book's signal bar already has "
+                         "an execution report for this account (the duplicate-run "
+                         "guard). Use only when the first run genuinely placed "
+                         "nothing")
     ap.add_argument("--refresh-report", action="store_true",
                     help="place NO orders: connect, read the account's real "
                          "positions and today's fills straight from IBKR, and "
@@ -280,8 +431,46 @@ def main() -> int:
         print("ABORT: book failed freshness validation (use --force to override).")
         return 1
 
+    # ── the book must be THIS session's book ─────────────────────────────────
+    # The generation-age window alone cannot catch a stale book: one published
+    # at 7:15 AM CT is still inside 36 h at 2:30 PM CT the NEXT day, which is
+    # how a day-old book was re-traded into an account that already held it.
+    ok_bar, bar_why = bar_is_current(payload.get("as_of"), today)
+    print(f"Signal bar: {bar_why}")
+    # Only a run that would PLACE orders is blocked: a dry-run preview and a
+    # --refresh-report (which re-states the account without trading) are always
+    # allowed, and say what would have happened instead.
+    trades_now = args.execute and not args.refresh_report
+    if not ok_bar and not args.allow_stale_bar:
+        if trades_now:
+            print("ABORT: refusing to trade a book that is not this session's "
+                  "(use --allow-stale-bar to override).")
+            return 1
+        print("  (a run with --execute would ABORT here — this run places no orders)")
+
+    # ── duplicate-run guard ──────────────────────────────────────────────────
+    # An execution report already archived for this signal bar means the book
+    # was traded. Running it again reads a book whose targets are already held
+    # and, if anything goes wrong with the positions read, buys the whole thing
+    # a second time. The archive is the ledger, so it is also the lock.
+    prior = eb.completed_run(report_out, payload.get("as_of")) if trades_now else None
+    if prior and not args.force_rerun:
+        print(f"ABORT: signal bar {payload.get('as_of')} was already executed at "
+              f"{prior.get('generated_at_utc')} "
+              f"({eb.archive_path(report_out, payload['as_of']).name}). "
+              "Use --refresh-report to re-state the account without trading, or "
+              "--force-rerun if that run genuinely placed no orders.")
+        return 0
+
     weights = dict(payload.get("weights", {}))
     exec_price = payload.get("exec_price", {})
+
+    # ── the book's own arithmetic ────────────────────────────────────────────
+    ok_math, math_why = ic.validate_book_math(weights, exec_price)
+    print(f"Book math: {math_why}")
+    if not ok_math:
+        print("ABORT: the book is not arithmetically sane. No orders placed.")
+        return 1
 
     # ── live-mode banner + confirmation ──────────────────────────────────────
     if live:
@@ -355,11 +544,16 @@ def main() -> int:
             return 0
         try:
             net_liq = broker.net_liq()
-            current = broker.positions_by_key()
+            try:
+                current = broker.holdings(net_liq)
+            except PositionReadError as e:
+                print(f"ABORT: {e}.")
+                return 1
             orders = build_order_plan(weights, exec_price, net_liq, current,
                                       args.band, args.fractional, args.max_order_notional)
             print(f"\nAccount {broker.account} ({tag}).")
             print_plan(orders, net_liq)
+            _preflight(broker, orders, current, weights, exec_price, net_liq, args)
             if not args.no_report:
                 planned = [dict(key=o.key, symbol=o.symbol, action=o.action,
                                 qty=o.qty, price=o.price, status="PLANNED",
@@ -376,22 +570,34 @@ def main() -> int:
     broker = Broker(args.host, args.port, args.client_id, **account_kwargs)
     try:
         net_liq = broker.net_liq()
-        current = broker.positions_by_key()
+        try:
+            current = broker.holdings(net_liq)
+        except PositionReadError as e:
+            print(f"ABORT: {e}. No orders placed — the next scheduled run will "
+                  "re-read the account.")
+            return 1
         orders = build_order_plan(weights, exec_price, net_liq, current,
                                   args.band, args.fractional, args.max_order_notional)
         print(f"\nAccount {broker.account} ({tag}).")
         print_plan(orders, net_liq)
+        ok_pre, why_pre = _preflight(broker, orders, current, weights, exec_price,
+                                     net_liq, args)
+        if not ok_pre:
+            print(f"ABORT: {why_pre} No orders placed.")
+            return 1
         fills: list[dict] = []
         if orders:
             print(f"\nTransmitting orders ({args.order_type})…")
             fills = broker.place(orders, args.fractional, args.fill_timeout,
                                  order_type=args.order_type,
                                  slippage_cap=args.slippage_cap,
-                                 outside_rth=args.outside_rth)
+                                 outside_rth=args.outside_rth,
+                                 allow_margin=args.allow_margin)
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,
                           args.account_mode)
+        _post_trade_check(broker, weights, exec_price, args)
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()

@@ -417,6 +417,19 @@ python scripts/ibkr_execute_book.py --file … --execute --slippage-cap 0.015
 The Executed Book tab shows what was actually sent per trade (`LMT $251.66`,
 `MOC`, `MKT`), so an escalation or a market fallback is visible after the fact.
 
+### Sequencing: sells settle, then buys are sized to the proceeds
+Orders go out in two legs — **all sells first**, awaited (and escalated if a
+marketable limit didn't fill), and only then the buys. The buy leg is then sized
+against what the account can actually pay for: settled cash plus the proceeds
+the sells *really* realised. A sell that half-fills therefore halves the
+corresponding buying power instead of quietly drawing a margin loan, and the
+trimmed names are reported rather than silently dropped. `--allow-margin`
+restores the old unconditional behaviour.
+
+MOC is the one exception: every leg prints in the same closing auction, so
+sequencing would buy nothing but lost minutes against the 15:50 ET entry cutoff.
+There the funding check uses the sells' expected proceeds.
+
 ### The historical record of past runs
 Each run overwrites `data/overall/executed_book.json`, so the executor also
 drops a dated copy of the report beside it, keyed by the signal bar it traded:
@@ -456,12 +469,43 @@ python scripts/backfill_executed_archive.py
   placed while the US market is closed, even though a fresh book is published
   on those days.
 
+## Pre-flight guards (what the executor refuses to do)
+
+Every one of these is checked before a single order is transmitted, and each
+aborts the run rather than trading a plan it cannot explain. They were hardened
+after the **2026-08-18 duplicate-execution incident**: three runs each read the
+account as flat, each re-bought the whole book on top of what was already held,
+and the paper account ended at 3.4× net liquidation on a $2.17M margin loan
+(−8.1% NAV). Any single guard below would have stopped it.
+
+| Guard | What it refuses | Override |
+|---|---|---|
+| **Verified positions read** | Trading on a positions read that misses value the account itself reports (`GrossPositionValue`). `ib_async` fills its position cache asynchronously, so a read taken too early comes back EMPTY — which the order planner cannot tell apart from a flat account. The read is now settled (`reqPositions` + re-read until stable) and cross-checked. | none — the next run re-reads |
+| **Current-bar check** | A book whose signal bar is not the last completed session. The 36-hour freshness window could not catch this: a book published 7:15 AM CT is still "fresh" at 2:30 PM CT the *next* day. A withheld publish now means **no trade**. | `--allow-stale-bar` |
+| **Duplicate-run lock** | A second execute run for a signal bar that already has an execution report (`executed_archive/<as_of>.json`). Dry-runs don't lock. | `--force-rerun` |
+| **Account state** | Trading into an account that already carries a margin loan (negative cash) or is already geared past the cap. | `--allow-margin` |
+| **Book math** | A book with a NaN/negative weight, weights summing past 100%, or a name carrying weight with no usable execution price. | none |
+| **Projected exposure** | A plan that would leave gross exposure above `--max-gross-frac` (default 1.02×) of net liquidation. The book is unlevered by construction, so anything above ~1× means a bad read or a duplicate run. | raise `--max-gross-frac` |
+| **Turnover** | A plan trading more than `--max-turnover-frac` (default 1.5×) of NAV — implausible for a daily rebalance. | raise the flag |
+| **Price drift** | A name quoting further than `--max-price-drift` (default 25%) from the book's sizing price — a split between publish and execution would size every order wrong. | `--max-price-drift 0` |
+| **Session hours** | Placing orders outside 09:30–16:00 ET (MOC excepted, which is priced into the close). | `--outside-rth` |
+| **Funded buys** | Buys beyond settled cash **plus the proceeds the sells actually realised**. Sells go first and are awaited; whatever they fail to realise shrinks the buys proportionally instead of being financed on margin. Names trimmed away appear in the report as `SKIPPED-FUNDING`. | `--allow-margin` |
+
+After trading, the run re-reads the account and prints realised gross leverage
+and the largest allocation drift — reported, never auto-corrected, because a
+second corrective round is exactly the reflex that compounds a bad read.
+
+The same verified read and exposure/turnover guards apply to the Option-A
+rebalancer (`scripts/ibkr_rebalance.py`), which sizes off net liquidation the
+same way.
+
 ## Safety & limitations
 
 - **Paper-account guard** blocks any non-`DU` account by default.
 - **Dry-run is the default**; orders require `--execute`.
 - **Freshness guard** aborts if the latest signal bar is > 4 days old (dead
-  feed protection).
+  feed protection), and the current-bar check above narrows that to the one
+  session the book is actually for.
 - Leveraged sleeves (MSTU 2×, SOXL 3×, UGL/NUGT/ERX 2×) are real ETFs and trade
   normally, but they are the volatile part of the book — paper-test thoroughly.
 - Market orders fill at the prevailing price; for illiquid names consider adding

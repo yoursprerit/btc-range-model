@@ -230,3 +230,24 @@ def record_for(records: list[dict], day) -> dict | None:
     if not on_or_before:
         return None
     return max(on_or_before, key=lambda r: (r["executed_on"], r["as_of"]))
+
+
+def completed_run(report_path, as_of) -> dict | None:
+    """The archived execution report for *as_of* on this account mode, if any.
+
+    The executor uses it as a duplicate-run lock: an archived record means the
+    book was already traded, so a second execute run for the same signal bar is
+    refused (``--force-rerun`` overrides).  Dry-runs place no orders and are not
+    treated as an execution.  Returns the payload, or None."""
+    try:
+        p = archive_path(report_path, as_of)
+        if not p.exists():
+            return None
+        payload = json.loads(p.read_text())
+    except Exception:
+        return None
+    if payload.get("schema") != SCHEMA:
+        return None
+    if (payload.get("mode") or "").lower() != "execute":
+        return None                        # a dry-run traded nothing
+    return payload
