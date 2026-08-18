@@ -151,9 +151,13 @@ if ($ExecExit -ne 0) { Log "WARN: executor exited $ExecExit - see the lines abov
 # origin so the branch never diverges. Set env IBKR_NO_PUSH_REPORT=1 to skip.
 $ReportName = if ($AccountMode -eq 'live') { 'executed_book_live.json' } else { 'executed_book.json' }
 $Report = Join-Path $RepoRoot "data\overall\$ReportName"
+# The dated as-of copy the executor writes beside the report feeds the Executed
+# Book page's Historical tab, so it ships in the same commit.
+$Archive = Join-Path $RepoRoot "data\overall\executed_archive"
 if ($env:IBKR_NO_PUSH_REPORT -ne '1' -and (Test-Path $Report)) {
     git add $Report
-    git diff --cached --quiet -- $Report
+    if (Test-Path $Archive) { git add $Archive }
+    git diff --cached --quiet -- $Report $Archive
     if ($LASTEXITCODE -ne 0) {
         git -c user.name="ibkr-executor" -c user.email="executor@localhost" `
             commit -q -m "chore(ibkr): execution report $(Get-Date -Format 'yyyy-MM-dd')"

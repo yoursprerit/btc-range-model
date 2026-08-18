@@ -37,7 +37,7 @@ model and backtest machinery.
 | ⛏️ **Gold Miners (GDXM)** | `app/gldm_hourly_app.py` | Gold-miners divergence strategy off the GLDM signal (GDX · NUGT) — same file, second app mode. |
 | 🖥️ **SOXX** · ⚡ **GRID** · 🛢️ **XLE** · 🧲 **REMX** · ⛏️ **WGMI** · ☀️ **PBW** · 🤖 **ARTY** | `app/ticker_app.py` | Seven config-driven ETF apps — one engine, one `TickerConfig` per asset. See **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**. |
 | 📋 **Target Book (IBKR)** | `app/target_book_app.py` | Human-readable viewer for the signed target-allocation artifact the rebalancer trades. |
-| ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target. |
+| ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
 
 Each **signal app** produces **one** signal but may trade several instruments
 off it — its 1× primary plus higher-beta / leveraged siblings, exactly as a desk
@@ -394,7 +394,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 │   ├── gldm_hourly_app.py / gldm_core.py    🥇 Gold forecaster
 │   ├── ticker_app.py / ticker_core.py / ticker_config.py   7 ETF apps (one engine)
 │   ├── target_book_app.py / target_book.py  📋 target-allocation viewer
-│   └── executed_book_app.py / executed_book.py  ✅ post-rebalance report
+│   └── executed_book_app.py / executed_book.py  ✅ post-rebalance report (+ dated archive)
 │
 ├── src/                      Training & data-fetch code
 │   ├── pipeline_ct.py, train_hourly_model.py, train_7d_close_cone.py,
