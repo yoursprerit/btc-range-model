@@ -58,7 +58,8 @@ import overall_core as oc                       # noqa: E402  headless engine
 import ibkr_symbols as sym                       # noqa: E402
 from ibkr_common import (                        # noqa: E402  shared broker/order plumbing
     DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP, ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
-    Broker, build_order_plan, is_trading_day, print_plan, signal_is_fresh,
+    Broker, PositionReadError, build_order_plan, check_exposure, check_turnover,
+    is_trading_day, print_plan, projected_exposure, signal_is_fresh,
 )
 
 
@@ -214,7 +215,7 @@ def main() -> int:
             return 0
         try:
             net_liq = broker.net_liq()
-            current = broker.positions_by_key()
+            current = broker.holdings(net_liq)
             orders = build_order_plan(book.weights, book.exec_price, net_liq,
                                       current, args.band, args.fractional)
             print(f"\nAccount {broker.account} (PAPER).")
@@ -229,11 +230,25 @@ def main() -> int:
                         account_mode=("any" if args.allow_nonpaper else "paper"))
     try:
         net_liq = broker.net_liq()
-        current = broker.positions_by_key()
+        # Same verified read + exposure guards as the Option-C executor: this
+        # entry point sizes off net liquidation too, so an empty positions read
+        # would re-buy the whole book here in exactly the same way.
+        try:
+            current = broker.holdings(net_liq)
+        except PositionReadError as e:
+            print(f"ABORT: {e}. No orders placed.")
+            return 1
         orders = build_order_plan(book.weights, book.exec_price, net_liq,
                                   current, args.band, args.fractional)
         print(f"\nAccount {broker.account} (PAPER).")
         print_plan(orders, net_liq)
+        for ok, why in (check_exposure(projected_exposure(orders, current,
+                                                          book.exec_price, net_liq)),
+                        check_turnover(orders, net_liq)):
+            print(f"  {'✓' if ok else '✗'} {why}")
+            if not ok:
+                print("ABORT: pre-flight failed. No orders placed.")
+                return 1
         if orders:
             print(f"\nTransmitting orders ({args.order_type})…")
             broker.place(orders, args.fractional, args.fill_timeout,

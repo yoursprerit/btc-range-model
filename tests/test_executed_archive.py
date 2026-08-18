@@ -119,3 +119,23 @@ def test_record_for_snaps_back_to_the_standing_run(tmp_path):
     assert eb.record_for(recs, "2026-08-01") is None
     # a timestamp normalises to its date
     assert eb.record_for(recs, "2026-08-15T09:30:00")["as_of"] == "2026-08-14"
+
+
+def test_completed_run_is_the_duplicate_run_lock(tmp_path):
+    report = tmp_path / "executed_book.json"
+    assert eb.completed_run(report, "2026-08-17") is None      # nothing executed yet
+    eb.archive_report(_payload(as_of="2026-08-17"), report)
+    prior = eb.completed_run(report, "2026-08-17")
+    assert prior and prior["as_of"] == "2026-08-17"
+    # a different bar is not locked, and neither account mode locks the other
+    assert eb.completed_run(report, "2026-08-18") is None
+    assert eb.completed_run(tmp_path / "executed_book_live.json", "2026-08-17") is None
+
+
+def test_a_dry_run_does_not_lock_the_bar(tmp_path):
+    # a dry-run places no orders, so it must not stop the real run that follows
+    report = tmp_path / "executed_book.json"
+    dry = _payload(as_of="2026-08-17")
+    dry["mode"] = "dry-run"
+    eb.archive_report(dry, report)
+    assert eb.completed_run(report, "2026-08-17") is None

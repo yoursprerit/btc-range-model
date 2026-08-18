@@ -30,6 +30,25 @@ DEFAULT_PORT = 4002
 PAPER_ACCT_PREFIX = "DU"          # IBKR paper account ids start with DU
 STALE_BAR_DAYS = 4                # abort if the freshest signal bar is older than this
 
+# ── exposure / funding guards ───────────────────────────────────────────────
+# The executor's book never asks for more than 100% of net liquidation, so any
+# plan that would end above ~1x NAV is a bug in the inputs (a bad positions
+# read, a duplicate run), not a decision. 1.02 leaves room for whole-share
+# rounding and a fill printing through the sizing price.
+DEFAULT_MAX_GROSS_FRAC = 1.02
+# Buys are funded from settled cash + the proceeds the sell leg actually
+# realised. The buffer keeps a fill printing above its limit from tipping the
+# account into a margin loan.
+FUNDING_BUFFER = 0.01
+# How long to wait for IBKR to deliver the position subscription before
+# concluding the account really is flat.
+POSITION_SETTLE_TRIES = 5
+POSITION_SETTLE_SLEEP_S = 1.0
+# A positions read is untrustworthy when the account reports materially more
+# gross position value than the read accounts for (tolerance as a fraction of
+# net liquidation).
+POSITION_READ_TOL = 0.02
+
 # ── order types ─────────────────────────────────────────────────────────────
 # MARKETABLE_LIMIT (default): a LIMIT priced THROUGH the touch by
 # ``slippage_cap`` — it fills like a market order under normal conditions but
@@ -85,6 +104,48 @@ def is_trading_day(day: pd.Timestamp) -> tuple[bool, str]:
     if str(day.date()) in US_MARKET_HOLIDAYS:
         return False, f"{day.date()} is a US market holiday"
     return True, "trading day"
+
+
+def prev_trading_day(day: pd.Timestamp, max_back: int = 10) -> pd.Timestamp:
+    """The last US trading session STRICTLY before *day* (weekends/holidays skipped)."""
+    d = pd.Timestamp(day).normalize()
+    for _ in range(max_back):
+        d -= pd.Timedelta(days=1)
+        if is_trading_day(d)[0]:
+            return d
+    raise RuntimeError(f"no trading day found within {max_back} days before {day}")
+
+
+def bar_is_current(as_of: str, today: pd.Timestamp) -> tuple[bool, str]:
+    """(ok, reason) — is *as_of* the bar this session is supposed to trade?
+
+    The publisher computes a book from a COMPLETED session's close and the
+    executor trades it during the next session, so exactly one bar is valid on
+    any given day: the previous trading session.  Anything older is a stale
+    book — yesterday's decision, priced off yesterday's close, re-traded into a
+    market that has already moved (and, if the account already holds it, traded
+    a second time).  That is what the freshness window alone could not catch:
+    a book generated at 7:15 AM CT is still inside a 36-hour window at 2:30 PM
+    CT the FOLLOWING day.
+
+    A withheld publish (failed audit, engine error) therefore means NO TRADE,
+    not "trade the last book we have" — the intended fallback all along."""
+    if not as_of:
+        return False, "no signal as-of date"
+    bar = pd.Timestamp(as_of).normalize()
+    want = prev_trading_day(today)
+    if bar == want:
+        return True, f"signal bar {bar.date()} is the last completed session"
+    if bar > want:
+        return False, (f"signal bar {bar.date()} is AHEAD of the last completed "
+                       f"session ({want.date()}) — the book is not tradeable yet")
+    sessions = 0
+    d = want
+    while d > bar and sessions < 20:
+        d = prev_trading_day(d)
+        sessions += 1
+    return False, (f"STALE book: signal bar {bar.date()} is {sessions} session(s) "
+                   f"behind the last completed session ({want.date()})")
 
 
 def signal_is_fresh(as_of: str, today: pd.Timestamp,
@@ -186,6 +247,246 @@ def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
 # ORDER PRICING / ROUTING — pure helpers (no ib_async), so they are unit-tested
 # without a broker connection.
 # ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+# EXPOSURE / FUNDING GUARDS
+# ════════════════════════════════════════════════════════════════════════════
+# The August-18 incident these exist to prevent: three duplicate runs each read
+# the account as flat, each bought the whole book again, and the account ended
+# at 3.4x NAV on a $2.17M margin loan. Every one of those rounds was arithmetic
+# the plan builder could not question, because it was handed `current = {}` and
+# sizes off net liquidation — which does NOT fall when you buy on margin, so
+# each round looked exactly as affordable as the first.
+
+
+class PositionReadError(RuntimeError):
+    """The broker's positions read could not be trusted — never trade on it."""
+
+
+def position_read_is_trustworthy(read_value: float, gross_value: float,
+                                 net_liq: float, tol: float = POSITION_READ_TOL
+                                 ) -> tuple[bool, str]:
+    """(ok, reason) — does the positions read account for the account's holdings?
+
+    *read_value* is the gross value the read itself explains; *gross_value* is
+    what the account reports independently (IBKR's ``GrossPositionValue``).  A
+    read that misses material value is a subscription that has not arrived yet,
+    not a flat account — and treating it as flat is what buys the book twice.
+
+    A zero/absent ``GrossPositionValue`` cannot confirm anything, so the read
+    passes only when it is itself empty; that keeps a genuinely flat account
+    (day one) tradeable while refusing the dangerous direction."""
+    if net_liq <= 0:
+        return False, "net liquidation is zero or unreadable"
+    if gross_value <= 0:
+        if read_value > 0:
+            return True, ("account reports no gross position value; "
+                          f"read explains ${read_value:,.0f} — using the read")
+        return True, "account reports no positions and the read agrees (flat)"
+    missing = gross_value - read_value
+    if missing > tol * net_liq:
+        return False, (f"positions read explains ${read_value:,.0f} of the "
+                       f"${gross_value:,.0f} the account reports "
+                       f"(${missing:,.0f} missing, > {tol*100:.0f}% of NAV) — "
+                       "the position subscription is incomplete")
+    return True, (f"positions read matches the account "
+                  f"(${read_value:,.0f} vs ${gross_value:,.0f} reported)")
+
+
+def projected_exposure(orders: list[Order], current: dict[str, float],
+                       exec_price: dict[str, float], net_liq: float) -> dict:
+    """Gross exposure before and after *orders*, valued at the book's prices."""
+    def _px(key: str) -> float:
+        return float(exec_price.get(key) or 0.0)
+
+    gross_before = sum(abs(sh) * _px(k) for k, sh in current.items())
+    buy = sum(o.qty * (o.price or _px(o.key)) for o in orders if o.action == "BUY")
+    sell = sum(o.qty * (o.price or _px(o.key)) for o in orders if o.action == "SELL")
+    gross_after = gross_before + buy - sell
+    return {"gross_before": gross_before, "buy_notional": buy,
+            "sell_notional": sell, "gross_after": gross_after,
+            "net_liq": float(net_liq),
+            "leverage_after": (gross_after / net_liq) if net_liq > 0 else 0.0}
+
+
+def check_exposure(exposure: dict, max_gross_frac: float = DEFAULT_MAX_GROSS_FRAC
+                   ) -> tuple[bool, str]:
+    """(ok, reason) — refuse a plan that would leave the account above NAV.
+
+    The book is an unlevered allocation: weights sum to at most 1.0, so a plan
+    landing materially above 1x net liquidation cannot be what the book asked
+    for."""
+    lev = exposure["leverage_after"]
+    if exposure["net_liq"] <= 0:
+        return False, "net liquidation is zero or unreadable"
+    if lev > max_gross_frac:
+        return False, (f"plan would leave gross exposure at "
+                       f"${exposure['gross_after']:,.0f} = {lev:.2f}x net liq "
+                       f"(cap {max_gross_frac:.2f}x) — the book is unlevered, so "
+                       "this means the positions read or the run is duplicated")
+    return True, (f"projected gross ${exposure['gross_after']:,.0f} = {lev:.2f}x "
+                  f"net liq (cap {max_gross_frac:.2f}x)")
+
+
+def fit_buys_to_funding(buys: list[Order], available: float, fractional: bool,
+                        buffer: float = FUNDING_BUFFER
+                        ) -> tuple[list[Order], list[Order], str]:
+    """(sendable, dropped, note) — scale BUY orders to the cash that funds them.
+
+    Buys are paid for out of settled cash plus whatever the sell leg actually
+    realised.  When the plan asks for more than that, every buy is scaled by the
+    same factor so the allocation keeps its shape, and names that fall below one
+    share are dropped rather than rounded up.  This is the backstop that turns
+    "buy the whole book again" into "buy what the account can pay for" — the
+    duplicate rounds would have been trimmed to nothing.
+    """
+    want = sum(o.qty * o.price for o in buys if o.price)
+    budget = max(0.0, available) * (1.0 - buffer)
+    if want <= budget or want <= 0:
+        return list(buys), [], (f"buys ${want:,.0f} funded from ${available:,.0f} "
+                                "available — no trimming")
+    scale = budget / want
+    sendable, dropped = [], []
+    for o in buys:
+        qty = o.qty * scale
+        if not fractional:
+            qty = float(int(qty))
+        if qty < (1e-6 if fractional else 1.0):
+            dropped.append(o)
+            continue
+        sendable.append(Order(o.key, o.symbol, o.action, qty, o.price,
+                              f"{o.reason} [trimmed to funding: "
+                              f"{qty:g} of {o.qty:g}]"))
+    note = (f"buys ${want:,.0f} exceed ${available:,.0f} available — scaled to "
+            f"{scale*100:.0f}% (${budget:,.0f}); {len(dropped)} name(s) dropped")
+    return sendable, dropped, note
+
+
+def validate_book_math(weights: dict[str, float], exec_price: dict[str, float],
+                       max_total: float = 1.02) -> tuple[bool, str]:
+    """(ok, reason) — is the book itself arithmetically sane?
+
+    A corrupted or mis-generated book (NaN weight, negative weight, weights
+    summing past 1, a zero/absent price on a name we are asked to buy) must
+    never reach the order planner: every one of those turns into a wrong order
+    size rather than an error."""
+    total = 0.0
+    for k, w in weights.items():
+        try:
+            w = float(w)
+        except (TypeError, ValueError):
+            return False, f"weight for {k} is not a number ({w!r})"
+        if not math.isfinite(w):
+            return False, f"weight for {k} is not finite ({w})"
+        if w < 0:
+            return False, f"negative weight for {k} ({w:.4f}) — the book is long-only"
+        total += w
+        if w > 0:
+            px = exec_price.get(k)
+            try:
+                px = float(px)
+            except (TypeError, ValueError):
+                px = 0.0
+            if not math.isfinite(px) or px <= 0:
+                return False, (f"{k} has weight {w*100:.1f}% but no usable "
+                               f"execution price ({exec_price.get(k)!r})")
+    if total > max_total:
+        return False, (f"weights sum to {total*100:.1f}% (> {max_total*100:.0f}%) — "
+                       "the book is unlevered by construction, so this is corrupt")
+    return True, f"book math OK (weights sum to {total*100:.1f}%)"
+
+
+def check_account_state(net_liq: float, cash: float, gross_value: float,
+                        allow_margin: bool = False,
+                        max_gross_frac: float = DEFAULT_MAX_GROSS_FRAC,
+                        cash_tol: float = 0.005) -> tuple[bool, str]:
+    """(ok, reason) — is the account in a state the book can be traded into?
+
+    Two red flags before a single order is planned: the account already carries
+    a margin loan (cash below ``-cash_tol`` x NAV — a few dollars of fee debit
+    is not a loan), or it is already geared past the cap.  Both
+    mean the account is not where the last run left it, so sizing a fresh book
+    against it would compound the problem rather than correct it — exactly the
+    state the duplicate runs left behind."""
+    if net_liq <= 0:
+        return False, "net liquidation is zero or unreadable"
+    if cash < -abs(cash_tol) * net_liq and not allow_margin:
+        return False, (f"account already carries a margin loan (cash "
+                       f"${cash:,.0f}) — refusing to trade until it is flat "
+                       "(--allow-margin to override)")
+    if gross_value > max_gross_frac * net_liq:
+        return False, (f"account is already at {gross_value/net_liq:.2f}x net liq "
+                       f"before trading (cap {max_gross_frac:.2f}x) — reduce it "
+                       "before running the book")
+    return True, (f"account OK (cash ${cash:,.0f}, gross ${gross_value:,.0f} = "
+                  f"{gross_value/net_liq:.2f}x net liq)")
+
+
+def check_turnover(orders: list[Order], net_liq: float,
+                   max_frac: float = 1.5) -> tuple[bool, str]:
+    """(ok, reason) — refuse a plan that churns implausibly much of the account.
+
+    A daily rebalance moves a few percent of NAV; a full liquidate-and-rebuy is
+    ~2x. Anything past the cap means the plan was built against the wrong
+    picture of the account."""
+    traded = sum(o.qty * (o.price or 0.0) for o in orders)
+    if net_liq <= 0:
+        return False, "net liquidation is zero or unreadable"
+    frac = traded / net_liq
+    if frac > max_frac:
+        return False, (f"plan trades ${traded:,.0f} = {frac:.2f}x net liq "
+                       f"(cap {max_frac:.2f}x) — implausible for a daily "
+                       "rebalance; check the positions read")
+    return True, f"turnover ${traded:,.0f} = {frac:.2f}x net liq"
+
+
+def market_session_open(now=None, allow_outside: bool = False) -> tuple[bool, str]:
+    """(ok, reason) — is the US regular session open right now?
+
+    Orders sent outside regular hours fill against a thin book (or, for MOC and
+    MARKET, are rejected outright), and the executor's own slot sits inside the
+    session — so an after-hours run is a scheduling accident, not a decision."""
+    et = _et_now(now)
+    open_t = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_t = et.replace(hour=US_CLOSE_ET[0], minute=US_CLOSE_ET[1],
+                         second=0, microsecond=0)
+    if open_t <= et <= close_t:
+        return True, f"regular session open ({et:%H:%M} ET)"
+    if allow_outside:
+        return True, f"outside regular hours ({et:%H:%M} ET) — allowed explicitly"
+    return False, (f"outside regular trading hours ({et:%H:%M} ET; session is "
+                   "09:30–16:00 ET) — use --outside-rth to trade anyway")
+
+
+def price_drift(book_price: float, live_price: float) -> float:
+    """|live − book| / book, or 0.0 when either side is unusable."""
+    try:
+        b, l = float(book_price), float(live_price)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (math.isfinite(b) and math.isfinite(l)) or b <= 0 or l <= 0:
+        return 0.0
+    return abs(l - b) / b
+
+
+def realised_weights(current: dict[str, float], price: dict[str, float],
+                     net_liq: float) -> dict[str, float]:
+    """Post-trade holdings as portfolio weights, valued at *price*."""
+    if net_liq <= 0:
+        return {}
+    return {k: abs(sh) * float(price.get(k) or 0.0) / net_liq
+            for k, sh in current.items()}
+
+
+def weight_drift(realised: dict[str, float], target: dict[str, float]
+                 ) -> list[tuple[str, float, float, float]]:
+    """[(key, target, realised, drift_pp)] sorted by |drift| descending."""
+    keys = set(realised) | set(target)
+    rows = [(k, float(target.get(k, 0.0)), float(realised.get(k, 0.0)),
+             (float(realised.get(k, 0.0)) - float(target.get(k, 0.0))) * 100)
+            for k in keys]
+    return sorted(rows, key=lambda r: -abs(r[3]))
+
+
 def _finite(x) -> float | None:
     """A usable positive price, or None (IBKR reports absent fields as nan/-1)."""
     try:
@@ -399,7 +700,9 @@ class Broker:
         and unrealised P&L. Fields that IBKR can't supply come back as 0.0, which
         the UI renders as “—”. Foreign symbols keep ``key=None``."""
         out = []
-        for item in self.ib.portfolio(self.account):
+        self.positions_by_key()          # settle the subscription first: a report
+        for item in self.ib.portfolio(self.account):   # written off a half-arrived
+                                                       # read understates the book
             c = item.contract
             out.append(dict(
                 key=sym.key_for_symbol(c.symbol), symbol=c.symbol,
@@ -452,14 +755,91 @@ class Broker:
             out.append(a)
         return sorted(out, key=lambda t: -abs(t["qty"] * t["price"]))
 
-    def positions_by_key(self) -> dict[str, float]:
-        """Current holdings as signal-key → shares (foreign symbols ignored)."""
+    def gross_position_value(self) -> float:
+        """IBKR's own ``GrossPositionValue`` for the account (0.0 if absent).
+
+        Read independently of the position subscription, so it can be used to
+        catch a positions read that has not arrived yet."""
+        for tag in ("GrossPositionValue",):
+            for v in self.ib.accountSummary(self.account):
+                if v.tag == tag:
+                    try:
+                        return abs(float(v.value))
+                    except (TypeError, ValueError):
+                        return 0.0
+        return 0.0
+
+    def _positions_raw(self) -> list:
+        return list(self.ib.positions(self.account))
+
+    def positions_by_key(self, settle: bool = True) -> dict[str, float]:
+        """Current holdings as signal-key → shares (foreign symbols ignored).
+
+        ``ib_async`` fills its position cache asynchronously after connect, so a
+        read taken too early comes back EMPTY — indistinguishable, to the order
+        planner, from a flat account.  With *settle* on, the subscription is
+        requested explicitly and re-read until it stops changing (or turns up
+        non-empty), which removes the race; :meth:`holdings` then verifies the
+        result against the account's own gross value before anything is traded.
+        """
+        if settle:
+            try:
+                self.ib.reqPositions()
+            except Exception:
+                pass                      # already subscribed — the sleep still helps
+            last = None
+            for _ in range(POSITION_SETTLE_TRIES):
+                raw = self._positions_raw()
+                snap = tuple(sorted((p.contract.symbol, float(p.position)) for p in raw))
+                if raw and snap == last:
+                    break                 # non-empty and stable → settled
+                last = snap
+                self.ib.sleep(POSITION_SETTLE_SLEEP_S)
         out: dict[str, float] = {}
-        for p in self.ib.positions(self.account):
+        for p in self._positions_raw():
             key = sym.key_for_symbol(p.contract.symbol)
             if key is not None:
                 out[key] = out.get(key, 0.0) + float(p.position)
         return out
+
+    def read_value(self) -> float:
+        """What the position read itself accounts for, on IBKR's own marks.
+
+        Valued from ``ib.portfolio()`` (market value where the account has data,
+        cost basis otherwise) rather than from the book's prices: a name being
+        CLOSED is not in the book at all, so book prices would under-count the
+        read and make the verification below misfire on a perfectly good read.
+        """
+        total = 0.0
+        for item in self.ib.portfolio(self.account):
+            mv = abs(float(getattr(item, "marketValue", 0.0) or 0.0))
+            if not mv:                    # no market-data subscription → cost
+                mv = abs(float(getattr(item, "position", 0.0) or 0.0)) * \
+                     abs(float(getattr(item, "averageCost", 0.0) or 0.0))
+            total += mv
+        return total
+
+    def holdings(self, net_liq: float | None = None,
+                 tol: float = POSITION_READ_TOL) -> dict[str, float]:
+        """Current holdings, VERIFIED against the account's gross position value.
+
+        Raises :class:`PositionReadError` when the read misses material value —
+        the state that let three duplicate runs each buy the whole book on top
+        of the one already held.  Refusing to trade on an unverifiable read is
+        always safe: the next scheduled run re-reads it.
+        """
+        current = self.positions_by_key()          # settled
+        nl = float(net_liq if net_liq is not None else self.net_liq())
+        try:
+            value = self.read_value()
+        except Exception:
+            value = 0.0
+        gross = self.gross_position_value()
+        ok, why = position_read_is_trustworthy(value, gross, nl, tol)
+        print(f"  Positions: {len(current)} name(s) — {why}")
+        if not ok:
+            raise PositionReadError(why)
+        return current
 
     def quote(self, contract) -> dict:
         """Snapshot bid/ask/last/close for a qualified contract (empty on any
@@ -609,7 +989,9 @@ class Broker:
     def place(self, orders: list[Order], fractional: bool, wait: float,
               order_type: str = ORDER_MARKETABLE_LIMIT,
               slippage_cap: float = DEFAULT_SLIPPAGE_CAP,
-              now=None, outside_rth: bool = False) -> list[dict]:
+              now=None, outside_rth: bool = False,
+              allow_margin: bool = False,
+              funding_buffer: float = FUNDING_BUFFER) -> list[dict]:
         """Transmit the order plan, sells first, waiting for fills.
 
         ``order_type`` is one of :data:`ORDER_TYPES`; see the module header for
@@ -618,59 +1000,124 @@ class Broker:
         the order type actually used and its limit, final status, filled
         quantity and average fill price) so the caller can build the execution
         report.
+
+        **Funding.** The sell leg is transmitted and awaited first, and unless
+        ``allow_margin`` is set the buy leg is then trimmed to what the account
+        can actually pay for: settled cash plus the proceeds the sells REALLY
+        realised (not the proceeds they were expected to realise).  Sells that
+        did not fill therefore shrink the buys instead of being financed with a
+        margin loan, and a plan built on a bad positions read cannot spend money
+        the account does not have.  Trimmed-away names come back in the results
+        as ``SKIPPED-FUNDING`` so the execution report shows what was not bought.
         """
         order_type, fractional = self._resolve_order_type(order_type, fractional,
                                                           now, outside_rth)
         results: list[dict] = []
         sells = [o for o in orders if o.action == "SELL"]
         buys = [o for o in orders if o.action == "BUY"]
+        self.funding_note = ""
+
+        cash0 = None
+        if not allow_margin:
+            try:
+                cash0 = self.cash()
+            except Exception as e:
+                print(f"    WARN: could not read cash ({e}) — funding check skipped")
 
         # MOC legs all print in the SAME auction, so sequencing sells before
         # buys buys nothing — it would only burn minutes off the entry cutoff.
-        # Submit everything, then wait once for the close.
-        legs = ([("MOC", sells + buys)] if order_type == ORDER_MOC
-                else [("SELL", sells), ("BUY", buys)])
+        # Submit everything, then wait once for the close. Nothing has filled by
+        # then either, so the funding check uses the EXPECTED sell proceeds.
+        if order_type == ORDER_MOC:
+            if cash0 is not None:
+                expected = sum(o.qty * (o.price or 0.0) for o in sells)
+                buys, dropped, note = fit_buys_to_funding(
+                    buys, cash0 + expected, fractional, funding_buffer)
+                self._note_funding(note, dropped, results)
+            results += self._run_leg("MOC", sells + buys, fractional, wait,
+                                     order_type, slippage_cap, now, outside_rth)
+            return results
 
-        for leg_name, leg_orders in legs:
-            trades = []
-            for o in leg_orders:
-                contract = sym.ibkr_contract(o.symbol)
-                self.ib.qualifyContracts(contract)
-                qty = o.qty if fractional else float(round(o.qty))
-                if qty <= 0:
-                    continue
-                order, used, lmt = self._build_order(o, qty, order_type,
-                                                     slippage_cap, contract,
-                                                     outside_rth)
-                if order is None:            # unsendable outside RTH — skipped
-                    continue
-                trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
-                print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}]"
-                      + (" outsideRth" if outside_rth else ""))
-            if not trades:
+        sell_results = self._run_leg("SELL", sells, fractional, wait, order_type,
+                                     slippage_cap, now, outside_rth)
+        results += sell_results
+
+        if cash0 is not None:
+            realised = sum(r["filled"] * (r["avg_fill_price"] or r["price"])
+                           for r in sell_results)
+            unfilled = [r for r in sell_results
+                        if r["filled"] + 1e-9 < r["qty"]]
+            if unfilled:
+                print(f"    {len(unfilled)} sell(s) did not fill in full — the buy "
+                      "leg is funded from what actually settled, not what was planned")
+            available = cash0 + realised
+            print(f"    Funding: cash ${cash0:,.0f} + realised sells "
+                  f"${realised:,.0f} = ${available:,.0f}")
+            buys, dropped, note = fit_buys_to_funding(buys, available, fractional,
+                                                      funding_buffer)
+            self._note_funding(note, dropped, results)
+
+        results += self._run_leg("BUY", buys, fractional, wait, order_type,
+                                 slippage_cap, now, outside_rth)
+        return results
+
+    def _note_funding(self, note: str, dropped: list[Order],
+                      results: list[dict]) -> None:
+        """Log the funding decision and record dropped buys in the report."""
+        print(f"    {note}")
+        self.funding_note = note
+        for o in dropped:
+            print(f"    skipped BUY {o.qty:g} {o.symbol} — not funded")
+            results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
+                                qty=float(o.qty), price=float(o.price),
+                                status="SKIPPED-FUNDING", filled=0.0,
+                                avg_fill_price=0.0, order_type="", limit_price=0.0,
+                                reason=f"{o.reason} [not funded]"))
+
+    def _run_leg(self, leg_name: str, leg_orders: list[Order], fractional: bool,
+                 wait: float, order_type: str, slippage_cap: float, now,
+                 outside_rth: bool) -> list[dict]:
+        """Transmit one leg, wait for it, escalate the unfilled part, report."""
+        results: list[dict] = []
+        trades = []
+        for o in leg_orders:
+            contract = sym.ibkr_contract(o.symbol)
+            self.ib.qualifyContracts(contract)
+            qty = o.qty if fractional else float(round(o.qty))
+            if qty <= 0:
                 continue
-            if order_type == ORDER_MOC:
-                deadline = moc_wait_seconds(now)
-                print(f"    waiting {deadline/60:.0f} min for the closing "
-                      f"auction to print…")
-            else:
-                deadline = wait              # wait for this leg before the next
-            while deadline > 0 and any(not t.isDone() for *_, t in trades):
-                self.ib.sleep(1.0)
-                deadline -= 1.0
-            if order_type == ORDER_MARKETABLE_LIMIT:
-                trades += self._escalate_unfilled(trades, fractional, wait,
-                                                  outside_rth)
-            for o, qty, used, lmt, t in trades:
-                st = t.orderStatus.status
-                filled = float(t.orderStatus.filled or 0.0)
-                avg = float(t.orderStatus.avgFillPrice or 0.0)
-                print(f"    {leg_name} {o.symbol}: {st} filled={filled:g}")
-                results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
-                                    qty=float(qty), price=float(o.price), status=st,
-                                    filled=filled, avg_fill_price=avg,
-                                    order_type=used, limit_price=lmt,
-                                    reason=o.reason))
+            order, used, lmt = self._build_order(o, qty, order_type,
+                                                 slippage_cap, contract,
+                                                 outside_rth)
+            if order is None:            # unsendable outside RTH — skipped
+                continue
+            trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
+            print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}]"
+                  + (" outsideRth" if outside_rth else ""))
+        if not trades:
+            return results
+        if order_type == ORDER_MOC:
+            deadline = moc_wait_seconds(now)
+            print(f"    waiting {deadline/60:.0f} min for the closing "
+                  f"auction to print…")
+        else:
+            deadline = wait              # wait for this leg before the next
+        while deadline > 0 and any(not t.isDone() for *_, t in trades):
+            self.ib.sleep(1.0)
+            deadline -= 1.0
+        if order_type == ORDER_MARKETABLE_LIMIT:
+            trades += self._escalate_unfilled(trades, fractional, wait,
+                                              outside_rth)
+        for o, qty, used, lmt, t in trades:
+            st = t.orderStatus.status
+            filled = float(t.orderStatus.filled or 0.0)
+            avg = float(t.orderStatus.avgFillPrice or 0.0)
+            print(f"    {leg_name} {o.symbol}: {st} filled={filled:g}")
+            results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
+                                qty=float(qty), price=float(o.price), status=st,
+                                filled=filled, avg_fill_price=avg,
+                                order_type=used, limit_price=lmt,
+                                reason=o.reason))
         return results
 
     def disconnect(self) -> None:
