@@ -417,6 +417,34 @@ python scripts/ibkr_execute_book.py --file … --execute --slippage-cap 0.015
 The Executed Book tab shows what was actually sent per trade (`LMT $251.66`,
 `MOC`, `MKT`), so an escalation or a market fallback is visible after the fact.
 
+### The historical record of past runs
+Each run overwrites `data/overall/executed_book.json`, so the executor also
+drops a dated copy of the report beside it, keyed by the signal bar it traded:
+
+```
+data/overall/executed_archive/<as_of>.json          # paper runs
+data/overall/executed_archive/<as_of>_live.json     # live runs
+```
+
+Those records are what the Executed Book page's **🕰️ Historical** tab browses —
+pick any past date and it replays that run in full: the trades placed, the
+positions it ended with, and the drift against the target book *of that same
+signal bar* (`data/overall/book_archive/<as_of>.json`), not today's. A re-run
+for the same bar (a late `--refresh-report`, a manual after-hours top-up)
+replaces that bar's record: last run wins, matching the account's end state.
+The daily wrapper commits the archive alongside the report, so the cloud app
+gets it on the same push.
+
+To seed the archive from runs that happened before it existed, run it once from
+an unshallowed clone — it rebuilds the records verbatim (signatures intact) from
+git history:
+
+```bash
+git fetch --unshallow                 # only if the clone is shallow
+python scripts/backfill_executed_archive.py --dry-run
+python scripts/backfill_executed_archive.py
+```
+
 ### Automating Option C
 - **Publish**: manual `workflow_dispatch` on the Action (or on the default
   branch, the scheduled cron — daily, 7 days a week), or a cron on any host

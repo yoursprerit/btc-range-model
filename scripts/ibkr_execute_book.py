@@ -87,6 +87,12 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
     out.write_text(tb.dumps(report, secret))
     print(f"Wrote execution report → {out_path} "
           f"({len(trades)} trade(s), {len(positions)} position(s))")
+    # dated copy (executed_archive/<as_of>[_live].json) — the live report file
+    # only ever holds the LAST run, so without this the Executed Book page's
+    # Historical tab would have nothing to browse. Best-effort by design.
+    arch = eb.archive_report(report, out, secret)
+    if arch:
+        print(f"  archived as-of record → {arch}")
     if not secret:
         # Silently emitting an unsigned report is how "signature mismatch"
         # shows up in the app hours later, with nothing in the run to explain
@@ -106,12 +112,16 @@ def _push_report(out_path: str) -> None:
     branch diverged -- a stale report is recoverable, a wedged repo is a chore.
     """
     import subprocess
-    rel = str(Path(out_path).resolve().relative_to(_REPO))
+    out = Path(out_path).resolve()
+    # the report itself PLUS the dated as-of record written beside it — the
+    # Historical tab is only as complete as what gets pushed.
+    rels = [str(out.relative_to(_REPO)),
+            str(eb.archive_dir(out).relative_to(_REPO))]
     def _git(*a):
         return subprocess.run(("git",) + a, cwd=_REPO, capture_output=True, text=True)
     branch = (_git("rev-parse", "--abbrev-ref", "HEAD").stdout or "main").strip()
-    _git("add", rel)
-    if _git("diff", "--cached", "--quiet", "--", rel).returncode == 0:
+    _git("add", *rels)
+    if _git("diff", "--cached", "--quiet", "--", *rels).returncode == 0:
         print("  report unchanged — nothing to publish")
         return
     _git("-c", "user.name=ibkr-executor", "-c", "user.email=executor@localhost",

@@ -11,6 +11,13 @@ human-readable way:
   * the **current IBKR positions** (shares, cost, market value, unrealised P&L,
     weight) with a donut.
 
+Two tabs:
+
+  * **✅ Latest run** — the report as just described,
+  * **🕰️ Historical** — the same view for any PAST run, picked by date from the
+    dated as-of records the executor archives beside the report
+    (``data/overall/executed_archive/<as_of>[_live].json``).
+
 The cloud app never connects to IBKR — this is the mirror of the Target Book
 flow: the executor publishes the report, this page displays it.
 """
@@ -40,6 +47,7 @@ import ibkr_symbols as sym                 # noqa: E402  (BTC→IBIT mapping)
 REPORT_PATH = _REPO_ROOT / "data" / "overall" / "executed_book.json"
 REPORT_PATH_LIVE = _REPO_ROOT / "data" / "overall" / "executed_book_live.json"
 TARGET_PATH = _REPO_ROOT / "data" / "overall" / "target_book.json"
+TARGET_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / tb.ARCHIVE_DIRNAME
 
 try:
     st.set_page_config(page_title="Executed Book (IBKR)", page_icon="✅",
@@ -90,8 +98,17 @@ def _name(key: str, symbol: str) -> str:
     return f"{ov.KIND_EMOJI.get(kind, '')} {meta.get('name', symbol)}".strip()
 
 
-def _render(payload: dict, *, source: str) -> None:
+def _render(payload: dict, *, source: str, historical: bool = False) -> None:
+    """Render one execution report.
+
+    ``historical`` marks an archived record: its age is the point rather than a
+    problem, so the freshness badge becomes an "archived record" stamp and the
+    drift comparison uses the target book of that same signal bar."""
     secret = _secret()
+    # both tabs render on every script run, so every element that Streamlit
+    # auto-IDs from its parameters needs a scope-unique key — two identical
+    # charts/tables on one run is a DuplicateElementId error
+    scope = "hist" if historical else "now"
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
     ok_sig, sig_why = tb.verify_signature(payload, secret)
     ok_val, val_why = eb.validate(payload, today)
@@ -123,10 +140,17 @@ def _render(payload: dict, *, source: str) -> None:
         sig_col = "#16a34a"; sig_txt = "✅ signature verified"
     else:
         sig_col = "#dc2626"; sig_txt = "⛔ signature MISMATCH"
+    if historical:
+        # an archived run is SUPPOSED to be old — flag the date, not the age
+        gen = payload.get("generated_at_utc") or "—"
+        fresh_badge = _badge(f"🗄️ archived run · executed {gen} UTC", "#6366f1")
+    else:
+        fresh_badge = _badge(("🟢 " if ok_val else "🟡 ") + val_why,
+                             "#16a34a" if ok_val else "#d97706")
     st.markdown(
         _badge(acct_txt, acct_col) + "  " +
         _badge(mode_txt, mode_col) + "  " + _badge(sig_txt, sig_col) + "  " +
-        _badge(("🟢 " if ok_val else "🟡 ") + val_why, "#16a34a" if ok_val else "#d97706") +
+        fresh_badge +
         (f"  {_badge('for signal bar ' + str(payload.get('as_of')), '#0ea5e9')}"
          if payload.get("as_of") else ""),
         unsafe_allow_html=True)
@@ -162,7 +186,7 @@ def _render(payload: dict, *, source: str) -> None:
         n_sell = sum(1 for t in trades if t.get("action") == "SELL")
         st.caption(f"**{n_sell}** sell(s) then **{n_buy}** buy(s).")
         st.dataframe(
-            tdf, hide_index=True, use_container_width=True,
+            tdf, hide_index=True, use_container_width=True, key=f"{scope}_trades",
             column_config={
                 "Qty": st.column_config.NumberColumn("Qty", format="%.0f"),
                 "Action": st.column_config.TextColumn("Action")})
@@ -173,8 +197,8 @@ def _render(payload: dict, *, source: str) -> None:
     st.markdown("### 📊 Current IBKR positions")
     if not positions:
         st.info("No open positions reported.")
-        _drift_section(payload)
-        _download(payload, secret)
+        _drift_section(payload, historical=historical)
+        _download(payload, secret, historical=historical)
         return
 
     mv_total = sum(abs(float(p.get("market_value") or 0.0)) for p in positions)
@@ -198,7 +222,7 @@ def _render(payload: dict, *, source: str) -> None:
     left, right = st.columns([3, 2])
     with left:
         st.dataframe(
-            pdf, hide_index=True, use_container_width=True,
+            pdf, hide_index=True, use_container_width=True, key=f"{scope}_positions",
             column_config={
                 "Shares": st.column_config.NumberColumn("Shares", format="%.0f"),
                 "Avg_cost": st.column_config.TextColumn("Avg cost"),
@@ -220,24 +244,42 @@ def _render(payload: dict, *, source: str) -> None:
                                    sort=False, textinfo="label+percent"))
             fig.update_layout(height=340, margin=dict(t=10, b=10, l=10, r=10),
                               showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{scope}_donut")
         else:
             st.caption("_No market values reported (paper account may lack a "
                        "market-data subscription) — sizing shown by shares/cost._")
 
-    _drift_section(payload)
-    _download(payload, secret)
+    _drift_section(payload, historical=historical)
+    _download(payload, secret, historical=historical)
 
 
-def _drift_section(payload: dict) -> None:
+def _drift_section(payload: dict, *, historical: bool = False) -> None:
     """Compare what the executor TARGETED (target_book weights) against what it
     actually HOLDS now (executed positions), per instrument, in percentage points.
     Small drifts are normal: whole-share rounding, the no-trade band, and fills
-    landing away from the sizing price."""
-    if not TARGET_PATH.exists():
-        return
+    landing away from the sizing price.
+
+    For an archived run the comparison uses the target book published for that
+    run's own signal bar (``book_archive/<as_of>.json``) — comparing a past
+    execution against today's book would only measure the days in between."""
+    as_of = payload.get("as_of")
+    if historical:
+        # today's book says nothing about a past run — use that bar's own book
+        tgt_path = (TARGET_ARCHIVE_DIR / f"{pd.Timestamp(as_of).date()}.json"
+                    if as_of else None)
+        if tgt_path is None or not tgt_path.exists():
+            st.markdown("---")
+            st.markdown("### 🎯 vs Target Book — allocation drift")
+            st.caption(f"No archived target book for signal bar **{as_of or '—'}** "
+                       "(`data/overall/book_archive/`), so there is nothing to "
+                       "compare this run against.")
+            return
+    else:
+        tgt_path = TARGET_PATH
+        if not tgt_path.exists():
+            return
     try:
-        tgt = tb.loads(TARGET_PATH.read_text())
+        tgt = tb.loads(tgt_path.read_text())
     except Exception:
         return
 
@@ -246,6 +288,9 @@ def _drift_section(payload: dict) -> None:
     if tgt.get("as_of") and payload.get("as_of") and tgt["as_of"] != payload["as_of"]:
         st.caption(f"⚠️ Target book bar (**{tgt['as_of']}**) differs from this "
                    f"report's bar (**{payload['as_of']}**) — comparing the latest of each.")
+    elif historical:
+        st.caption(f"Against the book published for signal bar **{tgt.get('as_of')}** "
+                   f"(`{tgt_path.relative_to(_REPO_ROOT)}`) — the one this run traded.")
 
     t_weights = tgt.get("weights", {}) or {}
     t_cash = float(tgt.get("cash_weight", 0.0) or 0.0)
@@ -284,6 +329,7 @@ def _drift_section(payload: dict) -> None:
 
     st.dataframe(
         pd.DataFrame(rows), hide_index=True, use_container_width=True,
+        key=f"{'hist' if historical else 'now'}_drift",
         column_config={
             "Target": st.column_config.NumberColumn("Target %", format="%.1f%%"),
             "Actual": st.column_config.NumberColumn("Actual %", format="%.1f%%"),
@@ -294,13 +340,145 @@ def _drift_section(payload: dict) -> None:
                "drift on a name means it didn't fill as intended — check the trades above.")
 
 
-def _download(payload: dict, secret) -> None:
+def _download(payload: dict, secret, *, historical: bool = False) -> None:
     text = (json.dumps(payload, indent=1) if payload.get("signature")
             else tb.dumps(payload, secret))
-    with st.expander("Raw execution report (JSON)"):
+    name = "executed_book.json"
+    if historical and payload.get("as_of"):
+        name = f"executed_book_{pd.Timestamp(payload['as_of']).date()}.json"
+    with st.expander(f"Raw execution report (JSON){' — ' + str(payload.get('as_of')) if historical else ''}"):
         st.code(text, language="json")
-    st.download_button("⬇️ Download executed_book.json", data=text,
-                       file_name="executed_book.json", mime="application/json")
+    st.download_button(f"⬇️ Download {name}", data=text, file_name=name,
+                       mime="application/json",
+                       key=f"dl_{'hist' if historical else 'latest'}_{name}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# HISTORICAL TAB — browse the dated as-of records the executor archives
+# ══════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False)
+def _records(report_path_str: str, sig: tuple) -> list[dict]:
+    """Archived runs for this account mode, newest first.
+
+    Cached on *sig*, a signature of the archive directory (names + mtimes +
+    sizes), so a 45-second auto-refresh re-reads the files only when they
+    actually change. (The name must NOT start with an underscore — Streamlit
+    leaves underscored arguments out of the cache key, which would pin the
+    first read forever.)"""
+    return eb.archived_records(report_path_str)
+
+
+def _archive_sig(report_path: Path) -> tuple:
+    d = eb.archive_dir(report_path)
+    if not d.is_dir():
+        return ()
+    return tuple(sorted((f.name, f.stat().st_mtime, f.stat().st_size)
+                        for f in d.glob("*.json")))
+
+
+def _history_index(recs: list[dict]) -> pd.DataFrame:
+    """One row per archived run — the at-a-glance record of every rebalance."""
+    rows = []
+    for r in recs:
+        pl = r["payload"]
+        trades = pl.get("trades") or []
+        filled = [t for t in trades if float(t.get("filled") or 0.0) > 0]
+        rows.append(dict(
+            Executed=r["executed_on"], Signal_bar=r["as_of"],
+            Account=("🔴 live" if (pl.get("account_mode") or "paper").lower() == "live"
+                     else "🧪 paper"),
+            Mode=("executed" if (pl.get("mode") or "").lower() == "execute"
+                  else (pl.get("mode") or "—")),
+            Trades=len(trades), Filled=len(filled),
+            Positions=len(pl.get("positions") or []),
+            Net_liq=float(pl.get("net_liq") or 0.0),
+            Cash=float(pl.get("cash") or 0.0)))
+    return pd.DataFrame(rows)
+
+
+def _render_history(report_path: Path) -> None:
+    recs = _records(str(report_path), _archive_sig(report_path))
+    if not recs:
+        st.info("No archived runs yet for this account.")
+        st.markdown(
+            "Every rebalance overwrites `data/overall/executed_book.json`, so past "
+            "runs are kept as dated records beside it in "
+            "`data/overall/executed_archive/<signal-bar>.json`. The executor writes "
+            "one on each run (`scripts/ibkr_execute_book.py`) and the daily wrapper "
+            "commits it; to seed the archive from runs that happened before it "
+            "existed, run **`python scripts/backfill_executed_archive.py`** on an "
+            "unshallowed clone — it rebuilds the records verbatim from git history.")
+        return
+
+    dates = sorted(r["executed_on"] for r in recs)          # ascending
+    first, last = pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[-1]).date()
+
+    st.markdown("### 📅 Pick a past execution")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        picked = st.date_input(
+            "Execution date", value=last, min_value=first, max_value=last,
+            help="The day the executor ran. It trades the morning after the "
+                 "signal bar, so a run dated the 18th executed the book "
+                 "published from the 17th's close.")
+    with c2:
+        st.caption(f"**{len(recs)}** archived run(s) from **{first}** to "
+                   f"**{last}**. Days without a run (weekends, holidays, a "
+                   "skipped cycle) fall back to the most recent run on or "
+                   "before the date you pick.")
+
+    if isinstance(picked, (tuple, list)):        # defensive: never a range here
+        picked = picked[-1] if picked else None
+    if picked is None:                           # the input was cleared
+        picked = last
+        st.caption("No date selected — showing the most recent run.")
+    key = str(picked)
+    rec = eb.record_for(recs, picked)
+    if rec is None:
+        st.warning(f"No run on or before **{key}** — the archive starts at "
+                   f"**{first}**.")
+        return
+    if rec["executed_on"] != key:            # snapped back to the standing run
+        st.caption(f"No run on **{key}** — showing the most recent one before it, "
+                   f"**{rec['executed_on']}**.")
+
+    st.markdown(f"#### 🕰️ Run of {rec['executed_on']} "
+                f"(signal bar {rec['as_of']})")
+    _render(rec["payload"], source=f"`{rec['path'].relative_to(_REPO_ROOT)}`",
+            historical=True)
+
+    # ── the whole archive at a glance ────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🗂️ All archived runs")
+    idx = _history_index(recs)
+    shown = idx.assign(
+        Net_liq=idx["Net_liq"].map(lambda v: f"${v:,.0f}" if v else "—"),
+        Cash=idx["Cash"].map(lambda v: f"${v:,.0f}" if v else "—"))
+    st.dataframe(
+        shown, hide_index=True, use_container_width=True, key="hist_index",
+        column_config={
+            "Signal_bar": st.column_config.TextColumn("Signal bar"),
+            "Net_liq": st.column_config.TextColumn("Net liq"),
+            "Filled": st.column_config.NumberColumn(
+                "Filled", help="Trades with a non-zero fill quantity.")})
+
+    nl = idx[idx["Net_liq"] > 0].sort_values("Executed")
+    if len(nl) > 1:
+        fig = go.Figure(go.Scatter(
+            x=pd.to_datetime(nl["Executed"]), y=nl["Net_liq"], mode="lines+markers",
+            line=dict(color="#0ea5e9", width=2), name="Net liquidation",
+            hovertemplate="%{x|%b %d, %Y}<br>$%{y:,.0f}<extra></extra>"))
+        fig.add_vline(x=pd.Timestamp(rec["executed_on"]), line_dash="dot",
+                      line_color="#dc2626")
+        fig.update_layout(height=260, margin=dict(t=30, b=10, l=10, r=10),
+                          yaxis_title="Net liquidation ($)", hovermode="x unified",
+                          xaxis=dict(tickformat="%b %d", dtick="D1"),
+                          title=dict(text="Account value as reported at each run",
+                                     font_size=13))
+        st.plotly_chart(fig, use_container_width=True, key="hist_netliq")
+        st.caption("Account value as the executor read it on each run — a record "
+                   "of the account, not a back-test: it moves with deposits and "
+                   "withdrawals as well as with the strategy.")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -311,11 +489,15 @@ if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
     _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()
 st.caption("What the IBKR executor actually did on the last rebalance — trades "
-           "placed and the resulting positions.")
+           "placed and the resulting positions — plus every earlier run, by date, "
+           "under 🕰️ Historical.")
 
-# Which account views are available? (paper always; live once a live run exists)
-_avail = [("Paper", REPORT_PATH)] + (
-    [("Live", REPORT_PATH_LIVE)] if REPORT_PATH_LIVE.exists() else [])
+# Which account views are available? (paper always; live once a live run exists —
+# either as the current report or as an archived one)
+_live_seen = REPORT_PATH_LIVE.exists() or bool(
+    eb.archive_dir(REPORT_PATH_LIVE).is_dir()
+    and list(eb.archive_dir(REPORT_PATH_LIVE).glob("*_live.json")))
+_avail = [("Paper", REPORT_PATH)] + ([("Live", REPORT_PATH_LIVE)] if _live_seen else [])
 if len(_avail) > 1:
     _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
                      help="Paper and live executions are kept as separate reports.")
@@ -323,17 +505,27 @@ if len(_avail) > 1:
 else:
     _path = REPORT_PATH
 
-if _path.exists():
-    try:
-        payload = tb.loads(_path.read_text())
-        _render(payload, source=f"`{_path.relative_to(_REPO_ROOT)}`")
-    except Exception as e:
-        st.error(f"Could not read the execution report: {e}")
-else:
-    st.warning("No execution report found at "
-               f"`{_path.relative_to(_REPO_ROOT)}`.")
-    st.markdown(
-        "It appears here once the executor has run a rebalance and committed the "
-        "report back to the branch (`scripts/ibkr_execute_book.py` writes it; the "
-        "daily wrapper commits it). Until then, see **📋 Target Book (IBKR)** for "
-        "the intended allocation.")
+_tab_now, _tab_hist = st.tabs(["✅ Latest run", "🕰️ Historical"])
+
+with _tab_now:
+    if _path.exists():
+        try:
+            payload = tb.loads(_path.read_text())
+            _render(payload, source=f"`{_path.relative_to(_REPO_ROOT)}`")
+        except Exception as e:
+            st.error(f"Could not read the execution report: {e}")
+    else:
+        st.warning("No execution report found at "
+                   f"`{_path.relative_to(_REPO_ROOT)}`.")
+        st.markdown(
+            "It appears here once the executor has run a rebalance and committed the "
+            "report back to the branch (`scripts/ibkr_execute_book.py` writes it; the "
+            "daily wrapper commits it). Until then, see **📋 Target Book (IBKR)** for "
+            "the intended allocation.")
+
+with _tab_hist:
+    st.caption("Previously executed books — every run the executor archived, "
+               "picked by date. Same view as the latest run: the trades it "
+               "placed, the positions it ended with, and how that stood against "
+               "the target book it was trading.")
+    _render_history(_path)

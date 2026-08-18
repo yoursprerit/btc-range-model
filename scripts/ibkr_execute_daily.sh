@@ -101,9 +101,12 @@ if [ "${ACCOUNT_MODE}" = "live" ]; then
 else
   REPORT="${REPO_ROOT}/data/overall/executed_book.json"
 fi
+# The dated as-of copy the executor writes beside the report feeds the Executed
+# Book page's Historical tab, so it ships in the same commit.
+ARCHIVE_DIR="${REPO_ROOT}/data/overall/executed_archive"
 if [ "${IBKR_NO_PUSH_REPORT:-0}" != "1" ] && [ -f "${REPORT}" ]; then
-  git add "${REPORT}"
-  if git diff --cached --quiet -- "${REPORT}"; then
+  git add "${REPORT}" "${ARCHIVE_DIR}" 2>/dev/null || git add "${REPORT}"
+  if git diff --cached --quiet -- "${REPORT}" "${ARCHIVE_DIR}"; then
     log "no change to executed_book.json — nothing to publish"
   else
     git -c user.name="ibkr-executor" -c user.email="executor@localhost" \

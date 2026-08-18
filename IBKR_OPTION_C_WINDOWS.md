@@ -501,7 +501,9 @@ Get-Content C:\btc-range-model\logs\ibkr_executor.log -Tail 40
 ## 8. Git write credentials for the execution report (optional)
 
 After trading, `ibkr_execute_daily.ps1` commits `data\overall\executed_book.json`
-and pushes it to `main` so the cloud app's **Executed Book** tab shows the fills.
+plus the dated copy of it under `data\overall\executed_archive\` (what the
+Executed Book tab's **🕰️ Historical** view reads) and pushes them to `main`, so
+the cloud app shows both the fills and the run's place in the record.
 This is **cosmetic** — trades execute and the report is written locally either
 way. Without credentials the wrapper logs
 `WARN: could not push execution report … rolling back`, resets to `origin/main`,
