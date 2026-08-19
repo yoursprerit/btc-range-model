@@ -428,7 +428,23 @@ restores the old unconditional behaviour.
 
 MOC is the one exception: every leg prints in the same closing auction, so
 sequencing would buy nothing but lost minutes against the 15:50 ET entry cutoff.
-There the funding check uses the sells' expected proceeds.
+There the funding check uses the sells' expected proceeds, priced at the bid —
+the floor on what they can realise, so the budget errs small.
+
+**The budget is priced off live quotes, not the book.** The book carries
+*yesterday's* close as its sizing price, so on a market that gapped up, shares
+sized at the book price cost more than the book says and the account borrows the
+difference. Each order's budget line is therefore taken from the quote at the
+price it will actually pay — the ask plus the slippage cap for a buy, the bid
+minus it for a sell, both the conservative side of the fill. A name that cannot
+be quoted (no market-data subscription, dead feed) falls back to the book price.
+
+Worked example — a book priced at $500, a market at $550, $50k of cash:
+
+| | shares sent | worst-case spend | result |
+|---|---|---|---|
+| budgeted at the book price | 99 | $54,722 | **$4,722 of margin** |
+| budgeted at the live quote | 89 | $49,195 | no margin |
 
 ### The historical record of past runs
 Each run overwrites `data/overall/executed_book.json`, so the executor also
@@ -489,7 +505,7 @@ and the paper account ended at 3.4× net liquidation on a $2.17M margin loan
 | **Turnover** | A plan trading more than `--max-turnover-frac` (default 1.5×) of NAV — implausible for a daily rebalance. | raise the flag |
 | **Price drift** | A name quoting further than `--max-price-drift` (default 25%) from the book's sizing price — a split between publish and execution would size every order wrong. | `--max-price-drift 0` |
 | **Session hours** | Placing orders outside 09:30–16:00 ET (MOC excepted, which is priced into the close). | `--outside-rth` |
-| **Funded buys** | Buys beyond settled cash **plus the proceeds the sells actually realised**. Sells go first and are awaited; whatever they fail to realise shrinks the buys proportionally instead of being financed on margin. Names trimmed away appear in the report as `SKIPPED-FUNDING`. | `--allow-margin` |
+| **Funded buys** | Buys beyond settled cash **plus the proceeds the sells actually realised**, budgeted at the price each order can really pay — the live ask plus the slippage cap for a buy, the live bid minus it for a sell. Sells go first and are awaited; whatever they fail to realise shrinks the buys proportionally instead of being financed on margin. Names trimmed away appear in the report as `SKIPPED-FUNDING`. | `--allow-margin` |
 
 After trading, the run re-reads the account and prints realised gross leverage
 and the largest allocation drift — reported, never auto-corrected, because a

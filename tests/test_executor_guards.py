@@ -355,3 +355,71 @@ def test_an_unreadable_cash_balance_fails_closed():
     b.place(orders, fractional=False, wait=0.0, order_type=ic.ORDER_MARKET)
     assert [q for a, _, q in b.ib.sent if a == "BUY"] == [], \
         "with no readable cash and no sell proceeds, nothing may be bought"
+
+
+# ── the funding budget is priced off the live quote, not yesterday's close ──
+class _QuotingIB(_FakeIB):
+    """Serves a quote, so the funding budget prices the fill it will really get."""
+    def __init__(self, bid, ask, fill_ratio=1.0):
+        super().__init__(fill_ratio)
+        self.bid, self.ask = bid, ask
+
+    def reqTickers(self, contract):
+        return [type("T", (), {"bid": self.bid, "ask": self.ask,
+                               "last": self.ask, "close": self.ask})()]
+
+
+def _quoting_broker(bid, ask, cash=0.0, fill_ratio=1.0):
+    b = object.__new__(ic.Broker)
+    b.ib = _QuotingIB(bid, ask, fill_ratio)
+    b.account = "DU1"
+    b.cash = lambda: cash
+    return b
+
+
+def test_funding_price_is_the_ceiling_a_buy_can_pay():
+    b = _quoting_broker(bid=549.0, ask=550.0)
+    o = ic.Order("SOXX", "SOXX", "BUY", 10.0, 500.0, "")     # book says $500
+    px = b.funding_price(o, slippage_cap=0.005)
+    assert px == pytest.approx(550.0 * 1.005, abs=0.01), "buy budgets at ask+cap"
+
+
+def test_funding_price_is_the_floor_a_sell_can_realise():
+    b = _quoting_broker(bid=549.0, ask=550.0)
+    o = ic.Order("SOXX", "SOXX", "SELL", 10.0, 500.0, "")
+    px = b.funding_price(o, slippage_cap=0.005)
+    assert px == pytest.approx(549.0 * 0.995, abs=0.01), "sell budgets at bid-cap"
+
+
+def test_funding_price_falls_back_to_the_book_when_unquotable():
+    b = _broker()                       # _FakeIB.reqTickers returns []
+    o = ic.Order("SOXX", "SOXX", "BUY", 10.0, 500.0, "")
+    assert b.funding_price(o) == 500.0
+
+
+def test_a_gap_up_no_longer_borrows_the_difference():
+    """The residual this change closes: book $500, market $550, $50k of cash."""
+    b = _quoting_broker(bid=549.0, ask=550.0, cash=50_000.0)
+    orders = _orders(("SOXX", "BUY", 100.0, 500.0))          # $50k at book prices
+    b.place(orders, fractional=False, wait=0.0, order_type=ic.ORDER_MARKET)
+    qty = sum(q for a, _, q in b.ib.sent if a == "BUY")
+    worst_case_spend = qty * 550.0 * 1.005
+    assert worst_case_spend <= 50_000.0, (
+        f"{qty:g} shares could cost ${worst_case_spend:,.0f} against $50k of cash")
+    assert qty > 0, "a gap up should trim the order, not cancel the strategy"
+
+
+def test_a_gap_down_still_buys_the_whole_plan():
+    b = _quoting_broker(bid=449.0, ask=450.0, cash=50_000.0)
+    orders = _orders(("SOXX", "BUY", 100.0, 500.0))
+    b.place(orders, fractional=False, wait=0.0, order_type=ic.ORDER_MARKET)
+    assert [q for a, _, q in b.ib.sent if a == "BUY"] == [100.0]
+
+
+def test_quotes_are_cached_within_a_run():
+    b = _quoting_broker(bid=549.0, ask=550.0)
+    calls = []
+    inner = b.ib.reqTickers
+    b.ib.reqTickers = lambda c: (calls.append(c) or inner(c))
+    b.quote_by_symbol("SOXX"); b.quote_by_symbol("SOXX")
+    assert len(calls) == 1, "the drift check and the funding budget share one quote"
