@@ -69,12 +69,14 @@ flowchart TD
 | 8 | 💻 Laptop | `scripts/ibkr_execute_daily.ps1` | Task Scheduler fires the wrapper; it fast-forwards the branch to grab the freshest book, then runs the executor. |
 | 9 | 💻 Laptop | `scripts/ibkr_execute_book.py` | Load the target book from `--file`, `--url`, or stdin. |
 | 10 | 💻 Laptop 🛡️ | `target_book.verify_signature()` | Recompute the HMAC; a tampered or forged book aborts here — no orders. |
-| 11 | 💻 Laptop 🛡️ | `target_book.validate()` · `ibkr_common.is_trading_day()` | Reject a stale signal bar or a book generated too long ago; skip weekends and US holidays. |
+| 11 | 💻 Laptop 🛡️ | `target_book.validate()` · `ibkr_common.is_trading_day()` · `bar_is_current()` · `eb.completed_run()` | Reject a stale signal bar or a book generated too long ago; require the bar to be the last completed session; refuse a bar already executed; skip weekends and US holidays. |
 | 12 | 💻 Laptop 🛡️ | `ibkr_common.Broker()` → `127.0.0.1:4002` | Open the paper-gateway socket and confirm the account is a paper (`DU…`) account — else abort. |
-| 13 | 💻 Laptop | `Broker.net_liq()` · `Broker.positions_by_key()` | Fetch net-liquidation value and current positions (IBKR symbols mapped back to signal keys — IBIT → BTC). |
+| 13 | 💻 Laptop 🛡️ | `Broker.net_liq()` · `Broker.holdings()` | Fetch net-liquidation value and current positions (IBKR symbols mapped back to signal keys — IBIT → BTC). The read is settled and **verified against the account's own gross position value**: an incomplete read raises `PositionReadError` instead of looking like a flat account. |
 | 14 | 💻 Laptop 📏 | `ibkr_common.build_order_plan()` | `target_shares = weight × net_liq ÷ price`. Diff vs held → **delta > 0 buy**, **delta < 0 sell**; a held name at 0% is fully closed. Skip anything inside the no-trade band (1% of NAV). Sells first. |
-| 15 | 💻 Laptop | `ibkr_common.Broker.place()` | Transmit orders — marketable limits by default (unfilled remainder escalates to market), or MOC into the 4:00 PM ET auction. Sells leg first (await fills to free buying power), then the buys leg; MOC submits both at once. |
+| 14b | 💻 Laptop 🛡️ | `ibkr_common.preflight()` | Account state (no existing margin loan, not already geared), session hours, turnover, projected exposure ≤ 1.02× net-liq, and each sizing price against a live quote (a split would size every order wrong). First failure aborts — no orders. |
+| 15 | 💻 Laptop | `ibkr_common.Broker.place()` · `fit_buys_to_funding()` | Transmit orders — marketable limits by default (unfilled remainder escalates to market), or MOC into the 4:00 PM ET auction. Sells leg first and awaited; the buy leg is then sized to settled cash + the proceeds the sells actually realised, budgeted at live quotes. Sells that miss shrink the buys instead of drawing a margin loan; trimmed names report as `SKIPPED-FUNDING`. MOC submits both at once (one auction). |
 | 16 | 💻 Laptop | IB Gateway → IBKR paper | Gateway routes to IBKR; the paper portfolio now matches the target book. |
+| 17 | 💻 Laptop 🛡️ | `ibkr_common.post_trade_check()` · `executed_book.archive_report()` | Re-read the account: realised leverage and the largest drift are reported, never auto-corrected. The run is archived to `executed_archive/<as_of>.json`, which is also the duplicate-run lock. |
 
 ## What runs where
 
@@ -89,6 +91,7 @@ control — and can download an adjusted, re-signed book — but it never connec
 IBKR. The automated publisher is the GitHub Action running `publish_target_book.py`.
 
 > **Safety:** dry-run is the default everywhere — orders require `--execute`.
-> Guards 10–12 each abort before any order is placed. Full walkthrough in
+> Guards 10–14b each abort before any order is placed, and 17 verifies the
+> result. Full walkthrough in
 > [`IBKR_PAPER_TRADING.md`](../IBKR_PAPER_TRADING.md); Windows setup in
 > [`IBKR_OPTION_C_WINDOWS.md`](../IBKR_OPTION_C_WINDOWS.md).

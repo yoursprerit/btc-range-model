@@ -33,6 +33,30 @@ BOOK = REPO / "data" / "overall" / "target_book.json"
 MAX_BAR_AGE_DAYS = 4
 MAX_GEN_AGE_HOURS = 36.0
 
+# Mirrors scripts/ibkr_common.py: since the 2026-08-18 duplicate-execution
+# incident the executor also requires the book's bar to be the LAST COMPLETED
+# SESSION (a 36-hour-fresh book can still be a day-old decision), and refuses a
+# bar it has already executed. Both are restated here so the operator learns it
+# now rather than from an ABORT when the 2:30 PM CT task fires.
+EXECUTED_ARCHIVE = REPO / "data" / "overall" / "executed_archive"
+US_MARKET_HOLIDAYS = {
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+}
+
+
+def _prev_trading_day(day):
+    """The last US trading session strictly before *day* (stdlib mirror of
+    ibkr_common.prev_trading_day)."""
+    d = day
+    for _ in range(10):
+        d -= timedelta(days=1)
+        if d.weekday() < 5 and d.isoformat() not in US_MARKET_HOLIDAYS:
+            return d
+    return day
+
 _results: list[tuple[str, str, str]] = []
 
 
@@ -96,14 +120,49 @@ def check_book() -> dict | None:
                                    f"the executor refuses to trade this book")
 
     as_of = payload.get("as_of")
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+    except ImportError:                                    # pragma: no cover
+        today = datetime.now(timezone.utc).date()
     if as_of:
-        bar_age = (datetime.now(timezone.utc).date()
-                   - datetime.strptime(as_of, "%Y-%m-%d").date()).days
+        # ET, like the executor: after 20:00 ET the UTC date has already rolled,
+        # and judging the bar by it would report an age the run never sees
+        bar_age = (today - datetime.strptime(as_of, "%Y-%m-%d").date()).days
         if bar_age > MAX_BAR_AGE_DAYS:
             _add("FAIL", "book-bar-age",
                  f"signal bar {as_of} is {bar_age}d old (limit {MAX_BAR_AGE_DAYS}d)")
         else:
             _add("PASS", "book-bar-age", f"signal bar {as_of} is {bar_age}d old")
+
+    if as_of:
+        # the one bar this session may trade
+        want = _prev_trading_day(today)
+        bar = datetime.strptime(as_of, "%Y-%m-%d").date()
+        if bar == want:
+            _add("PASS", "book-current-bar",
+                 f"signal bar {as_of} is the last completed session")
+        elif bar > want:
+            _add("WARN", "book-current-bar",
+                 f"signal bar {as_of} is ahead of the last completed session "
+                 f"({want}) -- not tradeable yet")
+        else:
+            _add("FAIL", "book-current-bar",
+                 f"STALE: signal bar {as_of} is behind the last completed session "
+                 f"({want}) -- the executor will refuse to trade it. Today's "
+                 f"publish has not landed; git pull, or check the publisher")
+
+        # already traded? the archived execution report is the executor's lock
+        rec = EXECUTED_ARCHIVE / f"{as_of}.json"
+        if rec.exists():
+            _add("WARN", "book-already-executed",
+                 f"{rec.name} exists -- this bar was already executed, so the "
+                 f"next run will be a no-op (--refresh-report re-states the "
+                 f"account without trading; --force-rerun only if that run "
+                 f"placed nothing)")
+        else:
+            _add("PASS", "book-already-executed",
+                 f"no execution report for {as_of} yet -- this bar is untraded")
 
     gen = payload.get("generated_at_utc")
     if gen:

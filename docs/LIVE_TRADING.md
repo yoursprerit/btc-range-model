@@ -34,6 +34,34 @@ Cloud publisher → target_book.json (paper) + target_book_live.json (live)
 All the paper guards still apply too: signature verification, freshness, weekend/
 holiday skip, and the no-trade band.
 
+### The guards added after the 2026-08-18 incident
+
+On 2026-08-18 the **paper** account was bought four times over: three runs each
+read the account as flat (IB Gateway had not delivered the position
+subscription), each re-bought the whole book on top of what was already held,
+and the account ended at **3.4× net liquidation on a $2.17M margin loan**, −8.1%
+NAV in a day. On a funded account that is a margin call, not a bad afternoon.
+Everything below now applies to live and paper alike — read
+[`IBKR_PAPER_TRADING.md`](../IBKR_PAPER_TRADING.md#pre-flight-guards-what-the-executor-refuses-to-do)
+for the full table.
+
+| Guard | Default | Why it matters for real money |
+|-------|---------|-------------------------------|
+| **Verified positions read** | always on | A read that misses value the account itself reports aborts the run. This is the guard that stops "the account looks flat, buy everything again". |
+| **Current-bar check** | always on (`--allow-stale-bar` to override) | Only the last completed session's book may trade. A withheld publish means **no trade**. |
+| **Duplicate-run lock** | always on (`--force-rerun`) | A signal bar with an execution report already archived is never executed twice. |
+| **Cash-funded buys** | always on (`--allow-margin`) | Buys are capped at settled cash + the proceeds the sells actually realised, budgeted at live quotes. **A live account cannot take on an unintended margin loan.** |
+| **Account state** | always on | Refuses to trade an account that already carries a margin loan or is already geared past the cap. |
+| **Projected exposure** | `--max-gross-frac 1.02` | Aborts any plan landing above ~1× NAV. Note this sits *on top of* `--max-deploy-frac`: that one caps the book's risk weight, this one catches a plan that would gear the account regardless of what the book said. |
+| **Turnover** | `--max-turnover-frac 1.5` | Aborts an implausible churn — the signature of a plan built against the wrong picture of the account. |
+| **Price drift** | `--max-price-drift 0.25` | Aborts when a name quotes far from its sizing price (a split between publish and execution would size every order wrong). |
+| **Session hours** | always on (`--outside-rth`) | No orders outside 09:30–16:00 ET. The incident's first round went out at 18:48 ET. |
+| **Post-trade verification** | always on | Re-reads the account and reports realised leverage and the largest drift. It never auto-corrects — a corrective second round is what compounds a bad read. |
+
+> **Before funding the account**, run a live-mode dry-run (`--account-mode live`
+> without `--execute`) and read the `Pre-flight:` block: every line must be a ✓.
+> The same block prints on every real run, in the log the wrapper keeps.
+
 ---
 
 ## The one hard part: 2FA on live login

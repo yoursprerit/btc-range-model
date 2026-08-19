@@ -106,6 +106,8 @@ actually broken in practice:
 | `secret-set` | a secret missing from the environment — the executor would trade **unverified**, not fail |
 | **`secret-verifies`** | **the configured secret does not actually sign the book on disk** — the publisher/laptop mismatch, caught here instead of at 2:30 |
 | `book-present` / `book-audit` / `book-bar-age` / `book-gen-age` | no book, a failed publish-time audit, or a stale one |
+| **`book-current-bar`** | the book's signal bar is **not** the last completed session — today's publish never landed, so the 2:30 run will refuse to trade it (see §12) |
+| **`book-already-executed`** | that bar already has an execution report, so the next run is a no-op — use `--refresh-report`, not a re-run |
 | `task-slot` | `-TaskTime` is **local** — it prints what your 14:30 maps to in CT/ET and fails if it lands outside market hours |
 | `kill-switch` | trading left disabled from an earlier rehearsal |
 | scheduled task | never registered (the `-Task` phase needs elevation) |
@@ -383,7 +385,13 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--band 0.02` | widen the no-trade band (fraction of net-liq) |
 | `--fractional` | allow fractional shares (default: whole shares) |
 | `--port 4002` | IB Gateway API port (paper) |
-| `--max-age-hours 36` | reject a book generated longer ago than this (default 36 spans the 7:15-AM-CT publish anchor → next day's 2:30-PM-CT executor slot, so yesterday's book still trades if today's publish was withheld) |
+| `--max-age-hours 36` | reject a book generated longer ago than this (default 36). Note this is no longer the binding guard: the bar check below refuses any book that is not the last completed session, so a withheld publish is a **no-trade**, not a re-trade of yesterday's book |
+| `--allow-stale-bar` | trade a book whose signal bar is not the last completed session. Off by default — deliberate catch-up only |
+| `--force-rerun` | execute a signal bar that already has an execution report. Only when you have confirmed the first run placed nothing |
+| `--allow-margin` | permit buys beyond settled cash + realised sell proceeds. Off by default — this is what keeps an unintended margin loan impossible |
+| `--max-gross-frac 1.02` | abort a plan that would leave gross exposure above this multiple of net-liq |
+| `--max-turnover-frac 1.5` | abort a plan that would trade more than this multiple of net-liq |
+| `--max-price-drift 0.25` | abort when a name quotes further than this from its sizing price (a split would size every order wrong); 0 disables |
 | `--order-type` | `marketable-limit` (default), `moc`, or `market` — see IBKR_PAPER_TRADING.md § Order routing (env `IBKR_ORDER_TYPE`) |
 | `--slippage-cap 0.005` | how far through the touch a marketable limit prices (env `IBKR_SLIPPAGE_CAP`) |
 | `--require-signature` | refuse an unsigned book |
@@ -654,7 +662,10 @@ setup starts it unless you ran `-Autostart` (§6).
    makes any Saturday/holiday fire a safe no-op.
 3. Guards keep it safe: weekend/holiday skip (executor side), stale-book
    refusal, paper-account check, HMAC verification, and the no-trade band
-   suppressing tiny churn.
+   suppressing tiny churn — plus, since the 2026-08-18 duplicate-execution
+   incident, a verified positions read, a current-bar requirement, a
+   duplicate-run lock, exposure/turnover caps and cash-funded buys. Every run
+   prints a `Pre-flight:` block; every line should be a ✓.
 4. Review `logs\ibkr_executor.log` and the IBKR paper account periodically.
 
 ---
@@ -705,7 +716,15 @@ Then the specifics:
 - **Paper only** — non-`DU` accounts are refused by default.
 - **Dry-run is the default** — orders require `--execute`.
 - **Signed books only** (recommended) — set `--require-signature` to enforce.
-- **Freshness guards** — stale bar or stale generation aborts the run.
+- **Freshness guards** — stale generation aborts the run, and the signal bar
+  must be the **last completed session**: a withheld publish is a no-trade.
+- **No duplicate execution** — a bar that already has an execution report is
+  never traded twice, so a retried or manually repeated run cannot double the
+  book (the failure that cost 8.1% of NAV on 2026-08-18).
+- **No unintended margin** — buys are capped at settled cash plus the proceeds
+  the sells actually realised, and any plan landing above ~1× net-liq aborts.
+- **Verified positions read** — an incomplete read from IB Gateway aborts the
+  run instead of looking like a flat account.
 - Leveraged sleeves (MSTU 2×, SOXL 3×, UGL/NUGT/ERX 2×) trade normally but are
   the volatile part of the book — paper-test thoroughly before trusting it.
 - This is for **paper** validation. Real money is a separate, deliberate step

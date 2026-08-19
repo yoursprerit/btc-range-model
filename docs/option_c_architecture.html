@@ -260,11 +260,13 @@
 
         <div class="step exec is-guard">
           <span class="badge">11</span>
-          <h3>Validate freshness &amp; market day <span class="tag guard">Guard</span></h3>
-          <p>Reject a stale signal bar or a book generated too long ago; skip weekends and US
-             holidays.</p>
+          <h3>Validate freshness, bar &amp; market day <span class="tag guard">Guard</span></h3>
+          <p>Reject a stale signal bar or a book generated too long ago; require the bar to be the
+             <b>last completed session</b> (a withheld publish means no trade); refuse a bar that
+             already has an execution report; skip weekends and US holidays.</p>
           <span class="ref"><b>target_book</b>.validate()</span>
-          <span class="ref"><b>ibkr_common</b>.is_trading_day()</span>
+          <span class="ref"><b>ibkr_common</b>.is_trading_day() · bar_is_current()</span>
+          <span class="ref"><b>executed_book</b>.completed_run()</span>
         </div>
 
         <div class="step exec is-guard">
@@ -277,11 +279,22 @@
 
         <div class="step exec">
           <span class="badge">13</span>
-          <h3>Read the account</h3>
+          <h3>Read the account <span class="tag guard">Guard</span></h3>
           <p>Fetch net-liquidation value and current positions (IBKR symbols mapped back to signal
-             keys — IBIT → BTC).</p>
+             keys — IBIT → BTC). The read is <b>settled and verified</b> against the account's own
+             gross position value: an incomplete read aborts rather than looking like a flat
+             account, which is what let three runs re-buy the whole book on 2026-08-18.</p>
           <span class="ref"><b>Broker</b>.net_liq()</span>
-          <span class="ref"><b>Broker</b>.positions_by_key()</span>
+          <span class="ref"><b>Broker</b>.holdings() → PositionReadError</span>
+        </div>
+
+        <div class="step exec is-guard">
+          <span class="badge">13b</span>
+          <h3>Pre-flight the plan <span class="tag guard">Guard</span></h3>
+          <p>Account state (no existing margin loan, not already geared), session hours,
+             turnover, projected exposure ≤ 1.02× net-liq, and each sizing price against a live
+             quote (a split would size every order wrong). First failure aborts — no orders.</p>
+          <span class="ref"><b>ibkr_common</b>.preflight(…, Guards)</span>
         </div>
 
         <div class="step exec is-size">
@@ -296,9 +309,12 @@
         <div class="step exec">
           <span class="badge">15</span>
           <h3>Place the orders</h3>
-          <p>Transmit orders — marketable limits by default (unfilled remainder escalates to market), or MOC into the 4:00 PM ET auction. Sells leg first (await fills to free buying power), then the
-             buys leg.</p>
+          <p>Transmit orders — marketable limits by default (unfilled remainder escalates to market), or MOC into the 4:00 PM ET auction. Sells leg first and awaited; the buy leg is then
+             <b>sized to what the account can pay</b> — settled cash plus the proceeds the sells
+             actually realised, budgeted at live quotes. Sells that miss shrink the buys instead
+             of drawing a margin loan; trimmed names are reported as <code>SKIPPED-FUNDING</code>.</p>
           <span class="ref"><b>ibkr_common</b>.Broker.place() → LimitOrder / MOC / MarketOrder</span>
+          <span class="ref"><b>ibkr_common</b>.fit_buys_to_funding()</span>
         </div>
 
         <div class="step exec">
@@ -308,13 +324,25 @@
           <span class="ref">IB Gateway → IBKR paper account</span>
         </div>
 
+        <div class="step exec is-guard">
+          <span class="badge">17</span>
+          <h3>Verify after trading <span class="tag guard">Guard</span></h3>
+          <p>Re-read the account: realised gross leverage and the largest allocation drift are
+             reported, never auto-corrected — a corrective second round is the reflex that
+             compounds a bad read. The run is archived to
+             <code>executed_archive/&lt;as_of&gt;.json</code>, which is also the duplicate-run lock.</p>
+          <span class="ref"><b>ibkr_common</b>.post_trade_check()</span>
+          <span class="ref"><b>executed_book</b>.archive_report()</span>
+        </div>
+
       </div>
     </div>
   </section>
 
   <div class="terminal">
     <h2>✔ Paper account rebalanced to the target book</h2>
-    <p>The only money-moving steps — sizing (14) and placement (15) — ran on the laptop.</p>
+    <p>The only money-moving steps — sizing (14) and placement (15) — ran on the laptop,
+       behind guards 10–13b and verified by 17.</p>
     <div class="flow">
       <span>build_order_plan</span><span>→</span><span>Broker.place</span><span>→</span>
       <span>IB Gateway :4002</span><span>→</span><span>IBKR paper</span>
@@ -336,7 +364,7 @@
 
   <p style="margin-top:22px;font-size:.8rem;color:var(--ink-soft);font-family:var(--mono)">
     Dry-run is the default everywhere · orders require <code>--execute</code> ·
-    guards 10–12 each abort before any order · full walkthrough in IBKR_PAPER_TRADING.md
+    guards 10–13b each abort before any order · full walkthrough in IBKR_PAPER_TRADING.md
   </p>
 </div>
 </body>

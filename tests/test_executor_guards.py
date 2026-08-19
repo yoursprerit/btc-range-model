@@ -423,3 +423,39 @@ def test_quotes_are_cached_within_a_run():
     b.ib.reqTickers = lambda c: (calls.append(c) or inner(c))
     b.quote_by_symbol("SOXX"); b.quote_by_symbol("SOXX")
     assert len(calls) == 1, "the drift check and the funding budget share one quote"
+
+
+# ── one implementation, both entry points ───────────────────────────────────
+def test_guards_from_args_falls_back_to_the_production_defaults():
+    class _Args:                       # an entry point that exposes only some
+        max_gross_frac = 1.5
+        allow_margin = True
+    g = ic.Guards.from_args(_Args())
+    assert g.max_gross_frac == 1.5 and g.allow_margin is True
+    assert g.max_turnover_frac == ic.Guards().max_turnover_frac
+    assert g.max_price_drift == ic.Guards().max_price_drift
+    assert g.outside_rth is False, "an unset flag must never loosen a guard"
+
+
+def test_both_trading_entry_points_run_the_shared_preflight():
+    """They place orders through the same code, so they must refuse the same
+    things — a regression here is how the two paths drift apart."""
+    root = Path(__file__).resolve().parent.parent / "scripts"
+    for name in ("ibkr_execute_book.py", "ibkr_rebalance.py"):
+        src = (root / name).read_text()
+        assert "preflight(" in src, f"{name} does not run the shared pre-flight"
+        assert "post_trade_check(" in src, f"{name} does not verify after trading"
+        assert "broker.holdings(" in src, f"{name} uses an unverified positions read"
+        assert "positions_by_key()" not in src.split("def main")[-1], \
+            f"{name} still sizes off a raw positions read"
+
+
+def test_the_shared_preflight_stops_a_levered_plan(monkeypatch):
+    """End-to-end through preflight(), the way both entry points call it."""
+    b = _quoting_broker(bid=559.0, ask=560.0, cash=39_253.0)
+    b.gross_position_value = lambda: 955_000.0
+    current = {"SOXX": 184.0}
+    orders = _orders(("SOXX", "BUY", 184.0, 560.0))        # the duplicate round
+    ok, why = ic.preflight(b, orders, current, {"SOXX": 560.0}, 200_000.0,
+                           ic.Guards(outside_rth=True))
+    assert not ok and ("already at" in why or "net liq" in why)
