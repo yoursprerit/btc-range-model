@@ -19,6 +19,7 @@ Gateway.  ``ib_async`` is imported lazily inside :class:`Broker` /
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 
 import pandas as pd
@@ -48,6 +49,9 @@ POSITION_SETTLE_SLEEP_S = 1.0
 # gross position value than the read accounts for (tolerance as a fraction of
 # net liquidation).
 POSITION_READ_TOL = 0.02
+# A quote is reused for this long within one run (the pre-flight's drift check
+# and the buy leg's funding budget ask for the same names minutes apart).
+QUOTE_CACHE_TTL_S = 60.0
 
 # ── order types ─────────────────────────────────────────────────────────────
 # MARKETABLE_LIMIT (default): a LIMIT priced THROUGH the touch by
@@ -328,8 +332,8 @@ def check_exposure(exposure: dict, max_gross_frac: float = DEFAULT_MAX_GROSS_FRA
 
 
 def fit_buys_to_funding(buys: list[Order], available: float, fractional: bool,
-                        buffer: float = FUNDING_BUFFER
-                        ) -> tuple[list[Order], list[Order], str]:
+                        buffer: float = FUNDING_BUFFER,
+                        price_of=None) -> tuple[list[Order], list[Order], str]:
     """(sendable, dropped, note) — scale BUY orders to the cash that funds them.
 
     Buys are paid for out of settled cash plus whatever the sell leg actually
@@ -338,8 +342,16 @@ def fit_buys_to_funding(buys: list[Order], available: float, fractional: bool,
     share are dropped rather than rounded up.  This is the backstop that turns
     "buy the whole book again" into "buy what the account can pay for" — the
     duplicate rounds would have been trimmed to nothing.
+
+    ``price_of`` supplies the price the budget is measured at — by default the
+    book's own ``exec_price``, but the caller passes a LIVE quote (see
+    :meth:`Broker.funding_price`).  That distinction matters: the book prices
+    yesterday's close, so on a market that gapped up, shares sized at the book
+    price cost more than the book says and the account borrows the difference.
+    Pricing the budget at what the order can actually pay removes that gap.
     """
-    want = sum(o.qty * o.price for o in buys if o.price)
+    px = price_of or (lambda o: float(o.price or 0.0))
+    want = sum(o.qty * px(o) for o in buys)
     budget = max(0.0, available) * (1.0 - buffer)
     if want <= budget or want <= 0:
         return list(buys), [], (f"buys ${want:,.0f} funded from ${available:,.0f} "
@@ -348,6 +360,7 @@ def fit_buys_to_funding(buys: list[Order], available: float, fractional: bool,
     sendable, dropped = [], []
     for o in buys:
         qty = o.qty * scale
+        # never let whole-share rounding push the spend back over the budget
         if not fractional:
             qty = float(int(qty))
         if qty < (1e-6 if fractional else 1.0):
@@ -855,6 +868,48 @@ class Broker:
         return {"bid": getattr(t, "bid", None), "ask": getattr(t, "ask", None),
                 "last": getattr(t, "last", None), "close": getattr(t, "close", None)}
 
+    def quote_by_symbol(self, symbol: str) -> dict:
+        """Quote for *symbol*, cached briefly (empty dict on any failure).
+
+        The pre-flight's price-drift check and the buy leg's funding budget ask
+        for the same names minutes apart; one short-lived cache keeps them
+        consistent and halves the market-data calls, while the TTL means a leg
+        that took a while still re-prices."""
+        cache = getattr(self, "_quotes", None)
+        if cache is None:
+            cache = self._quotes = {}
+        now = time.monotonic()
+        hit = cache.get(symbol)
+        if hit and (now - hit[0]) < QUOTE_CACHE_TTL_S:
+            return hit[1]
+        try:
+            contract = sym.ibkr_contract(symbol)
+            self.ib.qualifyContracts(contract)
+            q = self.quote(contract)
+        except Exception:
+            q = {}
+        cache[symbol] = (now, q)
+        return q
+
+    def funding_price(self, o: Order,
+                      slippage_cap: float = DEFAULT_SLIPPAGE_CAP) -> float:
+        """The worst price per share *o* could pay (BUY) or receive (SELL).
+
+        Taken from the live quote and priced exactly the way the order will be:
+        a buy at the ask plus the slippage cap, a sell at the bid minus it — the
+        ceiling on what a buy can cost and the floor on what a sell can realise.
+        Both are the conservative side, so a budget built from them cannot be
+        overspent by the fills themselves.
+
+        Falls back to the book's ``exec_price`` when the name cannot be quoted
+        (no market-data subscription, a dead feed): the same behaviour as before
+        the live pricing existed, and no worse."""
+        lmt, _basis = marketable_limit_price(o.action, self.quote_by_symbol(o.symbol),
+                                             slippage_cap)
+        if lmt is None or not math.isfinite(lmt) or lmt <= 0:
+            return float(o.price or 0.0)
+        return float(lmt)
+
     def _build_order(self, o: Order, qty: float, order_type: str,
                      slippage_cap: float, contract, outside_rth: bool = False):
         """(ib_async order, type actually used, limit price or 0.0).
@@ -1033,11 +1088,17 @@ class Broker:
         # buys buys nothing — it would only burn minutes off the entry cutoff.
         # Submit everything, then wait once for the close. Nothing has filled by
         # then either, so the funding check uses the EXPECTED sell proceeds.
+        def _px(o: Order) -> float:
+            return self.funding_price(o, slippage_cap)
+
         if order_type == ORDER_MOC:
             if cash0 is not None:
-                expected = sum(o.qty * (o.price or 0.0) for o in sells)
+                # nothing fills until the auction, so the sells' contribution is
+                # an estimate — taken at the bid side, the floor on what they
+                # can realise, so the budget errs small
+                expected = sum(o.qty * _px(o) for o in sells)
                 buys, dropped, note = fit_buys_to_funding(
-                    buys, cash0 + expected, fractional, funding_buffer)
+                    buys, cash0 + expected, fractional, funding_buffer, _px)
                 self._note_funding(note, dropped, results)
             results += self._run_leg("MOC", sells + buys, fractional, wait,
                                      order_type, slippage_cap, now, outside_rth)
@@ -1059,7 +1120,7 @@ class Broker:
             print(f"    Funding: cash ${cash0:,.0f} + realised sells "
                   f"${realised:,.0f} = ${available:,.0f}")
             buys, dropped, note = fit_buys_to_funding(buys, available, fractional,
-                                                      funding_buffer)
+                                                      funding_buffer, _px)
             self._note_funding(note, dropped, results)
 
         results += self._run_leg("BUY", buys, fractional, wait, order_type,

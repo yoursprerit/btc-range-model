@@ -173,11 +173,8 @@ def _price_drift_check(broker, orders, tol: float) -> tuple[bool, str]:
     worst = (0.0, "")
     checked = 0
     for o in orders:
-        try:
-            contract = sym.ibkr_contract(o.symbol)
-            broker.ib.qualifyContracts(contract)
-            q = broker.quote(contract)
-        except Exception:
+        q = broker.quote_by_symbol(o.symbol)     # cached: the funding budget
+        if not q:                                # asks for the same names later
             continue
         live = next((q.get(k) for k in ("last", "close", "ask", "bid")
                      if ic._finite(q.get(k))), None)
