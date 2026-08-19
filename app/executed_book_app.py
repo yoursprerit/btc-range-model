@@ -126,6 +126,29 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
     c[2].metric("Cash", f"${cash:,.0f}" if cash else "—")
     c[3].metric("Positions", f"{len(positions)}")
 
+    # ── sleeve: the run traded only a slice of the account ───────────────────
+    # Absent on reports from a run that traded the whole account, and on every
+    # report written before sleeves existed — hence the .get().
+    sleeve = payload.get("sleeve") or {}
+    if sleeve.get("nav"):
+        nav = float(sleeve.get("nav") or 0.0)
+        stake = float(sleeve.get("contributed") or 0.0)
+        pnl = float(sleeve.get("pnl") or 0.0)
+        ret = float(sleeve.get("return_pct") or 0.0)
+        st.markdown(
+            f"<div style='background:#f1f5f9;border-left:4px solid #0ea5e9;"
+            f"padding:.5rem .8rem;border-radius:4px;margin:.4rem 0 .8rem'>"
+            f"🍰 <b>Sleeve</b> — this run traded a "
+            f"<b>{nav/net_liq*100:.1f}%</b> slice of the account, not all of it."
+            f"</div>", unsafe_allow_html=True)
+        s_cols = st.columns(4)
+        s_cols[0].metric("Sleeve NAV", f"${nav:,.0f}")
+        s_cols[1].metric("Capital in", f"${stake:,.0f}")
+        s_cols[2].metric("Compounded P&L", f"${pnl:,.0f}", f"{ret:+.2f}%")
+        s_cols[3].metric("Sleeve cash", f"${float(sleeve.get('cash') or 0.0):,.0f}")
+        st.caption("Weights below are shares of the SLEEVE — the rest of the "
+                   "account is untouched by the strategy.")
+
     acct_mode = (payload.get("account_mode") or "paper").lower()
     live = acct_mode == "live"
     acct_txt = "🔴 LIVE — real money" if live else "🧪 PAPER"
@@ -307,7 +330,13 @@ def _drift_section(payload: dict, *, historical: bool = False) -> None:
         k = p.get("key") or p.get("symbol")
         actual_val[k] = actual_val.get(k, 0.0) + _val(p)
 
-    denom = net_liq if net_liq > 0 else (sum(actual_val.values()) + cash)
+    # A sleeve run's weights are shares of the SLEEVE — measured against the
+    # whole account they would read as a fraction of the fraction, and every
+    # name would look massively under-target.
+    sleeve_nav = float((payload.get("sleeve") or {}).get("nav") or 0.0)
+    if sleeve_nav > 0:
+        cash = float((payload.get("sleeve") or {}).get("cash") or 0.0)
+    denom = (sleeve_nav or net_liq) or (sum(actual_val.values()) + cash)
     if denom <= 0:
         st.caption("Not enough account data to compute drift on this run.")
         return

@@ -27,6 +27,13 @@
 #                 remaps paper to 4004 — set this to match)
 #   IBKR_EXTRA    extra flags passed through (e.g. "--fractional")
 #   IBKR_NO_PULL  set to 1 to skip the git pull (use the book already on disk)
+#   IBKR_SLEEVE_FILE   path to the sleeve ledger, if it is not the default
+#                      (<repo>/data/overall/sleeve[_live].json). Once a ledger
+#                      exists the executor finds it on its own and keeps
+#                      compounding it — nothing else here needs to change.
+#                      --sleeve-init-*/--sleeve-adjust are one-off OPERATOR
+#                      commands and must never be set here: in the env they
+#                      would re-run every single day.
 #   IBKR_ORDER_TYPE    marketable-limit (default) | moc | market
 #   IBKR_SLIPPAGE_CAP  how far through the touch a marketable limit prices
 #                      (default 0.005 = 0.5%)
@@ -83,6 +90,7 @@ if [ "${ACCOUNT_MODE}" = "live" ]; then
   [ -n "${IBKR_MAX_DEPLOY_FRAC:-}" ]    && ARGS+=(--max-deploy-frac "${IBKR_MAX_DEPLOY_FRAC}")
   [ -n "${IBKR_MAX_ORDER_NOTIONAL:-}" ] && ARGS+=(--max-order-notional "${IBKR_MAX_ORDER_NOTIONAL}")
 fi
+[ -n "${IBKR_SLEEVE_FILE:-}" ]      && ARGS+=(--sleeve-file "${IBKR_SLEEVE_FILE}")
 [ -n "${IBKR_KILL_SWITCH_FILE:-}" ] && ARGS+=(--kill-switch-file "${IBKR_KILL_SWITCH_FILE}")
 # shellcheck disable=SC2206
 [ -n "${EXTRA}" ] && ARGS+=(${EXTRA})

@@ -26,7 +26,7 @@ Cloud publisher → target_book.json (paper) + target_book_live.json (live)
 | **Account mode** | `--account-mode live` | Refuses to run unless the account is **non-paper**. |
 | **Explicit confirm** | `--confirm-live` | Live never runs by accident — the wrapper only adds this when `IBKR_ACCOUNT_MODE=live`. |
 | **Pinned account** | `--expected-account U1234567` | Aborts if the connected account isn't **exactly** yours — can't trade the wrong account. |
-| **Exposure cap** | `--max-deploy-frac 0.25` | Caps **risk assets** at **25% of net-liq**; the freed weight goes to **SATA** on the live book (idle → yield park), or cash on paper. |
+| **Exposure cap** | `--max-deploy-frac 0.25` | Caps **risk assets** at **25% of net-liq**; the freed weight goes to **SATA** on the live book (idle → yield park), or cash on paper. Note this re-derives 25% of the *whole account* every run, so gains are diluted back across it and losses are topped up from it — for a stake that keeps its own results, see [`FRACTIONAL_SLEEVE.md`](FRACTIONAL_SLEEVE.md). |
 | **Per-order cap** | `--max-order-notional 5000` | Clamps any single order to a dollar ceiling (fat-finger / bug backstop). |
 | **Kill switch** | `--kill-switch-file …/STOP_LIVE` or `IBKR_TRADING_DISABLED=1` | `touch` the file to halt live on the next run — no cron/systemd edits. |
 | **Dry-run default** | (no `--execute`) | Orders require `--execute`; the wrapper adds it deliberately. |
@@ -171,6 +171,11 @@ Paper is unaffected. To stop the schedule entirely:
 
 ## Recommended rollout
 
+0. **Best of all, ramp with a sleeve** — a separate IBKR account funded with the
+   stake, or [`FRACTIONAL_SLEEVE.md`](FRACTIONAL_SLEEVE.md)'s ledger in one
+   account. Either way the live capital compounds on its own P&L and its equity
+   curve is directly comparable to the backtest, which a fraction-of-account cap
+   is not.
 1. **Weeks of paper+live in parallel** at a low `--max-deploy-frac` (start 25%),
    whole shares, tight per-order cap.
 2. Reconcile the **Live** Executed Book against the **Paper** one daily — same

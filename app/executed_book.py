@@ -45,10 +45,15 @@ SCHEMA = "executed-book/v1"
 def build_payload(*, as_of: str, profile: str, mode: str, account: str,
                   net_liq: float, cash: float, trades: list[dict],
                   positions: list[dict], generated_at_utc: str | None = None,
-                  account_mode: str = "paper") -> dict:
+                  account_mode: str = "paper",
+                  sleeve: dict | None = None) -> dict:
     """Assemble a v1 execution-report payload (unsigned).
 
-    ``mode`` is execute/dry-run; ``account_mode`` is paper/live."""
+    ``mode`` is execute/dry-run; ``account_mode`` is paper/live.  ``sleeve`` is
+    the fractional-stake block (nav / contributed / pnl / return_pct) when the
+    run traded only a slice of the account — absent when it traded the whole
+    account, and readers must use ``.get("sleeve")`` so older reports still
+    load."""
     def _trade(t: dict) -> dict:
         qty = float(t.get("qty") or 0.0)
         price = float(t.get("price") or 0.0)
@@ -89,6 +94,8 @@ def build_payload(*, as_of: str, profile: str, mode: str, account: str,
         "cash": float(cash or 0.0),
         "trades": [_trade(t) for t in trades],
         "positions": [_pos(p) for p in positions],
+        **({"sleeve": {k: (float(v) if isinstance(v, (int, float)) else v)
+                       for k, v in sleeve.items()}} if sleeve else {}),
     }
 
 

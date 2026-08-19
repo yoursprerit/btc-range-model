@@ -585,7 +585,7 @@ def price_drift_check(broker, orders: list[Order], tol: float,
 
 def preflight(broker, orders: list[Order], current: dict[str, float],
               exec_price: dict[str, float], net_liq: float,
-              guards: Guards) -> tuple[bool, str]:
+              guards: Guards, sizing_nav: float | None = None) -> tuple[bool, str]:
     """Every check that must pass between building the plan and sending it.
 
     Each one answers a way the 2026-08-18 duplicate-execution incident could
@@ -595,20 +595,29 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
     entry points (the Option-C executor and the Option-A rebalancer) run the
     same set — they place orders through the same code, so they must refuse the
     same things.  Returns (ok, reason); reason is empty when everything passed.
+
+    ``sizing_nav`` is the capital the plan was actually sized against — the
+    sleeve's NAV when only a slice of the account is being traded, else net liq.
+    The *funding* checks stay on the account (cash and a margin loan are real,
+    account-wide facts); the *exposure* and *turnover* checks move onto the
+    sizing base, because "1.02x" and "1.5x" are statements about the capital the
+    book was sized for.  Left on net liq, a 10% sleeve could gear itself 10:1
+    before either cap noticed.
     """
     print("\nPre-flight:")
+    base = float(sizing_nav) if sizing_nav else float(net_liq)
     try:
         cash = broker.cash()
     except Exception:
         cash = 0.0
     gross = gross_value(broker, current, exec_price)
-    exposure = projected_exposure(orders, current, exec_price, net_liq)
+    exposure = projected_exposure(orders, current, exec_price, base)
 
     checks = [
         check_account_state(net_liq, cash, gross, guards.allow_margin,
                             guards.max_gross_frac),
         market_session_open(allow_outside=guards.outside_rth),
-        check_turnover(orders, net_liq, guards.max_turnover_frac),
+        check_turnover(orders, base, guards.max_turnover_frac),
         check_exposure(exposure, guards.max_gross_frac),
         price_drift_check(broker, orders, guards.max_price_drift,
                           guards.slippage_cap),
@@ -622,7 +631,8 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
 
 
 def post_trade_check(broker, weights: dict[str, float],
-                     exec_price: dict[str, float], guards: Guards) -> None:
+                     exec_price: dict[str, float], guards: Guards,
+                     sizing_nav: float | None = None) -> None:
     """Re-read the account AFTER trading and say whether it landed on target.
 
     Nothing is auto-corrected here — a second corrective round of orders is
@@ -636,13 +646,15 @@ def post_trade_check(broker, weights: dict[str, float],
         print(f"  could not verify the resulting account ({e})")
         return
     gross = gross_value(broker, after, exec_price)
-    lev = gross / net_liq if net_liq > 0 else 0.0
+    base = float(sizing_nav) if sizing_nav else float(net_liq)
+    label = "sleeve NAV" if sizing_nav else "net liq"
+    lev = gross / base if base > 0 else 0.0
     print(f"  {'✗' if lev > guards.max_gross_frac else '✓'} gross ${gross:,.0f} = "
-          f"{lev:.2f}x net liq ${net_liq:,.0f}")
+          f"{lev:.2f}x {label} ${base:,.0f}")
     if lev > guards.max_gross_frac:
         print("  WARNING: the account is geared above the cap after this run — "
               "do NOT re-run the executor; reconcile the account first.")
-    rows = weight_drift(realised_weights(after, exec_price, net_liq), weights)
+    rows = weight_drift(realised_weights(after, exec_price, base), weights)
     for key, tgt, got, dpp in rows[:3]:
         print(f"    {key:6} target {tgt*100:5.1f}%  actual {got*100:5.1f}%  "
               f"drift {dpp:+.1f} pp")
@@ -761,8 +773,9 @@ def moc_wait_seconds(now=None, buffer_s: float = MOC_CLOSE_BUFFER_S,
     return float(min(max(secs, 0.0), max_wait_s))
 
 
-def print_plan(orders: list[Order], net_liq: float) -> None:
-    print(f"\nOrder plan (net-liq ${net_liq:,.0f}):")
+def print_plan(orders: list[Order], net_liq: float,
+               label: str = "net-liq") -> None:
+    print(f"\nOrder plan ({label} ${net_liq:,.0f}):")
     if not orders:
         print("  ✓ already within the no-trade band — nothing to do")
         return

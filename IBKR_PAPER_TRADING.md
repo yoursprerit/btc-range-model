@@ -30,6 +30,10 @@ section below; the setup (gateway, IBC, cron) is shared.
 > — headless IB Gateway via Docker (`deploy/ibkr-gateway/`), the
 > `scripts/ibkr_execute_daily.sh` wrapper, and cron on an Oracle Always-Free VM.
 >
+> **Trading only part of the account?** See **[`docs/FRACTIONAL_SLEEVE.md`](docs/FRACTIONAL_SLEEVE.md)** —
+> hand the strategy a fixed stake and let it compound on its own P&L, instead of
+> re-deriving a fraction of the whole account every run.
+
 > **Going live (real money) alongside paper?** See **[`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md)**
 > — `--account-mode live` with a pinned-account guard, exposure / per-order caps,
 > a kill switch, and a second live gateway. Paper stays the default and runs in

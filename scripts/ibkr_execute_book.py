@@ -56,6 +56,7 @@ sys.path.insert(0, str(_REPO))
 
 import target_book as tb                           # noqa: E402  (light: stdlib + pandas)
 import executed_book as eb                          # noqa: E402
+import sleeve as sl                                 # noqa: E402
 import ibkr_symbols as sym                          # noqa: E402
 import ibkr_common as ic                            # noqa: E402  (pure guards)
 from ibkr_common import (                           # noqa: E402
@@ -69,7 +70,8 @@ DEFAULT_REPORT = _REPO / "data" / "overall" / "executed_book.json"
 
 
 def _write_report(broker, payload: dict, mode: str, trades: list[dict],
-                  out_path: str, secret, account_mode: str = "paper") -> None:
+                  out_path: str, secret, account_mode: str = "paper",
+                  sleeve: dict | None = None) -> None:
     """Write the execution report (trades + current positions) the Executed Book
     page reads. Best-effort — a failure here never fails the rebalance."""
     try:
@@ -84,7 +86,8 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
     report = eb.build_payload(
         as_of=payload.get("as_of", ""), profile=payload.get("profile", ""),
         mode=mode, account=broker.account, net_liq=net_liq, cash=cash,
-        trades=trades, positions=positions, account_mode=account_mode)
+        trades=trades, positions=positions, account_mode=account_mode,
+        sleeve=sleeve)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(tb.dumps(report, secret))
@@ -106,7 +109,7 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
               "--refresh-report.")
 
 
-def _push_report(out_path: str) -> None:
+def _push_report(out_path: str, sleeve_path=None) -> None:
     """Commit and push the execution report, the way ibkr_execute_daily.ps1 does.
 
     A manual run otherwise writes a perfectly good report that never leaves the
@@ -120,6 +123,13 @@ def _push_report(out_path: str) -> None:
     # Historical tab is only as complete as what gets pushed.
     rels = [str(out.relative_to(_REPO)),
             str(eb.archive_dir(out).relative_to(_REPO))]
+    # the sleeve ledger too: it IS the compounded record, and left on the laptop
+    # the cloud app and the next machine see a stake that never grew.
+    if sleeve_path and Path(sleeve_path).exists():
+        try:
+            rels.append(str(Path(sleeve_path).resolve().relative_to(_REPO)))
+        except ValueError:
+            pass                       # a ledger kept outside the repo — skip
     def _git(*a):
         return subprocess.run(("git",) + a, cwd=_REPO, capture_output=True, text=True)
     branch = (_git("rev-parse", "--abbrev-ref", "HEAD").stdout or "main").strip()
@@ -136,6 +146,165 @@ def _push_report(out_path: str) -> None:
         print(f"  WARN: could not push ({r.stderr.strip().splitlines()[-1] if r.stderr.strip() else 'unknown'})")
         print("  see IBKR_OPTION_C_WINDOWS.md section 8 — rolling back the commit")
         _git("reset", "--hard", f"origin/{branch}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SLEEVE — size the book off a compounding SLICE of the account
+# ════════════════════════════════════════════════════════════════════════════
+def _broker_marks(broker) -> dict[str, float]:
+    """signal-key → the broker's own mark, for names the book cannot price."""
+    try:
+        return {p["key"]: float(p.get("market_price") or 0.0)
+                for p in broker.portfolio_snapshot()
+                if p.get("key") and float(p.get("market_price") or 0.0) > 0}
+    except Exception:
+        return {}
+
+
+def _sleeve_state(args, broker, payload, net_liq, current, exec_price,
+                  report_out, secret):
+    """Resolve which capital THIS run sizes against.
+
+    Returns ``(ok, ledger, sizing_nav, path, perf)``.  With no ledger in play
+    ``ledger``/``perf`` are None and ``sizing_nav`` is the account's net liq —
+    byte-for-byte the pre-sleeve behaviour, so nothing changes for an account
+    that never opts in.
+
+    Everything here is read-only except an explicit ``--sleeve-init-*`` /
+    ``--sleeve-adjust``; the ledger is advanced by fills only, after the orders
+    come back, in :func:`_sleeve_settle`.
+    """
+    path = Path(args.sleeve_file) if args.sleeve_file else \
+        sl.default_path(report_out, args.account_mode)
+
+    if args.no_sleeve:
+        if path.exists():
+            print(f"Sleeve: {path.name} IGNORED (--no-sleeve) — sizing off the "
+                  "whole account.")
+        return True, None, net_liq, path, None
+
+    ledger = sl.load(path)
+    stake = None
+    if args.sleeve_init_usd:
+        stake = float(args.sleeve_init_usd)
+    elif args.sleeve_init_frac:
+        stake = float(args.sleeve_init_frac) * net_liq
+
+    # Opening a sleeve over a running one would silently erase its compounded
+    # history, so it has to be asked for twice.
+    if ledger and stake is not None and not args.sleeve_reset:
+        opened = (ledger.get("inception") or {}).get("usd", 0.0)
+        print(f"ABORT: {path.name} already holds a sleeve opened at "
+              f"${opened:,.2f}. Drop the --sleeve-init-* flag to keep "
+              "compounding it, or add --sleeve-reset to start over.")
+        return False, None, net_liq, path, None
+
+    moved = args.sleeve_adjust or args.sleeve_income
+    if args.sleeve_reset and stake is None:
+        print("ABORT: --sleeve-reset needs the new stake "
+              "(--sleeve-init-frac or --sleeve-init-usd).")
+        return False, None, net_liq, path, None
+    if ledger is None:
+        if stake is None:
+            if moved:
+                print(f"ABORT: no sleeve ledger at {path} to adjust.")
+                return False, None, net_liq, path, None
+            return True, None, net_liq, path, None      # no sleeve — full account
+    if stake is not None:
+        try:
+            ledger = sl.open_sleeve(usd=stake, account=broker.account,
+                                    account_mode=args.account_mode,
+                                    account_net_liq=net_liq,
+                                    as_of=payload.get("as_of", ""))
+        except ValueError as e:
+            print(f"ABORT: cannot open the sleeve — {e}")
+            return False, None, net_liq, path, None
+        sl.save(ledger, path, secret)
+        print(f"Sleeve: OPENED at ${stake:,.2f} = {stake/net_liq*100:.1f}% of "
+              f"net liq ${net_liq:,.0f} → {path}")
+
+    for ok, why in (sl.validate(ledger),
+                    sl.check_account_match(ledger, broker.account,
+                                           args.account_mode)):
+        if not ok:
+            print(f"ABORT: sleeve ledger — {why}")
+            return False, None, net_liq, path, None
+
+    # An explicit operator deposit/withdrawal/dividend. This is the ONLY money
+    # movement not driven by a fill, so it is always applied when typed and
+    # always stamped — never put it in the scheduled wrapper's env.
+    held_value, unpriced = sl.positions_value(current, exec_price,
+                                              _broker_marks(broker))
+    for usd, kind in ((args.sleeve_adjust, "capital"),
+                      (args.sleeve_income, "income")):
+        if not usd:
+            continue
+        # A withdrawal is floored at (roughly) zero cash: the sleeve's money is
+        # in its positions, and booking cash it does not have would size the
+        # next book against a fiction.
+        floor = None if args.allow_margin else \
+            -args.sleeve_tol * (float(ledger.get("cash", 0.0)) + held_value)
+        try:
+            ledger, msg = sl.adjust(ledger, usd, kind=kind,
+                                    note=f"operator --sleeve-{'adjust' if kind == 'capital' else 'income'}",
+                                    min_cash=floor)
+        except ValueError as e:
+            print(f"ABORT: {e}")
+            return False, None, net_liq, path, None
+        sl.save(ledger, path, secret)
+        print(f"Sleeve: {msg}")
+
+    nav = float(ledger.get("cash", 0.0)) + held_value
+    if unpriced:
+        # A held name valued at nothing understates the sleeve, which makes the
+        # book look under-invested and buys more of everything else.
+        print(f"ABORT: sleeve holds {', '.join(unpriced)} with no usable price "
+              "from either the book or the broker — refusing to size against an "
+              "understated NAV.")
+        return False, None, net_liq, path, None
+
+    try:
+        cash = broker.cash()
+    except Exception:
+        cash = 0.0
+    ok, why = sl.check_within_account(nav, float(ledger.get("cash", 0.0)),
+                                      net_liq, cash,
+                                      allow_margin=args.allow_margin,
+                                      tol=args.sleeve_tol)
+    perf = sl.performance(ledger, nav)
+    print(f"Sleeve: {why}")
+    print(f"  stake ${perf['contributed']:,.2f} → NAV ${nav:,.2f} "
+          f"({perf['pnl']:+,.2f}, {perf['return_pct']:+.2f}% compounded) — "
+          f"cash ${perf['cash']:,.2f}, ledger {path.name}")
+    if not ok:
+        print("ABORT: the sleeve ledger no longer reconciles with the account. "
+              "No orders placed. Re-run with --sleeve-adjust to book the "
+              "difference, or --no-sleeve to trade the whole account.")
+        return False, None, net_liq, path, perf
+
+    # Whole-share rounding is a rounding error against the whole account and a
+    # allocation error against a small sleeve: one $600 share is 6% of a $10k
+    # sleeve, so the realised weights stop resembling the book.
+    if not args.fractional:
+        worst = max((float(px or 0.0) for px in exec_price.values()), default=0.0)
+        if nav > 0 and worst / nav > 0.01:
+            print(f"  NOTE: whole-share sizing on a ${nav:,.0f} sleeve — the "
+                  f"priciest name (${worst:,.2f}) is {worst/nav*100:.1f}% of it "
+                  "per share. Use --fractional to track the book's weights.")
+    return True, ledger, nav, path, perf
+
+
+def _sleeve_settle(ledger, path, payload, fills, secret):
+    """Advance the sleeve's cash by what actually filled, once, after trading.
+
+    Only ever called from the --execute path: a dry-run plans PLANNED rows with
+    nothing filled, and a preview must never move the money."""
+    if ledger is None:
+        return None
+    ledger, msg = sl.apply_fills(ledger, fills, payload.get("as_of", ""))
+    sl.save(ledger, path, secret)
+    print(f"Sleeve: {msg}")
+    return ledger
 
 
 def _load_book(args, default_path: str) -> dict:
@@ -268,6 +437,37 @@ def main() -> int:
                          "3 delayed, 4 delayed-frozen. Delayed is FREE and needs "
                          "no subscription, but IBKR only serves it when asked -- "
                          "use 3 if quotes come back empty (error 10089)")
+    # ── fractional account: trade only a compounding SLICE of the account ────
+    ap.add_argument("--sleeve-file",
+                    help="path to the sleeve ledger (default: sleeve.json / "
+                         "sleeve_live.json beside the execution report). When a "
+                         "ledger exists, every order is sized off the SLEEVE's "
+                         "net asset value instead of the account's, so the "
+                         "strategy trades only its own stake and compounds it")
+    ap.add_argument("--no-sleeve", action="store_true",
+                    help="ignore any sleeve ledger and size off the full "
+                         "account net-liq (the pre-sleeve behaviour)")
+    init = ap.add_mutually_exclusive_group()
+    init.add_argument("--sleeve-init-frac", type=float,
+                      help="one-time: open the sleeve with this FRACTION of the "
+                           "account's current net-liq (e.g. 0.10 = 10%%)")
+    init.add_argument("--sleeve-init-usd", type=float,
+                      help="one-time: open the sleeve with this many dollars")
+    ap.add_argument("--sleeve-reset", action="store_true",
+                    help="re-open an existing sleeve at the new stake, "
+                         "discarding its compounded history (asks for one of "
+                         "the --sleeve-init-* flags)")
+    ap.add_argument("--sleeve-adjust", type=float, default=0.0,
+                    help="CAPITAL: deposit (+) or withdraw (-) this many "
+                         "dollars. Moves the base the sleeve's return is "
+                         "measured against, so a top-up never flatters it")
+    ap.add_argument("--sleeve-income", type=float, default=0.0,
+                    help="P&L: book a dividend (+) or a fee/interest debit (-) "
+                         "the fills cannot see. Counts as return, the way a "
+                         "price move does — NOT as capital you added")
+    ap.add_argument("--sleeve-tol", type=float, default=sl.DEFAULT_TOL,
+                    help="how far the ledger may sit outside the account before "
+                         "the run is refused (default %(default)s = 2%% of NAV)")
     ap.add_argument("--kill-switch-file",
                     help="if this file exists (or env IBKR_TRADING_DISABLED is set), "
                          "abort before placing any order")
@@ -403,14 +603,26 @@ def main() -> int:
         try:
             fills = broker.day_fills_by_symbol()
             print(f"  {len(fills)} symbol(s) with executions today")
+            # The sleeve is only RE-STATED here — its cash was already advanced
+            # by the run that sent these orders, and applying them again would
+            # double-count the day.
+            perf, _sv_path = None, None
+            try:
+                net_liq = broker.net_liq()
+                cur = broker.holdings(net_liq)      # verified read, never raw
+                _ok, _lg, _nav, _sv_path, perf = _sleeve_state(
+                    args, broker, payload, net_liq, cur,
+                    payload.get("exec_price", {}), report_out, secret)
+            except Exception as e:
+                print(f"  (sleeve not re-stated: {e})")
             # mode stays 'execute': orders really were sent for this book, and
             # the app's badge should reflect that rather than reading 'dry-run'.
             _write_report(broker, payload, "execute", fills, report_out, secret,
-                          account_mode=args.account_mode)
+                          account_mode=args.account_mode, sleeve=perf)
         finally:
             broker.disconnect()
         if args.push_report:
-            _push_report(report_out)
+            _push_report(report_out, _sv_path)
         return 0
 
     # ── dry-run: connect only to diff against live positions ─────────────────
@@ -429,19 +641,25 @@ def main() -> int:
             except PositionReadError as e:
                 print(f"ABORT: {e}.")
                 return 1
-            orders = build_order_plan(weights, exec_price, net_liq, current,
+            ok_sv, ledger, sizing_nav, _sv_path, perf = _sleeve_state(
+                args, broker, payload, net_liq, current, exec_price,
+                report_out, secret)
+            if not ok_sv:
+                return 1
+            base_label = "sleeve NAV" if ledger else "net-liq"
+            orders = build_order_plan(weights, exec_price, sizing_nav, current,
                                       args.band, args.fractional, args.max_order_notional)
             print(f"\nAccount {broker.account} ({tag}).")
-            print_plan(orders, net_liq)
+            print_plan(orders, sizing_nav, base_label)
             preflight(broker, orders, current, exec_price, net_liq,
-                      Guards.from_args(args))
+                      Guards.from_args(args), sizing_nav)
             if not args.no_report:
                 planned = [dict(key=o.key, symbol=o.symbol, action=o.action,
                                 qty=o.qty, price=o.price, status="PLANNED",
                                 filled=0.0, avg_fill_price=0.0, reason=o.reason)
                            for o in orders]
                 _write_report(broker, payload, "dry-run", planned,
-                              report_out, secret, args.account_mode)
+                              report_out, secret, args.account_mode, perf)
             print("\n[dry-run] No orders transmitted. Re-run with --execute to trade.")
         finally:
             broker.disconnect()
@@ -457,12 +675,18 @@ def main() -> int:
             print(f"ABORT: {e}. No orders placed — the next scheduled run will "
                   "re-read the account.")
             return 1
-        orders = build_order_plan(weights, exec_price, net_liq, current,
+        ok_sv, ledger, sizing_nav, sv_path, perf = _sleeve_state(
+            args, broker, payload, net_liq, current, exec_price,
+            report_out, secret)
+        if not ok_sv:
+            return 1
+        base_label = "sleeve NAV" if ledger else "net-liq"
+        orders = build_order_plan(weights, exec_price, sizing_nav, current,
                                   args.band, args.fractional, args.max_order_notional)
         print(f"\nAccount {broker.account} ({tag}).")
-        print_plan(orders, net_liq)
+        print_plan(orders, sizing_nav, base_label)
         ok_pre, why_pre = preflight(broker, orders, current, exec_price, net_liq,
-                                    Guards.from_args(args))
+                                    Guards.from_args(args), sizing_nav)
         if not ok_pre:
             print(f"ABORT: {why_pre} No orders placed.")
             return 1
@@ -474,16 +698,31 @@ def main() -> int:
                                  slippage_cap=args.slippage_cap,
                                  outside_rth=args.outside_rth,
                                  allow_margin=args.allow_margin)
+        # The ledger moves on the FILLS, before the report is written, so the
+        # report's sleeve block is the post-trade state the app will show.
+        ledger = _sleeve_settle(ledger, sv_path, payload, fills, secret)
+        if ledger is not None:
+            try:                          # verified read — same rule as sizing
+                after = broker.holdings(broker.net_liq())
+                nav_after, _ = sl.nav(ledger, after, exec_price,
+                                      _broker_marks(broker))
+                perf = sl.performance(ledger, nav_after)
+                sizing_nav = nav_after
+                print(f"Sleeve: NAV after this run ${nav_after:,.2f} "
+                      f"({perf['return_pct']:+.2f}% since inception)")
+            except Exception as e:
+                print(f"  (sleeve NAV not re-read after trading: {e})")
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,
-                          args.account_mode)
-        post_trade_check(broker, weights, exec_price, Guards.from_args(args))
+                          args.account_mode, perf)
+        post_trade_check(broker, weights, exec_price, Guards.from_args(args),
+                         sizing_nav if ledger is not None else None)
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()
     if args.push_report:
-        _push_report(report_out)
+        _push_report(report_out, sv_path)
     return 0
 
 

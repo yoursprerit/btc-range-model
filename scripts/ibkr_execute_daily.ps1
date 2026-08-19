@@ -127,6 +127,11 @@ if ($AccountMode -eq 'live') {
     if ($env:IBKR_MAX_DEPLOY_FRAC)    { $ExecArgs += @('--max-deploy-frac', $env:IBKR_MAX_DEPLOY_FRAC) }
     if ($env:IBKR_MAX_ORDER_NOTIONAL) { $ExecArgs += @('--max-order-notional', $env:IBKR_MAX_ORDER_NOTIONAL) }
 }
+# Sleeve ledger: only the PATH belongs in the env, and only when it is not the
+# default beside the execution report -- once the ledger exists the executor
+# finds it and keeps compounding it. --sleeve-init-* / --sleeve-adjust are
+# one-off operator commands; set here they would re-run every single day.
+if ($env:IBKR_SLEEVE_FILE)      { $ExecArgs += @('--sleeve-file', $env:IBKR_SLEEVE_FILE) }
 if ($env:IBKR_KILL_SWITCH_FILE) { $ExecArgs += @('--kill-switch-file', $env:IBKR_KILL_SWITCH_FILE) }
 # Order routing: marketable-limit (default) | moc | market - see IBKR_PAPER_TRADING.md.
 if ($env:IBKR_ORDER_TYPE)   { $ExecArgs += @('--order-type', $env:IBKR_ORDER_TYPE) }
