@@ -131,6 +131,11 @@ if ($env:IBKR_KILL_SWITCH_FILE) { $ExecArgs += @('--kill-switch-file', $env:IBKR
 # Order routing: marketable-limit (default) | moc | market - see IBKR_PAPER_TRADING.md.
 if ($env:IBKR_ORDER_TYPE)   { $ExecArgs += @('--order-type', $env:IBKR_ORDER_TYPE) }
 if ($env:IBKR_SLIPPAGE_CAP) { $ExecArgs += @('--slippage-cap', $env:IBKR_SLIPPAGE_CAP) }
+# Extra flags passed straight through, the way ibkr_execute_daily.sh does. The
+# rehearsal uses it to reach the order stage on a day whose book is stale or
+# already executed (IBKR_EXTRA='--allow-stale-bar --force-rerun'), which the
+# pre-flight guards would otherwise abort well before the kill switch.
+if ($env:IBKR_EXTRA) { $ExecArgs += ($env:IBKR_EXTRA -split '\s+' | Where-Object { $_ }) }
 Log "account mode: $AccountMode"
 
 # --execute places orders; the executor's own guards decide if it actually trades.
