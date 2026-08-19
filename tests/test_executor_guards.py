@@ -343,3 +343,15 @@ def test_a_small_fee_debit_is_not_a_margin_loan():
     assert ok, "a fee debit must not block the daily run"
     ok, _ = ic.check_account_state(1_000_000, -50_000.0, 950_000)
     assert not ok
+
+
+def test_an_unreadable_cash_balance_fails_closed():
+    """Not being able to see the cash is not permission to spend it."""
+    b = _broker(cash=0.0)
+    def _boom():
+        raise RuntimeError("no TotalCashValue")
+    b.cash = _boom
+    orders = _orders(("GDX", "BUY", 100.0, 100.0))
+    b.place(orders, fractional=False, wait=0.0, order_type=ic.ORDER_MARKET)
+    assert [q for a, _, q in b.ib.sent if a == "BUY"] == [], \
+        "with no readable cash and no sell proceeds, nothing may be bought"
