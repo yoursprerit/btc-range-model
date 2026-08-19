@@ -1,0 +1,203 @@
+{
+ "schema": "executed-book/v1",
+ "generated_at_utc": "2026-08-19T19:30:20+00:00",
+ "as_of": "2026-08-18",
+ "profile": "Balanced",
+ "mode": "execute",
+ "account_mode": "paper",
+ "account": "DUR917452",
+ "net_liq": 100029.41,
+ "cash": 2555.34,
+ "trades": [
+  {
+   "key": "SOXX",
+   "symbol": "SOXX",
+   "action": "BUY",
+   "qty": 50.0,
+   "price": 531.39,
+   "value": 26569.5,
+   "status": "Filled",
+   "filled": 50.0,
+   "avg_fill_price": 521.78,
+   "order_type": "marketable-limit",
+   "limit_price": 524.37,
+   "reason": "\u2192 28.1% (hold 0\u219253) [trimmed to funding: 50 of 53]"
+  },
+  {
+   "key": "GDX",
+   "symbol": "GDX",
+   "action": "BUY",
+   "qty": 194.0,
+   "price": 88.95,
+   "value": 17256.3,
+   "status": "Filled",
+   "filled": 194.0,
+   "avg_fill_price": 96.93,
+   "order_type": "marketable-limit",
+   "limit_price": 97.41,
+   "reason": "\u2192 18.0% (hold 0\u2192203) [trimmed to funding: 194 of 203]"
+  },
+  {
+   "key": "GRID",
+   "symbol": "GRID",
+   "action": "BUY",
+   "qty": 79.0,
+   "price": 183.76,
+   "value": 14517.039999999999,
+   "status": "Filled",
+   "filled": 79.0,
+   "avg_fill_price": 182.84,
+   "order_type": "marketable-limit",
+   "limit_price": 183.76,
+   "reason": "\u2192 15.3% (hold 0\u219283) [trimmed to funding: 79 of 83]"
+  },
+  {
+   "key": "NUGT",
+   "symbol": "NUGT",
+   "action": "BUY",
+   "qty": 61.0,
+   "price": 157.36,
+   "value": 9598.960000000001,
+   "status": "Filled",
+   "filled": 61.0,
+   "avg_fill_price": 185.15,
+   "order_type": "marketable-limit",
+   "limit_price": 186.08,
+   "reason": "\u2192 10.0% (hold 0\u219264) [trimmed to funding: 61 of 64]"
+  },
+  {
+   "key": "SOXL",
+   "symbol": "SOXL",
+   "action": "BUY",
+   "qty": 74.0,
+   "price": 129.1,
+   "value": 9553.4,
+   "status": "Filled",
+   "filled": 74.0,
+   "avg_fill_price": 122.1,
+   "order_type": "marketable-limit",
+   "limit_price": 122.72,
+   "reason": "\u2192 10.0% (hold 0\u219278) [trimmed to funding: 74 of 78]"
+  },
+  {
+   "key": "ERX",
+   "symbol": "ERX",
+   "action": "BUY",
+   "qty": 89.0,
+   "price": 107.53,
+   "value": 9570.17,
+   "status": "Filled",
+   "filled": 89.0,
+   "avg_fill_price": 107.51,
+   "order_type": "marketable-limit",
+   "limit_price": 108.01,
+   "reason": "\u2192 10.0% (hold 0\u219293) [trimmed to funding: 89 of 93]"
+  },
+  {
+   "key": "OIH",
+   "symbol": "OIH",
+   "action": "BUY",
+   "qty": 12.0,
+   "price": 420.49,
+   "value": 5045.88,
+   "status": "Filled",
+   "filled": 12.0,
+   "avg_fill_price": 418.37,
+   "order_type": "marketable-limit",
+   "limit_price": 420.47,
+   "reason": "\u2192 5.3% (hold 0\u219213) [trimmed to funding: 12 of 13]"
+  },
+  {
+   "key": "XLE",
+   "symbol": "XLE",
+   "action": "BUY",
+   "qty": 50.0,
+   "price": 63.68,
+   "value": 3184.0,
+   "status": "Filled",
+   "filled": 50.0,
+   "avg_fill_price": 63.61,
+   "order_type": "marketable-limit",
+   "limit_price": 63.93,
+   "reason": "\u2192 3.3% (hold 0\u219253) [trimmed to funding: 50 of 53]"
+  }
+ ],
+ "positions": [
+  {
+   "key": "SOXX",
+   "symbol": "SOXX",
+   "shares": 50.0,
+   "avg_cost": 521.800003,
+   "market_price": 521.5999756,
+   "market_value": 26080.0,
+   "unrealized_pnl": -10.0
+  },
+  {
+   "key": "GRID",
+   "symbol": "GRID",
+   "shares": 79.0,
+   "avg_cost": 182.85266125,
+   "market_price": 182.73025515,
+   "market_value": 14435.69,
+   "unrealized_pnl": -9.67
+  },
+  {
+   "key": "GDX",
+   "symbol": "GDX",
+   "shares": 194.0,
+   "avg_cost": 96.93515765,
+   "market_price": 96.91999815,
+   "market_value": 18802.48,
+   "unrealized_pnl": -2.94
+  },
+  {
+   "key": "SOXL",
+   "symbol": "SOXL",
+   "shares": 74.0,
+   "avg_cost": 122.1135165,
+   "market_price": 121.91000365,
+   "market_value": 9021.34,
+   "unrealized_pnl": -15.06
+  },
+  {
+   "key": "NUGT",
+   "symbol": "NUGT",
+   "shares": 61.0,
+   "avg_cost": 185.16639645,
+   "market_price": 185.05596925,
+   "market_value": 11288.41,
+   "unrealized_pnl": -6.74
+  },
+  {
+   "key": "XLE",
+   "symbol": "XLE",
+   "shares": 50.0,
+   "avg_cost": 63.630003,
+   "market_price": 63.60144045,
+   "market_value": 3180.07,
+   "unrealized_pnl": -1.43
+  },
+  {
+   "key": "ERX",
+   "symbol": "ERX",
+   "shares": 89.0,
+   "avg_cost": 107.52123895,
+   "market_price": 107.4485855,
+   "market_value": 9562.92,
+   "unrealized_pnl": -6.47
+  },
+  {
+   "key": "OIH",
+   "symbol": "OIH",
+   "shares": 12.0,
+   "avg_cost": 418.45333635,
+   "market_price": 418.18640135,
+   "market_value": 5018.24,
+   "unrealized_pnl": -3.2
+  }
+ ],
+ "signature": {
+  "alg": "HMAC-SHA256",
+  "value": "7ce7ebf02973f30524410b21e36de0406ecd140a208265095cc3f80911bb52b6"
+ }
+}
