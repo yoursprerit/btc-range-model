@@ -1022,7 +1022,12 @@ class Broker:
             try:
                 cash0 = self.cash()
             except Exception as e:
-                print(f"    WARN: could not read cash ({e}) — funding check skipped")
+                # Fail CLOSED: an unreadable cash balance is not permission to
+                # spend. Buys are then funded from realised sell proceeds only,
+                # which is the conservative reading of an account we cannot see.
+                cash0 = 0.0
+                print(f"    WARN: could not read cash ({e}) — funding buys from "
+                      "realised sell proceeds only")
 
         # MOC legs all print in the SAME auction, so sequencing sells before
         # buys buys nothing — it would only burn minutes off the entry cutoff.
