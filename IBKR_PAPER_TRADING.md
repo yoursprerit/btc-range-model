@@ -211,7 +211,16 @@ Useful flags:
 | `--port` | `4002` | IB Gateway API port (paper) |
 | `--fill-timeout` | `60` | seconds to wait for each order leg to fill |
 | `--force` | off | ignore the weekend/holiday & stale-signal guards |
+| `--allow-stale-bar` | off | trade a book whose bar is not the last completed session |
+| `--allow-margin` | off | **danger** — permit buys beyond cash + realised sell proceeds |
+| `--max-gross-frac` | `1.02` | abort a plan landing above this multiple of net-liq |
+| `--max-turnover-frac` | `1.5` | abort a plan trading above this multiple of net-liq |
+| `--max-price-drift` | `0.25` | abort when a name quotes this far from its sizing price |
+| `--outside-rth` | off | allow the run outside 09:30–16:00 ET |
 | `--allow-nonpaper` | off | **danger** — disable the paper-account guard |
+
+The Option-A rebalancer carries the same limits as the Option-C executor, from
+the same code — see [Pre-flight guards](#pre-flight-guards-what-the-executor-refuses-to-do).
 
 ### Recommended validation before trusting automation
 1. `scripts/ibkr_rebalance.py` (dry-run) — eyeball the target book against the
@@ -511,9 +520,18 @@ After trading, the run re-reads the account and prints realised gross leverage
 and the largest allocation drift — reported, never auto-corrected, because a
 second corrective round is exactly the reflex that compounds a bad read.
 
-The same verified read and exposure/turnover guards apply to the Option-A
-rebalancer (`scripts/ibkr_rebalance.py`), which sizes off net liquidation the
-same way.
+**Both entry points run the same set.** The guards live in
+`scripts/ibkr_common.py` (`Guards`, `preflight()`, `post_trade_check()`) and are
+called by the Option-C executor *and* the Option-A rebalancer
+(`scripts/ibkr_rebalance.py`) — they place orders through the same code, so they
+refuse the same things. The Option-A path has no published book to lock against,
+so it carries every guard except the duplicate-run lock.
+
+The machine-checkable half also runs ahead of the session:
+`python scripts/preflight_option_c.py` reports `book-current-bar` and
+`book-already-executed` alongside the signature and freshness checks, so a
+withheld publish or an already-traded bar shows up before the 2:30 PM CT slot
+rather than as an ABORT in the log.
 
 ## Safety & limitations
 

@@ -145,9 +145,11 @@ CRON_TZ=America/Chicago
   equity close and hours after the cloud publisher's morning commit, so the
   `git pull` gets the day's book. `CRON_TZ=America/Chicago` holds the slot
   across the CDT/CST switch.
-- The executor's own guards (weekend/holiday, stale book, signature, paper-only)
-  make a stray or early run a safe no-op — nothing trades unless everything checks
-  out.
+- The executor's own guards make a stray, early or repeated run a safe no-op —
+  nothing trades unless everything checks out: weekend/holiday, signature,
+  paper-only, a verified positions read, the book's bar being *this* session's,
+  a duplicate-run lock, exposure/turnover caps and cash-funded buys. The full
+  table is in [`IBKR_PAPER_TRADING.md`](../IBKR_PAPER_TRADING.md#pre-flight-guards-what-the-executor-refuses-to-do).
 - Env overrides (see the script header): `IBKR_PYTHON`, `IBKR_BRANCH`, `IBKR_BOOK`,
   `IBKR_BAND`, `IBKR_HOST`, `IBKR_PORT`, `IBKR_EXTRA`, `IBKR_NO_PULL`,
   `IBKR_ORDER_TYPE`, `IBKR_SLIPPAGE_CAP`.
@@ -156,10 +158,19 @@ CRON_TZ=America/Chicago
   pointing it at a stale branch means the freshness guard refuses to trade, which
   presents as a silent daily no-op.
 - **Freshness:** the executor rejects a book generated more than
-  `--max-age-hours` ago (**default 36**). That spans the 7:15-AM-CT publish
-  anchor to the *next* day's 2:30-PM-CT slot (31.25 h), so a withheld publish
-  still trades yesterday's book rather than nothing — but a genuinely dead
-  publisher stops trading instead of acting on stale signals.
+  `--max-age-hours` ago (**default 36**), *and* — since the 2026-08-18
+  duplicate-execution incident — one whose signal bar is not the last completed
+  session. The generation window alone could not catch a day-old book (a
+  7:15-AM-CT publish is still inside 36 h at the next day's 2:30-PM-CT slot),
+  and re-trading one into an account that already holds it is how that incident
+  started. **A withheld publish now means no trade**, which was always the
+  intended fallback: a missing book is a missing decision, not a licence to
+  re-run the last one. `--allow-stale-bar` overrides, for deliberate catch-up
+  only.
+- **Repeat runs are no-ops.** Once a signal bar has an execution report in
+  `data/overall/executed_archive/`, a second `--execute` for that bar aborts
+  (exit 0). A scheduler that retries a failed run therefore cannot double-trade;
+  `--refresh-report` re-states the account without placing orders.
 
 ### Order routing on this host
 

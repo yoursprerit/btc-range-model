@@ -500,6 +500,157 @@ def weight_drift(realised: dict[str, float], target: dict[str, float]
     return sorted(rows, key=lambda r: -abs(r[3]))
 
 
+@dataclass
+class Guards:
+    """The trading limits both entry points enforce, in one place.
+
+    Defaults are the production settings; the CLIs expose each as a flag so an
+    operator can widen one deliberately, in the open, rather than by editing
+    code."""
+    max_gross_frac: float = DEFAULT_MAX_GROSS_FRAC
+    max_turnover_frac: float = 1.5
+    max_price_drift: float = 0.25
+    slippage_cap: float = DEFAULT_SLIPPAGE_CAP
+    allow_margin: bool = False
+    outside_rth: bool = False
+
+    @classmethod
+    def from_args(cls, args) -> "Guards":
+        """Build from an argparse namespace, falling back to the defaults for
+        any flag a given entry point does not expose."""
+        g = cls()
+        for f in ("max_gross_frac", "max_turnover_frac", "max_price_drift",
+                  "slippage_cap", "allow_margin", "outside_rth"):
+            v = getattr(args, f, None)
+            if v is not None:
+                setattr(g, f, v)
+        return g
+
+
+def gross_value(broker, current: dict[str, float],
+                exec_price: dict[str, float]) -> float:
+    """Gross position value on the broker's own marks, book prices as a fallback.
+
+    Book prices alone would UNDER-count a name that is held but no longer in the
+    book (it has no price there) — and under-counting exposure is the direction
+    that lets a geared account look fine."""
+    for read in (getattr(broker, "gross_position_value", None),
+                 getattr(broker, "read_value", None)):
+        if read is None:
+            continue
+        try:
+            v = float(read())
+            if v > 0:
+                return v
+        except Exception:
+            continue
+    return sum(abs(sh) * float(exec_price.get(k) or 0.0) for k, sh in current.items())
+
+
+def price_drift_check(broker, orders: list[Order], tol: float,
+                      slippage_cap: float = DEFAULT_SLIPPAGE_CAP
+                      ) -> tuple[bool, str]:
+    """Compare each order's sizing price against a live quote.
+
+    A corporate action between publish and execution (a split above all) leaves
+    the book's ``exec_price`` off by a multiple, so every share count computed
+    from it is wrong by that same multiple. Best-effort: a name that cannot be
+    quoted is not a reason to block the run, but a name quoting far from its
+    sizing price is."""
+    if tol <= 0:
+        return True, "price-drift check disabled"
+    worst = (0.0, "")
+    checked = 0
+    for o in orders:
+        q = broker.quote_by_symbol(o.symbol)      # cached: the funding budget
+        if not q:                                 # asks for the same names later
+            continue
+        live = next((q.get(k) for k in ("last", "close", "ask", "bid")
+                     if _finite(q.get(k))), None)
+        if live is None:
+            continue
+        checked += 1
+        d = price_drift(o.price, live)
+        if d > worst[0]:
+            worst = (d, f"{o.symbol} sized at ${o.price:,.2f} but quoting "
+                        f"${float(live):,.2f} ({d*100:.0f}% away)")
+    if not checked:
+        return True, "price-drift check skipped (no quotes available)"
+    if worst[0] > tol:
+        return False, (f"{worst[1]} — beyond the {tol*100:.0f}% limit; a split or "
+                       "a bad book price would size every order wrong")
+    return True, (f"sizing prices within {tol*100:.0f}% of the market "
+                  f"({checked} checked, worst {worst[0]*100:.1f}%)")
+
+
+def preflight(broker, orders: list[Order], current: dict[str, float],
+              exec_price: dict[str, float], net_liq: float,
+              guards: Guards) -> tuple[bool, str]:
+    """Every check that must pass between building the plan and sending it.
+
+    Each one answers a way the 2026-08-18 duplicate-execution incident could
+    repeat: an account that is already geared, a plan that would gear it, a plan
+    that churns the whole book, a sizing price the market has left behind, or a
+    run that landed outside the session.  All are cheap and read-only, and BOTH
+    entry points (the Option-C executor and the Option-A rebalancer) run the
+    same set — they place orders through the same code, so they must refuse the
+    same things.  Returns (ok, reason); reason is empty when everything passed.
+    """
+    print("\nPre-flight:")
+    try:
+        cash = broker.cash()
+    except Exception:
+        cash = 0.0
+    gross = gross_value(broker, current, exec_price)
+    exposure = projected_exposure(orders, current, exec_price, net_liq)
+
+    checks = [
+        check_account_state(net_liq, cash, gross, guards.allow_margin,
+                            guards.max_gross_frac),
+        market_session_open(allow_outside=guards.outside_rth),
+        check_turnover(orders, net_liq, guards.max_turnover_frac),
+        check_exposure(exposure, guards.max_gross_frac),
+        price_drift_check(broker, orders, guards.max_price_drift,
+                          guards.slippage_cap),
+    ]
+    failed = ""
+    for ok, why in checks:
+        print(f"  {'✓' if ok else '✗'} {why}")
+        if not ok and not failed:
+            failed = why
+    return (not failed), failed
+
+
+def post_trade_check(broker, weights: dict[str, float],
+                     exec_price: dict[str, float], guards: Guards) -> None:
+    """Re-read the account AFTER trading and say whether it landed on target.
+
+    Nothing is auto-corrected here — a second corrective round of orders is
+    exactly the reflex that compounds a bad read.  This reports, loudly, so the
+    run's log and the next run's guards can act on it."""
+    print("\nPost-trade:")
+    try:
+        net_liq = broker.net_liq()
+        after = broker.positions_by_key()
+    except Exception as e:
+        print(f"  could not verify the resulting account ({e})")
+        return
+    gross = gross_value(broker, after, exec_price)
+    lev = gross / net_liq if net_liq > 0 else 0.0
+    print(f"  {'✗' if lev > guards.max_gross_frac else '✓'} gross ${gross:,.0f} = "
+          f"{lev:.2f}x net liq ${net_liq:,.0f}")
+    if lev > guards.max_gross_frac:
+        print("  WARNING: the account is geared above the cap after this run — "
+              "do NOT re-run the executor; reconcile the account first.")
+    rows = weight_drift(realised_weights(after, exec_price, net_liq), weights)
+    for key, tgt, got, dpp in rows[:3]:
+        print(f"    {key:6} target {tgt*100:5.1f}%  actual {got*100:5.1f}%  "
+              f"drift {dpp:+.1f} pp")
+    if rows and abs(rows[0][3]) > 5.0:
+        print(f"  WARNING: largest allocation drift is {rows[0][3]:+.1f} pp on "
+              f"{rows[0][0]} — check the fills above.")
+
+
 def _finite(x) -> float | None:
     """A usable positive price, or None (IBKR reports absent fields as nan/-1)."""
     try:

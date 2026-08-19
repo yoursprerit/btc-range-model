@@ -365,11 +365,23 @@ flowchart LR
         PB["run_universe → optimise → gate<br/>→ signed target_book.json"]
     end
     subgraph Host["executor (host with IB Gateway)"]
-        EX["verify signature → check freshness<br/>→ diff vs positions → trade"]
+        EX["verify signature → this session's bar?<br/>→ verified positions read<br/>→ pre-flight → sell, settle, fund buys"]
     end
     PB -- "git commit / raw URL" --> EX
     EX --> IB["IBKR paper / live account<br/>(BTC → IBIT)"]
 ```
+
+Both entry points share one order path (`scripts/ibkr_common.py`) and therefore
+one set of **pre-flight guards**, hardened after a 2026-08-18 incident in which
+three runs each read the paper account as flat and re-bought the whole book,
+leaving it at 3.4× net liquidation on a margin loan: a positions read verified
+against the account's own gross value, a book that must be the last completed
+session's, a duplicate-run lock, exposure/turnover caps, a price-drift (split)
+check, session-hours enforcement, and buys funded from settled cash plus
+realised sell proceeds — priced off live quotes, so an unintended margin loan
+is not reachable. Each run prints a `Pre-flight:` block and a post-trade
+verification. The full table is in
+[`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md#pre-flight-guards-what-the-executor-refuses-to-do).
 
 Guides: **[`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md)** (setup + both
 topologies) · **[`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)** (Windows)

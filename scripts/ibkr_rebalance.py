@@ -57,9 +57,11 @@ sys.path.insert(0, str(_REPO))
 import overall_core as oc                       # noqa: E402  headless engine
 import ibkr_symbols as sym                       # noqa: E402
 from ibkr_common import (                        # noqa: E402  shared broker/order plumbing
-    DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP, ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
-    Broker, PositionReadError, build_order_plan, check_exposure, check_turnover,
-    is_trading_day, print_plan, projected_exposure, signal_is_fresh,
+    DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
+    ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
+    Broker, Guards, PositionReadError, bar_is_current, build_order_plan,
+    is_trading_day, post_trade_check, preflight, print_plan, signal_is_fresh,
+    validate_book_math,
 )
 
 
@@ -180,6 +182,24 @@ def main() -> int:
                     help=f"how far THROUGH the touch a marketable limit is priced "
                          f"(default {DEFAULT_SLIPPAGE_CAP} = "
                          f"{DEFAULT_SLIPPAGE_CAP*100:.1f}%%)")
+    ap.add_argument("--max-gross-frac", type=float, default=DEFAULT_MAX_GROSS_FRAC,
+                    help="abort when the plan would leave gross exposure above "
+                         "this multiple of net liquidation (default %(default)s)")
+    ap.add_argument("--max-turnover-frac", type=float, default=1.5,
+                    help="abort when the plan would trade more than this multiple "
+                         "of net liquidation (default %(default)s)")
+    ap.add_argument("--max-price-drift", type=float, default=0.25,
+                    help="abort when a name quotes further than this from its "
+                         "sizing price (default %(default)s; 0 disables)")
+    ap.add_argument("--allow-margin", action="store_true",
+                    help="permit buys beyond settled cash + realised sell "
+                         "proceeds (i.e. on margin). OFF by default")
+    ap.add_argument("--outside-rth", action="store_true",
+                    help="allow the run outside 09:30-16:00 ET (thin book; IBKR "
+                         "rejects MARKET and MOC outside RTH)")
+    ap.add_argument("--allow-stale-bar", action="store_true",
+                    help="trade a book whose signal bar is NOT the last completed "
+                         "session (off by default — a stale signal means no trade)")
     ap.add_argument("--allow-nonpaper", action="store_true",
                     help="permit a non-DU account (DANGEROUS — disables the paper guard)")
     ap.add_argument("--force", action="store_true",
@@ -203,6 +223,22 @@ def main() -> int:
         return 1
     print(f"Signal freshness: {fwhy}")
 
+    # The signal must be THIS session's, not merely "not ancient": trading a
+    # book computed from an older bar re-trades a decision the market has
+    # already moved past (and, if the account already holds it, a second time).
+    ok_bar, bar_why = bar_is_current(book.as_of, today)
+    print(f"Signal bar: {bar_why}")
+    if not ok_bar and not args.allow_stale_bar and args.execute:
+        print("ABORT: refusing to trade a book that is not this session's "
+              "(use --allow-stale-bar to override). No orders placed.")
+        return 1
+
+    ok_math, math_why = validate_book_math(book.weights, book.exec_price)
+    print(f"Book math: {math_why}")
+    if not ok_math:
+        print("ABORT: the computed book is not arithmetically sane. No orders placed.")
+        return 1
+
     if not args.execute:
         print("\n[dry-run] Connecting only to read positions for the plan preview…")
         try:
@@ -220,6 +256,8 @@ def main() -> int:
                                       current, args.band, args.fractional)
             print(f"\nAccount {broker.account} (PAPER).")
             print_plan(orders, net_liq)
+            preflight(broker, orders, current, book.exec_price, net_liq,
+                      Guards.from_args(args))
             print("\n[dry-run] No orders transmitted. Re-run with --execute to trade.")
         finally:
             broker.disconnect()
@@ -242,18 +280,20 @@ def main() -> int:
                                   current, args.band, args.fractional)
         print(f"\nAccount {broker.account} (PAPER).")
         print_plan(orders, net_liq)
-        for ok, why in (check_exposure(projected_exposure(orders, current,
-                                                          book.exec_price, net_liq)),
-                        check_turnover(orders, net_liq)):
-            print(f"  {'✓' if ok else '✗'} {why}")
-            if not ok:
-                print("ABORT: pre-flight failed. No orders placed.")
-                return 1
+        guards = Guards.from_args(args)
+        ok_pre, why_pre = preflight(broker, orders, current, book.exec_price,
+                                    net_liq, guards)
+        if not ok_pre:
+            print(f"ABORT: {why_pre} No orders placed.")
+            return 1
         if orders:
             print(f"\nTransmitting orders ({args.order_type})…")
             broker.place(orders, args.fractional, args.fill_timeout,
                          order_type=args.order_type,
-                         slippage_cap=args.slippage_cap)
+                         slippage_cap=args.slippage_cap,
+                         outside_rth=args.outside_rth,
+                         allow_margin=args.allow_margin)
+        post_trade_check(broker, book.weights, book.exec_price, guards)
         print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()
