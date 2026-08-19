@@ -49,6 +49,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would be written without writing")
+    ap.add_argument("--ignore-reset", action="store_true",
+                    help="restore runs from before an account reset too (they "
+                         "belong to a PREVIOUS account — normally you do not "
+                         "want them back)")
     args = ap.parse_args()
 
     if _git("rev-parse", "--is-shallow-repository").strip() == "true":
@@ -84,16 +88,27 @@ def main() -> int:
         print("No execution reports found in history — nothing to do.")
         return 0
 
+    skipped = 0
     for variant, as_of in sorted(best):
         gen, text = best[(variant, as_of)]
         anchor = _REPO / _REPORTS[variant]
+        # a reset retired everything up to its cutoff — those runs are a
+        # different account's, and restoring them is what the marker prevents
+        reset = eb.read_reset(anchor)
+        if reset and not args.ignore_reset and as_of <= reset.get("cutoff_as_of", ""):
+            skipped += 1
+            continue
         out = eb.archive_path(anchor, as_of)
         mode = "live" if variant else "paper"
         print(f"  {as_of} ← executed {gen} ({mode}) → {out.relative_to(_REPO)}")
         if not args.dry_run:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text)
-    print(f"{'Would write' if args.dry_run else 'Wrote'} {len(best)} record(s).")
+    if skipped:
+        print(f"  skipped {skipped} run(s) retired by an account reset "
+              f"(--ignore-reset to restore them anyway)")
+    print(f"{'Would write' if args.dry_run else 'Wrote'} {len(best) - skipped} "
+          f"record(s).")
     return 0
 
 

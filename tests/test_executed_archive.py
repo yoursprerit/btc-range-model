@@ -139,3 +139,50 @@ def test_a_dry_run_does_not_lock_the_bar(tmp_path):
     dry["mode"] = "dry-run"
     eb.archive_report(dry, report)
     assert eb.completed_run(report, "2026-08-17") is None
+
+
+# ── account reset ───────────────────────────────────────────────────────────
+def test_a_reset_hides_the_previous_account_and_survives_a_backfill(tmp_path):
+    report = tmp_path / "executed_book.json"
+    eb.archive_report(_payload(as_of="2026-08-16", gen="2026-08-17T19:00:00+00:00"), report)
+    eb.archive_report(_payload(as_of="2026-08-17", gen="2026-08-18T19:00:00+00:00"), report)
+    assert len(eb.archived_records(report)) == 2
+
+    eb.write_reset(report, "2026-08-17", reason="paper account reset")
+    # the old account's runs are gone from the record...
+    assert eb.archived_records(report) == []
+    # ...even if the files themselves come back (a backfill from git history)
+    assert eb.archive_path(report, "2026-08-17").exists()
+    assert eb.archived_records(report) == []
+
+
+def test_a_reset_does_not_hide_runs_after_the_cutoff(tmp_path):
+    report = tmp_path / "executed_book.json"
+    eb.write_reset(report, "2026-08-17", reason="paper account reset")
+    eb.archive_report(_payload(as_of="2026-08-18", gen="2026-08-19T19:00:00+00:00"), report)
+    recs = eb.archived_records(report)
+    assert [r["as_of"] for r in recs] == ["2026-08-18"], \
+        "the new account's first run must start the record"
+
+
+def test_a_reset_releases_the_duplicate_run_lock_for_retired_bars(tmp_path):
+    # the new account has never traded that bar, so the lock must not fire
+    report = tmp_path / "executed_book.json"
+    eb.archive_report(_payload(as_of="2026-08-17"), report)
+    assert eb.completed_run(report, "2026-08-17") is not None
+    eb.write_reset(report, "2026-08-17")
+    assert eb.completed_run(report, "2026-08-17") is None
+
+
+def test_reset_marker_is_per_account_mode(tmp_path):
+    paper, live = tmp_path / "executed_book.json", tmp_path / "executed_book_live.json"
+    eb.write_reset(paper, "2026-08-17")
+    assert eb.read_reset(paper) is not None
+    assert eb.read_reset(live) is None, "resetting paper must not retire live history"
+
+
+def test_the_marker_is_not_mistaken_for_a_run(tmp_path):
+    report = tmp_path / "executed_book.json"
+    eb.write_reset(report, "2026-08-01")
+    eb.archive_report(_payload(as_of="2026-08-17"), report)
+    assert [r["as_of"] for r in eb.archived_records(report)] == ["2026-08-17"]

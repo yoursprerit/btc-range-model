@@ -398,17 +398,30 @@ def _history_index(recs: list[dict]) -> pd.DataFrame:
 
 def _render_history(report_path: Path) -> None:
     recs = _records(str(report_path), _archive_sig(report_path))
+    reset = eb.read_reset(report_path)
     if not recs:
         st.info("No archived runs yet for this account.")
-        st.markdown(
-            "Every rebalance overwrites `data/overall/executed_book.json`, so past "
-            "runs are kept as dated records beside it in "
-            "`data/overall/executed_archive/<signal-bar>.json`. The executor writes "
-            "one on each run (`scripts/ibkr_execute_book.py`) and the daily wrapper "
-            "commits it; to seed the archive from runs that happened before it "
-            "existed, run **`python scripts/backfill_executed_archive.py`** on an "
-            "unshallowed clone — it rebuilds the records verbatim from git history.")
+        if reset:
+            st.markdown(
+                f"The record was **reset on {str(reset.get('reset_at_utc'))[:10]}** "
+                f"({reset.get('reason')}): runs up to and including signal bar "
+                f"**{reset.get('cutoff_as_of')}** belong to the previous account and "
+                "are not shown. The next execution report starts the record fresh.")
+        else:
+            st.markdown(
+                "Every rebalance overwrites `data/overall/executed_book.json`, so past "
+                "runs are kept as dated records beside it in "
+                "`data/overall/executed_archive/<signal-bar>.json`. The executor writes "
+                "one on each run (`scripts/ibkr_execute_book.py`) and the daily wrapper "
+                "commits it; to seed the archive from runs that happened before it "
+                "existed, run **`python scripts/backfill_executed_archive.py`** on an "
+                "unshallowed clone — it rebuilds the records verbatim from git history.")
         return
+    if reset:
+        st.caption(f"↺ Record reset on {str(reset.get('reset_at_utc'))[:10]} "
+                   f"({reset.get('reason')}) — runs up to signal bar "
+                   f"**{reset.get('cutoff_as_of')}** were a previous account's and "
+                   "are not shown.")
 
     dates = sorted(r["executed_on"] for r in recs)          # ascending
     first, last = pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[-1]).date()
@@ -515,9 +528,14 @@ with _tab_now:
         except Exception as e:
             st.error(f"Could not read the execution report: {e}")
     else:
+        _reset = eb.read_reset(_path)
         st.warning("No execution report found at "
                    f"`{_path.relative_to(_REPO_ROOT)}`.")
         st.markdown(
+            (f"The record was **reset on {str(_reset.get('reset_at_utc'))[:10]}** "
+             f"({_reset.get('reason')}) — the previous account's runs were retired "
+             "up to signal bar **" + str(_reset.get("cutoff_as_of")) + "**. "
+             if _reset else "") +
             "It appears here once the executor has run a rebalance and committed the "
             "report back to the branch (`scripts/ibkr_execute_book.py` writes it; the "
             "daily wrapper commits it). Until then, see **📋 Target Book (IBKR)** for "

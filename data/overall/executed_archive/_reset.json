@@ -1,0 +1,6 @@
+{
+ "schema": "executed-archive-reset/v1",
+ "reset_at_utc": "2026-08-19T01:27:41+00:00",
+ "cutoff_as_of": "2026-08-17",
+ "reason": "paper account reset"
+}
