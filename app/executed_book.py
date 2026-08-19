@@ -177,6 +177,8 @@ def archived_records(report_path) -> list[dict]:
     d, want = archive_dir(report_path), variant(report_path)
     if not d.is_dir():
         return []
+    reset = read_reset(report_path)
+    cutoff = (reset or {}).get("cutoff_as_of") or ""
     out: list[dict] = []
     for p in sorted(d.glob("*.json")):
         stem = p.stem
@@ -189,6 +191,8 @@ def archived_records(report_path) -> list[dict]:
         if payload.get("schema") != SCHEMA:
             continue
         as_of = payload.get("as_of") or stem.replace("_live", "")
+        if cutoff and str(pd.Timestamp(as_of).date()) <= cutoff:
+            continue                       # a previous account's run — not ours
         out.append({
             "as_of": str(pd.Timestamp(as_of).date()),
             "executed_on": _executed_on(payload) or str(pd.Timestamp(as_of).date()),
@@ -212,6 +216,52 @@ def _executed_on(payload: dict) -> str | None:
         return str(ts.tz_convert("America/New_York").date())
     except Exception:
         return None
+
+
+# ── reset marker ─────────────────────────────────────────────────────────────
+# Resetting the broker account (a fresh paper account, a wiped balance) makes
+# every earlier run a record of a DIFFERENT account: same schema, unrelated
+# money. Deleting the files is not enough on its own — the reports live on in
+# git history, and ``backfill_executed_archive.py`` would happily restore them.
+# A marker records the cutoff so the reset survives: readers ignore anything at
+# or before it, and the backfill refuses to re-create it.
+RESET_MARKER = "_reset"
+RESET_SCHEMA = "executed-archive-reset/v1"
+
+
+def reset_marker_path(report_path) -> Path:
+    """``_reset.json`` for paper, ``_reset_live.json`` for live.
+
+    Paper and live share the archive directory, so the marker carries the same
+    ``_live`` suffix its records do — resetting a paper account must never
+    retire the live account's history."""
+    return archive_dir(report_path) / f"{RESET_MARKER}{variant(report_path)}.json"
+
+
+def read_reset(report_path) -> dict | None:
+    """The reset marker for this account mode, or None."""
+    try:
+        p = reset_marker_path(report_path)
+        if not p.exists():
+            return None
+        payload = json.loads(p.read_text())
+    except Exception:
+        return None
+    return payload if payload.get("schema") == RESET_SCHEMA else None
+
+
+def write_reset(report_path, cutoff_as_of, reason: str = "account reset") -> Path:
+    """Record that runs up to and including *cutoff_as_of* belong to a previous
+    account and must never be shown or restored."""
+    p = reset_marker_path(report_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({
+        "schema": RESET_SCHEMA,
+        "reset_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "cutoff_as_of": str(pd.Timestamp(cutoff_as_of).date()),
+        "reason": reason,
+    }, indent=1))
+    return p
 
 
 def record_for(records: list[dict], day) -> dict | None:
@@ -240,6 +290,10 @@ def completed_run(report_path, as_of) -> dict | None:
     refused (``--force-rerun`` overrides).  Dry-runs place no orders and are not
     treated as an execution.  Returns the payload, or None."""
     try:
+        reset = read_reset(report_path)
+        cutoff = (reset or {}).get("cutoff_as_of") or ""
+        if cutoff and str(pd.Timestamp(as_of).date()) <= cutoff:
+            return None                    # pre-reset: a different account
         p = archive_path(report_path, as_of)
         if not p.exists():
             return None
