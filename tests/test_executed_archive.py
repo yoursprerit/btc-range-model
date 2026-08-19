@@ -186,3 +186,16 @@ def test_the_marker_is_not_mistaken_for_a_run(tmp_path):
     eb.write_reset(report, "2026-08-01")
     eb.archive_report(_payload(as_of="2026-08-17"), report)
     assert [r["as_of"] for r in eb.archived_records(report)] == ["2026-08-17"]
+
+
+def test_a_dry_run_never_overwrites_an_executed_record(tmp_path):
+    """What an after-hours dry-run did to the real 2026-08-17 record: replaced
+    the fills with a list of PLANNED trades."""
+    report = tmp_path / "executed_book.json"
+    eb.archive_report(_payload(as_of="2026-08-17", qty=462.0), report)
+    preview = _payload(as_of="2026-08-17", gen="2026-08-19T01:18:14+00:00", qty=271.0)
+    preview["mode"] = "dry-run"
+    preview["trades"][0]["status"] = "PLANNED"
+    assert eb.archive_report(preview, report) is None, "a preview is not a record"
+    back = json.loads(eb.archive_path(report, "2026-08-17").read_text())
+    assert back["mode"] == "execute" and back["trades"][0]["qty"] == 462.0
