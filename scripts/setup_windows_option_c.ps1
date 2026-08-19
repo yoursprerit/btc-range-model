@@ -447,6 +447,18 @@ if ($Rehearse) {
                 elseif ($tail -match 'no secret provided') { Fail "task ran WITHOUT the secret - the book would trade unverified" }
                 else { Warn "no signature line found - read the log above" }
                 if ($tail -match 'kill switch active') { Ok "reached the order stage and stopped there (as intended)" }
+                elseif ($tail -match 'not this session''s') {
+                    Ok "pre-flight stopped the run: the book is not this session's"
+                    Info "  that is the stale-book guard working. To rehearse the whole"
+                    Info "  path anyway: set IBKR_EXTRA='--allow-stale-bar --force-rerun'"
+                    Info "  and re-run -Rehearse (the kill switch still blocks any order)."
+                }
+                elseif ($tail -match 'was already executed') {
+                    Ok "pre-flight stopped the run: this signal bar was already executed"
+                    Info "  that is the duplicate-run guard working. To rehearse the whole"
+                    Info "  path anyway: set IBKR_EXTRA='--force-rerun' and re-run"
+                    Info "  -Rehearse (the kill switch still blocks any order)."
+                }
                 else { Warn "did not reach the kill-switch abort - read the log above" }
                 if ($tail -match 'done \(executor exit 0\)') { Ok "wrapper ran to completion" }
                 else { Fail "wrapper did not finish cleanly" }

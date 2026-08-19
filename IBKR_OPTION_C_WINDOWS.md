@@ -131,6 +131,23 @@ That exercises Task Scheduler, environment inheritance, `git pull`, the venv,
 the encoding path and the wrapper — everything except the broker round-trip —
 at any hour, with zero risk of a trade. Use it instead of waiting for 2:30.
 
+**If a pre-flight guard stops the run first**, the rehearsal says so instead of
+warning — the two it recognises are the stale-book guard (the day's publish has
+not landed) and the duplicate-run guard (that bar was already executed). Both are
+the guards working, not a broken deployment. To rehearse the *whole* path anyway,
+pass the overrides through and re-run; the kill switch still blocks any order:
+
+```powershell
+$env:IBKR_EXTRA = '--allow-stale-bar --force-rerun'
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -Rehearse
+Remove-Item Env:\IBKR_EXTRA
+```
+
+`IBKR_EXTRA` passes any extra executor flags through the wrapper (the Linux
+wrapper has always had it; the PowerShell one gained it with these guards). It is
+read from the *task's* environment, so set it with `setx` if the scheduled task
+must see it — and unset it afterwards, or every run will carry the overrides.
+
 ### Testing outside market hours
 
 `-Rehearse` deliberately places nothing. To actually put orders in after the
