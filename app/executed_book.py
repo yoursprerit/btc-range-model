@@ -146,6 +146,13 @@ def archive_path(report_path, as_of) -> Path:
 def archive_report(payload: dict, report_path, secret: str | None = None) -> Path | None:
     """Persist *payload* as the dated as-of record next to *report_path*.
 
+    Only an **executed** run is archived.  A dry-run is a preview of orders that
+    were never sent, and archiving one would overwrite the record of what the
+    account actually traded on that bar with a list of PLANNED trades — which is
+    exactly what an after-hours dry-run did to the 2026-08-17 record on
+    2026-08-18.  The Historical tab is the record of executions; previews do not
+    belong in it.
+
     Signed with *secret* when given (same HMAC as the live report), so archived
     records stay verifiable.  Best-effort: a failure to archive never fails a
     rebalance.  Returns the path written, or None."""
@@ -154,6 +161,8 @@ def archive_report(payload: dict, report_path, secret: str | None = None) -> Pat
         as_of = payload.get("as_of")                 # importable on its own
         if not as_of:
             return None
+        if (payload.get("mode") or "").lower() != "execute":
+            return None                              # a preview, not a record
         p = archive_path(report_path, as_of)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(tb.dumps(payload, secret))
