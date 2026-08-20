@@ -38,6 +38,7 @@ model and backtest machinery.
 | 🖥️ **SOXX** · ⚡ **GRID** · 🛢️ **XLE** · 🧲 **REMX** · ⛏️ **WGMI** · ☀️ **PBW** · 🤖 **ARTY** | `app/ticker_app.py` | Seven config-driven ETF apps — one engine, one `TickerConfig` per asset. See **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**. |
 | 📋 **Target Book (IBKR)** | `app/target_book_app.py` | Human-readable viewer for the signed target-allocation artifact the rebalancer trades. |
 | ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
+| 🤖 **AI Assistant** | `app/assistant_app.py` | Chat that answers questions about the numbers on any tab, the calculations behind them and the design decisions in this repo — grounded in the committed artifacts plus read-only search over the working tree. See **[AI Assistant](#-ai-assistant)**. |
 
 Each **signal app** produces **one** signal but may trade several instruments
 off it — its 1× primary plus higher-beta / leveraged siblings, exactly as a desk
@@ -94,7 +95,9 @@ flowchart LR
     R --> TK["ETF apps<br/>ticker_app.py × 7"]
     R --> TB["📋 Target Book"]
     R --> EB["✅ Executed Book"]
+    R --> AI["🤖 AI Assistant<br/>assistant_app.py + assistant_core.py"]
     OV -. "re-runs every strategy<br/>through one daily engine" .-> TK
+    AI -. "reads committed artifacts<br/>+ the repo, read-only" .-> EB
 ```
 
 The **Overall** app never imports the individual apps — it re-runs every
@@ -347,6 +350,65 @@ Official platform docs: <https://docs.streamlit.io/deploy/streamlit-community-cl
 
 ---
 
+## 🤖 AI Assistant
+
+A chat page that answers questions about **this** app — what the tabs are
+showing, how those numbers are computed, and why the strategy is built the way
+it is. It is grounded rather than generative: the model is given the app's own
+data and the repo's own text, and is instructed to answer from them or say it
+cannot.
+
+**How an answer is grounded.** Two mechanisms, in `app/assistant_core.py`:
+
+1. **The state pack** — every question carries the committed artifacts the
+   pages themselves read (`data/overall/target_book.json`, `executed_book.json`,
+   `daily_audit.json`, `strategy_health.json`, `overall_results.json` and each
+   sleeve's `backtest_results.json`), pruned so long per-day series are elided.
+   So *"what is the book holding?"*, *"which sleeves are red?"* and *"what did
+   the last rebalance execute?"* are answered from the published JSON with no
+   look-up round-trip — the same numbers 📋 Target Book, ✅ Executed Book,
+   🩺 Strategy Health and 🕵️ Daily Audit render.
+2. **Read-only repo tools** — `search_repo`, `read_file`, `list_files`,
+   `read_json` and `read_table` over the working tree. So *"why* is it holding
+   that?" is answered by opening `OVERALL_STRATEGY.md`, the relevant `*_EVAL.md`
+   or the actual `app/*.py` calculation, and the answer cites the path.
+
+The assistant is asked to state the artifact and `as_of` date behind every
+number, to show its arithmetic, and to say plainly when the data does not
+contain an answer instead of estimating one.
+
+**What it cannot do.** Every path is confined to the repository and refuses
+anything credential-shaped (`.env`, `secrets.toml`, `*.key`, …) or binary. It
+has no write tool, no shell, and no broker access — it cannot change a weight,
+publish a book or place an order. The 🔴 Live tabs recompute from market data
+when opened, so for intraday questions the assistant answers from the last
+committed snapshot and says so.
+
+**Model choice.** The sidebar lists the models your Anthropic subscription is
+actually entitled to (queried live via `GET /v1/models`), best first, with
+**Claude Opus 5** pre-selected as the recommended default for this app. Request
+knobs are gated per model — adaptive thinking and `output_config.effort` are
+only sent to models that accept them. A **Show reasoning** toggle surfaces a
+summary of the model's thinking above each answer.
+
+**Setup.** One API key, from [console.anthropic.com](https://console.anthropic.com/settings/keys):
+
+* **Streamlit Community Cloud** — *Manage app → Settings → Secrets*:
+
+  ```toml
+  ANTHROPIC_API_KEY = "sk-ant-…"
+  ```
+
+* **Locally** — export `ANTHROPIC_API_KEY`, or put the same line in
+  `.streamlit/secrets.toml` (git-ignored, so the key is never committed).
+
+Without a key the page renders a setup notice and every other app is unaffected.
+Usage is billed to your Anthropic account; the ~18 k-token grounding prompt is
+sent with a cache breakpoint, so follow-up questions in a conversation re-read
+it at roughly a tenth of the cost.
+
+---
+
 ## Live execution (Interactive Brokers)
 
 The Overall book can drive a real IBKR account. Two topologies, both
@@ -406,7 +468,8 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 │   ├── gldm_hourly_app.py / gldm_core.py    🥇 Gold forecaster
 │   ├── ticker_app.py / ticker_core.py / ticker_config.py   7 ETF apps (one engine)
 │   ├── target_book_app.py / target_book.py  📋 target-allocation viewer
-│   └── executed_book_app.py / executed_book.py  ✅ post-rebalance report (+ dated archive)
+│   ├── executed_book_app.py / executed_book.py  ✅ post-rebalance report (+ dated archive)
+│   └── assistant_app.py / assistant_core.py  🤖 grounded AI chat over the app + repo
 │
 ├── src/                      Training & data-fetch code
 │   ├── pipeline_ct.py, train_hourly_model.py, train_7d_close_cone.py,
@@ -448,6 +511,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Strategy decay monitor (🩺 Strategy Health) | [`STRATEGY_HEALTH.md`](STRATEGY_HEALTH.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
 | Deploy the dashboard (Streamlit) | [`docs/STREAMLIT_DEPLOY.md`](docs/STREAMLIT_DEPLOY.md) |
+| AI Assistant (grounding, tools, model choice) | [`README.md` § 🤖 AI Assistant](#-ai-assistant) |
 | Legacy (audit only) | [`legacy/README.md`](legacy/README.md) |
 
 > **Honest bottom line.** This is a research and paper-trading platform for

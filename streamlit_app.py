@@ -7,6 +7,8 @@ Streamlit Community Cloud expects the main file at the repo root named
   * ``app/gldm_hourly_app.py``  — the gold (GLDM) forecaster (unchanged)
   * ``app/ticker_app.py``       — the generic, config-driven app that serves the
                                   new tickers (SOXX / GRID / XLE / REMX / …)
+  * ``app/assistant_app.py``    — the AI Assistant chat, grounded in the
+                                  committed artifacts and the repo's own docs
 
 A single **Application** radio at the top of the sidebar lists every app.  The
 choice is stored in ``st.session_state['gldm_active_app']``; reading session
@@ -38,28 +40,40 @@ sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
            "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
            "DAILYAUDIT": "🕵️  Daily Audit",
            "HEALTH": "🩺  Strategy Health",
            "TARGETBOOK": "📋  Target Book (IBKR)",
-           "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
+           "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
+           "ASSISTANT": "🤖  AI Assistant"}
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
 
 # ── sub-app execution (compile once, exec on every rerun) ────────────────────
-@st.cache_resource(show_spinner=False)
-def _compiled_app(path_str: str, _mtime: float):
+@st.cache_resource(show_spinner=False, max_entries=32)
+def _compiled_app(path_str: str, mtime: float):
     """Compile a sub-app's source once and reuse the code object across reruns.
 
     Streamlit runs this router on every rerun — each ~45 s auto-refresh and every
     app switch.  The previous ``runpy.run_path`` re-read and re-compiled the target
     file each time; for ``btc_hourly_app.py`` (~15 k lines / ~760 KB) that recompile
     was a large, invisible tax on switch latency.  Caching on ``(path, mtime)``
-    recompiles only when the file actually changes on disk."""
+    recompiles only when the file actually changes on disk.
+
+    ``mtime`` must NOT be renamed to ``_mtime``: Streamlit excludes
+    leading-underscore parameters from a cache key.  It was spelled that way
+    until now, which silently reduced the key to ``path_str`` alone — so an
+    edited sub-app kept serving its stale code object for the life of the
+    process, and only a restart picked the change up.  (Harmless on Streamlit
+    Cloud, where a deploy restarts the process, but it makes local iteration
+    baffling: you edit a file, the router re-reads its mtime, and nothing
+    changes on screen.)  ``max_entries`` bounds what the real key now admits —
+    every edit adds an entry, and ``cache_resource`` evicts nothing by
+    default."""
     return compile(Path(path_str).read_text(), path_str, "exec")
 
 
@@ -165,6 +179,9 @@ def _run_choice():
     elif _choice == "EXECUTEDBOOK":
         # Post-rebalance report: trades executed + current IBKR positions.
         _exec_app(_APP_DIR / "executed_book_app.py")
+    elif _choice == "ASSISTANT":
+        # Chat grounded in the committed artifacts + the repo's own docs.
+        _exec_app(_APP_DIR / "assistant_app.py")
     elif _choice in ("BTC", "GLDM", "GDXM"):
         # Upgrade the original app's built-in BTC/GLDM selector to the full list,
         # without touching the app source.  Only the ``gldm_active_app`` widget is

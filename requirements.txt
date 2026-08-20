@@ -48,5 +48,11 @@ plotly>=5.18
 # degrades gracefully to click/reload refresh if this is unavailable).
 streamlit-autorefresh>=1.0.1
 
+# AI Assistant page (app/assistant_app.py) — the Anthropic SDK.
+# Only the long-stable surface is used (messages.stream, models.list), so both
+# the 0.x and 1.x majors work; the page degrades to a "no API key" notice if the
+# key is absent and every OTHER page runs fine even if this import fails.
+anthropic>=0.69,<2
+
 # Notebook generation
 nbformat>=5.9
