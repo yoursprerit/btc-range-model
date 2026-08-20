@@ -368,10 +368,30 @@ cannot.
    the last rebalance execute?"* are answered from the published JSON with no
    look-up round-trip — the same numbers 📋 Target Book, ✅ Executed Book,
    🩺 Strategy Health and 🕵️ Daily Audit render.
-2. **Read-only repo tools** — `search_repo`, `read_file`, `list_files`,
+2. **`live_signal` — the app's own engines, run on demand.** Questions about a
+   *current* signal ("is BTC about to fire a buy?", "how close is GDX to an
+   exit?") are answered by RUNNING the engine the tab runs — `btc_ct_engine`,
+   `gldm_engine` or `overall_core.run_asset` — never by reverse-engineering it
+   out of the source. For the CT sleeves it also returns the gate breakdown:
+   per-bar predicted vs realised high/low, the U1 components against their
+   thresholds, and exactly what the **next** bar must do to trigger an entry —
+   including when that is arithmetically impossible (U1 needs ≥2 high-breaks in
+   3 bars, so with none in the last two, no entry can fire at the next close
+   however far the bar runs). See `btc_ct_engine.live_diagnostics`.
+3. **Read-only repo tools** — `search_repo`, `read_file`, `list_files`,
    `read_json` and `read_table` over the working tree. So *"why* is it holding
    that?" is answered by opening `OVERALL_STRATEGY.md`, the relevant `*_EVAL.md`
-   or the actual `app/*.py` calculation, and the answer cites the path.
+   or the actual `app/*.py` calculation, and the answer cites the path. Search
+   spans the docs **and** `app/`/`scripts/` source by default, because how
+   something works is usually in a docstring — the 12:00-UTC bar convention,
+   for one, is stated only in `app/freshness.py`.
+
+**The two clocks.** The prompt states them up front, because they are the usual
+source of a wrong answer: BTC · MSTR · MSTU · ETH run on **12:00-UTC-anchored
+bars** (bar *D* closes at `D+1 12:00Z` = **7:00 AM US Central** in summer), and
+every engine reports `as_of` as the bar **START** date — so the newest completed
+bar is normally *yesterday*, and *today* is the bar still open. Equity sleeves
+run on exchange sessions closing at 16:00 ET.
 
 The assistant is asked to state the artifact and `as_of` date behind every
 number, to show its arithmetic, and to say plainly when the data does not
@@ -385,11 +405,23 @@ when opened, so for intraday questions the assistant answers from the last
 committed snapshot and says so.
 
 **Model choice.** The sidebar lists the models your Anthropic subscription is
-actually entitled to (queried live via `GET /v1/models`), best first, with
-**Claude Opus 5** pre-selected as the recommended default for this app. Request
-knobs are gated per model — adaptive thinking and `output_config.effort` are
-only sent to models that accept them. A **Show reasoning** toggle surfaces a
-summary of the model's thinking above each answer.
+actually entitled to (queried live via `GET /v1/models`), most capable first,
+each with its price per million tokens. The **cheapest** entitled model is
+selected by default — most questions here are look-ups the state pack already
+answers — and it is picked by *computing* the lowest cost from the catalogue's
+prices, so a cheaper model wins the day it ships rather than when someone edits
+a constant. Switch to 🧠 **most capable** for questions that chain several
+look-ups together; Haiku is markedly weaker at that. Request knobs are gated per
+model — adaptive thinking and `output_config.effort` are only sent to models
+that accept them. A **Show reasoning** toggle surfaces a summary of the model's
+thinking above each answer (disabled on models that do not expose it).
+
+**Sessions.** Follow-up questions stay in the same conversation — the whole
+thread is replayed each turn, so *"and how does that compare to GLDM?"* works —
+until **🆕 New chat** clears it. Answers never end in silence: if a question
+exhausts the tool budget (12 rounds), the assistant is forced into one final
+tool-free pass to answer from what it gathered and name what it could not
+determine.
 
 **Setup.** One API key, from [console.anthropic.com](https://console.anthropic.com/settings/keys):
 
@@ -405,7 +437,8 @@ summary of the model's thinking above each answer.
 Without a key the page renders a setup notice and every other app is unaffected.
 Usage is billed to your Anthropic account; the ~18 k-token grounding prompt is
 sent with a cache breakpoint, so follow-up questions in a conversation re-read
-it at roughly a tenth of the cost.
+it at roughly a tenth of the cost. With the default (cheapest) model that puts
+a typical follow-up well under a cent.
 
 ---
 
