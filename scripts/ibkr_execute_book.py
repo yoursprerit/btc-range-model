@@ -81,10 +81,19 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
         positions = broker.portfolio_snapshot()
     except Exception:
         positions = []
+    # Session realized P&L, read right after the rebalance: what its trims and
+    # closes actually banked. Account-level because a name closed out entirely
+    # vanishes from the portfolio snapshot, so the per-position figures alone
+    # can never account for a full exit.
+    try:
+        realized = broker.realized_pnl()
+    except Exception:
+        realized = None
     report = eb.build_payload(
         as_of=payload.get("as_of", ""), profile=payload.get("profile", ""),
         mode=mode, account=broker.account, net_liq=net_liq, cash=cash,
-        trades=trades, positions=positions, account_mode=account_mode)
+        trades=trades, positions=positions, account_mode=account_mode,
+        realized_pnl=realized)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(tb.dumps(report, secret))

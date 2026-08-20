@@ -459,3 +459,25 @@ def test_the_shared_preflight_stops_a_levered_plan(monkeypatch):
     ok, why = ic.preflight(b, orders, current, {"SOXX": 560.0}, 200_000.0,
                            ic.Guards(outside_rth=True))
     assert not ok and ("already at" in why or "net liq" in why)
+
+
+# ── IBKR P&L fields: the Double.MAX_VALUE "not available" sentinel ──────────
+# IBKR does not omit a P&L it cannot supply — it sends Double.MAX_VALUE
+# (~1.8e308). A raw float() of that lands in the execution report and renders
+# as an absurd number in the app, so it has to be read as "unknown" instead.
+
+def test_the_max_value_sentinel_reads_as_unknown_not_a_number():
+    assert ic._pnl_value(1.7976931348623157e308) is None
+    assert ic._pnl_value(-1.7976931348623157e308) is None
+
+
+def test_real_pnl_values_survive_including_zero():
+    assert ic._pnl_value(127.6) == pytest.approx(127.6)
+    assert ic._pnl_value(-12.4) == pytest.approx(-12.4)
+    assert ic._pnl_value(0.0) == 0.0             # a real zero, not "unknown"
+    assert ic._pnl_value("127.6") == pytest.approx(127.6)
+
+
+def test_missing_and_unparsable_pnl_reads_as_unknown():
+    for bad in (None, "", "n/a", float("nan"), object()):
+        assert ic._pnl_value(bad) is None

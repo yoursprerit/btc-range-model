@@ -23,7 +23,8 @@ def _payload(positions, **kw):
         mode=kw.get("mode", "execute"), account="DU1234567",
         net_liq=kw.get("net_liq", 100000.0), cash=kw.get("cash", 2500.0),
         trades=[], positions=positions,
-        account_mode=kw.get("account_mode", "paper"))
+        account_mode=kw.get("account_mode", "paper"),
+        realized_pnl=kw.get("realized_pnl"))
 
 
 def _pos(key, shares, avg_cost, market_price=0.0):
@@ -180,3 +181,133 @@ def test_real_committed_report_marks_against_live_prices():
     assert cp["value"] == pytest.approx(sum(
         float(x["shares"]) for x in payload["positions"]))
     assert cp["pnl"] == pytest.approx(cp["value"] - cp["cost"])
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# REALISED P&L — what a tilt-driven trim actually banked
+# ════════════════════════════════════════════════════════════════════════════
+# A partial sell is invisible in the cost-basis view on its own: IBKR leaves the
+# remaining shares' avg_cost untouched, so the position's open P&L just scales
+# down with the share count and the gain on the sold slice disappears. These
+# pin the field that recovers it — and, just as importantly, pin that a report
+# which never carried the field reports "unknown" rather than a confident zero.
+
+def _pos_r(key, shares, avg_cost, realized=None, market_price=0.0):
+    p = _pos(key, shares, avg_cost, market_price)
+    if realized is not None:
+        p["realized_pnl"] = realized
+    return p
+
+
+def test_trim_plus_realised_reconciles_to_the_untrimmed_position():
+    """The whole point of the field. 194 sh @ 96.94 marked at 99.84 is +563
+    open. Trim to 150 and the open P&L drops to +435 — but 44 shares booked
+    +127.60 on the way out, and the two must add back to the original +563."""
+    full = eb.current_positions(
+        _payload([_pos("GDX", 194.0, 96.94)]), {"GDX": 99.84})
+    trimmed = eb.current_positions(
+        _payload([_pos_r("GDX", 150.0, 96.94, realized=127.60)],
+                 realized_pnl=127.60), {"GDX": 99.84})
+    assert full["pnl"] == pytest.approx(562.60, abs=0.01)
+    assert trimmed["pnl"] == pytest.approx(435.00, abs=0.01)
+    assert trimmed["realized"] == pytest.approx(127.60)
+    assert trimmed["total_pnl"] == pytest.approx(full["pnl"], abs=0.01)
+
+
+def test_trim_leaves_the_percentage_untouched():
+    """avg_cost does not move on a partial long sell, so P&L % is invariant to
+    the trim — only the dollar figure scales. Guards against a future change
+    that quietly re-bases the percentage on the remaining shares."""
+    a = eb.current_positions(_payload([_pos("GDX", 194.0, 96.94)]), {"GDX": 99.84})
+    b = eb.current_positions(_payload([_pos("GDX", 150.0, 96.94)]), {"GDX": 99.84})
+    assert a["rows"][0]["pnl_pct"] == pytest.approx(b["rows"][0]["pnl_pct"])
+    assert b["rows"][0]["pnl"] < a["rows"][0]["pnl"]
+
+
+def test_a_report_without_the_field_is_unknown_not_zero():
+    """Every archived record written before this field existed. Reporting $0
+    realised would claim the rebalance banked nothing, which nobody knows."""
+    cp = eb.current_positions(_payload([_pos("GDX", 150.0, 96.94)]), {"GDX": 99.84})
+    assert cp["realized"] is None
+    assert cp["realized_known"] is False
+    assert cp["realized_account"] is None and cp["realized_positions"] is None
+    # and the total must not be inflated by a phantom zero
+    assert cp["total_pnl"] == pytest.approx(cp["pnl"])
+    assert cp["rows"][0]["realized"] is None
+
+
+def test_a_genuine_zero_is_recorded_as_known():
+    """A rebalance that placed no sells really did bank nothing — that is a
+    fact, and must read differently from an unrecorded field."""
+    cp = eb.current_positions(
+        _payload([_pos_r("GDX", 150.0, 96.94, realized=0.0)], realized_pnl=0.0),
+        {"GDX": 99.84})
+    assert cp["realized"] == 0.0 and cp["realized_known"] is True
+
+
+def test_account_figure_covers_names_closed_out_entirely():
+    """IBKR drops a position the moment it hits zero shares, so a full exit has
+    no row and its realised P&L can only come from the account-level figure —
+    which must therefore win over the sum of the surviving positions."""
+    cp = eb.current_positions(
+        _payload([_pos_r("GDX", 150.0, 96.94, realized=127.60)],
+                 realized_pnl=940.0), {"GDX": 99.84})
+    assert cp["realized_positions"] == pytest.approx(127.60)
+    assert cp["realized_account"] == pytest.approx(940.0)
+    assert cp["realized"] == pytest.approx(940.0)      # the superset wins
+    assert cp["total_pnl"] == pytest.approx(cp["pnl"] + 940.0)
+
+
+def test_per_position_sum_is_used_when_only_positions_carry_it():
+    """A report whose account-level read failed but whose positions came
+    through still yields a realised figure rather than falling back to None."""
+    cp = eb.current_positions(
+        _payload([_pos_r("GDX", 150.0, 96.94, realized=127.60),
+                  _pos_r("XLE", 50.0, 63.63, realized=-12.40)]),
+        {"GDX": 99.84, "XLE": 64.46})
+    assert cp["realized_account"] is None
+    assert cp["realized"] == pytest.approx(115.20)
+    assert cp["realized_known"] is True
+
+
+def test_realised_survives_the_json_round_trip_through_build_payload():
+    """The report is written to disk and read back by a different process, so
+    the field has to survive serialisation — including its null form."""
+    import json
+    payload = _payload([_pos_r("GDX", 150.0, 96.94, realized=127.60),
+                        _pos("XLE", 50.0, 63.63)], realized_pnl=940.0)
+    back = json.loads(json.dumps(payload))
+    assert back["realized_pnl"] == pytest.approx(940.0)
+    by = {p["key"]: p for p in back["positions"]}
+    assert by["GDX"]["realized_pnl"] == pytest.approx(127.60)
+    assert by["XLE"]["realized_pnl"] is None      # present, explicitly null
+    cp = eb.current_positions(back, {"GDX": 99.84, "XLE": 64.46})
+    assert cp["realized"] == pytest.approx(940.0)
+
+
+def test_adding_the_field_does_not_break_signature_verification():
+    """Records signed before the field existed must still verify — the HMAC
+    covers each payload as it was written, so an added key cannot retro-break
+    the archive."""
+    import target_book as tb
+    old = _payload([_pos("GDX", 194.0, 96.94)])
+    old.pop("realized_pnl")                       # a genuinely pre-field record
+    signed = tb.loads(tb.dumps(old, "s3cret"))
+    ok, _ = tb.verify_signature(signed, "s3cret")
+    assert ok
+    assert eb.current_positions(signed, {"GDX": 99.84})["realized_known"] is False
+
+
+@pytest.mark.parametrize("raw", [None, "", "n/a", float("nan")])
+def test_unreadable_realised_values_become_none(raw):
+    cp = eb.current_positions(
+        _payload([_pos_r("GDX", 150.0, 96.94, realized=raw)]), {"GDX": 99.84})
+    assert cp["rows"][0]["realized"] is None
+    assert cp["realized_known"] is False
+
+
+def test_opt_float_rejects_nan_and_blanks_but_keeps_zero():
+    assert eb.opt_float(0.0) == 0.0               # a real zero survives
+    assert eb.opt_float("12.5") == pytest.approx(12.5)
+    for bad in (None, "", "abc", float("nan")):
+        assert eb.opt_float(bad) is None

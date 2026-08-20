@@ -31,13 +31,13 @@ model and backtest machinery.
 
 | App | Module | What it does |
 |---|---|---|
-| 🧭 **Overall Trading** | `app/overall_app.py` | The combined cross-asset **decision cockpit** — fuses every signal, position and backtest into one portfolio and answers *"where should capital go today?"* A **💼 Current Positions** section on the 🔴 Live and 🕰️ Historical tabs marks the executed book's real IBKR cost basis against the live price (or the viewed bar's close). |
+| 🧭 **Overall Trading** | `app/overall_app.py` | The combined cross-asset **decision cockpit** — fuses every signal, position and backtest into one portfolio and answers *"where should capital go today?"* A **💼 Current Positions** section on the 🔴 Live and 🕰️ Historical tabs marks the executed book's real IBKR cost basis against the live price (or the viewed bar's close), and adds the **realised P&L** each rebalance's trims banked. |
 | ₿ **Bitcoin (BTC)** | `app/btc_hourly_app.py` | Four-model BTC forecaster (hourly close, daily H/L, 7-day cone, day-type) + the BTC divergence strategy (BTC · MSTR · MSTU · ETH). See **[`BTC_README.md`](BTC_README.md)**. |
 | 🥇 **Gold Trend (GLDM)** | `app/gldm_hourly_app.py` | Gold forecaster + dual-MA 25/100 strategy (GLDM · UGL). See **[`GLDM_README.md`](GLDM_README.md)**. |
 | ⛏️ **Gold Miners (GDXM)** | `app/gldm_hourly_app.py` | Gold-miners divergence strategy off the GLDM signal (GDX · NUGT) — same file, second app mode. |
 | 🖥️ **SOXX** · ⚡ **GRID** · 🛢️ **XLE** · 🧲 **REMX** · ⛏️ **WGMI** · ☀️ **PBW** · 🤖 **ARTY** | `app/ticker_app.py` | Seven config-driven ETF apps — one engine, one `TickerConfig` per asset. See **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**. |
 | 📋 **Target Book (IBKR)** | `app/target_book_app.py` | Human-readable viewer for the signed target-allocation artifact the rebalancer trades. |
-| ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
+| ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target, with the **realised P&L** each run banked. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
 | 🤖 **AI Assistant** | `app/assistant_app.py` | Chat that answers questions about the numbers on any tab, the calculations behind them and the design decisions in this repo — grounded in the committed artifacts plus read-only search over the working tree. See **[AI Assistant](#-ai-assistant)**. |
 
 Each **signal app** produces **one** signal but may trade several instruments

@@ -16,12 +16,30 @@ Schema ``executed-book/v1``:
       "account": "DU1234567",
       "net_liq": 100000.0,
       "cash": 42000.0,
+      "realized_pnl": 127.6,       # account, this session (null = not recorded)
       "trades":    [ {key, symbol, action, qty, price, value, status, filled,
                       avg_fill_price, order_type, limit_price, reason} … ],
       "positions": [ {key, symbol, shares, avg_cost, market_price, market_value,
-                      unrealized_pnl} … ],
+                      unrealized_pnl, realized_pnl} … ],
       "signature": { "alg": "HMAC-SHA256", "value": "…" }   # optional
     }
+
+``realized_pnl`` (added after v1 shipped) is what a rebalance actually BANKED.
+It matters because a partial trim is otherwise invisible here: IBKR leaves the
+remaining shares' ``avg_cost`` untouched when part of a long is sold, so the
+position's unrealised P&L just scales down with the share count and the gain on
+the sold slice vanishes.  It is carried in two places because neither alone is
+complete — per position (what that name's trim booked) and per account (the
+only figure that can include a name closed out ENTIRELY, since IBKR drops a
+zero-size position from the portfolio read).  Both are **nullable**: reports
+written before the field existed omit it, and null must never be read as a real
+zero.  The figure is per trading SESSION, not since inception; the executor
+snapshots it right after its rebalance, so in normal operation it is that
+rebalance's own realised result.
+
+Adding the field needs no schema bump — old readers ignore an unknown key, new
+readers use ``.get()`` — and archived records signed before it existed still
+verify, since each signature covers the payload as it was written.
 
 Signing/verifying reuses ``target_book.sign`` / ``verify_signature`` (they are
 schema-agnostic), so one shared secret covers both artifacts.
@@ -42,13 +60,36 @@ import pandas as pd
 SCHEMA = "executed-book/v1"
 
 
+def opt_float(raw) -> float | None:
+    """A nullable numeric field: the value as a float, else None.
+
+    Used for the P&L fields, where None ("the broker did not report this", or
+    "this report predates the field") must stay distinguishable from a genuine
+    0.0.  Coercing the two together would let an old record claim a rebalance
+    banked nothing when in fact nobody ever asked."""
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return None if val != val else val          # NaN is not a value either
+
+
 def build_payload(*, as_of: str, profile: str, mode: str, account: str,
                   net_liq: float, cash: float, trades: list[dict],
                   positions: list[dict], generated_at_utc: str | None = None,
-                  account_mode: str = "paper") -> dict:
+                  account_mode: str = "paper",
+                  realized_pnl: float | None = None) -> dict:
     """Assemble a v1 execution-report payload (unsigned).
 
-    ``mode`` is execute/dry-run; ``account_mode`` is paper/live."""
+    ``mode`` is execute/dry-run; ``account_mode`` is paper/live.
+
+    ``realized_pnl`` is the ACCOUNT's session realized P&L at the moment the
+    report was written (see ``ibkr_common.IBKRBroker.realized_pnl``); each
+    position may carry its own ``realized_pnl`` too.  ``None`` throughout means
+    "not recorded" — reports written before the field existed simply omit it,
+    and that must never read as a real zero."""
     def _trade(t: dict) -> dict:
         qty = float(t.get("qty") or 0.0)
         price = float(t.get("price") or 0.0)
@@ -74,6 +115,9 @@ def build_payload(*, as_of: str, profile: str, mode: str, account: str,
             "market_price": float(p.get("market_price") or 0.0),
             "market_value": float(p.get("market_value") or 0.0),
             "unrealized_pnl": float(p.get("unrealized_pnl") or 0.0),
+            # session realized P&L for this name — what a trim booked. Kept
+            # nullable: "IBKR didn't report it" is not "it booked nothing".
+            "realized_pnl": opt_float(p.get("realized_pnl")),
         }
 
     return {
@@ -87,6 +131,10 @@ def build_payload(*, as_of: str, profile: str, mode: str, account: str,
         "account": account,
         "net_liq": float(net_liq or 0.0),
         "cash": float(cash or 0.0),
+        # account-level session realized P&L: the only figure that can see a
+        # name closed out entirely (IBKR drops a zero-size position from the
+        # portfolio, so its realized P&L is in no per-position row)
+        "realized_pnl": opt_float(realized_pnl),
         "trades": [_trade(t) for t in trades],
         "positions": [_pos(p) for p in positions],
     }
@@ -337,10 +385,19 @@ def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
     ``price_src='report'`` so the UI can say the quote is not current; a
     position with neither is ``price_src='none'`` and contributes no P&L.
 
-    Returns ``{rows, cost, value, pnl, pnl_pct, n, n_live, n_stale, as_of,
-    cash, net_liq, account_mode, mode}``; ``rows`` are largest-position-first
-    and each carries ``key, symbol, shares, avg_cost, cost_basis, price,
-    price_src, dchg, market_value, pnl, pnl_pct``.
+    Returns ``{rows, cost, value, pnl, pnl_pct, n, n_live, n_stale, realized,
+    realized_account, realized_known, total_pnl, as_of, cash, net_liq,
+    account_mode, mode}``; ``rows`` are largest-position-first and each carries
+    ``key, symbol, shares, avg_cost, cost_basis, price, price_src, dchg,
+    market_value, pnl, pnl_pct, realized``.
+
+    On realized P&L: ``realized`` sums what the open positions booked this
+    session (a trim's gain), ``realized_account`` is the account-level figure
+    that ALSO covers names closed out entirely, and ``total_pnl`` adds the
+    better of the two to the open P&L — because a trim-and-re-add cycle
+    otherwise reports only the smaller open profit and silently drops what was
+    already banked.  ``realized_known`` is False for a report written before
+    the field existed, so the UI can say "not recorded" rather than "$0".
     """
     payload = payload or {}
     prices = prices or {}
@@ -385,19 +442,33 @@ def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
         rows.append(dict(
             key=key, symbol=p.get("symbol") or key, shares=shares,
             avg_cost=avg_cost, cost_basis=cost_basis, price=px, price_src=src,
-            dchg=dchg, market_value=mv, pnl=pnl, pnl_pct=pnl_pct))
+            dchg=dchg, market_value=mv, pnl=pnl, pnl_pct=pnl_pct,
+            realized=opt_float(p.get("realized_pnl"))))
 
     rows.sort(key=lambda r: -abs(r["market_value"] or r["cost_basis"]))
     cost = sum(r["cost_basis"] for r in rows)
     value = sum(r["market_value"] for r in rows if r["price_src"] != "none")
     priced_cost = sum(r["cost_basis"] for r in rows if r["price_src"] != "none")
     pnl = value - priced_cost
+
+    # realized: per-position sums cover trims of names still held; the
+    # account figure additionally covers names closed out entirely (which have
+    # no row at all).  Prefer the account figure when it exists — it is the
+    # superset — and fall back to the per-position sum when it does not.
+    per_pos = [r["realized"] for r in rows if r["realized"] is not None]
+    acct = opt_float(payload.get("realized_pnl"))
+    realized_sum = sum(per_pos) if per_pos else None
+    realized = acct if acct is not None else realized_sum
     return dict(
         rows=rows, cost=cost, value=value, pnl=pnl,
         pnl_pct=(pnl / abs(priced_cost) * 100) if priced_cost else None,
         n=len(rows),
         n_live=sum(1 for r in rows if r["price_src"] == "live"),
         n_stale=sum(1 for r in rows if r["price_src"] != "live"),
+        realized=realized, realized_account=acct,
+        realized_positions=realized_sum,
+        realized_known=realized is not None,
+        total_pnl=pnl + (realized or 0.0),
         as_of=payload.get("as_of"), cash=float(payload.get("cash") or 0.0),
         net_liq=float(payload.get("net_liq") or 0.0),
         account_mode=(payload.get("account_mode") or "paper"),
