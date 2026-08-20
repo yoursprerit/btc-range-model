@@ -90,3 +90,27 @@ def test_the_assistant_page_exists_and_is_routed():
     assert 'assistant_app.py' in src
     assert (_ROOT / "app" / "assistant_app.py").exists()
     assert (_ROOT / "app" / "assistant_core.py").exists()
+
+
+def test_the_compiled_app_cache_key_actually_includes_the_mtime():
+    """``_compiled_app`` is cached on ``(path, mtime)`` so an edited sub-app is
+    recompiled.  Streamlit drops leading-underscore parameters from a cache key,
+    so naming the second parameter ``_mtime`` silently reduces the key to the
+    path alone — the file changes on disk and the stale code object keeps being
+    served for the life of the process.  It read that way once; this pins it."""
+    tree = ast.parse((_ROOT / "streamlit_app.py").read_text(encoding="utf-8"))
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_compiled_app"), None)
+    assert fn is not None, "streamlit_app.py no longer defines _compiled_app"
+
+    args = [a.arg for a in fn.args.args]
+    assert args == ["path_str", "mtime"], f"unexpected signature: {args}"
+    assert not any(a.startswith("_") for a in args), (
+        "a leading underscore excludes the argument from the Streamlit cache key")
+
+    # ...and it must still be cached, or every rerun re-parses ~760 KB of source.
+    decorators = [ast.unparse(d) for d in fn.decorator_list]
+    assert any("cache_resource" in d for d in decorators), decorators
+    assert any("max_entries" in d for d in decorators), (
+        "cache_resource evicts nothing by default; a real (path, mtime) key "
+        "grows an entry per edit")

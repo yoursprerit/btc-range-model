@@ -54,15 +54,26 @@ for _k, _c in ticker_config.CONFIGS.items():
 
 
 # ── sub-app execution (compile once, exec on every rerun) ────────────────────
-@st.cache_resource(show_spinner=False)
-def _compiled_app(path_str: str, _mtime: float):
+@st.cache_resource(show_spinner=False, max_entries=32)
+def _compiled_app(path_str: str, mtime: float):
     """Compile a sub-app's source once and reuse the code object across reruns.
 
     Streamlit runs this router on every rerun — each ~45 s auto-refresh and every
     app switch.  The previous ``runpy.run_path`` re-read and re-compiled the target
     file each time; for ``btc_hourly_app.py`` (~15 k lines / ~760 KB) that recompile
     was a large, invisible tax on switch latency.  Caching on ``(path, mtime)``
-    recompiles only when the file actually changes on disk."""
+    recompiles only when the file actually changes on disk.
+
+    ``mtime`` must NOT be renamed to ``_mtime``: Streamlit excludes
+    leading-underscore parameters from a cache key.  It was spelled that way
+    until now, which silently reduced the key to ``path_str`` alone — so an
+    edited sub-app kept serving its stale code object for the life of the
+    process, and only a restart picked the change up.  (Harmless on Streamlit
+    Cloud, where a deploy restarts the process, but it makes local iteration
+    baffling: you edit a file, the router re-reads its mtime, and nothing
+    changes on screen.)  ``max_entries`` bounds what the real key now admits —
+    every edit adds an entry, and ``cache_resource`` evicts nothing by
+    default."""
     return compile(Path(path_str).read_text(), path_str, "exec")
 
 
