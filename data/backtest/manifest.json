@@ -1,7 +1,7 @@
 {
   "version": "v3",
   "pull_date": "2026-08-20",
-  "pull_ts_utc": "2026-08-20T13:04:33Z",
+  "pull_ts_utc": "2026-08-20T13:09:27Z",
   "generated_by": "scripts/pull_backtest_data.py",
   "qc_all_passed": true,
   "btc_bar_anchor": "12:00 UTC (7am CT) \u2014 BTC OHLCV rebucketed from Binance hourly to match the daily model and live view. Macro/on-chain remain calendar-date joined. Equities (MSTR/MSTU) remain exchange-session daily.",
