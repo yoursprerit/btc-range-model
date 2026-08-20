@@ -149,14 +149,47 @@ def test_system_prompt_is_cache_marked_and_grounded():
 
 
 # ── models ─────────────────────────────────────────────────────────────────
-def test_opus_5_is_the_default_when_entitled():
+def test_the_default_is_the_cheapest_entitled_model():
+    """Cost is the default because most questions are look-ups the state pack
+    already answers; the picker is one click away for the rest."""
     specs = sorted(ac.MODEL_CATALOG.values(), key=lambda s: s.rank)
-    assert ac.default_model(specs) == "claude-opus-5"
+    assert ac.default_model(specs) == "claude-haiku-4-5"
+    assert ac.cheapest_model(specs) == "claude-haiku-4-5"
+    assert ac.most_capable_model(specs) == "claude-opus-5"
 
 
-def test_default_falls_back_to_the_best_entitled_model():
-    specs = [ac.MODEL_CATALOG["claude-sonnet-5"], ac.MODEL_CATALOG["claude-haiku-4-5"]]
-    assert ac.default_model(specs) == "claude-sonnet-5"
+def test_cheapest_is_computed_from_prices_not_hardcoded():
+    """The day a cheaper model ships, it should win without a code change."""
+    bargain = ac.ModelSpec("claude-thrift-1", "Claude Thrift", "cheap",
+                           input_price=0.1, output_price=0.5, rank=50)
+    specs = [ac.MODEL_CATALOG["claude-opus-5"], ac.MODEL_CATALOG["claude-haiku-4-5"],
+             bargain]
+    assert ac.default_model(specs) == "claude-thrift-1"
+
+
+def test_cost_index_orders_the_catalogue_by_real_spend():
+    order = [s.model_id for s in
+             sorted((m for m in ac.MODEL_CATALOG.values() if m.priced),
+                    key=lambda s: s.cost_index)]
+    assert order[0] == "claude-haiku-4-5"
+    assert order[-1] == "claude-fable-5"
+    # Input-weighted: the grounding prompt dwarfs the answer on every turn.
+    assert (ac.MODEL_CATALOG["claude-haiku-4-5"].cost_index
+            < ac.MODEL_CATALOG["claude-sonnet-5"].cost_index
+            < ac.MODEL_CATALOG["claude-opus-5"].cost_index)
+
+
+def test_an_unpriced_model_is_never_called_cheapest():
+    """A model discovered from the API but absent from the catalogue has no
+    price — claiming it is the most economical would be a guess."""
+    unknown = ac.spec_for("claude-zeta-9")
+    assert not unknown.priced and unknown.cost_index is None
+    assert ac.cheapest_model([unknown]) is None
+    # ...and with nothing priced, the default falls back to the most capable.
+    assert ac.default_model([unknown]) == "claude-zeta-9"
+
+
+def test_default_falls_back_when_nothing_is_entitled():
     assert ac.default_model([]) == ac.PREFERRED_MODEL
 
 
@@ -365,9 +398,38 @@ def test_stream_answer_stops_at_the_tool_round_cap(monkeypatch):
     out = list(ac.stream_answer(api_key="k", spec=ac.MODEL_CATALOG["claude-opus-5"],
                                 messages=[{"role": "user", "content": "hi"}],
                                 system=[{"type": "text", "text": "s"}]))
-    assert len(msgs.calls) == ac.MAX_TOOL_ROUNDS
-    assert any("Stopped after" in e.get("text", "") for e in out if e["type"] == "text")
+
+    # ...and the cap must not mean silence: one extra call is made with tool
+    # use forbidden, so the user gets the best answer the gathered data allows.
+    assert len(msgs.calls) == ac.MAX_TOOL_ROUNDS + 1
+    closing = msgs.calls[-1]
+    assert closing["tool_choice"] == {"type": "none"}
+    assert "Do not request another" in closing["messages"][-1]["content"]
+    assert any(e["type"] == "note" and "budget" in e["text"] for e in out)
     assert out[-1]["type"] == "done"
+
+
+def test_a_failed_closing_turn_still_ends_cleanly(monkeypatch):
+    """If the forced final answer itself fails, the turn must still terminate
+    with a `done` event — otherwise the UI spins forever."""
+    class _Boom(_FakeMessages):
+        def stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) > ac.MAX_TOOL_ROUNDS:
+                raise RuntimeError("closing call failed")
+            return _FakeStream([], _Block(
+                stop_reason="tool_use", usage=_usage(),
+                content=[_Block(type="tool_use", id="t", name="list_files",
+                                input={"path_glob": "*.md"})]))
+
+    msgs = _Boom([])
+    monkeypatch.setattr(ac, "build_client",
+                        lambda _k: type("C", (), {"messages": msgs})())
+    out = list(ac.stream_answer(api_key="k", spec=ac.MODEL_CATALOG["claude-opus-5"],
+                                messages=[{"role": "user", "content": "hi"}],
+                                system=[{"type": "text", "text": "s"}]))
+    assert out[-1]["type"] == "done"
+    assert any("closing summary also failed" in e.get("text", "") for e in out)
 
 
 def test_stream_answer_surfaces_a_refusal(monkeypatch):
@@ -392,3 +454,97 @@ def test_stream_answer_does_not_mutate_the_callers_history(monkeypatch):
                                 messages=history, system=[{"type": "text", "text": "s"}]))
     assert history == [{"role": "user", "content": "hi"}]
     assert len(out[-1]["messages"]) == 2      # the updated transcript comes back
+
+
+# ── live signals, search reach, and session continuity ─────────────────────
+def test_live_signal_is_advertised_as_the_first_tool():
+    """Ordering is guidance: a question about a current signal should reach for
+    this before it starts grepping engine source."""
+    assert ac.TOOLS[0]["name"] == "live_signal"
+    desc = ac.TOOLS[0]["description"]
+    assert "running the app's" in desc.lower() or "own engine" in desc.lower()
+
+
+def test_live_signal_rejects_an_unknown_sleeve_with_the_valid_set():
+    out, is_error = ac.execute_tool("live_signal", {"sleeve": "NOTATICKER"})
+    assert "Unknown sleeve" in out
+    for key in ("BTC", "GLDM", "SOXX"):
+        assert key in out
+
+
+def test_search_default_scope_covers_source_not_just_docs():
+    """The bar-clock convention that broke a real question lives in a module
+    docstring, not in any .md — searching docs alone could never find it."""
+    globs = ac._DEFAULT_SEARCH_GLOBS
+    assert "app/*.py" in globs and "*.md" in globs
+
+    out, is_error = ac.execute_tool(
+        "search_repo", {"pattern": r"Bar-START date of the most recent"})
+    assert not is_error
+    assert "app/freshness.py" in out
+
+
+def test_search_accepts_several_globs_and_dedupes():
+    out, _ = ac.execute_tool("search_repo", {
+        "pattern": r"^# ", "path_glob": "STRATEGY_HEALTH.md,STRATEGY_HEALTH.md",
+        "max_results": 20})
+    assert out.count("STRATEGY_HEALTH.md:1:") == 1
+
+
+def test_search_context_returns_surrounding_lines():
+    """Context turns search→read into one call."""
+    plain, _ = ac.execute_tool("search_repo", {
+        "pattern": r"^# ", "path_glob": "STRATEGY_HEALTH.md"})
+    ctx, _ = ac.execute_tool("search_repo", {
+        "pattern": r"^# ", "path_glob": "STRATEGY_HEALTH.md", "context": 3})
+    assert len(ctx) > len(plain)
+    assert ">" in ctx                      # the matched line is marked
+
+
+def test_search_miss_suggests_how_to_widen():
+    out, _ = ac.execute_tool("search_repo",
+                             {"pattern": "zzz-not-in-this-repo-zzz"})
+    assert "Widen the glob" in out
+
+
+def test_the_prompt_teaches_the_bar_clock():
+    """The failing question hinged entirely on this: 12:00Z bar close = 7 AM CT,
+    and `as_of` being the bar START date."""
+    text = ac.build_system_prompt()[0]["text"]
+    for needle in ("12:00-UTC", "7:00 AM US Central", "START", "live_signal",
+                   "app/freshness.py"):
+        assert needle in text, needle
+
+
+def test_the_prompt_tells_the_model_to_answer_rather_than_exhaust_the_budget():
+    text = ac.build_system_prompt()[0]["text"]
+    assert "budget per question" in text.lower()
+    assert "useful partial answer" in text.lower()
+
+
+def test_followups_replay_the_whole_thread(monkeypatch):
+    """A follow-up must carry the earlier turns, or "and how does that compare?"
+    is unanswerable. The session ends only when the UI clears the history."""
+    def _turn(text):
+        return ([], _Block(stop_reason="end_turn", usage=_usage(),
+                           content=[_Block(type="text", text=text)]))
+
+    client, msgs = _fake_client([_turn("first answer"), _turn("second answer")])
+    monkeypatch.setattr(ac, "build_client", lambda _k: client)
+    spec = ac.MODEL_CATALOG["claude-opus-5"]
+    sysb = [{"type": "text", "text": "s"}]
+
+    first = list(ac.stream_answer(api_key="k", spec=spec, system=sysb,
+                                  messages=[{"role": "user", "content": "Q1"}]))
+    history = first[-1]["messages"]
+    assert len(history) == 2                       # user + assistant
+
+    second = list(ac.stream_answer(
+        api_key="k", spec=spec, system=sysb,
+        messages=history + [{"role": "user", "content": "Q2"}]))
+    assert msgs.calls[1]["messages"][0]["content"] == "Q1", (
+        "the earlier question must still be in the replayed thread")
+    thread = second[-1]["messages"]
+    assert len(thread) == 4                        # Q1, A1, Q2, A2
+    assert [m["role"] for m in thread] == ["user", "assistant", "user", "assistant"]
+    assert thread[2]["content"] == "Q2"

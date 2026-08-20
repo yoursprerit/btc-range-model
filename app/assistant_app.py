@@ -16,7 +16,14 @@ Nothing on this page can write: the sandbox in ``assistant_core`` confines
 every read to the repo and refuses anything that looks like a credential.
 
 The model picker lists what this API key is really entitled to (``GET
-/v1/models``), best model first, defaulting to Claude Opus 5.
+/v1/models``), most capable first, with each model's price shown.  The
+*cheapest* entitled model is selected by default — most questions here are
+look-ups the state pack already answers — and a stronger one is one click away
+for questions that need several look-ups chained together.
+
+Follow-up questions stay in the same session: the whole thread is replayed to
+the API each turn, so "and how does that compare to GLDM?" works.  **🆕 New
+chat** drops the thread and starts fresh.
 
 Configuration
 -------------
@@ -116,18 +123,32 @@ with st.sidebar:
     _ids = [c[0] for c in _choices]
     _labels = {c[0]: c[1] for c in _choices}
     _blurbs = {c[0]: c[2] for c in _choices}
-    _default = ac.default_model(
-        [ac.spec_for(i) for i in _ids])
+    _specs = [ac.spec_for(i) for i in _ids]
+    _default = ac.default_model(_specs)          # the cheapest entitled model
+    _cheapest = ac.cheapest_model(_specs)
+    _capable = ac.most_capable_model(_specs)
     if st.session_state.get("assistant_model") not in _ids and _ids:
         st.session_state["assistant_model"] = _default
 
+    def _model_label(mid: str) -> str:
+        """Name + why you would pick it + what a million input tokens costs."""
+        spec = ac.spec_for(mid)
+        tag = ("  💲 cheapest" if mid == _cheapest
+               else "  🧠 most capable" if mid == _capable else "")
+        # \$ escaped: Streamlit renders these labels as markdown, and a bare
+        # "$5/$25" is parsed as LaTeX math — the dollars vanish and the text
+        # reflows.
+        price = (f"  ·  \\${spec.input_price:g}/\\${spec.output_price:g} per Mtok"
+                 if spec.priced else "")
+        return f"{_labels.get(mid, mid)}{tag}{price}"
+
     _model_id = st.radio(
-        "Anthropic model", options=_ids,
-        format_func=lambda m: (f"{_labels.get(m, m)}"
-                               + ("  ⭐" if m == _default else "")),
+        "Anthropic model", options=_ids, format_func=_model_label,
         key="assistant_model",
-        help="Models your Anthropic subscription can use, best first. "
-             "⭐ marks the recommended default for this app.")
+        help="Models your Anthropic subscription can use, most capable first. "
+             "Prices are USD per million input/output tokens. The cheapest one "
+             "is selected by default — switch to a stronger model for questions "
+             "that need several look-ups chained together.")
     st.caption(f"_{_blurbs.get(_model_id, '')}_")
     st.caption(f"`{_model_id}`")
     if _discover_err:
@@ -143,9 +164,23 @@ with st.sidebar:
               f"{_spec.label} does not expose reasoning."))
 
     st.markdown("---")
-    if st.button("🧹 Clear conversation", use_container_width=True):
+    st.markdown("#### 💬 Session")
+    _turns = len(st.session_state.get(_TRANSCRIPT_KEY, []))
+    # The sidebar runs BEFORE this script run appends the current question, so
+    # reading the transcript here is always one turn stale.  Hold the slot and
+    # refresh it after the answer lands (see _render_session_caption below).
+    _session_slot = st.empty()
+    # Starting a new chat drops the API-side history AND the visible transcript,
+    # so the next question is billed against a fresh (cached) prefix instead of
+    # dragging an unrelated thread along.
+    if st.button("🆕 New chat", use_container_width=True, type="primary",
+                 disabled=not _turns,
+                 help="Forget this conversation and start a fresh session. "
+                      "The app data and documentation context is unchanged."):
         st.session_state[_HISTORY_KEY] = []
         st.session_state[_TRANSCRIPT_KEY] = []
+        st.session_state["assistant_session_n"] = (
+            st.session_state.get("assistant_session_n", 1) + 1)
         st.rerun()
     if st.button("♻️ Reload app data", use_container_width=True,
                  help="Re-read the committed artifacts into the assistant's context."):
@@ -155,6 +190,21 @@ with st.sidebar:
     st.caption("_Answers are grounded in the committed artifacts and the repo's "
                "own documentation — the assistant reads files, it never writes "
                "and never places an order._")
+
+def _render_session_caption() -> None:
+    """Fill the sidebar's session slot from the CURRENT transcript."""
+    asked = sum(1 for t in st.session_state.get(_TRANSCRIPT_KEY, [])
+                if t.get("role") == "user")
+    with _session_slot.container():
+        if asked:
+            st.caption(f"_{asked} question{'s' if asked != 1 else ''} in this "
+                       "session — follow-ups keep the whole thread as context._")
+        else:
+            st.caption("_Ask anything; follow-up questions keep the earlier "
+                       "answers as context until you start a new chat._")
+
+
+_render_session_caption()
 
 # ══════════════════════════════════════════════════════════════════════════
 # MAIN PANE
@@ -223,6 +273,8 @@ def _render_turn(turn: dict) -> None:
                              f"{_summarise_input(call.get('input', {}))}",
                              expanded=False):
                 st.code(str(call.get("result", ""))[:8000], language="text")
+        if turn.get("notes"):
+            st.info(" · ".join(turn["notes"]), icon="⏳")
         st.markdown(turn["text"])
         if turn.get("usage"):
             st.caption(turn["usage"])
@@ -262,10 +314,12 @@ if _question:
         _reason_box = st.expander("🧠 Reasoning", expanded=False) if _show_reasoning else None
         _reason_slot = _reason_box.empty() if _reason_box is not None else None
         _tool_slot = st.container()
+        _note_slot = st.empty()
         _answer_slot = st.empty()
         _usage_slot = st.empty()
 
         _answer, _reasoning, _tools, _usage = "", "", [], None
+        _notes: list[str] = []
         _failed = None
         try:
             with st.spinner(f"{_spec.label} is reading the repo…"):
@@ -291,6 +345,11 @@ if _question:
                                     expanded=False):
                                 st.code(str(_ev.get("result", ""))[:8000],
                                         language="text")
+                    elif kind == "note":
+                        # e.g. the tool budget ran out — say so above the
+                        # answer rather than letting the turn end silently.
+                        _notes.append(_ev["text"])
+                        _note_slot.info(" · ".join(_notes), icon="⏳")
                     elif kind == "usage":
                         _usage = _ev
                     elif kind == "done":
@@ -320,8 +379,11 @@ if _question:
         "text": _answer or (f"⚠️ {_failed}" if _failed else "_(no answer returned)_"),
         "reasoning": _reasoning,
         "tools": _tools,
+        "notes": _notes,
         "usage": _usage_line,
     })
+
+    _render_session_caption()          # now that this turn is in the transcript
 
 # record this page's own render, like every other app
 fr.record_refresh("ASSISTANT", kind="assistant", app_label="🤖 AI Assistant")

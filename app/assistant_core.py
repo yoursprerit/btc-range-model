@@ -57,11 +57,30 @@ class ModelSpec:
     max_output: int = 16_000
     adaptive_thinking: bool = False      # thinking={"type": "adaptive"}
     effort: str | None = None            # output_config={"effort": ...}
-    rank: int = 99                       # lower sorts first; 0 is the default
+    rank: int = 99                       # lower sorts first — capability order
+    input_price: float | None = None     # USD per million input tokens
+    output_price: float | None = None    # USD per million output tokens
 
     @property
     def supports_reasoning(self) -> bool:
         return self.adaptive_thinking
+
+    @property
+    def priced(self) -> bool:
+        return self.input_price is not None and self.output_price is not None
+
+    @property
+    def cost_index(self) -> float | None:
+        """Relative cost of one question here, lower being cheaper.
+
+        Weighted toward input because this app's turns are: the grounding
+        prompt is ~18 k tokens of app state and documentation, while a typical
+        answer is a few hundred. Ranking on the sticker output price alone
+        would misorder models for *this* workload.
+        """
+        if not self.priced:
+            return None
+        return self.input_price + self.output_price / 5.0
 
 
 #: Curated metadata for the models we know how to drive.  ``discover_models``
@@ -71,34 +90,45 @@ class ModelSpec:
 MODEL_CATALOG: dict[str, ModelSpec] = {
     m.model_id: m for m in (
         ModelSpec("claude-opus-5", "Claude Opus 5",
-                  "Best analysis + tool use. Recommended for this app.",
-                  max_output=128_000, adaptive_thinking=True, effort="high", rank=0),
+                  "Strongest multi-step analysis and tool use. Pick this for "
+                  "questions that need several look-ups chained together.",
+                  max_output=128_000, adaptive_thinking=True, effort="high", rank=0,
+                  input_price=5.0, output_price=25.0),
         ModelSpec("claude-fable-5", "Claude Fable 5",
                   "Most capable; slowest and priciest. For the hardest questions.",
-                  max_output=128_000, adaptive_thinking=True, effort="high", rank=1),
+                  max_output=128_000, adaptive_thinking=True, effort="high", rank=1,
+                  input_price=10.0, output_price=50.0),
         ModelSpec("claude-opus-4-8", "Claude Opus 4.8",
                   "Previous Opus generation; strong reasoning.",
-                  max_output=128_000, adaptive_thinking=True, effort="high", rank=2),
+                  max_output=128_000, adaptive_thinking=True, effort="high", rank=2,
+                  input_price=5.0, output_price=25.0),
         ModelSpec("claude-opus-4-7", "Claude Opus 4.7",
                   "Older Opus generation.",
-                  max_output=128_000, adaptive_thinking=True, effort="high", rank=3),
+                  max_output=128_000, adaptive_thinking=True, effort="high", rank=3,
+                  input_price=5.0, output_price=25.0),
         ModelSpec("claude-opus-4-6", "Claude Opus 4.6",
                   "Older Opus generation.",
-                  max_output=64_000, adaptive_thinking=True, effort="high", rank=4),
+                  max_output=64_000, adaptive_thinking=True, effort="high", rank=4,
+                  input_price=5.0, output_price=25.0),
         ModelSpec("claude-sonnet-5", "Claude Sonnet 5",
-                  "Faster and cheaper than Opus; very capable.",
-                  max_output=128_000, adaptive_thinking=True, effort="high", rank=5),
+                  "A middle option — most of Opus's capability at ~60% of the "
+                  "cost. Introductory pricing runs to 2026-08-31.",
+                  max_output=128_000, adaptive_thinking=True, effort="high", rank=5,
+                  input_price=3.0, output_price=15.0),
         ModelSpec("claude-sonnet-4-6", "Claude Sonnet 4.6",
                   "Previous Sonnet generation.",
-                  max_output=64_000, adaptive_thinking=True, effort="high", rank=6),
+                  max_output=64_000, adaptive_thinking=True, effort="high", rank=6,
+                  input_price=3.0, output_price=15.0),
         ModelSpec("claude-haiku-4-5", "Claude Haiku 4.5",
-                  "Fastest and cheapest. Good for quick look-ups.",
-                  max_output=64_000, adaptive_thinking=False, effort=None, rank=7),
+                  "Cheapest and fastest. Great for look-ups and single-step "
+                  "questions; weaker when an answer needs many chained tools.",
+                  max_output=64_000, adaptive_thinking=False, effort=None, rank=7,
+                  input_price=1.0, output_price=5.0),
     )
 }
 
-#: Selected when the subscription offers it — the picker falls back to the
-#: best-ranked entitled model otherwise.
+#: The most *capable* model — labelled as such in the picker, and the fallback
+#: default when nothing in the entitled set carries a price.
 PREFERRED_MODEL = "claude-opus-5"
 
 _FAMILY_VER = re.compile(r"^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?")
@@ -205,12 +235,39 @@ def spec_for(model_id: str) -> ModelSpec:
     return MODEL_CATALOG.get(model_id) or _infer_spec(model_id)
 
 
+def cheapest_model(specs: list[ModelSpec]) -> str | None:
+    """The lowest ``cost_index`` among the entitled models that carry a price.
+
+    A model discovered from the API but absent from ``MODEL_CATALOG`` has no
+    price, and is therefore never named "most economical" — we would be
+    guessing.  Ties break toward the more capable model (lower ``rank``).
+    """
+    priced = [s for s in specs if s.priced]
+    if not priced:
+        return None
+    return min(priced, key=lambda s: (s.cost_index, s.rank)).model_id
+
+
+def most_capable_model(specs: list[ModelSpec]) -> str | None:
+    """The best-ranked entitled model, for labelling the other end of the scale."""
+    return min(specs, key=lambda s: s.rank).model_id if specs else None
+
+
 def default_model(specs: list[ModelSpec]) -> str:
-    """The pre-selected model: Opus 5 when entitled, else the best-ranked one."""
+    """The pre-selected model — the cheapest one this subscription can use.
+
+    Cost is the default because most questions here are look-ups the state pack
+    already answers, and the picker is one click away when a question needs
+    more.  It is *computed* from the catalogue's per-MTok prices rather than
+    hardcoded, so the day a cheaper model ships it wins automatically.  With no
+    priced model in the entitled set we fall back to the most capable one
+    rather than picking arbitrarily.
+    """
     ids = [s.model_id for s in specs]
-    if PREFERRED_MODEL in ids:
+    if not ids:
         return PREFERRED_MODEL
-    return ids[0] if ids else PREFERRED_MODEL
+    return (cheapest_model(specs) or most_capable_model(specs)
+            or (PREFERRED_MODEL if PREFERRED_MODEL in ids else ids[0]))
 
 
 def _short_error(exc: Exception) -> str:
@@ -313,28 +370,65 @@ def tool_read_file(path: str, start_line: int = 1, max_lines: int = 400) -> str:
     return f"{rel(p)} (lines {start}–{start + len(chunk) - 1} of {len(lines)}):\n{body}{tail}"
 
 
-def tool_search_repo(pattern: str, path_glob: str = "**/*.md",
-                     max_results: int = 40, ignore_case: bool = True) -> str:
+#: The default search scope.  It deliberately spans the markdown record AND the
+#: source: how a thing WORKS lives in ``app/*.py`` and its docstrings far more
+#: often than in a .md file — the 12:00-UTC bar convention, for one, is
+#: documented only in ``app/freshness.py``'s module docstring.  Searching docs
+#: alone sent the assistant hunting through 17 k lines of app source by hand.
+_DEFAULT_SEARCH_GLOBS = "*.md,docs/*.md,app/*.py,scripts/*.py,*.py"
+
+
+def tool_search_repo(pattern: str, path_glob: str = _DEFAULT_SEARCH_GLOBS,
+                     max_results: int = 40, ignore_case: bool = True,
+                     context: int = 0) -> str:
+    """Regex search over one or more comma-separated globs, with context lines."""
     try:
         rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
     except re.error as exc:
         return f"Invalid regular expression {pattern!r}: {exc}"
     cap = max(1, min(int(max_results), 200))
+    ctx = max(0, min(int(context), 10))
+    globs = [g.strip() for g in str(path_glob).split(",") if g.strip()]
+
+    seen: set[Path] = set()
     hits: list[str] = []
-    for p in _iter_repo_files(path_glob):
-        try:
-            text = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for n, line in enumerate(text.splitlines(), 1):
-            if rx.search(line):
-                hits.append(f"{rel(p)}:{n}: {line.strip()[:240]}")
+    capped = False
+    for glob in globs:
+        for p in _iter_repo_files(glob):
+            if p in seen:
+                continue
+            seen.add(p)
+            try:
+                lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for n, line in enumerate(lines, 1):
+                if not rx.search(line):
+                    continue
+                if ctx:
+                    lo, hi = max(0, n - 1 - ctx), min(len(lines), n + ctx)
+                    block = "\n".join(
+                        f"{'>' if i + 1 == n else ' '} {i + 1:>5}  {lines[i][:240]}"
+                        for i in range(lo, hi))
+                    hits.append(f"{rel(p)}:{n}:\n{block}")
+                else:
+                    hits.append(f"{rel(p)}:{n}: {line.strip()[:240]}")
                 if len(hits) >= cap:
-                    return (f"{len(hits)} match(es) for {pattern!r} (capped):\n"
-                            + "\n".join(hits))
+                    capped = True
+                    break
+            if capped:
+                break
+        if capped:
+            break
+
     if not hits:
-        return f"No match for {pattern!r} in {path_glob!r}."
-    return f"{len(hits)} match(es) for {pattern!r}:\n" + "\n".join(hits)
+        return (f"No match for {pattern!r} in {path_glob!r}. "
+                "Widen the glob (e.g. '**/*.py') or loosen the pattern.")
+    head = f"{len(hits)} match(es) for {pattern!r}{' (capped)' if capped else ''}:"
+    body = "\n".join(hits)
+    if len(body) > _MAX_READ_CHARS:
+        body = body[:_MAX_READ_CHARS] + "\n… [truncated — narrow the pattern]"
+    return f"{head}\n{body}"
 
 
 def _drill(obj: Any, pointer: str) -> Any:
@@ -409,26 +503,158 @@ def tool_read_table(path: str, mode: str = "head", n: int = 15,
     return f"{shape} — {mode}({rows}):\n{frame.to_string()[:_MAX_READ_CHARS]}"
 
 
+# ── live signals: run the real engines, don't read their source ─────────────
+#: Which engine owns each sleeve.  Questions about "is X about to trigger" are
+#: answered by RUNNING the engine, never by reverse-engineering it out of the
+#: source — which is what an assistant without this tool is forced to attempt,
+#: and why such questions used to burn every tool round without landing.
+_CT_KEYS = {"BTC", "MSTR", "MSTU", "ETH"}
+_GLDM_KEYS = {"GLDM": "trend", "UGL": "trend", "GDX": "miners", "NUGT": "miners",
+              "GDXM": "miners"}
+
+#: Engine runs are expensive (the CT model load alone is ~20 s) and the answer
+#: only changes when a bar closes, so results are memoised for the process.
+_SIGNAL_CACHE: dict[str, Any] = {}
+
+
+def _engine_import(name: str):
+    import importlib
+
+    return importlib.import_module(name)
+
+
+def _ct_results() -> list[dict]:
+    if "ct" not in _SIGNAL_CACHE:
+        _SIGNAL_CACHE["ct"] = _engine_import("btc_ct_engine").run_btc_ct()
+    return _SIGNAL_CACHE["ct"]
+
+
+def _summarise_result(r: dict) -> dict:
+    """The decision-relevant fields of an engine result, without the curves."""
+    dec = r.get("decision") or {}
+    pos = r.get("pos") or {}
+    return {
+        "key": r.get("key"),
+        "name": r.get("name"),
+        "as_of_bar_start": str(getattr(r.get("as_of"), "date", lambda: r.get("as_of"))()),
+        "decision": dec.get("label"),
+        "state": dec.get("state"),
+        "exits_next_bar": bool(dec.get("exits_next_bar", False)),
+        "alert": r.get("alert"),
+        "bull_regime": r.get("bull_regime"),
+        "in_position": pos.get("in_pos"),
+        "entry_px": pos.get("entry_px"),
+        "unrealised_pct": pos.get("upnl"),
+        "stop_px": pos.get("stop_px"),
+        "last_close": r.get("last_close"),
+        "day_change_pct": r.get("dchg"),
+        "ma_value": r.get("ma_val"),
+        "n_trades": r.get("n_trades"),
+        "win_rate_pct": r.get("win_rate"),
+    }
+
+
+def tool_live_signal(sleeve: str, diagnostics: bool = True,
+                     lookback_bars: int = 8) -> str:
+    """Current signal for one sleeve, from the engine the app itself runs."""
+    key = str(sleeve).strip().upper()
+    if key in _CT_KEYS:
+        rows = [_summarise_result(r) for r in _ct_results() if r.get("key") == key]
+        if not rows:
+            return f"The CT engine returned no result for {key}."
+        out: dict[str, Any] = {"sleeve": key, "signal": rows[0]}
+        if diagnostics:
+            diag = _SIGNAL_CACHE.get("ct_diag")
+            if diag is None:
+                diag = _engine_import("btc_ct_engine").live_diagnostics(
+                    lookback=max(2, min(int(lookback_bars), 30)))
+                _SIGNAL_CACHE["ct_diag"] = diag
+            out["diagnostics"] = diag
+        return json.dumps(prune(out, max_list=30), indent=1, default=str)
+
+    if key in _GLDM_KEYS:
+        eng = _engine_import("gldm_engine")
+        mode = _GLDM_KEYS[key]
+        cache_key = f"gldm_{mode}"
+        if cache_key not in _SIGNAL_CACHE:
+            _SIGNAL_CACHE[cache_key] = (eng.run_gldm_miners() if mode == "miners"
+                                        else eng.run_gldm_trend())
+        rows = [_summarise_result(r) for r in _SIGNAL_CACHE[cache_key]]
+        return json.dumps({"sleeve": key, "signals": rows}, indent=1, default=str)
+
+    oc = _engine_import("overall_core")
+    try:
+        cfg = oc.overall_config(key)
+    except Exception:
+        known = sorted(_CT_KEYS | set(_GLDM_KEYS)) + list(
+            _engine_import("ticker_config").APP_KEYS)
+        return f"Unknown sleeve {key!r}. Known sleeves: {', '.join(known)}."
+    cache_key = f"asset_{key}"
+    if cache_key not in _SIGNAL_CACHE:
+        _SIGNAL_CACHE[cache_key] = oc.run_asset(cfg)
+    rows = [_summarise_result(r) for r in _SIGNAL_CACHE[cache_key]]
+    return json.dumps({"sleeve": key, "signals": rows}, indent=1, default=str)
+
+
 #: name → (callable, JSON schema).  The schemas are the model's whole view of
 #: what it may do, so they spell out the *purpose* of each argument.
 TOOLS: list[dict[str, Any]] = [
     {
+        "name": "live_signal",
+        "description": (
+            "THE current signal for one sleeve, computed by running the app's "
+            "OWN engine — not by reading its source. Use this for ANY question "
+            "about what a sleeve is doing now or what would make it trigger: "
+            "'is BTC about to fire a buy?', 'why is SOXX flat?', 'how close is "
+            "GDX to an exit?'. Returns the decision, regime, position and — for "
+            "BTC/MSTR/MSTU/ETH — full gate diagnostics: per-bar predicted vs "
+            "realised high/low, the U1 components against their thresholds, and "
+            "exactly what the NEXT bar must do to trigger an entry (including "
+            "whether it is arithmetically impossible). Prefer this over reading "
+            "engine source; one call beats ten greps."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sleeve": {"type": "string",
+                           "description": "BTC, MSTR, MSTU, ETH, GLDM, UGL, GDX, "
+                                          "NUGT, SOXX, GRID, XLE, REMX, WGMI, "
+                                          "PBW or ARTY."},
+                "diagnostics": {"type": "boolean",
+                                "description": "Include the gate breakdown and "
+                                               "recent bars (default true)."},
+                "lookback_bars": {"type": "integer",
+                                  "description": "Bars of predicted-vs-actual "
+                                                 "history (default 8)."},
+            },
+            "required": ["sleeve"],
+        },
+    },
+    {
         "name": "search_repo",
         "description": (
-            "Regex-search the repository's text files. Use this FIRST to locate "
-            "where something is documented or implemented — e.g. search "
-            "'waterfill|18%' over '**/*.md' for a design decision, or "
-            "'def priority' over 'app/*.py' for the calculation. Returns "
-            "path:line: text."),
+            "Regex-search the repository's text files, with surrounding context. "
+            "Use this to locate where something is documented or implemented — "
+            "e.g. 'waterfill|18%' for a design decision, or 'def priority' for "
+            "the calculation. The default scope covers the markdown record AND "
+            "the app/script source, because HOW something works is usually in "
+            "the code and its docstrings, not only in the .md files. Returns "
+            "path:line: text, so one search often removes the need to read_file "
+            "at all."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Python regular expression."},
                 "path_glob": {"type": "string",
-                              "description": "Glob relative to the repo root, e.g. "
-                                             "'*.md', 'app/*.py', '**/*.json'. "
-                                             "Default '**/*.md'."},
+                              "description": "One glob, or several comma-separated, "
+                                             "relative to the repo root — e.g. "
+                                             "'app/*.py', '*.md,app/*.py', "
+                                             "'data/**/*.json'. Defaults to the "
+                                             "docs plus app/ and scripts/ source."},
                 "max_results": {"type": "integer", "description": "Cap (default 40)."},
+                "context": {"type": "integer",
+                            "description": "Lines of context around each hit "
+                                           "(default 0, max 10). Use 2-4 to read "
+                                           "a definition without a second call."},
                 "ignore_case": {"type": "boolean", "description": "Default true."},
             },
             "required": ["pattern"],
@@ -509,6 +735,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 _DISPATCH: dict[str, Callable[..., str]] = {
+    "live_signal": tool_live_signal,
     "search_repo": tool_search_repo,
     "read_file": tool_read_file,
     "list_files": tool_list_files,
@@ -669,7 +896,36 @@ routes them; each sub-app also renders the same radio):
 
 Live tabs RECOMPUTE from market data when opened; the JSON artifacts are the
 nightly committed snapshot. When they disagree, the artifact's `as_of` is the
-truth about what was *published*, and the Live tab is the truth about *now*."""
+truth about what was *published*, and the Live tab is the truth about *now* —
+and `live_signal` is how YOU reach that same live computation."""
+
+
+BAR_CLOCK = """\
+Bar timing — read this before answering any "will it trigger / has it closed"
+question, because the two clocks below are the usual source of a wrong answer
+--------------------------------------------------------------------------
+* BTC · MSTR · MSTU · ETH run on **12:00-UTC-anchored daily bars**. Bar *D*
+  covers `[D 12:00Z, D+1 12:00Z)` and its signal becomes knowable the INSTANT
+  the bar closes at `D+1 12:00Z` — which is **7:00 AM US Central in summer
+  (CDT), 6:00 AM in winter (CST)**.
+* Every engine reports `as_of` as the bar **START** date *D*. So the newest
+  completed bar is normally *yesterday's* date, and *today's* date is the bar
+  still in progress, closing tomorrow morning at 12:00Z.
+  A question about "the bar closing tomorrow at 7 AM CT" is therefore about the
+  bar whose `as_of` START date is TODAY — one bar AFTER the newest completed
+  bar `live_signal` reports.
+* Equity sleeves (GLDM, GDX, SOXX, GRID, XLE, REMX, WGMI, PBW, ARTY and their
+  leveraged siblings) run on **exchange sessions**: session *D* closes at
+  `D 16:00 ET`.
+* The daily publish anchors at **7:15 AM US Central** — after the Bitcoin bar
+  close, so the book sees BTC's fresh signal and every equity's prior close.
+* The full statement of all of this is `app/freshness.py`'s module docstring.
+
+A signal for a bar that has NOT closed is not knowable — the gates read that
+bar's realised high/low. What IS knowable, and what you should give, is what
+the next bar would have to do: `live_signal` returns exactly that under
+`next_bar_entry_requirement`, including whether an entry is arithmetically
+impossible at the next close."""
 
 
 _ANSWERING_RULES = """\
@@ -685,6 +941,16 @@ How to answer
   section, and cite the file. The *_EVAL.md files hold the experiments that
   settled each decision; OVERALL_STRATEGY.md, TRADING_STRATEGY.md and
   STRATEGY_HEALTH.md hold the methodology.
+* For anything about a CURRENT or IMMINENT signal — "is X about to buy", "will
+  the next bar trigger", "why is X flat", "how close is the exit" — call
+  `live_signal` FIRST. It runs the app's real engine and returns the gate
+  components against their thresholds. Do NOT try to reconstruct a signal by
+  reading engine source: that is slow, and the answer it produces is a guess
+  about code rather than a reading of data.
+* Pick the tool that answers the question in one call. You have a limited tool
+  budget per question; if you are three calls in and no closer, stop searching
+  and answer with what you have, stating plainly what you could not determine.
+  A useful partial answer beats an exhausted budget and no answer at all.
 * Cite as `path` or `path:line`. Quote the sentence that decides the point when
   a design decision is contested.
 * State the as-of date whenever you quote a book, a health flag or a position:
@@ -715,6 +981,8 @@ them, and the design decisions recorded in its documentation.
 
 {APP_MAP}
 
+{BAR_CLOCK}
+
 {_ANSWERING_RULES}
 
 Documentation index (use read_file / search_repo to open any of these)
@@ -732,7 +1000,11 @@ pruned — long series are elided and retrievable with read_json)
 # ════════════════════════════════════════════════════════════════════════════
 # THE CHAT TURN
 # ════════════════════════════════════════════════════════════════════════════
-MAX_TOOL_ROUNDS = 8
+#: Tool rounds before the loop stops fetching.  Raised from 8: with
+#: ``live_signal`` most questions now resolve in one or two, but a genuinely
+#: multi-part question ("compare these three sleeves and say why") needs room,
+#: and running out used to mean the user got NOTHING back.
+MAX_TOOL_ROUNDS = 12
 #: Chat answers, not documents — a cap this size never truncates a real answer
 #: and keeps a runaway generation from burning the budget.
 ANSWER_MAX_TOKENS = 16_000
@@ -826,7 +1098,45 @@ def stream_answer(*, api_key: str, spec: ModelSpec,
                             "content": text, "is_error": is_error})
         convo.append({"role": "user", "content": results})
     else:
-        yield {"type": "text",
-               "text": f"\n\n_Stopped after {MAX_TOOL_ROUNDS} tool rounds._"}
+        # Budget exhausted.  Previously this ended the turn with whatever the
+        # last round happened to have streamed — for a question the model was
+        # still investigating, that is nothing at all, and the user saw a
+        # spinner resolve into silence.  Instead, force one final pass with
+        # tool use forbidden: the model has to answer from what it already
+        # gathered and say what it could not determine.  A partial answer with
+        # its gaps named is always more useful than an empty one.
+        convo.append({
+            "role": "user",
+            "content": (
+                f"You have used all {MAX_TOOL_ROUNDS} tool calls for this "
+                "question. Do not request another. Answer now from what you "
+                "have gathered: give your best supported conclusion, show the "
+                "figures it rests on, and state plainly which part you could "
+                "not determine and what would settle it."),
+        })
+        yield {"type": "note",
+               "text": f"Tool budget ({MAX_TOOL_ROUNDS} rounds) reached — "
+                       "answering from what was gathered."}
+        try:
+            with client.messages.stream(
+                model=spec.model_id, system=sys_blocks, tools=TOOLS,
+                # Keep the tool definitions (the history contains tool_use
+                # blocks that reference them) but forbid another call.
+                tool_choice={"type": "none"},
+                messages=convo, cache_control={"type": "ephemeral"}, **base,
+            ) as stream:
+                for event in stream:
+                    if event.type == "text":
+                        yield {"type": "text", "text": event.text}
+                    elif (event.type == "content_block_delta"
+                          and getattr(event.delta, "type", "") == "thinking_delta"):
+                        yield {"type": "thinking",
+                               "text": getattr(event.delta, "thinking", "")}
+                closing = stream.get_final_message()
+            convo.append({"role": "assistant", "content": closing.content})
+        except Exception as exc:                          # noqa: BLE001
+            yield {"type": "text",
+                   "text": ("\n\n_Ran out of tool rounds, and the closing "
+                            f"summary also failed: {exc.__class__.__name__}._")}
 
     yield {"type": "done", "messages": convo}

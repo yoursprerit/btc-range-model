@@ -538,3 +538,127 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
         ))
     return out
 
+
+
+# ── live signal diagnostics (read-only; used by the 🤖 AI Assistant) ─────────
+def live_diagnostics(lookback: int = 8, start: str = "2025-01-01") -> dict:
+    """Explain the CT sleeves' CURRENT signal state, and what would flip it.
+
+    ``run_btc_ct`` answers *what the signal is*; this answers *why, and what
+    the next bar would have to do to change it* — the question people actually
+    ask ("given today's realised high/low, will a buy trigger at the next bar
+    close?").  Everything here is derived from ``compute_sigs_pure``, so it is
+    the same arithmetic the BTC app's gates run on; nothing is re-implemented.
+
+    Entry needs U1 — a 3-bar mean high-error above ``U1_ERRHI_MIN`` AND at
+    least 2 high-breaks in the last 3 bars — and then a regime gate.  Both
+    components are reported against their thresholds, plus the *headroom*: how
+    far the next bar must exceed its own predicted high for the 3-bar mean to
+    clear U1.  That last figure is honest about what it does not know — the
+    next bar's ``pred_high`` is not knowable until its features exist, so the
+    requirement is expressed as a percentage above prediction, not a price.
+
+    Bars are 12:00-UTC anchored: bar *D* covers ``[D 12:00Z, D+1 12:00Z)`` and
+    its signal is knowable the moment it closes at ``D+1 12:00Z`` (7:00 AM CDT
+    / 6:00 AM CST).  ``as_of`` is the bar START date, so the newest completed
+    bar here is normally *yesterday* and the bar in progress is *today*.
+    """
+    rf = T.load_raw_features()
+    preds = T.build_preds_offline(rf)
+    comp = T.prep(rf, preds, start, str(rf.index[-1].date()))
+    if comp is None or len(comp) < 30:
+        return {"error": "not enough CT history to diagnose"}
+    sigs = compute_sigs_pure(comp)
+    i = len(comp) - 1
+    err_hi = sigs["err_hi"]
+    hi_break = (comp["actual_high"].values > comp["pred_high"].values).astype(int)
+
+    # U1 headroom: ehma3[i+1] = mean(err_hi[i-1], err_hi[i], err_hi[i+1]), so
+    # the next bar clears the mean threshold at
+    #   err_hi[i+1] > 3*U1_ERRHI_MIN - err_hi[i-1] - err_hi[i].
+    need_err = 3.0 * U1_ERRHI_MIN - float(err_hi[i]) - float(err_hi[i - 1])
+    breaks_in_window = int(hi_break[i] + hi_break[i - 1])   # carried into hb3 next bar
+
+    bars = []
+    for j in range(max(0, i - lookback + 1), i + 1):
+        bars.append({
+            "bar_start_date": str(pd.Timestamp(comp["target_date"].iloc[j]).date()),
+            "close_asof": round(float(comp["close_asof"].iloc[j]), 2),
+            "pred_high": round(float(comp["pred_high"].iloc[j]), 2),
+            "actual_high": round(float(comp["actual_high"].iloc[j]), 2),
+            "pred_low": round(float(comp["pred_low"].iloc[j]), 2),
+            "actual_low": round(float(comp["actual_low"].iloc[j]), 2),
+            "actual_close": round(float(comp["actual_close"].iloc[j]), 2),
+            "err_hi_pct": round(float(sigs["err_hi"][j]), 3),
+            "err_lo_pct": round(float(sigs["err_lo"][j]), 3),
+            "high_break": bool(hi_break[j]),
+            "ehma3": round(float(sigs["ehma3"][j]), 3),
+            "hb3": int(sigs["hb3"][j]),
+            "u1": bool(sigs["u1"][j]),
+            "above_ma30": bool(sigs["above_ma30"][j]),
+            "entry_pure": bool(sigs["tf2_entry_pure"][j]),
+            "entry_ma": bool(sigs["tf2_entry_ma"][j]),
+        })
+
+    return {
+        "engine": "btc_ct_engine (CT divergence — BTC · MSTR · MSTU · ETH)",
+        "bar_convention": ("12:00-UTC anchored daily bars; bar D spans "
+                           "[D 12:00Z, D+1 12:00Z) and its signal is knowable "
+                           "at D+1 12:00Z = 7:00 AM CDT / 6:00 AM CST. "
+                           "Dates below are bar START dates."),
+        "latest_completed_bar_start": bars[-1]["bar_start_date"],
+        "thresholds": {
+            "U1_ERRHI_MIN_pct": U1_ERRHI_MIN,
+            "U1_min_high_breaks_in_3": 2,
+            "D2_ERRHI_MAX_pct": D2_ERRHI_MAX,
+            "V_RECENT_WIN_bars": V_RECENT_WIN,
+            "ma_window": 30,
+            "gate_by_asset": dict(GATE_BY_ASSET),
+        },
+        "current_state": {
+            "ehma3_pct": round(float(sigs["ehma3"][i]), 3),
+            "hb3": int(sigs["hb3"][i]),
+            "u1": bool(sigs["u1"][i]),
+            "d1": bool(sigs["d1"][i]), "d2": bool(sigs["d2"][i]),
+            "d3": bool(sigs["d3"][i]),
+            "above_ma30": bool(sigs["above_ma30"][i]),
+            "bull_regime": bool(sigs["bull_regime"][i]),
+            "clean_7d": bool(sigs["clean_7d"][i]),
+            "v_recent": bool(sigs["v_recent"][i]),
+            "entry_pure_gate": bool(sigs["tf2_entry_pure"][i]),
+            "entry_ma_gate": bool(sigs["tf2_entry_ma"][i]),
+        },
+        "next_bar_entry_requirement": {
+            "needs_err_hi_pct_above": round(need_err, 3),
+            "explanation": (
+                "The next bar must exceed its own predicted high by more than "
+                f"{need_err:.2f}% of that bar's reference close for the 3-bar "
+                f"mean high-error to clear U1 ({U1_ERRHI_MIN}%). A negative "
+                "number means the mean already clears it on any outcome."),
+            "high_breaks_in_last_2_bars": breaks_in_window,
+            "needs_a_high_break_next_bar": breaks_in_window < 2,
+            # The decisive one: hb3 on the next bar is at most
+            # breaks_in_window + 1, so when the last two bars broke no highs,
+            # U1's ">=2 in 3" cannot be met however far the next bar runs —
+            # an entry is arithmetically impossible, not merely unlikely.
+            "u1_possible_next_bar": bool(breaks_in_window + 1 >= 2),
+            "u1_impossible_reason": (
+                None if breaks_in_window + 1 >= 2 else
+                f"only {breaks_in_window} of the last 2 bars broke their "
+                "predicted high, so the 3-bar count can reach at most 1 next "
+                "bar and U1 requires 2 — no entry can fire at the next close "
+                "regardless of how high the bar runs"),
+            "regime_gate_now": {
+                "above_ma30": bool(sigs["above_ma30"][i]),
+                "bull_regime": bool(sigs["bull_regime"][i]),
+                "clean_7d": bool(sigs["clean_7d"][i]),
+                "v_recent": bool(sigs["v_recent"][i]),
+            },
+            "caveat": ("U1 is necessary but not sufficient — the per-asset "
+                       "regime gate must also pass, and the gate is evaluated "
+                       "on the new bar, not on today's values. The next bar's "
+                       "pred_high is not knowable until its features exist, so "
+                       "this is a requirement in % above prediction, not a price."),
+        },
+        "recent_bars": bars,
+    }
