@@ -476,6 +476,43 @@ broker knows the *fill*. So the 🧭 Overall Trading app reads it directly, in a
 | 🔴 **Live — Decision Cockpit** | IBKR average fill from `executed_book_live.json`, else `executed_book.json` | the same **live spot** every other price on that tab uses |
 | 🕰️ **Historical View** | the run standing on the chosen date, from `executed_archive/` | each sleeve's **official close on the viewed bar** |
 
+Each shows the position's **open** P&L (mark − cost basis on what is still held)
+alongside the **realised** P&L that run banked, and their total.
+
+**Realised P&L — what a trim actually banked.** The daily optimiser's tilt
+often sells *part* of a name and keeps the rest. That trim is invisible in a
+cost-basis view on its own: IBKR leaves the remaining shares' `avg_cost`
+untouched, so the position's open P&L simply scales down with the share count
+and the gain on the sold slice disappears. The report therefore carries
+`realized_pnl` in two places — per position (what that name's trim booked) and
+per account (the only figure that can include a name closed out **entirely**,
+since IBKR drops a position the moment it hits zero shares). The section shows
+both: a *Realised this run* metric with `open + realised = total`, a per-card
+`💰 banked this run` line, and a footer that says how much came from names that
+no longer have a card.
+
+Worked example — 194 GDX at an average cost of \$96.94, marked at \$99.84:
+
+| | Shares | Avg cost | Open P&L | Realised | Total |
+|---|---|---|---|---|---|
+| Full position | 194 | \$96.94 | **+\$563 (+2.99%)** | — | +\$563 |
+| Tilt trims to 150 | 150 | \$96.94 | **+\$435 (+2.99%)** | +\$127.60 | **+\$563** |
+| Tilt re-adds 44 @ \$105 | 194 | \$98.77 | **+\$208 (+1.09%)** | +\$127.60 | +\$336 |
+
+The percentage is invariant to a trim (the basis per share does not move) and
+open + realised reconciles back to the untrimmed figure. A *re-add* is what
+genuinely moves the number: the basis blends to \$98.77, so the same 194 shares
+now show +1.09% instead of +2.99% at an unchanged price.
+
+Two properties worth knowing. The figure is per trading **session**, not since
+inception — the executor reads it straight after its own rebalance, so in normal
+operation it is that rebalance's result (a manual trade in the same session
+lands in it too). And it is **nullable**: reports written before the field
+existed omit it, and the UI renders "—" rather than \$0, because "nobody asked"
+and "it banked nothing" are different facts. Archived records signed before the
+field existed still verify — each signature covers the payload as it was
+written, so no schema bump was needed.
+
 Same card layout as the signal section above it, grouped by parent signal, so
 the *engine's* position (entry bar → bar P&L) and the *account's* position
 (average fill → live P&L) sit one under the other and can be read against each

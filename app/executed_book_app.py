@@ -211,12 +211,16 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
         avg_cost = float(p.get("avg_cost") or 0.0)
         mpx = float(p.get("market_price") or 0.0)
         wt = (mv / mv_total * 100) if mv_total else 0.0
+        # realised: nullable on purpose — an older report has no such field,
+        # and "not recorded" must not render as a confident $0
+        rpnl = eb.opt_float(p.get("realized_pnl"))
         prows.append(dict(
             Instrument=_name(p.get("key"), p.get("symbol")), IBKR=p.get("symbol"),
             Shares=shares, Avg_cost=(f"${avg_cost:,.2f}" if avg_cost else "—"),
             Price=(f"${mpx:,.2f}" if mpx else "—"),
             Value=(f"${mv:,.0f}" if mv else "—"),
             Unreal_PnL=(f"${upnl:,.0f}" if mv else "—"),
+            Real_PnL=("—" if rpnl is None else f"${rpnl:,.2f}"),
             Weight=wt))
     pdf = pd.DataFrame(prows)
 
@@ -228,11 +232,27 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
                 "Shares": st.column_config.NumberColumn("Shares", format="%.0f"),
                 "Avg_cost": st.column_config.TextColumn("Avg cost"),
                 "Unreal_PnL": st.column_config.TextColumn("Unreal. P&L"),
+                "Real_PnL": st.column_config.TextColumn(
+                    "Realised P&L",
+                    help="Booked by the shares this run SOLD — a trim leaves "
+                         "the remaining shares' average cost untouched, so it "
+                         "shows up nowhere else. Per session; “—” means the "
+                         "report predates the field."),
                 "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%")})
         tot_upnl = sum(float(p.get("unrealized_pnl") or 0.0) for p in positions)
-        st.caption(f"Total unrealised P&L: **${tot_upnl:,.0f}** · "
-                   f"invested **${mv_total:,.0f}**"
-                   + (f" · cash **${cash:,.0f}**" if cash else ""))
+        _rl = [eb.opt_float(p.get("realized_pnl")) for p in positions]
+        _rl_known = [v for v in _rl if v is not None]
+        _acct_rl = eb.opt_float(payload.get("realized_pnl"))
+        _rl_tot = _acct_rl if _acct_rl is not None else (
+            sum(_rl_known) if _rl_known else None)
+        # \$ — several bare dollar amounts in one markdown string read as a
+        # $…$ LaTeX span and render as upside-down maths
+        st.caption((f"Total unrealised P&L: **${tot_upnl:,.0f}** · "
+                    f"invested **${mv_total:,.0f}**"
+                    + (f" · cash **${cash:,.0f}**" if cash else "")
+                    + ("" if _rl_tot is None else
+                       f" · **realised this run ${_rl_tot:,.2f}**")
+                    ).replace("$", "\\$"))
     with right:
         if mv_total:
             labels = [p.get("symbol") for p in sorted(

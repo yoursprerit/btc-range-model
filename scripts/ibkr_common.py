@@ -101,6 +101,29 @@ US_MARKET_HOLIDAYS = {
 # ════════════════════════════════════════════════════════════════════════════
 # TRADING-DAY / FRESHNESS GUARDS
 # ════════════════════════════════════════════════════════════════════════════
+# IBKR signals "this P&L is not available" by sending Double.MAX_VALUE
+# (~1.8e308) rather than omitting the field, so a raw float() of it renders as
+# an absurd number. Anything at that magnitude is the sentinel, not a P&L.
+_PNL_UNAVAILABLE = 1e30
+
+
+def _pnl_value(raw) -> float | None:
+    """A P&L field from IBKR as a float, or None when IBKR withholds it.
+
+    None and 0.0 mean different things here — "the broker did not report it"
+    versus "the position really has booked nothing" — so an unavailable value
+    is never flattened to zero."""
+    if raw is None or raw == "":
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if val != val or abs(val) >= _PNL_UNAVAILABLE:     # NaN or the sentinel
+        return None
+    return val
+
+
 def is_trading_day(day: pd.Timestamp) -> tuple[bool, str]:
     """(tradeable?, reason) — False on weekends and US market holidays."""
     if day.weekday() >= 5:
@@ -856,13 +879,40 @@ class Broker:
                 return float(v.value)
         return 0.0
 
+    def realized_pnl(self) -> float | None:
+        """The account's SESSION realized P&L, or None if IBKR won't say.
+
+        IBKR reports realized P&L per trading session, not since inception — so
+        read straight after a rebalance (which is when the executor writes its
+        report) this is what THAT rebalance banked: the gain/loss booked by
+        every trim and close it placed.  Any manual trade made in the same
+        session lands in it too.
+
+        Account-level on purpose.  A name closed out ENTIRELY disappears from
+        ``ib.portfolio()`` (the wrapper drops a contract the moment its size
+        hits zero), so per-position realized P&L can never see a full exit —
+        only this figure covers the whole session."""
+        for v in self.ib.accountSummary(self.account):
+            if v.tag == "RealizedPnL" and v.currency in ("USD", "BASE", ""):
+                return _pnl_value(v.value)
+        for v in self.ib.accountValues(self.account):
+            if v.tag == "RealizedPnL" and v.currency in ("USD", "BASE"):
+                return _pnl_value(v.value)
+        return None
+
     def portfolio_snapshot(self) -> list[dict]:
         """Current holdings with cost/market data, one dict per position.
 
         Uses ``ib.portfolio()`` (richer than ``positions()``): shares, average
         cost, and — when the paper account has market data — market price/value
         and unrealised P&L. Fields that IBKR can't supply come back as 0.0, which
-        the UI renders as “—”. Foreign symbols keep ``key=None``."""
+        the UI renders as “—”. Foreign symbols keep ``key=None``.
+
+        ``realized_pnl`` is the session figure IBKR attributes to that position:
+        after a rebalance that TRIMMED a name, it is what the sold slice booked
+        (the remaining shares keep their average cost, so the trim is otherwise
+        invisible in this snapshot).  ``None`` when IBKR withholds it — which is
+        not the same as a real zero, so it is never coerced to 0.0."""
         out = []
         self.positions_by_key()          # settle the subscription first: a report
         for item in self.ib.portfolio(self.account):   # written off a half-arrived
@@ -874,7 +924,8 @@ class Broker:
                 avg_cost=float(getattr(item, "averageCost", 0.0) or 0.0),
                 market_price=float(getattr(item, "marketPrice", 0.0) or 0.0),
                 market_value=float(getattr(item, "marketValue", 0.0) or 0.0),
-                unrealized_pnl=float(getattr(item, "unrealizedPNL", 0.0) or 0.0)))
+                unrealized_pnl=_pnl_value(getattr(item, "unrealizedPNL", None)),
+                realized_pnl=_pnl_value(getattr(item, "realizedPNL", None))))
         return out
 
     def day_fills_by_symbol(self) -> list[dict]:

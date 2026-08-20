@@ -628,6 +628,28 @@ def get_executed_archive(bucket: str) -> list[dict]:
     return []
 
 
+def _money(x, digits=0) -> str:
+    """A signed dollar amount as ``+$1,234`` / ``−$1,234`` (— when unknown).
+
+    Sign before the symbol so the minus reads at a glance, and a true minus
+    (U+2212) rather than a hyphen so it lines up in the tabular figures."""
+    if x is None:
+        return "—"
+    return f"{'+' if x >= 0 else '−'}${abs(x):,.{digits}f}"
+
+
+def _no_tex(text: str) -> str:
+    """Escape ``$`` for a PLAIN Streamlit markdown string (caption/markdown with
+    no HTML).
+
+    Two bare dollar amounts in one such string are read as a ``$…$`` LaTeX span
+    and render as upside-down maths — so every money figure that reaches
+    ``st.caption`` goes through here. Text inside HTML tags
+    (``unsafe_allow_html=True``) is exempt: Streamlit passes it through as raw
+    HTML, and an escape there would print a literal backslash."""
+    return text.replace("$", "\\$")
+
+
 def _pos_meta(key: str, meta_by_key: dict) -> dict:
     """Display metadata for an executed-book key: the live/snapshot row when the
     instrument is one this app trades, else a neutral fallback so an unknown
@@ -656,16 +678,33 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
                 "is flat (or fully in cash) as of that run.")
         return
 
-    k = st.columns(4)
+    k = st.columns(5)
     k[0].metric("Positions held", f"{cp['n']}")
     k[1].metric("Cost basis", f"${cp['cost']:,.0f}",
                 help="Σ shares × IBKR average cost — what the account actually paid.")
     k[2].metric("Market value", f"${cp['value']:,.0f}",
                 help=f"Σ shares × {mark_label}.")
-    k[3].metric("Unrealised P&L",
-                f"{'+' if cp['pnl'] >= 0 else '−'}${abs(cp['pnl']):,.0f}",
+    # delta_color stays "normal" in both directions: Streamlit already paints a
+    # negative delta red, so flipping to "inverse" on a loss would render the
+    # loss GREEN — the one colour a losing book must never be.
+    k[3].metric("Open P&L", _money(cp["pnl"]),
                 delta=(None if cp["pnl_pct"] is None else f"{cp['pnl_pct']:+.2f}%"),
-                delta_color="normal" if cp["pnl"] >= 0 else "inverse")
+                help="Marked-to-price minus cost basis on what is still held.")
+    if cp["realized_known"]:
+        k[4].metric("Realised this run", _money(cp["realized"]),
+                    delta=f"total {_money(cp['total_pnl'])}", delta_color="off",
+                    help="What this rebalance BANKED — the gain/loss on shares "
+                         "it sold. A trim leaves the remaining shares' average "
+                         "cost untouched, so without this the sold slice's "
+                         "profit would simply vanish from the section. "
+                         "**total** = open P&L + realised.")
+    else:
+        k[4].metric("Realised this run", "—",
+                    help="Not recorded: this execution report predates the "
+                         "`realized_pnl` field (or IBKR withheld it). Shown as "
+                         "“—” rather than $0 — nobody asked, so nothing is "
+                         "known either way. Runs from the next rebalance "
+                         "onward carry it.")
 
     # group by parent signal, in the cockpit's canonical parent order, so the
     # cards line up with the section above; anything unknown trails at the end
@@ -680,13 +719,16 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
         g_cost = sum(r["cost_basis"] for r in grp)
         g_pnl = sum(r["pnl"] for r in grp)
         g_pct = (g_pnl / abs(g_cost) * 100) if g_cost else None
+        g_real = [r["realized"] for r in grp if r["realized"]]
         head = _pos_meta(grp[0]["key"], meta_by_key)
         gcol = C_BUY if g_pnl >= 0 else C_EXIT
         st.markdown(
             f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 4px 0'>"
             f"<span style='font-size:16px;font-weight:800'>{head['emoji']} {pk}</span>"
-            f"{_pill(f'{g_pnl:+,.0f} $', gcol)}"
-            f"<span style='font-size:11px;color:#94a3b8'>"
+            f"{_pill(_money(g_pnl) + ' open', gcol)}"
+            + (_pill(_money(sum(g_real)) + " banked",
+                     C_BUY if sum(g_real) >= 0 else C_EXIT) if g_real else "")
+            + f"<span style='font-size:11px;color:#94a3b8'>"
             f"{len(grp)} holding{'s' if len(grp) != 1 else ''} · cost "
             f"${g_cost:,.0f} · P&amp;L {'—' if g_pct is None else f'{g_pct:+.2f}%'}"
             f"</span></div>", unsafe_allow_html=True)
@@ -714,9 +756,19 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
                     f"<span style='color:#94a3b8'>cost</span> · "
                     f"${r['cost_basis']:,.0f}<br>"
                     f"P&amp;L <b style='color:{rc}'>{_pct(r['pnl_pct'], 2)}</b> "
-                    f"<b style='color:{rc}'>({r['pnl']:+,.0f} $)</b> · value "
+                    f"<b style='color:{rc}'>({_money(r['pnl'])})</b> · value "
                     f"${r['market_value']:,.0f}</div>",
                 ]
+                # a trim leaves avg_cost alone, so the line above is unchanged
+                # by it — this is the only place the sold slice's profit shows
+                if r["realized"]:
+                    _rlc = C_BUY if r["realized"] >= 0 else C_EXIT
+                    body.append(
+                        f"<div style='font-size:11px;line-height:1.5;"
+                        f"margin-top:2px'>💰 banked this run "
+                        f"<b style='color:{_rlc}'>{_money(r['realized'], 2)}</b>"
+                        f"<span style='color:#94a3b8'> · total "
+                        f"{_money(r['pnl'] + r['realized'])}</span></div>")
                 if r["price_src"] == "report":
                     body.append(
                         "<div style='font-size:10.5px;color:#d97706;margin-top:2px'>"
@@ -734,6 +786,24 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
                 body.append("</div>")
                 st.markdown("".join(body), unsafe_allow_html=True)
 
+    if cp["realized_known"]:
+        _gap = (cp["realized_account"] or 0.0) - (cp["realized_positions"] or 0.0)
+        st.caption(_no_tex(
+            f"💰 **Realised this run {_money(cp['realized'], 2)}** — booked by "
+            "the shares this rebalance SOLD. A tilt-driven trim sells part of a "
+            "name and keeps the rest; IBKR leaves the remaining shares' average "
+            "cost untouched, so the cards above just scale down with the share "
+            "count and would otherwise lose the sold slice's profit entirely. "
+            f"Open {_money(cp['pnl'])} + realised {_money(cp['realized'])} = "
+            f"**{_money(cp['total_pnl'])}** total. Per trading session, not "
+            "since inception — the executor reads it straight after its own "
+            "rebalance, so it is that rebalance's result."
+            + (f" Of it, {_money(_gap, 2)} came from names closed out entirely "
+               "(no card above — IBKR drops a position the moment it hits zero "
+               "shares); the rest is the trims you can see."
+               if cp["realized_account"] is not None
+               and cp["realized_positions"] is not None
+               and abs(_gap) > 0.005 else "")))
     if cp["n_stale"]:
         st.caption(f"⚠️ {cp['n_stale']} of {cp['n']} holdings had no {mark_label} — "
                    "they are marked at the price the execution report itself "
@@ -1798,15 +1868,14 @@ with tab_live:
                            "close**, so the P&L is as of that bar, not now.")
             _render_current_positions(_cp, by_key, mark_label=_cp_mark_lbl)
             if _cp_report.get("cash"):
-                # \$ — two bare dollar amounts in one markdown string are read
-                # as a $…$ LaTeX span and render as upside-down maths
-                st.caption(f"💵 Uninvested cash in the account: "
-                           f"**\\${float(_cp_report['cash']):,.0f}**"
-                           + (f" · net liquidation "
-                              f"**\\${float(_cp_report['net_liq']):,.0f}**"
-                              if _cp_report.get("net_liq") else "")
-                           + ". Full fills, drift-vs-target and the raw report "
-                             "are in the **✅ Executed Book (IBKR)** app.")
+                st.caption(_no_tex(
+                    f"💵 Uninvested cash in the account: "
+                    f"**${float(_cp_report['cash']):,.0f}**"
+                    + (f" · net liquidation "
+                       f"**${float(_cp_report['net_liq']):,.0f}**"
+                       if _cp_report.get("net_liq") else "")
+                    + ". Full fills, drift-vs-target and the raw report "
+                      "are in the **✅ Executed Book (IBKR)** app."))
 
     st.markdown("---")
 
@@ -3661,16 +3730,16 @@ with tab_hist:
                     _hcp, {r["key"]: r for r in _snap["rows"]},
                     mark_label=f"the {_h_bar.strftime('%b %d, %Y')} close")
                 if _hcp_rec["payload"].get("cash"):
-                    st.caption(
+                    st.caption(_no_tex(
                         f"💵 Uninvested cash at that run: "
-                        f"**\\${float(_hcp_rec['payload']['cash']):,.0f}**"
+                        f"**${float(_hcp_rec['payload']['cash']):,.0f}**"
                         + (f" · net liquidation "
-                           f"**\\${float(_hcp_rec['payload']['net_liq']):,.0f}** "
+                           f"**${float(_hcp_rec['payload']['net_liq']):,.0f}** "
                            f"(as reported then)"
                            if _hcp_rec["payload"].get("net_liq") else "")
                         + ". The full run — fills, drift vs the target book, the "
                           "raw report — is in the **✅ Executed Book (IBKR)** "
-                          "app's 🕰️ Historical tab.")
+                          "app's 🕰️ Historical tab."))
 
 
 # ══════════════════════════════════════════════════════════════════════════
