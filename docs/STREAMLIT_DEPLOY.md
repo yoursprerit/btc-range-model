@@ -61,9 +61,18 @@ via `runtime.txt`.
 - **Theme & server** are pre-set in [`.streamlit/config.toml`](../.streamlit/config.toml)
   (`headless = true`, light theme, Bitcoin-orange accent) — no dashboard changes
   needed.
-- **Secrets are not required.** All data is fetched from public feeds (Yahoo,
-  Binance, blockchain.info, alternative.me); models load from the committed
-  `models/` artefacts. Leave the **Secrets** box empty.
+- **One optional secret.** All *market* data is fetched from public feeds
+  (Yahoo, Binance, blockchain.info, alternative.me) and models load from the
+  committed `models/` artefacts, so every trading app works with the **Secrets**
+  box empty. The 🤖 **AI Assistant** page is the only thing that needs a key:
+
+  ```toml
+  ANTHROPIC_API_KEY = "sk-ant-…"
+  ```
+
+  Without it that one page renders a setup notice and everything else is
+  unaffected. Never commit the key — `.streamlit/secrets.toml` is git-ignored;
+  paste it into *Manage app → Settings → Secrets* instead.
 - **IBKR execution is *not* part of the cloud app.** The dashboard only *views*
   the target/executed books; placing real orders runs off-platform next to IB
   Gateway (see [`../IBKR_PAPER_TRADING.md`](../IBKR_PAPER_TRADING.md) and

@@ -7,6 +7,8 @@ Streamlit Community Cloud expects the main file at the repo root named
   * ``app/gldm_hourly_app.py``  — the gold (GLDM) forecaster (unchanged)
   * ``app/ticker_app.py``       — the generic, config-driven app that serves the
                                   new tickers (SOXX / GRID / XLE / REMX / …)
+  * ``app/assistant_app.py``    — the AI Assistant chat, grounded in the
+                                  committed artifacts and the repo's own docs
 
 A single **Application** radio at the top of the sidebar lists every app.  The
 choice is stored in ``st.session_state['gldm_active_app']``; reading session
@@ -38,14 +40,15 @@ sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK"])
+             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
            "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
            "DAILYAUDIT": "🕵️  Daily Audit",
            "HEALTH": "🩺  Strategy Health",
            "TARGETBOOK": "📋  Target Book (IBKR)",
-           "EXECUTEDBOOK": "✅  Executed Book (IBKR)"}
+           "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
+           "ASSISTANT": "🤖  AI Assistant"}
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
@@ -165,6 +168,9 @@ def _run_choice():
     elif _choice == "EXECUTEDBOOK":
         # Post-rebalance report: trades executed + current IBKR positions.
         _exec_app(_APP_DIR / "executed_book_app.py")
+    elif _choice == "ASSISTANT":
+        # Chat grounded in the committed artifacts + the repo's own docs.
+        _exec_app(_APP_DIR / "assistant_app.py")
     elif _choice in ("BTC", "GLDM", "GDXM"):
         # Upgrade the original app's built-in BTC/GLDM selector to the full list,
         # without touching the app source.  Only the ``gldm_active_app`` widget is
