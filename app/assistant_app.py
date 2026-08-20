@@ -165,7 +165,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("#### 💬 Session")
-    _turns = len(st.session_state.get(_TRANSCRIPT_KEY, []))
     # The sidebar runs BEFORE this script run appends the current question, so
     # reading the transcript here is always one turn stale.  Hold the slot and
     # refresh it after the answer lands (see _render_session_caption below).
@@ -173,8 +172,16 @@ with st.sidebar:
     # Starting a new chat drops the API-side history AND the visible transcript,
     # so the next question is billed against a fresh (cached) prefix instead of
     # dragging an unrelated thread along.
+    #
+    # NEVER gate this button on the transcript length.  It used to carry
+    # ``disabled=not _turns``, read from the same stale session state the
+    # caption above has to work around: the run that answers your FIRST
+    # question renders the sidebar before recording that turn, and nothing
+    # reruns afterwards — so the button stayed greyed out with a full
+    # conversation on screen, and the only way to reset was to ask a second
+    # question first.  There is no state where a user should be unable to start
+    # a new chat, and clicking it with nothing to clear is a harmless no-op.
     if st.button("🆕 New chat", use_container_width=True, type="primary",
-                 disabled=not _turns,
                  help="Forget this conversation and start a fresh session. "
                       "The app data and documentation context is unchanged."):
         st.session_state[_HISTORY_KEY] = []
