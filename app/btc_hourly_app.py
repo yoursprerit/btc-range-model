@@ -188,6 +188,29 @@ SATA_DAILY_FACTOR   = 1.0 + SATA_ANNUAL_RATE / SATA_BUSINESS_DAYS  # ≈1.00052
 
 st.set_page_config(page_title="BTC Hourly Forecaster", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
+
+# Streamlit's default st.metric value font (~2.25rem) is too big for the
+# 5-column headline row, and it renders the value inside a markdown container
+# that is hard-clipped to ONE line (white-space:nowrap + overflow:hidden +
+# text-overflow:ellipsis). Together those truncated the top panel: the
+# "Forecast band" range lost its trailing digits, and "🐻 BEAR / NEUTRAL"
+# collapsed to just the emoji once the expanded sidebar narrowed the column.
+# Shrink the value and let value / label / delta wrap instead of ellipsing.
+st.markdown("""
+<style>
+div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+/* The clipping is applied on the inner markdown container AND on the <p> it
+   wraps the text in, so both have to be unset — targeting only the container
+   still left the <p> ellipsing the delta subtitle. */
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] *,
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] *,
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] *
+{white-space:normal !important;overflow:visible !important;
+ text-overflow:clip !important;}
+[data-testid="stMetricValue"] p {line-height:1.3;}
+[data-testid="stMetricLabel"] p, [data-testid="stMetricDelta"] p {line-height:1.25;}
+</style>""", unsafe_allow_html=True)
+
 st.title("📈 Bitcoin — Live hourly next-close forecast")
 import strategy_version as _sv                 # noqa: E402
 if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
@@ -13775,8 +13798,12 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
     c2.metric(f"Forecast 1 h from now ({forecast_target.strftime('%H:%M:%S')} UTC)",
               f"${pred_close:,.0f}",
               delta=f"{expected_ret_pct:+.3f}% vs spot")
+    # NOTE: escape the dollars — Streamlit renders metric values as markdown, so
+    # a PAIR of unescaped "$" is parsed as inline LaTeX. That silently ate both
+    # "$" signs and re-set the digits between them as math, which is why this
+    # band read as a mangled, half-missing number.
     c3.metric("Forecast band ±0.5 %",
-              f"${pred_close_dn:,.0f} – ${pred_close_up:,.0f}",
+              f"\\${pred_close_dn:,.0f} – \\${pred_close_up:,.0f}",
               delta=f"width = {2*BAND_PCT*100:.1f} %")
     c4.metric("Fear & Greed (latest daily)",
               f"{fng_now if fng_now is not None else 'n/a'}",
@@ -14104,13 +14131,13 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                   f"${daily['pred_high']:,.0f}",
                   delta=(f"+{(daily['pred_high']/daily['close_asof']-1)*100:.2f}% vs close"))
         d1.caption(
-            f"±1.5 % band ${daily['pred_high']*0.985:,.0f} – ${daily['pred_high']*1.015:,.0f}"
+            f"±1.5 % band \\${daily['pred_high']*0.985:,.0f} – \\${daily['pred_high']*1.015:,.0f}"
         )
         d2.metric("Predicted DAILY LOW",
                   f"${daily['pred_low']:,.0f}",
                   delta=(f"{(daily['pred_low']/daily['close_asof']-1)*100:.2f}% vs close"))
         d2.caption(
-            f"±1.5 % band ${daily['pred_low']*0.985:,.0f} – ${daily['pred_low']*1.015:,.0f}"
+            f"±1.5 % band \\${daily['pred_low']*0.985:,.0f} – \\${daily['pred_low']*1.015:,.0f}"
         )
         # Direction-head bias (if model artefact has one)
         pb = daily.get("p_bull")
@@ -14932,9 +14959,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         st.markdown(
             f"#### 📅 7-day close-price cone — regime: **{cone7['regime_label']}**  "
             f"<small>(as-of {pd.Timestamp(cone7['asof_date']).strftime('%Y-%m-%d')} "
-            f"close ${cone7['asof_close']:,.0f} → "
+            f"close \\${cone7['asof_close']:,.0f} → "
             f"forecast {cone7['pred_date'].strftime('%Y-%m-%d')} "
-            f"${cone7['pred_close']:,.0f} "
+            f"\\${cone7['pred_close']:,.0f} "
             f"({ret_pct:+.2f}% regime median return), "
             f"band ±{cone7['band_pct']*100:.1f}%)</small>",
             unsafe_allow_html=True,
@@ -15192,9 +15219,9 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
         st.markdown(
             f"#### 📆 14-day close-price cone — regime: **{cone14['regime_label']}**  "
             f"<small>(as-of {pd.Timestamp(cone14['asof_date']).strftime('%Y-%m-%d')} "
-            f"close ${cone14['asof_close']:,.0f} → "
+            f"close \\${cone14['asof_close']:,.0f} → "
             f"forecast {cone14['pred_date'].strftime('%Y-%m-%d')} "
-            f"${cone14['pred_close']:,.0f} "
+            f"\\${cone14['pred_close']:,.0f} "
             f"(regime median {ret_pct_14:+.2f}%), "
             f"band ±{cone14['band_pct']*100:.1f}%{ml_tag})</small>",
             unsafe_allow_html=True,
@@ -16997,9 +17024,9 @@ with tab_btc:
             "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
-            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "Perpetual Preferred, \\$100 par), earning its **13% annual dividend paid daily** "
             "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
-            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "effective). SATA is assumed to have always traded flat at \\$100 par and paid this "
             "same daily dividend across every backtest period."
         )
     _btc_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
@@ -17076,9 +17103,9 @@ with tab_mstr:
             "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
-            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "Perpetual Preferred, \\$100 par), earning its **13% annual dividend paid daily** "
             "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
-            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "effective). SATA is assumed to have always traded flat at \\$100 par and paid this "
             "same daily dividend across every backtest period."
         )
     _mstr_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
@@ -17158,9 +17185,9 @@ with tab_mstu:
             "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
-            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "Perpetual Preferred, \\$100 par), earning its **13% annual dividend paid daily** "
             "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
-            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "effective). SATA is assumed to have always traded flat at \\$100 par and paid this "
             "same daily dividend across every backtest period."
         )
     _mstu_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
@@ -17243,9 +17270,9 @@ with tab_eth:
             "🪙 **SATA idle-cash variant** — *identical* Pure Regime (Bull Regime OR Clean Breakout OR V-reversal) "
             "entry/exit signals; the **only** difference is that capital sitting in **cash "
             "between positions** is parked in **SATA** (Strive's Variable Rate Series A "
-            "Perpetual Preferred, $100 par), earning its **13% annual dividend paid daily** "
+            "Perpetual Preferred, \\$100 par), earning its **13% annual dividend paid daily** "
             "(≈0.052% per business day, reinvested at par → daily compounding ≈13.88% "
-            "effective). SATA is assumed to have always traded flat at $100 par and paid this "
+            "effective). SATA is assumed to have always traded flat at \\$100 par and paid this "
             "same daily dividend across every backtest period."
         )
     _eth_model_mtime = (float(os.path.getmtime(str(DAILY_MODEL_CT)))
