@@ -48,6 +48,22 @@ legacy/models/inference_assets_7d.joblib
 # runtime marker for the CT feature auto-refresh (btc_ct_engine._ensure_fresh_features)
 data/backtest/.last_feature_pull
 
+# Runtime Yahoo caches for the sleeves NO pinning pipeline covers. The seven
+# generic ticker sleeves and gold have their data/<sleeve>/macro_daily.csv
+# committed on purpose — scripts/refresh_sleeve_snapshots.py fetches, quality-
+# gates and PINS those (see DATA_CONSISTENCY.md), so a deployment reuses one
+# validated vintage instead of re-trusting a live fetch. BTC and GDXM are not
+# in that pipeline (BTC's vintage comes from scripts/pull_backtest_data.py,
+# gold's from gldm_macro_daily.csv), so these files are written fresh on every
+# boot and have never been tracked. Committing an ad-hoc copy would smuggle
+# un-gated market data past the data gate and move the app's data-vintage stamp.
+data/btc/macro_daily.csv
+data/btc/macro_daily_manifest.json
+data/gdxm/macro_daily.csv
+data/gdxm/macro_daily_manifest.json
+data/gldm/macro_daily.csv
+data/gldm/macro_daily_manifest.json
+
 # per-deployment page-refresh log (written by the apps, read by 🕵️ Daily Audit)
 runtime/freshness_log.json
 # per-deployment dataset audit trail (app/data_gate.py) — server-local state
