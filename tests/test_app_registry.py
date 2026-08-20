@@ -114,3 +114,29 @@ def test_the_compiled_app_cache_key_actually_includes_the_mtime():
     assert any("max_entries" in d for d in decorators), (
         "cache_resource evicts nothing by default; a real (path, mtime) key "
         "grows an entry per edit")
+
+
+def test_the_new_chat_button_is_never_conditionally_disabled():
+    """🆕 New chat must always be clickable.
+
+    Streamlit renders the sidebar before the run's question is appended to the
+    transcript, so any ``disabled=`` gate read from session state is a turn
+    stale.  It shipped as ``disabled=not _turns``, which meant that after your
+    FIRST question — the run that renders the sidebar with an empty transcript
+    and then answers — the button stayed greyed out with a full conversation on
+    screen, and the only way to reset was to ask a second question.  A
+    two-question browser check passes straight over that, so it is pinned here
+    instead: no condition, ever.
+    """
+    tree = ast.parse((_ROOT / "app" / "assistant_app.py").read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "button"
+             and n.args and isinstance(n.args[0], ast.Constant)
+             and "New chat" in str(n.args[0].value)]
+    assert len(calls) == 1, f"expected exactly one New chat button, found {len(calls)}"
+    kwargs = {k.arg for k in calls[0].keywords}
+    assert "disabled" not in kwargs, (
+        "New chat must not be gated — the sidebar's view of the transcript is "
+        "one turn stale, so any gate greys the button out exactly when it is "
+        "first needed")
