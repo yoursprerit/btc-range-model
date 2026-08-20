@@ -52,6 +52,7 @@ import plotly.graph_objects as go
 import overall_core as ov
 import ticker_config
 import freshness as fr
+import executed_book as eb          # cost-basis positions from the IBKR report
 import inspect as _inspect
 
 if not hasattr(fr, "audit_universe"):          # self-heal a stale module cache
@@ -573,6 +574,170 @@ def _kind_badge(kind):
 
 def _pct(x, digits=1):
     return "—" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{x:+.{digits}f}%"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CURRENT POSITIONS — what the ACCOUNT holds, at the price it really paid
+# ══════════════════════════════════════════════════════════════════════════
+# Every other position block on this page is the ENGINE's book: entries are
+# daily closes the strategy decided on, P&L is measured from that bar.  This
+# one is the BROKER's: cost basis is the IBKR average fill the executor
+# reported (data/overall/executed_book[_live].json), and the mark is whatever
+# price the tab has — the live spot on 🔴 Live, the chosen bar's official close
+# on 🕰️ Historical.  The two can differ legitimately (a fill lands away from
+# the sizing close, a top-up averages the basis up), which is exactly why the
+# account's own P&L is worth showing next to the engine's.
+_EB_DIR = _REPO_ROOT / "data" / "overall"
+_EB_PATHS = (_EB_DIR / "executed_book_live.json", _EB_DIR / "executed_book.json")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_executed_report(bucket: str) -> dict | None:
+    """The execution report the IBKR executor commits back after a rebalance —
+    the LIVE account's when one exists, else the paper account's (the same
+    live-first order the published Targetbook uses).
+
+    Dry-runs are kept: they place no orders, but the ``positions`` they report
+    are still the account's real holdings and real average costs — only the
+    ``trades`` in such a report are hypothetical, and this section shows none."""
+    import json as _json
+    for _p in _EB_PATHS:
+        try:
+            if not _p.exists():
+                continue
+            payload = _json.loads(_p.read_text())
+        except Exception:
+            continue
+        if payload.get("schema") == eb.SCHEMA and (payload.get("positions") or []):
+            payload = dict(payload, _source=_p.name)
+            return payload
+    return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_executed_archive(bucket: str) -> list[dict]:
+    """Every archived execution run (live account first, else paper), newest
+    first — the 🕰️ Historical tab picks the one standing on the chosen bar."""
+    for _p in _EB_PATHS:
+        try:
+            recs = eb.archived_records(_p)
+        except Exception:
+            recs = []
+        if recs:
+            return recs
+    return []
+
+
+def _pos_meta(key: str, meta_by_key: dict) -> dict:
+    """Display metadata for an executed-book key: the live/snapshot row when the
+    instrument is one this app trades, else a neutral fallback so an unknown
+    holding (a manual buy, a retired sleeve) still renders instead of crashing."""
+    row = meta_by_key.get(key) or {}
+    am = ov.ASSET_META.get(key, {})
+    return dict(
+        emoji=row.get("emoji") or "📄",
+        name=row.get("name") or am.get("name") or key,
+        kind=row.get("kind") or am.get("kind") or "core",
+        parent=row.get("parent") or key,
+        accent=row.get("accent") or "#94a3b8",
+        known=bool(row))
+
+
+def _render_current_positions(cp: dict, meta_by_key: dict, *,
+                              mark_label: str) -> None:
+    """The executed book's holdings as per-instrument cards, grouped by parent
+    signal — the same card grammar as *Live signal & positions* above, with the
+    engine's entry bar swapped for the broker's average fill.
+
+    ``mark_label`` names the price the P&L is marked at, for the captions."""
+    rows = cp["rows"]
+    if not rows:
+        st.info("The execution report lists **no open positions** — the account "
+                "is flat (or fully in cash) as of that run.")
+        return
+
+    k = st.columns(4)
+    k[0].metric("Positions held", f"{cp['n']}")
+    k[1].metric("Cost basis", f"${cp['cost']:,.0f}",
+                help="Σ shares × IBKR average cost — what the account actually paid.")
+    k[2].metric("Market value", f"${cp['value']:,.0f}",
+                help=f"Σ shares × {mark_label}.")
+    k[3].metric("Unrealised P&L",
+                f"{'+' if cp['pnl'] >= 0 else '−'}${abs(cp['pnl']):,.0f}",
+                delta=(None if cp["pnl_pct"] is None else f"{cp['pnl_pct']:+.2f}%"),
+                delta_color="normal" if cp["pnl"] >= 0 else "inverse")
+
+    # group by parent signal, in the cockpit's canonical parent order, so the
+    # cards line up with the section above; anything unknown trails at the end
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(_pos_meta(r["key"], meta_by_key)["parent"], []).append(r)
+    order = [p for p in ov.PARENT_KEYS if p in groups]
+    order += [p for p in groups if p not in order]
+
+    for pk in order:
+        grp = groups[pk]
+        g_cost = sum(r["cost_basis"] for r in grp)
+        g_pnl = sum(r["pnl"] for r in grp)
+        g_pct = (g_pnl / abs(g_cost) * 100) if g_cost else None
+        head = _pos_meta(grp[0]["key"], meta_by_key)
+        gcol = C_BUY if g_pnl >= 0 else C_EXIT
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:10px;margin:10px 0 4px 0'>"
+            f"<span style='font-size:16px;font-weight:800'>{head['emoji']} {pk}</span>"
+            f"{_pill(f'{g_pnl:+,.0f} $', gcol)}"
+            f"<span style='font-size:11px;color:#94a3b8'>"
+            f"{len(grp)} holding{'s' if len(grp) != 1 else ''} · cost "
+            f"${g_cost:,.0f} · P&amp;L {'—' if g_pct is None else f'{g_pct:+.2f}%'}"
+            f"</span></div>", unsafe_allow_html=True)
+        cards = st.columns(max(3, len(grp)))
+        for i, r in enumerate(grp):
+            m = _pos_meta(r["key"], meta_by_key)
+            with cards[i % max(3, len(grp))]:
+                rc = C_BUY if r["pnl"] >= 0 else C_EXIT
+                px_s = f"${r['price']:,.2f}" if r["price"] else "—"
+                d_s = ("" if r["dchg"] is None else
+                       f" <b style='color:{C_BUY if r['dchg'] >= 0 else C_EXIT}'>"
+                       f"{r['dchg']:+.1f}%</b>")
+                body = [
+                    f"<div style='border:1px solid #e2e8f0;border-left:5px solid {m['accent']};"
+                    f"border-radius:9px;padding:9px 11px;margin-bottom:8px;background:#fff'>",
+                    f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                    f"<span style='font-weight:800;font-size:14px'>{r['key']}"
+                    f"{_kind_badge(m['kind'])}</span>"
+                    f"<span style='font-size:12px;color:#64748b'>{px_s}{d_s}</span></div>",
+                    f"<div style='font-size:10px;color:#94a3b8;margin-bottom:4px'>"
+                    f"{m['name']}{'' if r['symbol'] == r['key'] else ' · IBKR ' + str(r['symbol'])}"
+                    f"</div>",
+                    f"<div style='font-size:11.5px;line-height:1.5'>"
+                    f"📍 <b>LONG</b> {r['shares']:,.0f} sh @ ${r['avg_cost']:,.2f} "
+                    f"<span style='color:#94a3b8'>cost</span> · "
+                    f"${r['cost_basis']:,.0f}<br>"
+                    f"P&amp;L <b style='color:{rc}'>{_pct(r['pnl_pct'], 2)}</b> "
+                    f"<b style='color:{rc}'>({r['pnl']:+,.0f} $)</b> · value "
+                    f"${r['market_value']:,.0f}</div>",
+                ]
+                if r["price_src"] == "report":
+                    body.append(
+                        "<div style='font-size:10.5px;color:#d97706;margin-top:2px'>"
+                        "⚠️ no live quote — marked at the price the execution "
+                        "report carried.</div>")
+                elif r["price_src"] == "none":
+                    body.append(
+                        "<div style='font-size:10.5px;color:#dc2626;margin-top:2px'>"
+                        "⚠️ no price available — P&amp;L cannot be marked.</div>")
+                if not m["known"]:
+                    body.append(
+                        "<div style='font-size:10.5px;color:#94a3b8;margin-top:2px'>"
+                        "held in the account but not traded by any current "
+                        "sleeve.</div>")
+                body.append("</div>")
+                st.markdown("".join(body), unsafe_allow_html=True)
+
+    if cp["n_stale"]:
+        st.caption(f"⚠️ {cp['n_stale']} of {cp['n']} holdings had no {mark_label} — "
+                   "they are marked at the price the execution report itself "
+                   "carried, so their P&L is as of that run, not now.")
 
 
 tab_live, tab_hist, tab_bt, tab_explain = st.tabs(
@@ -1585,6 +1750,63 @@ with tab_live:
         st.info("Unified **daily** reads. For the canonical hourly Pure-Regime view of "
                 "BTC (BTC/MSTR/MSTU/ETH) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
                 "**🥇 Gold** app in the sidebar.")
+
+    # ── 3b. CURRENT POSITIONS (executed book cost basis × live price) ────
+    # The section above is the ENGINE's book — entries at the daily closes the
+    # strategy decided on. This one is the ACCOUNT's: cost basis from the IBKR
+    # execution report the executor commits back, marked at the live spot that
+    # already drives every other price on this tab.
+    _cp_report = get_executed_report(_bucket())
+    _cp_marks = {r["key"]: {"price": r["last_close"], "dchg": r["dchg"]}
+                 for r in results}
+    _cp = eb.current_positions(_cp_report, _cp_marks)
+    with st.expander("💼 **Current Positions** — executed book cost basis × live price",
+                     expanded=False):
+        if not _cp_report:
+            st.info("No execution report is available yet "
+                    "(`data/overall/executed_book.json`). This section fills in "
+                    "as soon as the IBKR executor runs a rebalance and commits "
+                    "its report back — see **IBKR_PAPER_TRADING.md** for the "
+                    "flow, or the **✅ Executed Book (IBKR)** app in the sidebar.")
+        else:
+            _cp_live = (_cp_report.get("account_mode") or "paper").lower() == "live"
+            _cp_dry = (_cp_report.get("mode") or "").lower() == "dry-run"
+            st.caption(
+                "What the **account actually holds**, at the price it actually "
+                "paid. Cost basis is the IBKR average fill from the execution "
+                "report; the mark is the same **live spot** the cards above use, "
+                "so the P&L here is the account's real open profit right now — "
+                "not the engine's bar-to-bar P&L. The two differ by whatever the "
+                "fill gave up against the signal close. "
+                + ("🔴 **LIVE account** — real money. " if _cp_live
+                   else "🧪 **Paper account.** ")
+                + (f"Report for signal bar **{_cp_report.get('as_of')}**, run "
+                   f"**{fr.fmt_ct(_cp_report.get('generated_at_utc'))}** "
+                   f"(`{_cp_report.get('_source')}`).")
+                + ("  ⚠️ The last run was a **dry-run** — no orders were sent, "
+                   "but the holdings below are the account's real ones."
+                   if _cp_dry else ""))
+            # the marks are whatever the tab's price overlay produced: the
+            # live spot when the quote fetch worked, otherwise each sleeve's
+            # last completed bar close — say which, so the P&L is never read
+            # as "right now" when the quotes are down
+            _cp_mark_lbl = ("the live spot price" if _n_spot
+                            else "the last completed bar close")
+            if not _n_spot:
+                st.caption("⚠️ No live spot quotes this refresh — the marks "
+                           "below are each sleeve's **last completed bar "
+                           "close**, so the P&L is as of that bar, not now.")
+            _render_current_positions(_cp, by_key, mark_label=_cp_mark_lbl)
+            if _cp_report.get("cash"):
+                # \$ — two bare dollar amounts in one markdown string are read
+                # as a $…$ LaTeX span and render as upside-down maths
+                st.caption(f"💵 Uninvested cash in the account: "
+                           f"**\\${float(_cp_report['cash']):,.0f}**"
+                           + (f" · net liquidation "
+                              f"**\\${float(_cp_report['net_liq']):,.0f}**"
+                              if _cp_report.get("net_liq") else "")
+                           + ". Full fills, drift-vs-target and the raw report "
+                             "are in the **✅ Executed Book (IBKR)** app.")
 
     st.markdown("---")
 
@@ -3390,6 +3612,65 @@ with tab_hist:
                            "time (`data/overall/book_archive/`) — signature-"
                            "covered, never recomputed. **Book $** applies the "
                            "portfolio value above to the published weights.")
+
+        # ── CURRENT POSITIONS AS OF THAT DATE (executed-book cost basis) ───
+        # The mirror of the 🔴 Live tab's section, rolled back: the execution
+        # report that was STANDING on the chosen date (the last rebalance the
+        # executor ran on or before it — the account held that book for the
+        # rest of the day), marked at that bar's official close instead of the
+        # live spot.  Only appears once the executor has archived runs; before
+        # that the archive is empty and the section says so.
+        st.markdown("")
+        with st.expander("💼 **Current Positions** — executed book cost basis × "
+                         f"close on {_h_bar.strftime('%b %d, %Y')}", expanded=False):
+            _hcp_recs = get_executed_archive(_bucket())
+            _hcp_rec = eb.record_for(_hcp_recs, _h_sel) if _hcp_recs else None
+            if not _hcp_recs:
+                st.info("No archived execution runs yet "
+                        "(`data/overall/executed_archive/`), so there is no "
+                        "record of what the account held on this date. This "
+                        "section fills in as the IBKR executor rebalances and "
+                        "archives each run — one dated record per signal bar.")
+            elif _hcp_rec is None:
+                _hcp_first = min(r["executed_on"] for r in _hcp_recs)
+                st.info(f"**{_h_sel}** precedes the executed-book archive — the "
+                        f"first archived run is **{_hcp_first}**. Pick a later "
+                        "date to see the account's real cost basis and P&L.")
+            else:
+                _hcp_marks = {r["key"]: {"price": r["close"], "dchg": r["dchg"]}
+                              for r in _snap["rows"]}
+                _hcp = eb.current_positions(_hcp_rec["payload"], _hcp_marks)
+                _hcp_live = ((_hcp_rec["payload"].get("account_mode") or "paper")
+                             .lower() == "live")
+                _hcp_same = _hcp_rec["executed_on"] == str(pd.Timestamp(_h_sel).date())
+                st.caption(
+                    "What the **account actually held** on this date, at the "
+                    "price it actually paid — the broker's record, not the "
+                    "engine's. Cost basis is the IBKR average fill from the "
+                    f"rebalance executed **{_hcp_rec['executed_on']}** "
+                    f"(signal bar **{_hcp_rec['as_of']}**)"
+                    + ("" if _hcp_same else
+                       f" — the last run standing on {_h_sel}, so this is the "
+                       "book the account was carrying that day")
+                    + ("; marked at each sleeve's official close on "
+                       f"**{_h_bar.strftime('%b %d, %Y')}**, so the P&L is as "
+                       "of that bar, not today. ")
+                    + ("🔴 **LIVE account** — real money." if _hcp_live
+                       else "🧪 **Paper account.**"))
+                _render_current_positions(
+                    _hcp, {r["key"]: r for r in _snap["rows"]},
+                    mark_label=f"the {_h_bar.strftime('%b %d, %Y')} close")
+                if _hcp_rec["payload"].get("cash"):
+                    st.caption(
+                        f"💵 Uninvested cash at that run: "
+                        f"**\\${float(_hcp_rec['payload']['cash']):,.0f}**"
+                        + (f" · net liquidation "
+                           f"**\\${float(_hcp_rec['payload']['net_liq']):,.0f}** "
+                           f"(as reported then)"
+                           if _hcp_rec["payload"].get("net_liq") else "")
+                        + ". The full run — fills, drift vs the target book, the "
+                          "raw report — is in the **✅ Executed Book (IBKR)** "
+                          "app's 🕰️ Historical tab.")
 
 
 # ══════════════════════════════════════════════════════════════════════════

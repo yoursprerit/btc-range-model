@@ -464,6 +464,29 @@ data/overall/executed_archive/<as_of>.json          # paper runs
 data/overall/executed_archive/<as_of>_live.json     # live runs
 ```
 
+### 💼 Current Positions — the account's own P&L, inside the Overall app
+The execution report is the only artifact that knows what the account **really
+paid**: the engines know an entry *bar* (a daily close they decided on), the
+broker knows the *fill*. So the 🧭 Overall Trading app reads it directly, in a
+**💼 Current Positions** collapsible section on both tabs, right under
+*🛰️ Live signal & positions — by app*:
+
+| Tab | Cost basis | Marked at |
+|---|---|---|
+| 🔴 **Live — Decision Cockpit** | IBKR average fill from `executed_book_live.json`, else `executed_book.json` | the same **live spot** every other price on that tab uses |
+| 🕰️ **Historical View** | the run standing on the chosen date, from `executed_archive/` | each sleeve's **official close on the viewed bar** |
+
+Same card layout as the signal section above it, grouped by parent signal, so
+the *engine's* position (entry bar → bar P&L) and the *account's* position
+(average fill → live P&L) sit one under the other and can be read against each
+other. They differ by exactly what the fill gave up against the signal close,
+plus whatever a later top-up did to the average cost — which is the point of
+showing both. Holdings with no quote fall back to the mark the report itself
+carried and say so; keys the current universe no longer trades still render,
+flagged as held-but-not-traded. Both sections are empty-safe: before the
+executor has ever run they explain what will fill them in, and the Historical
+one says when the chosen date precedes the archive.
+
 Those records are what the Executed Book page's **🕰️ Historical** tab browses —
 pick any past date and it replays that run in full: the trades placed, the
 positions it ended with, and the drift against the target book *of that same

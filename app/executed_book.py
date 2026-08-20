@@ -314,3 +314,92 @@ def completed_run(report_path, as_of) -> dict | None:
     if (payload.get("mode") or "").lower() != "execute":
         return None                        # a dry-run traded nothing
     return payload
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# COST-BASIS POSITIONS  (what the account actually holds, marked to a price)
+# ════════════════════════════════════════════════════════════════════════════
+# The execution report is the ONLY record of what the account really paid: the
+# strategy engines know an entry BAR (a daily close), the broker knows the fill.
+# ``current_positions`` turns a report into per-instrument rows whose cost basis
+# is the broker's ``avg_cost`` and whose mark is whatever price the caller
+# supplies — the live spot on the 🔴 Live tab, that bar's official close on the
+# 🕰️ Historical one.  Pure and price-source-agnostic so both tabs (and the
+# tests) share one P&L definition.
+
+def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
+    """Cost-basis positions from an execution report, marked at *prices*.
+
+    *prices* maps instrument key → either a plain number or a mapping with a
+    ``price`` (and optional ``dchg`` day-change %) — so a spot-quote dict and a
+    ``{key: close}`` dict both work.  A key with no usable mark falls back to
+    the ``market_price`` the report itself carried at execution time, flagged
+    ``price_src='report'`` so the UI can say the quote is not current; a
+    position with neither is ``price_src='none'`` and contributes no P&L.
+
+    Returns ``{rows, cost, value, pnl, pnl_pct, n, n_live, n_stale, as_of,
+    cash, net_liq, account_mode, mode}``; ``rows`` are largest-position-first
+    and each carries ``key, symbol, shares, avg_cost, cost_basis, price,
+    price_src, dchg, market_value, pnl, pnl_pct``.
+    """
+    payload = payload or {}
+    prices = prices or {}
+
+    def _mark(key: str) -> tuple[float, float | None]:
+        """(price, day-change %) for *key* from the caller's price map."""
+        q = prices.get(key)
+        if q is None:
+            return 0.0, None
+        if isinstance(q, dict):
+            try:
+                px = float(q.get("price") or 0.0)
+            except (TypeError, ValueError):
+                px = 0.0
+            d = q.get("dchg")
+            try:
+                d = float(d) if d is not None else None
+            except (TypeError, ValueError):
+                d = None
+            return px, d
+        try:
+            return float(q), None
+        except (TypeError, ValueError):
+            return 0.0, None
+
+    rows = []
+    for p in payload.get("positions") or []:
+        key = p.get("key") or p.get("symbol") or ""
+        shares = float(p.get("shares") or 0.0)
+        avg_cost = float(p.get("avg_cost") or 0.0)
+        if not shares or avg_cost <= 0:
+            continue                        # a closed / unpriced line, not a holding
+        px, dchg = _mark(key)
+        src = "live"
+        if px <= 0:                          # no live quote — the report's own mark
+            px = float(p.get("market_price") or 0.0)
+            src = "report" if px > 0 else "none"
+        cost_basis = shares * avg_cost
+        mv = shares * px if px > 0 else 0.0
+        pnl = (mv - cost_basis) if px > 0 else 0.0
+        pnl_pct = (pnl / abs(cost_basis) * 100) if (px > 0 and cost_basis) else None
+        rows.append(dict(
+            key=key, symbol=p.get("symbol") or key, shares=shares,
+            avg_cost=avg_cost, cost_basis=cost_basis, price=px, price_src=src,
+            dchg=dchg, market_value=mv, pnl=pnl, pnl_pct=pnl_pct))
+
+    rows.sort(key=lambda r: -abs(r["market_value"] or r["cost_basis"]))
+    cost = sum(r["cost_basis"] for r in rows)
+    value = sum(r["market_value"] for r in rows if r["price_src"] != "none")
+    priced_cost = sum(r["cost_basis"] for r in rows if r["price_src"] != "none")
+    pnl = value - priced_cost
+    return dict(
+        rows=rows, cost=cost, value=value, pnl=pnl,
+        pnl_pct=(pnl / abs(priced_cost) * 100) if priced_cost else None,
+        n=len(rows),
+        n_live=sum(1 for r in rows if r["price_src"] == "live"),
+        n_stale=sum(1 for r in rows if r["price_src"] != "live"),
+        as_of=payload.get("as_of"), cash=float(payload.get("cash") or 0.0),
+        net_liq=float(payload.get("net_liq") or 0.0),
+        account_mode=(payload.get("account_mode") or "paper"),
+        mode=(payload.get("mode") or ""),
+        generated_at_utc=payload.get("generated_at_utc") or "")

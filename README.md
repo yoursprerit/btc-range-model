@@ -31,7 +31,7 @@ model and backtest machinery.
 
 | App | Module | What it does |
 |---|---|---|
-| 🧭 **Overall Trading** | `app/overall_app.py` | The combined cross-asset **decision cockpit** — fuses every signal, position and backtest into one portfolio and answers *"where should capital go today?"* |
+| 🧭 **Overall Trading** | `app/overall_app.py` | The combined cross-asset **decision cockpit** — fuses every signal, position and backtest into one portfolio and answers *"where should capital go today?"* A **💼 Current Positions** section on the 🔴 Live and 🕰️ Historical tabs marks the executed book's real IBKR cost basis against the live price (or the viewed bar's close). |
 | ₿ **Bitcoin (BTC)** | `app/btc_hourly_app.py` | Four-model BTC forecaster (hourly close, daily H/L, 7-day cone, day-type) + the BTC divergence strategy (BTC · MSTR · MSTU · ETH). See **[`BTC_README.md`](BTC_README.md)**. |
 | 🥇 **Gold Trend (GLDM)** | `app/gldm_hourly_app.py` | Gold forecaster + dual-MA 25/100 strategy (GLDM · UGL). See **[`GLDM_README.md`](GLDM_README.md)**. |
 | ⛏️ **Gold Miners (GDXM)** | `app/gldm_hourly_app.py` | Gold-miners divergence strategy off the GLDM signal (GDX · NUGT) — same file, second app mode. |
