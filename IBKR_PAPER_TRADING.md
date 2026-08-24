@@ -211,7 +211,7 @@ Useful flags:
 | `--port` | `4002` | IB Gateway API port (paper) |
 | `--fill-timeout` | `60` | seconds to wait for each order leg to fill |
 | `--force` | off | ignore the weekend/holiday & stale-signal guards |
-| `--allow-stale-bar` | off | trade a book whose bar is not the last completed session |
+| `--allow-stale-bar` | off | trade a book whose equity basis is not the last completed session |
 | `--allow-margin` | off | **danger** — permit buys beyond cash + realised sell proceeds |
 | `--max-gross-frac` | `1.02` | abort a plan landing above this multiple of net-liq |
 | `--max-turnover-frac` | `1.5` | abort a plan trading above this multiple of net-liq |
@@ -566,7 +566,7 @@ and the paper account ended at 3.4× net liquidation on a $2.17M margin loan
 | Guard | What it refuses | Override |
 |---|---|---|
 | **Verified positions read** | Trading on a positions read that misses value the account itself reports (`GrossPositionValue`). `ib_async` fills its position cache asynchronously, so a read taken too early comes back EMPTY — which the order planner cannot tell apart from a flat account. The read is now settled (`reqPositions` + re-read until stable) and cross-checked. | none — the next run re-reads |
-| **Current-bar check** | A book whose signal bar is not the last completed session. The 36-hour freshness window could not catch this: a book published 7:15 AM CT is still "fresh" at 2:30 PM CT the *next* day. A withheld publish now means **no trade**. | `--allow-stale-bar` |
+| **Current-bar check** | A book whose **equity basis** is not the last completed session. The 36-hour freshness window could not catch this: a book published 7:15 AM CT is still "fresh" at 2:30 PM CT the *next* day. A withheld publish now means **no trade**. A weekend `as_of` over the right basis is normal — the 24/7 sleeves move on Saturdays and Sundays. | `--allow-stale-bar` |
 | **Duplicate-run lock** | A second execute run for a signal bar that already has an execution report (`executed_archive/<as_of>.json`). Dry-runs don't lock. | `--force-rerun` |
 | **Account state** | Trading into an account that already carries a margin loan (negative cash) or is already geared past the cap. | `--allow-margin` |
 | **Book math** | A book with a NaN/negative weight, weights summing past 100%, or a name carrying weight with no usable execution price. | none |

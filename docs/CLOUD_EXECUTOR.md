@@ -159,14 +159,20 @@ CRON_TZ=America/Chicago
   presents as a silent daily no-op.
 - **Freshness:** the executor rejects a book generated more than
   `--max-age-hours` ago (**default 36**), *and* — since the 2026-08-18
-  duplicate-execution incident — one whose signal bar is not the last completed
-  session. The generation window alone could not catch a day-old book (a
-  7:15-AM-CT publish is still inside 36 h at the next day's 2:30-PM-CT slot),
+  duplicate-execution incident — one whose **equity basis** is not the last
+  completed session. The generation window alone could not catch a day-old book
+  (a 7:15-AM-CT publish is still inside 36 h at the next day's 2:30-PM-CT slot),
   and re-trading one into an account that already holds it is how that incident
   started. **A withheld publish now means no trade**, which was always the
   intended fallback: a missing book is a missing decision, not a licence to
   re-run the last one. `--allow-stale-bar` overrides, for deliberate catch-up
   only.
+  The basis is the book's signature-covered `signal_basis.equity_close`, not its
+  `as_of`: the publisher runs 7 days a week for the 24/7 sleeves, so the
+  Saturday, Sunday and Monday books all carry a weekend `as_of` over Friday's
+  close. Gating on `as_of` refused those as "ahead of the last completed
+  session", which cost a full session's trading every Monday and after every US
+  market holiday (2026-08-24).
 - **Repeat runs are no-ops.** Once a signal bar has an execution report in
   `data/overall/executed_archive/`, a second `--execute` for that bar aborts
   (exit 0). A scheduler that retries a failed run therefore cannot double-trade;

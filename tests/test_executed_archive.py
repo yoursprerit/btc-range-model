@@ -199,3 +199,76 @@ def test_a_dry_run_never_overwrites_an_executed_record(tmp_path):
     assert eb.archive_report(preview, report) is None, "a preview is not a record"
     back = json.loads(eb.archive_path(report, "2026-08-17").read_text())
     assert back["mode"] == "execute" and back["trades"][0]["qty"] == 462.0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# REPORT AGE — counted in trading SESSIONS, not wall-clock hours
+# ════════════════════════════════════════════════════════════════════════════
+# The executor runs once per trading day at 2:30 PM CT (= 3:30 PM ET), so a
+# Friday report is the newest one that can exist until Monday afternoon. The old
+# 48-hour window could not express that: Fri 2:30 PM CT → Mon 2:30 PM CT is 72 h,
+# so a flawless week still flagged its own report stale from Sunday afternoon on
+# ("report is 3.1 days old (> 2d)"), while any window wide enough to cover the
+# weekend would have hidden a missed midweek session.
+import pandas as pd  # noqa: E402
+
+
+FRIDAY_RUN = "2026-08-21T19:30:47+00:00"        # Fri 2:30 PM CT, the real one
+
+
+def _report(gen=FRIDAY_RUN, as_of="2026-08-20"):
+    return _payload(as_of=as_of, gen=gen)
+
+
+def test_fridays_report_is_fresh_all_weekend():
+    for when in ("2026-08-22 11:00", "2026-08-23 18:00"):      # Sat, Sun
+        ok, why = eb.validate(_report(), pd.Timestamp(when))
+        assert ok, f"{when}: {why}"
+
+
+def test_fridays_report_is_fresh_on_monday_before_the_slot():
+    """Someone looking at 9 AM Monday: nothing newer can exist yet."""
+    ok, why = eb.validate(_report(), pd.Timestamp("2026-08-24 09:00"))
+    assert ok, why
+
+
+def test_a_missed_monday_slot_goes_stale_that_afternoon():
+    """2026-08-24: Monday's run never happened, so from ~4:15 PM ET the newest
+    report is a session behind — which is exactly what should show yellow."""
+    ok, why = eb.validate(_report(), pd.Timestamp("2026-08-24 17:41"))
+    assert not ok
+    assert "1 session" in why and "2026-08-21" in why and "2026-08-24" in why
+
+
+def test_a_missed_midweek_session_is_not_hidden():
+    """What a wider hour-window would have swallowed: Wednesday evening with
+    Tuesday's report still the newest."""
+    ok, why = eb.validate(_report(gen="2026-08-18T19:30:00+00:00"),
+                          pd.Timestamp("2026-08-19 17:00"))
+    assert not ok and "1 session" in why
+
+
+def test_todays_own_report_is_fresh():
+    ok, why = eb.validate(_report(gen="2026-08-24T19:30:00+00:00"),
+                          pd.Timestamp("2026-08-24 17:41"))
+    assert ok, why
+
+
+def test_a_holiday_does_not_age_the_report():
+    """2026-09-07 is Labor Day: Friday's report is still the newest one that
+    can exist when the market reopens Tuesday morning."""
+    ok, why = eb.validate(_report(gen="2026-09-04T19:30:00+00:00"),
+                          pd.Timestamp("2026-09-08 09:00"))
+    assert ok, why
+
+
+def test_the_expected_session_flips_at_the_slot_plus_grace():
+    before = eb.expected_report_session(pd.Timestamp("2026-08-24 15:00"))
+    after = eb.expected_report_session(pd.Timestamp("2026-08-24 16:20"))
+    assert str(before.date()) == "2026-08-21"      # Friday — nothing newer yet
+    assert str(after.date()) == "2026-08-24"       # today's run should have landed
+
+
+def test_a_wrong_schema_is_still_refused():
+    ok, why = eb.validate({"schema": "something-else/v1"}, pd.Timestamp("2026-08-24"))
+    assert not ok and "unexpected schema" in why

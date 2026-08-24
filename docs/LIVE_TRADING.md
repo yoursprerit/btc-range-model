@@ -48,7 +48,7 @@ for the full table.
 | Guard | Default | Why it matters for real money |
 |-------|---------|-------------------------------|
 | **Verified positions read** | always on | A read that misses value the account itself reports aborts the run. This is the guard that stops "the account looks flat, buy everything again". |
-| **Current-bar check** | always on (`--allow-stale-bar` to override) | Only the last completed session's book may trade. A withheld publish means **no trade**. |
+| **Current-bar check** | always on (`--allow-stale-bar` to override) | Only a book whose equity basis (`signal_basis.equity_close`) is the last completed session may trade; a weekend `as_of` over that basis is normal and passes. A withheld publish means **no trade**. |
 | **Duplicate-run lock** | always on (`--force-rerun`) | A signal bar with an execution report already archived is never executed twice. |
 | **Cash-funded buys** | always on (`--allow-margin`) | Buys are capped at settled cash + the proceeds the sells actually realised, budgeted at live quotes. **A live account cannot take on an unintended margin loan.** |
 | **Account state** | always on | Refuses to trade an account that already carries a margin loan or is already geared past the cap. |

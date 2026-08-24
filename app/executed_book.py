@@ -57,6 +57,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import freshness as fr
+
 SCHEMA = "executed-book/v1"
 
 
@@ -140,12 +142,76 @@ def build_payload(*, as_of: str, profile: str, mode: str, account: str,
     }
 
 
-def validate(payload: dict, today: pd.Timestamp, *,
-             max_gen_age_hours: float = 48.0) -> tuple[bool, str]:
-    """(ok, reason) — schema check + how recently the report was produced.
+# The executor's daily slot: 2:30 PM CT = 3:30 PM ET, plus a grace window for
+# the run itself (connect, place, reconcile, commit, push) to land before its
+# absence counts as a missed session.
+EXEC_SLOT_ET = (15, 30)
+EXEC_GRACE_MINUTES = 45
 
-    A wider default window than the target book (48h) so a Friday execution is
-    still "recent" over a weekend when someone looks on Monday."""
+
+def _session_date(ts: pd.Timestamp) -> pd.Timestamp:
+    """The US trading date an instant belongs to (ET, midnight-normalised)."""
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("America/New_York").tz_localize(None)
+    return ts.normalize()
+
+
+def _prev_session(day: pd.Timestamp) -> pd.Timestamp:
+    """The US trading session strictly before *day* (weekends/holidays skipped)."""
+    d = pd.Timestamp(day).normalize() - pd.Timedelta(days=1)
+    while not fr.is_us_trading_day(d):
+        d -= pd.Timedelta(days=1)
+    return d
+
+
+def expected_report_session(today: pd.Timestamp) -> pd.Timestamp:
+    """The session whose execution report should be the newest one on disk.
+
+    Today once today's 2:30-PM-CT slot has come and gone (plus grace);
+    otherwise the previous trading session — the newest report that can
+    possibly exist right now."""
+    now = pd.Timestamp(today)
+    if now.tzinfo is not None:
+        now = now.tz_convert("America/New_York").tz_localize(None)
+    day = now.normalize()
+    landed_by = day + pd.Timedelta(hours=EXEC_SLOT_ET[0],
+                                   minutes=EXEC_SLOT_ET[1] + EXEC_GRACE_MINUTES)
+    if fr.is_us_trading_day(day) and now >= landed_by:
+        return day
+    return _prev_session(day)
+
+
+def sessions_behind(ran: pd.Timestamp, want: pd.Timestamp,
+                    max_back: int = 20) -> int:
+    """How many US trading sessions *ran* sits behind *want* (0 if not behind)."""
+    ran, want = pd.Timestamp(ran).normalize(), pd.Timestamp(want).normalize()
+    n = 0
+    while want > ran and n < max_back:
+        want = _prev_session(want)
+        n += 1
+    return n
+
+
+def validate(payload: dict, today: pd.Timestamp, *,
+             max_sessions_behind: int = 0,
+             max_gen_age_hours: float | None = None) -> tuple[bool, str]:
+    """(ok, reason) — schema check + how many trading SESSIONS old the report is.
+
+    Age is counted in sessions, not hours, because the executor runs once per
+    trading day at 2:30 PM CT: a Friday execution is the newest report that
+    *can* exist all weekend and must still read fresh when someone looks on
+    Monday morning.  A plain hour window could never express that — Fri 2:30 PM
+    CT → Mon 2:30 PM CT is 72 h, so the old 48-hour window turned the badge
+    yellow every Sunday afternoon of a flawless week, and a wider one would
+    have hidden a genuinely missed midweek session instead.
+
+    Counting sessions does both jobs: the report reads fresh across weekends
+    and holidays, and goes stale the moment a session's 2:30-PM-CT slot passes
+    without producing a newer one.
+
+    ``max_gen_age_hours`` is an optional extra ceiling in wall-clock hours (off
+    by default) for a caller that wants one on top of the session count."""
     if payload.get("schema") != SCHEMA:
         return False, f"unexpected schema {payload.get('schema')!r} (want {SCHEMA})"
     gen = payload.get("generated_at_utc")
@@ -156,8 +222,14 @@ def validate(payload: dict, today: pd.Timestamp, *,
         gen_ts = gen_ts.tz_localize("UTC")
     now = pd.Timestamp(datetime.now(timezone.utc))
     age_h = (now - gen_ts).total_seconds() / 3600.0
-    if age_h > max_gen_age_hours:
+    if max_gen_age_hours is not None and age_h > max_gen_age_hours:
         return False, f"report is {age_h/24:.1f} days old (> {max_gen_age_hours/24:.0f}d)"
+    want = expected_report_session(today)
+    behind = sessions_behind(_session_date(gen_ts), want)
+    if behind > max_sessions_behind:
+        return False, (f"no execution report for the last {behind} session(s) — "
+                       f"newest ran {_session_date(gen_ts).date()}, expected "
+                       f"{want.date()}")
     return True, f"executed {gen} UTC ({age_h:.1f}h ago)"
 
 

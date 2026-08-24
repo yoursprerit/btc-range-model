@@ -66,6 +66,59 @@ def test_a_bar_from_the_future_is_refused():
     assert not ok and "AHEAD" in why
 
 
+# ── the two calendars: a weekend as_of over a Friday equity basis ───────────
+# 2026-08-24 (Monday): the publisher runs 7 days a week for the 24/7 sleeves, so
+# the book handed to that afternoon's executor was stamped as_of 2026-08-23
+# (Sunday) while its equity basis was Friday's close. Judging as_of against the
+# previous EQUITY session called that "AHEAD of the last completed session" and
+# the executor traded nothing — every Monday, and every day after a US holiday.
+def test_monday_book_with_a_weekend_bar_trades_on_its_friday_equity_basis():
+    ok, why = ic.bar_is_current("2026-08-23", pd.Timestamp("2026-08-24"),
+                                equity_close="2026-08-21")
+    assert ok, why
+    assert "equity basis 2026-08-21 is the last completed session" in why
+    assert "24/7 sleeves" in why
+
+
+def test_the_day_after_a_holiday_trades_too():
+    """2026-09-07 is Labor Day: Tuesday's book carries a Monday as_of over
+    Friday's close, which the as_of rule refused just like a Monday."""
+    ok, why = ic.bar_is_current("2026-09-07", pd.Timestamp("2026-09-08"),
+                                equity_close="2026-09-04")
+    assert ok, why
+
+
+def test_a_withheld_publish_is_still_refused_on_its_equity_basis():
+    """The guard's whole point survives: a book whose equity basis is behind the
+    last completed session is stale no matter what its as_of says. Tuesday
+    2026-08-25 holding Monday's book (as_of Sunday, basis Friday) because
+    Tuesday's publish was withheld — Monday's close has happened since."""
+    ok, why = ic.bar_is_current("2026-08-23", pd.Timestamp("2026-08-25"),
+                                equity_close="2026-08-21")
+    assert not ok and "STALE" in why and "1 session" in why
+
+
+def test_an_equity_basis_ahead_of_the_session_is_refused():
+    ok, why = ic.bar_is_current("2026-08-18", pd.Timestamp("2026-08-18"),
+                                equity_close="2026-08-18")
+    assert not ok and "AHEAD" in why
+
+
+def test_a_bar_dated_past_today_is_refused_even_with_a_good_basis():
+    """A broken publisher, not a weekend sleeve — the basis must not excuse it."""
+    ok, why = ic.bar_is_current("2026-08-25", pd.Timestamp("2026-08-24"),
+                                equity_close="2026-08-21")
+    assert not ok and "FUTURE" in why
+
+
+def test_books_without_a_basis_stamp_keep_the_as_of_rule():
+    """Published before 2026-07-23 → no signal_basis; nothing changes for them."""
+    ok, _ = ic.bar_is_current("2026-08-17", pd.Timestamp("2026-08-18"))
+    assert ok
+    ok, why = ic.bar_is_current("2026-08-16", pd.Timestamp("2026-08-18"))
+    assert not ok and "STALE" in why
+
+
 def test_prev_trading_day_skips_holidays():
     # 2026-09-07 is Labor Day → the session before Tuesday the 8th is Friday the 4th
     assert ic.prev_trading_day(pd.Timestamp("2026-09-08")).date() == \

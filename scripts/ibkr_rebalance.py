@@ -55,6 +55,7 @@ sys.path.insert(0, str(_REPO / "scripts"))
 sys.path.insert(0, str(_REPO))
 
 import overall_core as oc                       # noqa: E402  headless engine
+import freshness as fr                          # noqa: E402  session calendars
 import ibkr_symbols as sym                       # noqa: E402
 from ibkr_common import (                        # noqa: E402  shared broker/order plumbing
     DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
@@ -75,6 +76,7 @@ class TargetBook:
     cash_weight: float               # undeployed remainder → held as cash
     exec_price: dict[str, float]     # traded-symbol live price used for sizing
     actions: list[dict]              # the gate's per-asset action rows (for logging)
+    equity_close: str = ""           # last COMPLETED 4:00-PM-ET close behind it
 
 
 def compute_target_book(profile: str = None, results: list | None = None,
@@ -138,8 +140,11 @@ def compute_target_book(profile: str = None, results: list | None = None,
     exec_price = {k: v["price"] for k, v in px_raw.items() if v and v.get("price")}
 
     as_of = max((str(pd.Timestamp(r["as_of"]).date()) for r in results), default="")
+    # as_of is the freshest bar across the universe, so the 24/7 sleeves push it
+    # onto weekend dates; the equity basis is what the session guard judges.
     return TargetBook(as_of=as_of, weights=targets, cash_weight=float(gate["sata"]),
-                      exec_price=exec_price, actions=gate["actions"])
+                      exec_price=exec_price, actions=gate["actions"],
+                      equity_close=str(fr.expected_equity_asof().date()))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -226,7 +231,8 @@ def main() -> int:
     # The signal must be THIS session's, not merely "not ancient": trading a
     # book computed from an older bar re-trades a decision the market has
     # already moved past (and, if the account already holds it, a second time).
-    ok_bar, bar_why = bar_is_current(book.as_of, today)
+    ok_bar, bar_why = bar_is_current(book.as_of, today,
+                                     equity_close=book.equity_close)
     print(f"Signal bar: {bar_why}")
     if not ok_bar and not args.allow_stale_bar and args.execute:
         print("ABORT: refusing to trade a book that is not this session's "
