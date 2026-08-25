@@ -9,7 +9,10 @@ BTC is executed through IBIT).
 Select it from the **Application radio at the top of the sidebar** →
 **₿ Bitcoin (BTC)**. For the platform overview see **[`README.md`](README.md)**;
 for the full strategy spec see **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)**
-and **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**; the
+and **[`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md)**; for a
+worked example of reading a live divergence signal — the 2026-08 thrust, its 26
+historical analogs, and why the live gate stayed flat — see
+**[`BTC_BULLRUN_ANALOG_EVAL.md`](BTC_BULLRUN_ANALOG_EVAL.md)**; the
 ETH sleeve — and an important **look-ahead finding affecting MSTR/MSTU (fixed
 2026-07-25: equity fills now land at the first exchange close after the
 signal moment)** — are in

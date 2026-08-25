@@ -152,7 +152,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 
 | Strategy | Signal(s) | Current strategy doc → additional |
 |---|---|---|
-| BTC Divergence Pure-Regime | BTC · MSTR · MSTU · ETH (traded as ETHA) | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) (ETH add + a look-ahead finding) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
+| BTC Divergence Pure-Regime | BTC · MSTR · MSTU · ETH (traded as ETHA) | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) (ETH add + a look-ahead finding) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) · [`BTC_BULLRUN_ANALOG_EVAL.md`](BTC_BULLRUN_ANALOG_EVAL.md) (2026-08 thrust: real leg or fake-out?) |
 | Gold middle path (dual-MA + divergence) | GLDM · UGL & GDX · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
 | Semis Dual-MA 25/100 | SOXX · SOXL | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
 | Grid MACD 10/20/9 | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
@@ -534,7 +534,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Topic | Doc |
 |---|---|
 | Bitcoin four-model stack (deep dive) | [`BTC_README.md`](BTC_README.md) |
-| BTC / MSTR / MSTU strategy spec | [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) · [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) |
+| BTC / MSTR / MSTU strategy spec | [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) · [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`BTC_BULLRUN_ANALOG_EVAL.md`](BTC_BULLRUN_ANALOG_EVAL.md) |
 | Divergence trend signatures | [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) |
 | Gold app + strategy | [`GLDM_README.md`](GLDM_README.md) · [`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md) |
 | ETF apps (SOXX/GRID/XLE/REMX/WGMI/PBW/ARTY) | [`TICKER_APPS_README.md`](TICKER_APPS_README.md) |
