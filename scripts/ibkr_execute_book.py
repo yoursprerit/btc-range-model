@@ -324,7 +324,15 @@ def main() -> int:
     # The generation-age window alone cannot catch a stale book: one published
     # at 7:15 AM CT is still inside 36 h at 2:30 PM CT the NEXT day, which is
     # how a day-old book was re-traded into an account that already held it.
-    ok_bar, bar_why = bar_is_current(payload.get("as_of"), today)
+    # signal_basis (signature-covered, stamped by the publisher since
+    # 2026-07-23) pins the exact 4:00-PM-ET close the book was built from. The
+    # guard gates on THAT, not on as_of: the publisher runs 7 days a week for
+    # the 24/7 sleeves, so Monday's book is stamped with a weekend as_of while
+    # its equity basis is still Friday's close. Older books have no stamp and
+    # fall back to the as_of rule.
+    _basis = payload.get("signal_basis") or {}
+    ok_bar, bar_why = bar_is_current(payload.get("as_of"), today,
+                                     equity_close=_basis.get("equity_close"))
     print(f"Signal bar: {bar_why}")
     # Only a run that would PLACE orders is blocked: a dry-run preview and a
     # --refresh-report (which re-states the account without trading) are always

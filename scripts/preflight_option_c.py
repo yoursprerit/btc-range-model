@@ -136,19 +136,35 @@ def check_book() -> dict | None:
             _add("PASS", "book-bar-age", f"signal bar {as_of} is {bar_age}d old")
 
     if as_of:
-        # the one bar this session may trade
+        # The one basis this session may trade. Mirrors ibkr_common.bar_is_current:
+        # the publisher runs 7 days a week for the 24/7 sleeves, so a weekend
+        # as_of is normal and the EQUITY close the book was built from is what
+        # decides tradeability. signal_basis is stamped (and signature-covered)
+        # on every book published since 2026-07-23; older ones use as_of.
         want = _prev_trading_day(today)
         bar = datetime.strptime(as_of, "%Y-%m-%d").date()
-        if bar == want:
+        equity_close = (payload.get("signal_basis") or {}).get("equity_close")
+        judged, label = (bar, "signal bar")
+        if equity_close:
+            judged, label = (datetime.strptime(equity_close, "%Y-%m-%d").date(),
+                             "equity basis")
+        if equity_close and bar > today:
+            # a bar dated past today is a broken publisher, not a weekend sleeve
+            _add("FAIL", "book-current-bar",
+                 f"signal bar {as_of} is in the FUTURE (today is {today}) -- "
+                 f"the executor will refuse to trade it")
+        elif judged == want:
             _add("PASS", "book-current-bar",
-                 f"signal bar {as_of} is the last completed session")
-        elif bar > want:
+                 f"{label} {judged} is the last completed session"
+                 + (f" (signal bar {as_of} carries the 24/7 sleeves)"
+                    if judged != bar else ""))
+        elif judged > want:
             _add("WARN", "book-current-bar",
-                 f"signal bar {as_of} is ahead of the last completed session "
+                 f"{label} {judged} is ahead of the last completed session "
                  f"({want}) -- not tradeable yet")
         else:
             _add("FAIL", "book-current-bar",
-                 f"STALE: signal bar {as_of} is behind the last completed session "
+                 f"STALE: {label} {judged} is behind the last completed session "
                  f"({want}) -- the executor will refuse to trade it. Today's "
                  f"publish has not landed; git pull, or check the publisher")
 

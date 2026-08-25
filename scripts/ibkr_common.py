@@ -143,36 +143,80 @@ def prev_trading_day(day: pd.Timestamp, max_back: int = 10) -> pd.Timestamp:
     raise RuntimeError(f"no trading day found within {max_back} days before {day}")
 
 
-def bar_is_current(as_of: str, today: pd.Timestamp) -> tuple[bool, str]:
-    """(ok, reason) — is *as_of* the bar this session is supposed to trade?
+def sessions_behind(bar: pd.Timestamp, want: pd.Timestamp,
+                    max_back: int = 20) -> int:
+    """How many US trading sessions *bar* sits behind *want* (0 if equal/ahead)."""
+    sessions = 0
+    d = pd.Timestamp(want).normalize()
+    bar = pd.Timestamp(bar).normalize()
+    while d > bar and sessions < max_back:
+        d = prev_trading_day(d)
+        sessions += 1
+    return sessions
 
-    The publisher computes a book from a COMPLETED session's close and the
-    executor trades it during the next session, so exactly one bar is valid on
-    any given day: the previous trading session.  Anything older is a stale
-    book — yesterday's decision, priced off yesterday's close, re-traded into a
-    market that has already moved (and, if the account already holds it, traded
-    a second time).  That is what the freshness window alone could not catch:
-    a book generated at 7:15 AM CT is still inside a 36-hour window at 2:30 PM
-    CT the FOLLOWING day.
+
+def bar_is_current(as_of: str, today: pd.Timestamp, *,
+                   equity_close: str | None = None) -> tuple[bool, str]:
+    """(ok, reason) — is this book the one this session is supposed to trade?
+
+    The publisher computes a book from a COMPLETED close and the executor
+    trades it during the next session, so a book whose EQUITY basis is older
+    than the last completed session is stale — yesterday's decision, priced off
+    yesterday's close, re-traded into a market that has already moved (and, if
+    the account already holds it, traded a second time).  That is what the
+    freshness window alone could not catch: a book generated at 7:15 AM CT is
+    still inside a 36-hour window at 2:30 PM CT the FOLLOWING day.
 
     A withheld publish (failed audit, engine error) therefore means NO TRADE,
-    not "trade the last book we have" — the intended fallback all along."""
+    not "trade the last book we have" — the intended fallback all along.
+
+    TWO CALENDARS.  ``as_of`` is the freshest bar across the whole universe, and
+    Bitcoin prints one every day, so the publisher (which runs 7 days a week)
+    stamps a WEEKEND ``as_of`` on the Saturday, Sunday and Monday books — while
+    their equity basis is Friday's close either way, because equities do not
+    trade on weekends.  Judging ``as_of`` against the previous *equity* session
+    therefore refused the Monday book as "AHEAD" and, after every US market
+    holiday, refused the next session's book too: a whole session traded
+    nothing (2026-08-24).  So when the book carries the publisher's
+    signature-covered ``signal_basis.equity_close`` stamp, gate on THAT — the
+    exact 4:00-PM-ET close the book was built from — and let ``as_of`` carry
+    the 24/7 sleeves through the weekend, which is the entire reason the
+    publisher runs on weekends at all.
+
+    Books published before 2026-07-23 carry no ``signal_basis``, so
+    ``equity_close`` is None for them and the original ``as_of`` rule stands."""
     if not as_of:
         return False, "no signal as-of date"
     bar = pd.Timestamp(as_of).normalize()
     want = prev_trading_day(today)
+
+    if equity_close:
+        basis = pd.Timestamp(equity_close).normalize()
+        # a bar dated past today is a broken publisher, not a weekend sleeve
+        if bar > pd.Timestamp(today).normalize():
+            return False, (f"signal bar {bar.date()} is in the FUTURE (today is "
+                           f"{pd.Timestamp(today).normalize().date()}) — the book "
+                           f"is not tradeable")
+        if basis == want:
+            return True, (f"equity basis {basis.date()} is the last completed "
+                          f"session" + (f" (signal bar {bar.date()} carries the "
+                                        f"24/7 sleeves)" if bar != want else ""))
+        if basis > want:
+            return False, (f"equity basis {basis.date()} is AHEAD of the last "
+                           f"completed session ({want.date()}) — the book is not "
+                           f"tradeable yet")
+        return False, (f"STALE book: equity basis {basis.date()} is "
+                       f"{sessions_behind(basis, want)} session(s) behind the "
+                       f"last completed session ({want.date()})")
+
     if bar == want:
         return True, f"signal bar {bar.date()} is the last completed session"
     if bar > want:
         return False, (f"signal bar {bar.date()} is AHEAD of the last completed "
                        f"session ({want.date()}) — the book is not tradeable yet")
-    sessions = 0
-    d = want
-    while d > bar and sessions < 20:
-        d = prev_trading_day(d)
-        sessions += 1
-    return False, (f"STALE book: signal bar {bar.date()} is {sessions} session(s) "
-                   f"behind the last completed session ({want.date()})")
+    return False, (f"STALE book: signal bar {bar.date()} is "
+                   f"{sessions_behind(bar, want)} session(s) behind the last "
+                   f"completed session ({want.date()})")
 
 
 def signal_is_fresh(as_of: str, today: pd.Timestamp,

@@ -106,7 +106,7 @@ actually broken in practice:
 | `secret-set` | a secret missing from the environment — the executor would trade **unverified**, not fail |
 | **`secret-verifies`** | **the configured secret does not actually sign the book on disk** — the publisher/laptop mismatch, caught here instead of at 2:30 |
 | `book-present` / `book-audit` / `book-bar-age` / `book-gen-age` | no book, a failed publish-time audit, or a stale one |
-| **`book-current-bar`** | the book's signal bar is **not** the last completed session — today's publish never landed, so the 2:30 run will refuse to trade it (see §12) |
+| **`book-current-bar`** | the book's **equity basis** is not the last completed session — today's publish never landed, so the 2:30 run will refuse to trade it (see §12). A *weekend* `as_of` is normal and passes: the publisher runs 7 days a week for the 24/7 sleeves, and Monday's book carries Friday's close |
 | **`book-already-executed`** | that bar already has an execution report, so the next run is a no-op — use `--refresh-report`, not a re-run |
 | `task-slot` | `-TaskTime` is **local** — it prints what your 14:30 maps to in CT/ET and fails if it lands outside market hours |
 | `kill-switch` | trading left disabled from an earlier rehearsal |
@@ -402,8 +402,8 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--band 0.02` | widen the no-trade band (fraction of net-liq) |
 | `--fractional` | allow fractional shares (default: whole shares) |
 | `--port 4002` | IB Gateway API port (paper) |
-| `--max-age-hours 36` | reject a book generated longer ago than this (default 36). Note this is no longer the binding guard: the bar check below refuses any book that is not the last completed session, so a withheld publish is a **no-trade**, not a re-trade of yesterday's book |
-| `--allow-stale-bar` | trade a book whose signal bar is not the last completed session. Off by default — deliberate catch-up only |
+| `--max-age-hours 36` | reject a book generated longer ago than this (default 36). Note this is no longer the binding guard: the bar check below refuses any book whose equity basis is not the last completed session, so a withheld publish is a **no-trade**, not a re-trade of yesterday's book |
+| `--allow-stale-bar` | trade a book whose equity basis is not the last completed session. Off by default — deliberate catch-up only |
 | `--force-rerun` | execute a signal bar that already has an execution report. Only when you have confirmed the first run placed nothing |
 | `--allow-margin` | permit buys beyond settled cash + realised sell proceeds. Off by default — this is what keeps an unintended margin loan impossible |
 | `--max-gross-frac 1.02` | abort a plan that would leave gross exposure above this multiple of net-liq |
@@ -717,7 +717,7 @@ Then the specifics:
 | Log stops right after `Published book …` with no `Signature:` line and no `done` | The classic detached-run failure, fixed in the wrapper as of 2026-08-17. Redirected stdout on Windows is encoded with the ANSI codepage, so the `→` in the book printout raised `UnicodeEncodeError`; `2>&1` then turned the traceback into a terminating error under `$ErrorActionPreference='Stop'`, killing the wrapper before it could log anything. `git pull` to get the fix. Note the same command works interactively — a console stdout takes the Unicode path, so this only ever shows up under Task Scheduler. |
 | Executed Book shows a **signature error** | The report was written by a process with no `OVERALL_BOOK_SECRET`, so it went out **unsigned** (the run now warns when this happens). Open a new PowerShell and re-run with `--refresh-report --push-report`. |
 | Executed Book shows **stale trades / allocation drift** after fills completed | Two causes. (a) A manual run writes the report locally but does **not** push — only the wrapper did, until `--push-report`. (b) The report is written when `--fill-timeout` expires, so fills that print later are missing. `--refresh-report` fixes both: it re-reads positions and today's fills from the broker. |
-| `ABORT: refusing to trade a book that is not this session's` | Working as intended: the book's signal bar is not the last completed session, usually because today's publish was withheld or the `git pull` failed. **No trade is the correct outcome** — fix the publish, don't override. `--allow-stale-bar` exists for deliberate catch-up only. |
+| `ABORT: refusing to trade a book that is not this session's` | Working as intended: the book's **equity basis** (`signal_basis.equity_close`) is not the last completed session, usually because today's publish was withheld or the `git pull` failed. **No trade is the correct outcome** — fix the publish, don't override. `--allow-stale-bar` exists for deliberate catch-up only. |
 | `ABORT: signal bar … was already executed at …` | The duplicate-run guard. That bar's book was already traded (the record is in `data\overall\executed_archive\`). To refresh the report without trading: `--refresh-report`. Only pass `--force-rerun` if you have confirmed the first run placed no orders. |
 | `ABORT: positions read explains $… of the $… the account reports` | IB Gateway had not delivered the position subscription when the run read it. Nothing was traded — this is the guard that prevents re-buying a book the account already holds. Re-run; if it repeats, restart IB Gateway. |
 | `ABORT: plan would leave gross exposure at … x net liq` | The plan would gear the account, which an unlevered book never asks for — so the inputs are wrong (stale positions, a duplicate run, or an account that was already geared). Reconcile the account before re-running; do not raise `--max-gross-frac` to get past it. |
@@ -733,8 +733,13 @@ Then the specifics:
 - **Paper only** — non-`DU` accounts are refused by default.
 - **Dry-run is the default** — orders require `--execute`.
 - **Signed books only** (recommended) — set `--require-signature` to enforce.
-- **Freshness guards** — stale generation aborts the run, and the signal bar
-  must be the **last completed session**: a withheld publish is a no-trade.
+- **Freshness guards** — stale generation aborts the run, and the book's
+  **equity basis** (`signal_basis.equity_close`, signature-covered) must be the
+  **last completed session**: a withheld publish is a no-trade. The `as_of` bar
+  itself may sit ahead of that basis — Bitcoin prints a bar every day, so the
+  Saturday, Sunday and Monday books all carry a weekend `as_of` over Friday's
+  close, and gating on `as_of` instead made every Monday (and every day after a
+  US holiday) a no-trade day.
 - **No duplicate execution** — a bar that already has an execution report is
   never traded twice, so a retried or manually repeated run cannot double the
   book (the failure that cost 8.1% of NAV on 2026-08-18).
