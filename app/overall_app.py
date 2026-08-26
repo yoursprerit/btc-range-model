@@ -246,6 +246,12 @@ STRAT_CURVE = "Overall strategy (gated replay)"
 # each day (data/overall/book_archive/), daily optimiser trims included.
 STRAT_CURVE_ACTUAL = "Overall strategy (as published)"
 
+# display name of the do-nothing alternative — an equal target weight in every
+# instrument in the universe, held through every signal, never in cash.  It is
+# both a benchmark line on every Growth chart AND a selectable performance
+# source in the P&L section, so the name has to be one constant.
+BH_CURVE = "Equal-weight Buy & Hold"
+
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_published_books(bucket: str):
@@ -281,7 +287,7 @@ def get_all_profiles(bucket: str):
     sata = ov.SATA_DAILY
     bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)      # profile-independent
     base_curves = {"Equal-weight strategies": bm["strat_equal"]["equity"],
-                   "Equal-weight Buy & Hold": bm["bh_equal"]["equity"]}
+                   BH_CURVE: bm["bh_equal"]["equity"]}
     profiles = {}
     for name in UI_PROFILES:
         prof = ov.RISK_PROFILES[name]
@@ -301,6 +307,20 @@ def get_all_profiles(bucket: str):
                               w_opt=w_opt, wf=wf)
     return dict(results=results, computed_at=computed_at, rets=rets, bm=bm,
                 profiles=profiles)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_bh_replay(bucket: str):
+    """Equal-weight buy & hold of the whole universe, in the same shape the
+    strategy replays return (weights / SATA / returns matrices), so the P&L
+    section can drive every figure off it exactly as it does off the gated
+    replay or the as-published record.  Aligned to the strategy returns
+    matrix's calendar, which makes its curve identical to the
+    ``BH_CURVE`` benchmark line the same charts already draw."""
+    allp = get_all_profiles(bucket)
+    if not allp:
+        return None
+    return ov.equal_weight_bh_replay(allp["results"], index=allp["rets"].index)
 
 
 def get_portfolio(bucket: str, profile: str):
@@ -1906,28 +1926,44 @@ with tab_live:
         _ver_start = pd.Timestamp(ov.STRATEGY_VERSION_START).strftime("%b %d, %Y")
         _SRC_ACTUAL = "🎯 As-published record (actual books)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
-        if _bookrep_all is not None:
-            _pnl_src = st.radio(
-                "Performance source", [_SRC_ACTUAL, _SRC_REPLAY],
-                horizontal=True, key="overall_pnl_source",
-                help="**As-published record** — compounds the target books the "
-                     "publisher actually committed each day (one archived JSON "
-                     "per signal day), so the daily optimizer's trims and "
-                     "re-sizes are exactly the ones that really happened. "
-                     f"**Only books published under the current strategy "
-                     f"version ({_ver_up}, from {_ver_start}) are counted** — "
-                     "older-generation books never mix in. "
-                     "**Walk-forward replay** — a look-ahead-free simulation "
-                     "of the current rules over the full back-test "
-                     "history (longer window, but a reconstruction, not the "
-                     "record).")
-        else:
-            _pnl_src = _SRC_REPLAY
+        _SRC_BH = "⚖️ Equal-weight buy & hold"
+        _bhrep = get_bh_replay(_bucket())
+        # the buy-&-hold source is the "do nothing" alternative measured over
+        # the identical window — always offered, since it needs no archive and
+        # no profile.  The as-published option only exists once books do.
+        _src_opts = ([_SRC_ACTUAL] if _bookrep_all is not None else []) \
+            + [_SRC_REPLAY] + ([_SRC_BH] if _bhrep is not None else [])
+        # a remembered choice can vanish from the list (first archived book,
+        # or none at all) — clear it rather than let the widget error
+        if st.session_state.get("overall_pnl_source") not in _src_opts:
+            st.session_state.pop("overall_pnl_source", None)
+        _pnl_src = st.radio(
+            "Performance source", _src_opts,
+            horizontal=True, key="overall_pnl_source",
+            help="**As-published record** — compounds the target books the "
+                 "publisher actually committed each day (one archived JSON "
+                 "per signal day), so the daily optimizer's trims and "
+                 "re-sizes are exactly the ones that really happened. "
+                 f"**Only books published under the current strategy "
+                 f"version ({_ver_up}, from {_ver_start}) are counted** — "
+                 "older-generation books never mix in. "
+                 "**Walk-forward replay** — a look-ahead-free simulation "
+                 "of the current rules over the full back-test "
+                 "history (longer window, but a reconstruction, not the "
+                 "record). "
+                 "**Equal-weight buy & hold** — the do-nothing alternative: "
+                 "an equal slice of every instrument in the universe, bought "
+                 "at the start date and held through every signal, never in "
+                 "cash. Same dates, same instruments, no strategy — the "
+                 "sections below switch to the ones that mean something "
+                 "for a book that never trades.")
+        if _bookrep_all is None:
             st.caption("ℹ️ No archived published books found "
-                       "(`data/overall/book_archive/`) — showing the "
-                       "walk-forward replay only. The as-published view "
-                       "unlocks once the daily publisher has archived books.")
+                       "(`data/overall/book_archive/`) — the as-published "
+                       "view unlocks once the daily publisher has archived "
+                       "books.")
         _actual = _pnl_src == _SRC_ACTUAL
+        _bh_src = _pnl_src == _SRC_BH
         if _actual and _bookrep is None:
             # the current version's record hasn't accumulated 2 bars yet —
             # say so explicitly and fall back to the replay, never to
@@ -1943,7 +1979,42 @@ with tab_live:
                     "🧪 walk-forward replay (the current implementation's "
                     "full-history back-test) until the record exists.")
             _actual = False
-        if _actual:
+        if _bh_src:
+            # buy & hold in the replay's shape: an equal target weight in every
+            # instrument every day (renormalised over the sleeves that have
+            # data), earning the UNDERLYINGS' own returns rather than the
+            # sleeves' strategy returns, and never a dollar in cash.  Feeding
+            # that triple through the same pipeline makes every figure below
+            # the honest buy-&-hold read of the identical window.
+            st.caption("P&L, performance and risk of **equal-weight buy & "
+                       "hold** — an equal slice of each of the "
+                       f"**{_bhrep['n_assets']} instruments** the strategy "
+                       "trades, bought at the start date and **held through "
+                       "every signal**, with no exits and no idle cash. This "
+                       "is the *do-nothing* alternative measured over exactly "
+                       "the same window, on exactly the same instruments, so "
+                       "the comparison table and Growth chart below say what "
+                       "the strategy's trading actually added or cost. The "
+                       "book is held at equal target weight (re-balanced back "
+                       "to equal daily, gross of costs), it never touches "
+                       "SATA, and it is **independent of the risk profile "
+                       "selected above** — changing the profile leaves every "
+                       "figure in this view unchanged. Sections that only "
+                       "describe a *trading* book (trade logs, realized P&L, "
+                       "win rates per trade, turnover) are hidden here, "
+                       "because buy & hold has exactly one position per "
+                       "sleeve and never sells it. Dollar figures scale the "
+                       "💼 portfolio value entered above.")
+            _wf = {"weights": _bhrep["weights"], "sata": _bhrep["sata"],
+                   "active": None}
+            _strat_label = BH_CURVE
+            # keep the as-published record alongside the strategy curves so
+            # "what did trading actually add?" is one glance
+            _curves_view = ({STRAT_CURVE_ACTUAL: _bookrep["equity"],
+                             **_PF["curves"]} if _bookrep is not None
+                            else dict(_PF["curves"]))
+            _curve_all = _PF["curves"][BH_CURVE]
+        elif _actual:
             _n_books = len(_bookrep["books"])
             _n_old = len(_bookrep_all["books"]) - _n_books
             st.caption(f"P&L, performance and risk of the **as-published "
@@ -2038,9 +2109,19 @@ with tab_live:
                # older cached replays and the as-published record
                "active": (_wf.get("active").loc[:_end_ts]
                           if _wf.get("active") is not None else None)}
-        _rets_win = _PF["rets"].loc[:_end_ts]
+        # buy & hold earns the UNDERLYINGS' returns, not the sleeves' strategy
+        # returns — the attribution/daily-P&L helpers must be fed that matrix
+        # or the parts stop summing to the curve
+        _rets_win = (_bhrep["rets"] if _bh_src else _PF["rets"]).loc[:_end_ts]
         # sleeve-inclusion gate + per-trade notionals under a daily-weight book
         _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
+        # buy & hold reads the share each name actually carried INSIDE the
+        # window: _wmax is a peak over all history, and early on — when only a
+        # few sleeves had price data — the equal split handed those few much
+        # larger slices than they carry today
+        _bh_w = ({k: float(_wf["weights"][k]
+                           .loc[pd.Timestamp(_start_sel):].mean())
+                  for k in _wf["weights"].columns} if _bh_src else {})
         _sm = ov.slice_metrics(_curve_all, _start_sel)
         if _sm is None:
             st.warning("Not enough strategy history between those dates — pick "
@@ -2058,7 +2139,9 @@ with tab_live:
             _src_note = (f"as-published <b style='color:{_sv.BADGE_COLOR}'>"
                          f"{_ver_up}</b> record · {_n_books} "
                          f"book{'s' if _n_books != 1 else ''}" if _actual
-                         else f"profile <code>{_profile}</code>")
+                         else (f"equal-weight buy &amp; hold · "
+                               f"{_bhrep['n_assets']} instruments" if _bh_src
+                               else f"profile <code>{_profile}</code>"))
             with pnl_cols[2]:
                 st.markdown(
                     f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
@@ -2067,7 +2150,8 @@ with tab_live:
                     f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
             pm = st.columns(4)
-            pm[0].metric("Strategy P&L", f"{_sm['total_ret']*100:+.1f}%",
+            _pl_lbl = "Buy & hold P&L" if _bh_src else "Strategy P&L"
+            pm[0].metric(_pl_lbl, f"{_sm['total_ret']*100:+.1f}%",
                          delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
                          delta_color="normal" if _pnl_d >= 0 else "inverse")
             pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
@@ -2079,37 +2163,61 @@ with tab_live:
                          delta=f"vol {_sm['vol']*100:.0f}%", delta_color="off")
             # per-asset since-start reads (also feed the blend-level trade stats)
             _pa = ov.per_asset_slice_metrics(results, _start_sel, end=_end_arg)
-            _ots = ov.overall_trade_stats(_pa, _wmax)
+            if _bh_src:
+                # buy & hold never trades: exactly one position per sleeve,
+                # opened at the anchor and still open at the end.  The
+                # blend-level trade counters therefore become a held-position
+                # read — how many sleeves are held, and how many are in profit
+                # — off the same per-asset rows, judged on the BUY & HOLD leg.
+                _bh_rows = [p for p in _pa
+                            if p["bh"] and _bh_w.get(p["key"], 0) > 0.0005]
+                _bh_wins = sum(1 for p in _bh_rows if p["bh"]["total_ret"] > 0)
+                _ots = dict(n_trades=len(_bh_rows), n_open=len(_bh_rows),
+                            wins=_bh_wins, n_sleeves=len(_bh_rows),
+                            win_rate=(_bh_wins / len(_bh_rows))
+                            if _bh_rows else None)
+            else:
+                _ots = ov.overall_trade_stats(_pa, _wmax)
             # winning-days read conditioned on days with risk on — SATA-only
             # days would otherwise count as tiny guaranteed wins
             _dw = ov.daily_win_stats(_curve_all, _start_sel,
                                      active=_wf["weights"].sum(axis=1))
             pm2 = st.columns(6)
+            # buy & hold is invested every single day, so the "(invested)"
+            # qualifier — and the SATA caveat behind it — mean nothing there
+            _wd_lbl = "Winning days" if _bh_src else "Winning days (invested)"
+            _wd_help = ("Share of days the equal-weight book closed up. Buy & "
+                        "hold is fully invested every day, so this counts "
+                        "every trading day in the window. The Wilson 95% "
+                        "interval says how seriously to take the headline: "
+                        "over a short window a coin flip sits inside it."
+                        if _bh_src else
+                        "Share of days the blend closed up, counting ONLY days "
+                        "it actually held a position — fully-in-cash days are "
+                        "excluded so the steady SATA yield can't inflate the "
+                        "rate. The Wilson 95% interval says how seriously to "
+                        "take the headline: with few invested days a coin "
+                        "flip sits inside it.")
             if _dw is None or _dw["win_rate"] is None:
-                pm2[0].metric("Winning days (invested)", "—",
+                pm2[0].metric(_wd_lbl, "—",
                               delta=f"all-days {_sm['win_days']*100:.0f}%",
                               delta_color="off",
                               help="No days with risk deployed in this window "
                                    "— the book sat fully in SATA cash.")
             else:
                 pm2[0].metric(
-                    "Winning days (invested)", f"{_dw['win_rate']*100:.0f}%",
+                    _wd_lbl, f"{_dw['win_rate']*100:.0f}%",
                     delta=(f"{_dw['wins']}/{_dw['n_active']}d · CI "
                            f"{_dw['ci_lo']*100:.0f}–{_dw['ci_hi']*100:.0f}%"),
-                    delta_color="off",
-                    help="Share of days the blend closed up, counting ONLY days "
-                         "it actually held a position — fully-in-cash days are "
-                         "excluded so the steady SATA yield can't inflate the "
-                         "rate. The Wilson 95% interval says how seriously to "
-                         "take the headline: with few invested days a coin "
-                         "flip sits inside it.")
+                    delta_color="off", help=_wd_help)
             pm2[1].metric("Best day", f"{_sm['best_day']*100:+.2f}%")
             pm2[2].metric("Worst day", f"{_sm['worst_day']*100:+.2f}%")
             if _dw is None or _dw["win_rate"] is None:
                 pm2[3].metric("Trading days", f"{_sm['days']}")
             else:
                 pm2[3].metric(
-                    "Daily edge (invested)", f"{_dw['expectancy']*100:+.2f}%",
+                    "Daily edge" if _bh_src else "Daily edge (invested)",
+                    f"{_dw['expectancy']*100:+.2f}%",
                     delta=(f"W {_dw['avg_win']*100:+.2f}% · "
                            f"L {_dw['avg_loss']*100:+.2f}%"),
                     delta_color="off",
@@ -2117,20 +2225,39 @@ with tab_live:
                          "winning day + loss rate × average losing day. The "
                          "number that actually compounds: a high win rate "
                          "with a negative edge still loses money.")
-            pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
-                          delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
-                          delta_color="off",
-                          help="Round-trip trades across every sleeve the optimal "
-                               "blend holds (weight > 0) that were open at any point "
-                               "since the start date — including trades entered "
-                               "before it — plus currently-open positions.")
-            pm2[5].metric("Win rate",
-                          "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
-                          delta=f"{_ots['wins']}/{_ots['n_trades']} won" if _ots["n_trades"] else None,
-                          delta_color="off",
-                          help="Winning trades out of all counted trades: closed "
-                               "trades on their realised return, open positions on "
-                               "their current unrealised P&L.")
+            if _bh_src:
+                pm2[4].metric("Instruments held", f"{_ots['n_trades']}",
+                              delta="all still open — never sold",
+                              delta_color="off",
+                              help="One position per instrument, bought at the "
+                                   "start date and held to the end of the "
+                                   "window. Buy & hold places no other trade, "
+                                   "so there are no round-trips to count.")
+                pm2[5].metric(
+                    "Sleeves in profit",
+                    "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
+                    delta=(f"{_ots['wins']}/{_ots['n_trades']} up"
+                           if _ots["n_trades"] else None),
+                    delta_color="off",
+                    help="Share of the held instruments whose own buy-&-hold "
+                         "return is positive over this window — the "
+                         "buy-&-hold analogue of the strategy's trade win "
+                         "rate, judged on the one open position per sleeve.")
+            else:
+                pm2[4].metric("Trades (incl. open)", f"{_ots['n_trades']}",
+                              delta=f"{_ots['n_open']} open" if _ots["n_open"] else "all closed",
+                              delta_color="off",
+                              help="Round-trip trades across every sleeve the optimal "
+                                   "blend holds (weight > 0) that were open at any point "
+                                   "since the start date — including trades entered "
+                                   "before it — plus currently-open positions.")
+                pm2[5].metric("Win rate",
+                              "—" if _ots["win_rate"] is None else f"{_ots['win_rate']*100:.0f}%",
+                              delta=f"{_ots['wins']}/{_ots['n_trades']} won" if _ots["n_trades"] else None,
+                              delta_color="off",
+                              help="Winning trades out of all counted trades: closed "
+                                   "trades on their realised return, open positions on "
+                                   "their current unrealised P&L.")
 
             # same-window benchmark comparison — is the strategy earning its
             # keep?  In as-published mode the walk-forward replay stays in the
@@ -2167,11 +2294,14 @@ with tab_live:
 
             # equity curve re-based to the portfolio value at the chosen start
             _fig_pnl = go.Figure()
-            _pnl_styles = {_strat_label: ("#111827", 3),
-                           "Equal-weight strategies": ("#0ea5e9", 1.5),
-                           "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
-            if _actual:                        # replay demoted to a benchmark line
-                _pnl_styles[STRAT_CURVE] = ("#7c3aed", 1.5)
+            # every non-selected curve is a thin benchmark line; the selected
+            # source is always the bold black one — assigned LAST so it wins
+            # even when it shares a name with a benchmark (buy & hold does)
+            _pnl_styles = {"Equal-weight strategies": ("#0ea5e9", 1.5),
+                           BH_CURVE: ("#94a3b8", 1.5),
+                           STRAT_CURVE: ("#7c3aed", 1.5),
+                           STRAT_CURVE_ACTUAL: ("#16a34a", 1.5)}
+            _pnl_styles[_strat_label] = ("#111827", 3)
             for _nm, _cv in _curves_view.items():
                 _sub = _cv.loc[pd.Timestamp(_start_sel):]
                 if len(_sub) < 2:
@@ -2184,7 +2314,8 @@ with tab_live:
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
             _src_title = (f"as-published books ({_ver_up})" if _actual
-                          else f"`{_profile}` profile")
+                          else ("equal-weight buy & hold" if _bh_src
+                                else f"`{_profile}` profile"))
             _fig_pnl.update_layout(
                 height=340, margin=dict(t=30, b=10, l=10, r=10),
                 yaxis_title="Portfolio value ($)", hovermode="x unified",
@@ -2193,7 +2324,19 @@ with tab_live:
                                 f"{_win_lbl} — {_src_title}",
                            font_size=13))
             st.plotly_chart(_fig_pnl, use_container_width=True)
-            if _actual:
+            if _bh_src:
+                st.caption("📌 **Equal-weight buy & hold**: an equal slice of "
+                           "every instrument, put on at the anchor close and "
+                           "held to the end of the window — no entries, no "
+                           "exits, no cash leg. The book is re-balanced back "
+                           "to equal weight daily and marked at official "
+                           "closes, gross of commissions, fills and any "
+                           "re-balance costs. The strategy curves plotted "
+                           "alongside are the same window and the same "
+                           "instruments, so the gap between the lines is what "
+                           "the trading rules added or cost. Not investment "
+                           "advice.")
+            elif _actual:
                 st.caption("📌 The **as-published record**: each day compounds "
                            "the archived book actually committed from the "
                            "previous bar's close — weights, daily optimizer "
@@ -2226,12 +2369,25 @@ with tab_live:
                            "**one colour per signal group** (e.g. ₿ BTC covers "
                            "BTC·MSTR·MSTU·ETH — hover any band for that day's "
                            "per-asset split); grey on top is idle cash in "
-                           "**SATA**. Bands widen and narrow daily as "
-                           + ("the published books trim and re-size positions "
-                              "— even when no Action signal changes."
-                              if _actual else
-                              "priorities move — even when no Action signal "
-                              "changes."))
+                           "**SATA**. "
+                           + ("Bands are flat by construction: every "
+                              "instrument carries the same target weight "
+                              "every day and nothing is ever parked in cash, "
+                              "so the SATA band stays at zero. A band steps "
+                              "where a sleeve's price history begins and the "
+                              "equal split is spread across one more name — "
+                              "and on **weekends**, where the equity sleeves "
+                              "have no bar and the split falls to the crypto "
+                              "names that do (the same convention the "
+                              "Equal-weight Buy & Hold benchmark line has "
+                              "always used)."
+                              if _bh_src else
+                              "Bands widen and narrow daily as "
+                              + ("the published books trim and re-size "
+                                 "positions — even when no Action signal "
+                                 "changes." if _actual else
+                                 "priorities move — even when no Action "
+                                 "signal changes.")))
 
             # per-day $ / % P&L off the same weights + returns as the P&L-by-
             # asset attribution — shared by the trade log's Day-P&L column and
@@ -2248,6 +2404,18 @@ with tab_live:
                         sata_daily=ov.SATA_DAILY)
                 return _dpl_memo["v"]
 
+            # exact per-sleeve attribution of the window's P&L — the
+            # per-asset table, 📊 P&L-by-asset, ⚡ capital efficiency and 💡
+            # trade efficiency all need the identical call, so make it once
+            _att_memo = {}
+
+            def _get_att():
+                if "v" not in _att_memo:
+                    _att_memo["v"] = ov.pnl_attribution_replay(
+                        _rets_win, _wf["weights"], _wf["sata"], _start_sel,
+                        sata_daily=ov.SATA_DAILY)
+                return _att_memo["v"]
+
             # exact per-sleeve ledger (realized/unrealized/deployed) —
             # shared by 💰 realized P&L, 🥧 capital traded and ⚡ capital
             # efficiency, computed once on first use
@@ -2263,7 +2431,7 @@ with tab_live:
             # ── daily trade log — every buy/sell the daily book ordered ──────
             # (both sources: the source radio above decides which weight
             # matrix — as-published books or walk-forward replay — feeds it)
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"🧾 Daily trade log {_win_lbl} — positions bought "
                     "& sold day by day, with each day's P&L (toggle on/off)",
                     key="overall_daily_trade_log"):
@@ -2480,7 +2648,7 @@ with tab_live:
             # (the 🧾 trade log's ⚖️ tilt trims + 🚦 sell signals rolled up
             # per sleeve — realized-only, per-trade approximation: it does
             # NOT reconcile to the exact 📊 P&L-by-asset attribution)
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"💰 Realized P&L by asset {_win_lbl} — % and $ locked "
                     "in by daily tilt trims & sell signals (toggle to show)",
                     key="overall_realized_pnl_by_asset"):
@@ -2613,12 +2781,16 @@ with tab_live:
                 else:
                     st.caption("What the "
                                + ("**as-published book**" if _actual
-                                  else "**walk-forward replay book**")
+                                  else ("**equal-weight buy-&-hold book**"
+                                        if _bh_src else
+                                        "**walk-forward replay book**"))
                                + " (per the performance-source toggle above) "
                                "**earned or lost each trading day**: green "
                                "bars are up days, red bars down days, "
-                               "**every day included** (unlike the 🧾 trade "
-                               "log, which lists only days that traded). "
+                               "**every day included**"
+                               + ("" if _bh_src else
+                                  " (unlike the 🧾 trade log, which lists "
+                                  "only days that traded)") + ". "
                                "Each day's blend return is scaled by the "
                                "book's compounded value at the previous "
                                "close, so the bars **sum exactly to the "
@@ -2677,8 +2849,9 @@ with tab_live:
                                f"(${_dd.loc[_wd]:+,.0f} · "
                                f"{_dr.loc[_wd]*100:+.2f}%). Weekend bars "
                                "carry the crypto sleeves' P&L only (equity "
-                               "sleeves hold through closed markets; SATA "
-                               "accrues on business days).")
+                               "sleeves hold through closed markets"
+                               + ("" if _bh_src else
+                                  "; SATA accrues on business days") + ").")
 
             # ── published books & daily trims — the record, book by book ─────
             # (as-published mode only: this IS the archive, one row per publish)
@@ -2715,7 +2888,7 @@ with tab_live:
                                "exactly what the P&L above compounds, so all "
                                "the trims listed here are already inside "
                                "every metric in this section.")
-                    _bh = ("<tr style='background:#f1f5f9;font-size:12px;"
+                    _bk_hdr = ("<tr style='background:#f1f5f9;font-size:12px;"
                            "text-align:left'>"
                            "<th style='padding:6px 10px'>Signal bar</th>"
                            "<th>Profile</th>"
@@ -2781,15 +2954,150 @@ with tab_live:
                             f"{_chg_s}</td></tr>")
                     st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
                                 f"<table style='width:100%;border-collapse:collapse'>"
-                                f"{_bh}{''.join(reversed(_brs))}</table></div>",
+                                f"{_bk_hdr}{''.join(reversed(_brs))}</table></div>",
                                 unsafe_allow_html=True)
 
             # ── per-asset breakdown — opt-in via toggle so the page stays clean
             # (a nested st.expander is not allowed inside the section expander)
             # (_pa computed above, alongside the blend-level trade stats)
-            if st.toggle(f"🔬 Per-asset breakdown {_win_lbl} — every sleeve's "
-                         "return & risk (toggle to show)",
-                         key="overall_pa_breakdown"):
+            # Buy & hold gets its OWN table: the strategy columns (trades, win
+            # rate, in-market share) describe a book that trades, and this one
+            # never does — what matters instead is each held instrument's own
+            # return, its risk, and the dollars it put into the blend's P&L.
+            if _bh_src and st.toggle(
+                    f"🔬 Per-instrument buy & hold {_win_lbl} — every "
+                    "holding's return, risk & $ contribution (toggle to show)",
+                    key="overall_pa_breakdown_bh"):
+                _bh_att = _get_att()
+                _bh_pa = [p for p in _pa if p["bh"]]
+                st.caption("Each instrument **bought at the start date and "
+                           "held**, measured over the same window as the "
+                           "headline above. **Weight** is its average share "
+                           "of the book across the window — an equal split of "
+                           "the names that have a bar that day, so it dips "
+                           "below 1/N for a sleeve that joins late and rises "
+                           "on weekends for the crypto names; **$ "
+                           "contribution** is its exact share "
+                           "of the blend's P&L — the same attribution the 📊 "
+                           "chart below plots, so the column sums to the "
+                           "headline Buy & hold P&L. Instruments whose price "
+                           "history begins after the start date are measured "
+                           "from their own first bar (noted inline) and take "
+                           "their equal slice only from that bar. There is no "
+                           "SATA row: buy & hold never holds cash.")
+                if not _bh_pa:
+                    st.info("No instrument has enough history after that date.")
+                else:
+                    _bh_sorted = sorted(_bh_pa,
+                                        key=lambda x: x["bh"]["total_ret"])
+                    fig_bhpa = go.Figure(go.Bar(
+                        y=[p["key"] for p in _bh_sorted],
+                        x=[p["bh"]["total_ret"] * 100 for p in _bh_sorted],
+                        orientation="h",
+                        marker_color=[p["accent"] for p in _bh_sorted],
+                        text=[f"{p['bh']['total_ret']*100:+.1f}%"
+                              for p in _bh_sorted],
+                        textposition="outside", cliponaxis=False,
+                        customdata=[[p["name"], p["bh"]["mdd"] * 100,
+                                     p["bh"]["sharpe"]] for p in _bh_sorted],
+                        hovertemplate="%{y} — %{customdata[0]}<br>"
+                                      "<b>%{x:+.1f}%</b> held · max DD "
+                                      "%{customdata[1]:.1f}% · Sharpe "
+                                      "%{customdata[2]:.2f}<extra></extra>"))
+                    fig_bhpa.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                    # the equal-weight blend itself, for "which names carried it"
+                    fig_bhpa.add_vline(
+                        x=_sm["total_ret"] * 100, line_dash="dot",
+                        line_color="#111827", line_width=1.5,
+                        annotation_text=f"blend {_sm['total_ret']*100:+.1f}%",
+                        annotation_font_size=10)
+                    fig_bhpa.update_layout(
+                        height=max(300, 26 * len(_bh_sorted) + 80),
+                        margin=dict(t=40, b=10, l=10, r=70),
+                        xaxis_title="buy & hold return since start (%)",
+                        title=dict(text="Return by instrument — bought at the "
+                                        "start date and held",
+                                   font_size=13))
+                    st.plotly_chart(fig_bhpa, use_container_width=True)
+
+                    bph = ("<tr style='background:#f1f5f9;font-size:12px;"
+                           "text-align:left'>"
+                           "<th style='padding:6px 10px'>Instrument</th>"
+                           "<th style='text-align:right'>Buy&amp;Hold P&amp;L</th>"
+                           "<th style='text-align:right'>Max DD</th>"
+                           "<th style='text-align:right'>Sharpe</th>"
+                           "<th style='text-align:right'>Weight</th>"
+                           "<th style='text-align:right'>$ contribution</th>"
+                           "<th style='text-align:right'>vs its strategy</th></tr>")
+                    bpr = []
+                    _bh_by_key = {p["key"]: p for p in _bh_pa}
+                    for pk, grp in parents:
+                        for res in grp:
+                            p = _bh_by_key.get(res["key"])
+                            if not p:
+                                continue
+                            bh_a, sm_a = p["bh"], p["strat"]
+                            _rc = C_BUY if bh_a["total_ret"] >= 0 else C_EXIT
+                            _late = (f"<div style='font-size:10px;color:#94a3b8'>"
+                                     f"since "
+                                     f"{bh_a['start'].strftime('%b %d, %Y')}</div>"
+                                     if bh_a["start"] > _sm["start"] else "")
+                            _contrib = ((_bh_att["per_key"].get(p["key"], 0.0)
+                                         * portfolio_value)
+                                        if _bh_att else None)
+                            _cs = ("—" if _contrib is None else
+                                   f"<span style='color:"
+                                   f"{C_BUY if _contrib >= 0 else C_EXIT}'>"
+                                   f"${_contrib:+,.0f}</span>")
+                            # how the sleeve's own signal strategy did over the
+                            # same window — the per-name version of the whole
+                            # comparison this view exists to make
+                            _gap = sm_a["total_ret"] - bh_a["total_ret"]
+                            _gs = (f"<span style='color:"
+                                   f"{C_BUY if _gap >= 0 else C_EXIT}'>"
+                                   f"{_gap*100:+.1f} pp</span>"
+                                   f"<div style='font-size:10px;color:#94a3b8'>"
+                                   f"strat {sm_a['total_ret']*100:+.1f}%</div>")
+                            bpr.append(
+                                f"<tr style='border-bottom:1px solid #eef2f7'>"
+                                f"<td style='padding:6px 10px;font-weight:700'>"
+                                f"{p['emoji']} {p['key']}{_kind_badge(p['kind'])}"
+                                f"<span style='font-size:11px;color:#94a3b8;"
+                                f"font-weight:400'> {p['name']}</span>{_late}</td>"
+                                f"<td style='text-align:right;font-weight:700;"
+                                f"color:{_rc}'>{bh_a['total_ret']*100:+.1f}%</td>"
+                                f"<td style='text-align:right;color:{C_EXIT}'>"
+                                f"{bh_a['mdd']*100:.1f}%</td>"
+                                f"<td style='text-align:right'>"
+                                f"{bh_a['sharpe']:.2f}</td>"
+                                f"<td style='text-align:right;font-weight:700'>"
+                                f"{_bh_w.get(p['key'], 0)*100:.1f}%</td>"
+                                f"<td style='text-align:right;font-weight:600;"
+                                f"font-variant-numeric:tabular-nums'>{_cs}</td>"
+                                f"<td style='text-align:right'>{_gs}</td></tr>")
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;"
+                                f"border-collapse:collapse'>"
+                                f"{bph}{''.join(bpr)}</table></div>",
+                                unsafe_allow_html=True)
+                    st.caption("**vs its strategy** is the gap between the "
+                               "instrument's own signal-driven strategy and "
+                               "simply holding it, over this window: green "
+                               "means the signals beat holding that name, red "
+                               "means holding it won. Positive gaps here are "
+                               "what the strategy sources above are made of. "
+                               "**Max DD** and **Sharpe** are measured on the "
+                               "held position from the start date, so they "
+                               "carry the full downside a holder actually "
+                               "sat through — the equal-weight blend's own "
+                               "drawdown, in the headline above, is milder "
+                               "only because the names don't all fall "
+                               "together.")
+
+            if not _bh_src and st.toggle(
+                    f"🔬 Per-asset breakdown {_win_lbl} — every sleeve's "
+                    "return & risk (toggle to show)",
+                    key="overall_pa_breakdown"):
                 st.caption("Each instrument's **own signal-driven strategy** vs "
                            "simply buying & holding it, both measured from the same "
                            "start date. **In mkt** = share of days the sleeve was "
@@ -2924,11 +3232,13 @@ with tab_live:
                                "sum to the blend P&L.")
 
             # ── trade log — the individual trades behind the counts above ──────
-            _tl = ov.trade_log_since(results, _wmax, _start_sel,
-                                     weight_matrix=_wf["weights"],
-                                     end=_end_arg)
+            # (buy & hold places one buy per sleeve at the anchor and never
+            # another ticket — there is no round-trip log to build)
+            _tl = [] if _bh_src else ov.trade_log_since(
+                results, _wmax, _start_sel, weight_matrix=_wf["weights"],
+                end=_end_arg)
             _n_open_tl = sum(1 for t in _tl if t["open"])
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"📜 Trade log {_win_lbl} — "
                     f"{len(_tl)} trade{'s' if len(_tl) != 1 else ''}"
                     f"{f' · {_n_open_tl} open' if _n_open_tl else ''} (toggle to show)",
@@ -3005,7 +3315,7 @@ with tab_live:
                                 f"{tlh}{''.join(tlr)}</table></div>", unsafe_allow_html=True)
 
             # ── capital traded by asset — where the strategy put the money ─────
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"🥧 Capital traded by asset {_win_lbl} — % of total "
                     "deployed capital (toggle to show)",
                     key="overall_capital_by_asset"):
@@ -3084,20 +3394,26 @@ with tab_live:
                     f"📊 P&L by asset {_win_lbl} — how much each "
                     "instrument earned or lost (toggle to show)",
                     key="overall_pnl_share_by_asset"):
-                st.caption("The headline **Strategy P&L above, split by sleeve**: "
-                           "each day's blend return is decomposed into every "
-                           "sleeve's weighted share (plus the **SATA** yield on "
-                           "idle capital) and scaled by the blend's compounding "
-                           "value, so the bars **sum exactly to the Strategy "
-                           "P&L dollar figure** for the selected source and "
-                           "start date. Green bars are net winners, red bars "
-                           "net losers; each is labelled with its share of the "
-                           "net total. (This is exact attribution off the blend "
-                           "curve — unlike the trade log's **≈ $ on blend** "
-                           "column, which is a per-trade approximation.)")
-                _att = ov.pnl_attribution_replay(
-                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
-                    sata_daily=ov.SATA_DAILY)
+                st.caption(f"The headline **{_pl_lbl} above, split by "
+                           "sleeve**: each day's blend return is decomposed "
+                           "into every sleeve's weighted share "
+                           + ("" if _bh_src else
+                              "(plus the **SATA** yield on idle capital) ")
+                           + "and scaled by the blend's compounding value, so "
+                           f"the bars **sum exactly to the {_pl_lbl} dollar "
+                           "figure** for the selected source and start date. "
+                           "Green bars are net winners, red bars net losers; "
+                           "each is labelled with its share of the net total. "
+                           + ("Every sleeve carries the same weight here, so "
+                              "the bars rank the instruments purely on how "
+                              "each one moved over the window — the "
+                              "buy-&-hold blend's winners and losers, with "
+                              "nothing the signals did in between."
+                              if _bh_src else
+                              "(This is exact attribution off the blend curve "
+                              "— unlike the trade log's **≈ $ on blend** "
+                              "column, which is a per-trade approximation.)"))
+                _att = _get_att()
                 if _att is None:
                     st.info("Not enough blend history after that date — "
                             "no P&L to attribute.")
@@ -3114,9 +3430,11 @@ with tab_live:
                     _pnl_by = {k: v for k, v in _pnl_by.items() if abs(v) >= 0.5}
                     _bars = [(f"{by_key[k]['emoji']} {k}", v,
                               C_BUY if v >= 0 else C_EXIT,
-                              f"{_pcnt.get(k, 0)} trade"
-                              f"{'s' if _pcnt.get(k, 0) != 1 else ''} · peak wt "
-                              f"{_wmax.get(k, 0)*100:.1f}%")
+                              ("bought at the start & held · avg weight "
+                               f"{_bh_w.get(k, 0)*100:.1f}%" if _bh_src else
+                               f"{_pcnt.get(k, 0)} trade"
+                               f"{'s' if _pcnt.get(k, 0) != 1 else ''} · "
+                               f"peak wt {_wmax.get(k, 0)*100:.1f}%"))
                              for k, v in _pnl_by.items()]
                     if _att["sata"]:
                         _bars.append(("💵 SATA", _att["sata"] * portfolio_value,
@@ -3155,7 +3473,7 @@ with tab_live:
                     st.plotly_chart(fig_pnl_by, use_container_width=True)
 
             # ── capital efficiency — P&L per dollar of capital deployed ──────
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"⚡ Capital efficiency by asset {_win_lbl} — P&L earned "
                     "per $ of capital traded (toggle to show)",
                     key="overall_capital_efficiency"):
@@ -3173,9 +3491,7 @@ with tab_live:
                            "portfolio value entered. **SATA** isn't shown — "
                            "its yield accrues on idle cash, not traded "
                            "capital.")
-                _eff_att = ov.pnl_attribution_replay(
-                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
-                    sata_daily=ov.SATA_DAILY)
+                _eff_att = _get_att()
                 _effled = {k: r for k, r in _get_rlz().items()
                            if r["deployed"] > 1e-9}
                 if not _effled or _eff_att is None:
@@ -3218,7 +3534,7 @@ with tab_live:
                     st.plotly_chart(fig_eff, use_container_width=True)
 
             # ── win rate per asset — how often each sleeve's trades won ──────
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"🎯 Win rate by asset {_win_lbl} — share of winning "
                     "trades per instrument (toggle to show)",
                     key="overall_win_rate_by_asset"):
@@ -3276,7 +3592,7 @@ with tab_live:
                     st.plotly_chart(fig_wr, use_container_width=True)
 
             # ── trade efficiency — each trade's average share of total P&L ───
-            if st.toggle(
+            if not _bh_src and st.toggle(
                     f"💡 Trade efficiency by asset {_win_lbl} — average % of "
                     "total P&L earned per trade (toggle to show)",
                     key="overall_trade_efficiency"):
@@ -3291,9 +3607,7 @@ with tab_live:
                            "the ratio is independent of the 💼 portfolio value. "
                            "**SATA** isn't shown — its yield accrues daily on "
                            "idle cash, not from trades.")
-                _pe_att = ov.pnl_attribution_replay(
-                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
-                    sata_daily=ov.SATA_DAILY)
+                _pe_att = _get_att()
                 _wts_pe = _wmax
                 _pe_bars = []
                 if _pe_att and _pe_att["total"] > 0:

@@ -2728,6 +2728,71 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                 books=parsed, version_spans=spans, dropped=sorted(dropped))
 
 
+# ── equal-weight buy & hold — the "do nothing" alternative, in replay shape ──
+# The strategy sections all run off one triple: a per-day WEIGHT matrix, a
+# per-day SATA (idle-cash) weight, and a per-asset RETURN matrix.  Buy & hold
+# is the same thing with the signals removed: every instrument in the universe
+# carries the same target weight every day and earns its own underlying move,
+# whatever the signal said, with nothing ever parked in cash.  Building it in
+# the replay's shape lets the whole P&L section — headline metrics, benchmark
+# table, allocation area, daily P&L, exact per-sleeve attribution — run off it
+# unchanged, and guarantees the curve is byte-for-byte the ``bh_equal``
+# benchmark line the same charts already draw.
+def bh_returns_matrix(results: list[dict]) -> pd.DataFrame:
+    """Per-instrument daily BUY & HOLD returns — the underlying's own bar-to-bar
+    move, ignoring the signal.  The buy-&-hold analogue of ``returns_matrix``
+    (which carries each sleeve's *strategy* returns), aligned into one frame
+    with NaN where an instrument has no history yet."""
+    cols = {}
+    for res in results:
+        px = pd.Series(np.asarray(res["r"]["bh"], float),
+                       index=pd.to_datetime(pd.Series(res["r"]["dates"])))
+        cols[res["key"]] = px.pct_change()
+    return pd.DataFrame(cols).sort_index()
+
+
+def equal_weight_bh_replay(results: list[dict],
+                           index: pd.Index | None = None) -> dict | None:
+    """Equal-weight buy & hold of the whole universe, returned in the same
+    shape as ``walkforward_gated_replay`` / ``published_book_replay``
+    (``ret``/``equity``/``metrics``/``weights``/``sata``) so every figure and
+    toggle in the P&L section can run off it with no special-casing.
+
+    Same construction as ``benchmarks()['bh_equal']``: an equal TARGET weight
+    in every instrument, renormalised each day over the sleeves that actually
+    have data (so a sleeve whose history starts later joins at its first bar
+    instead of dragging a cash stub through the early window), held through
+    every signal — no entries, no exits, no idle cash, so ``sata`` is flat
+    zero.  Passing ``index`` (the strategy returns matrix's index) aligns the
+    curve to exactly the same calendar the strategy sources use, which is what
+    makes this identical to the ``Equal-weight Buy & Hold`` benchmark curve.
+
+    Also returns ``rets`` — the buy-&-hold returns matrix the weights earn,
+    which is what the attribution/daily-P&L helpers must be fed instead of the
+    strategy ``returns_matrix`` — and ``n_assets``.  ``None`` when there is
+    nothing to replay (<2 bars)."""
+    bh = bh_returns_matrix(results)
+    if bh.empty:
+        return None
+    if index is not None:
+        bh = bh.reindex(index)
+    if len(bh.index) < 2:
+        return None
+    avail = bh.notna().to_numpy()
+    n = bh.shape[1]
+    wt = avail * (1.0 / n)
+    denom = wt.sum(axis=1, keepdims=True)
+    denom[denom == 0] = np.nan
+    W = np.nan_to_num(wt / denom)          # sums to 1 on any day with data
+    port = (W * np.nan_to_num(bh.to_numpy(float))).sum(axis=1)
+    daily = pd.Series(port, index=bh.index)
+    eq = _equity(daily)
+    return dict(ret=daily, equity=eq, metrics=curve_metrics(eq),
+                weights=pd.DataFrame(W, index=bh.index, columns=bh.columns),
+                sata=pd.Series(0.0, index=bh.index),
+                rets=bh, n_assets=n)
+
+
 def benchmarks(returns: pd.DataFrame, results: list[dict],
                pos: pd.DataFrame | None = None, sata_daily: float = 0.0) -> dict:
     """Reference curves: equal-weight buy&hold of the underlyings (always
