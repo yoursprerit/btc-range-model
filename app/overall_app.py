@@ -2259,17 +2259,32 @@ with tab_live:
                                    "trades on their realised return, open positions on "
                                    "their current unrealised P&L.")
 
-            # same-window benchmark comparison — is the strategy earning its
-            # keep?  In as-published mode the walk-forward replay stays in the
-            # table as a benchmark row, so record-vs-simulation is one glance.
+            # Benchmark comparison over the SELECTED window — is the strategy
+            # earning its keep?  In as-published mode the walk-forward replay
+            # stays in as a benchmark row, so record-vs-simulation is one
+            # glance.
+            #
+            # A curve whose history starts AFTER the chosen start date cannot
+            # cover the window: slice_metrics anchors it at its own first bar
+            # instead, and the growth chart re-bases it there too, so its line
+            # enters mid-chart at break-even.  That is honest arithmetic but it
+            # is not the same measurement as the other rows — the as-published
+            # record begins the day the current strategy version was stamped,
+            # so with an earlier start date its row simply stops responding to
+            # the date picker while every other row moves.  Mark those rows
+            # with the window they ACTUALLY cover (the same "since <date>"
+            # convention the per-asset table below uses) and mute the figures,
+            # rather than presenting them as like-for-like.
             _bench_rows = []
             for _nm, _cv in _curves_view.items():
                 _bm_sm = ov.slice_metrics(_cv, _start_sel)
                 if _bm_sm:
                     _bench_rows.append((_nm, _bm_sm))
+            _n_short = sum(1 for _nm, _m in _bench_rows
+                           if _m["start"] > _sm["start"])
             if len(_bench_rows) > 1:
                 bh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
-                      "<th style='padding:6px 10px'>Strategy (same window)</th>"
+                      "<th style='padding:6px 10px'>Strategy</th>"
                       "<th style='text-align:right'>P&amp;L</th>"
                       "<th style='text-align:right'>$ on portfolio</th>"
                       "<th style='text-align:right'>Max DD</th>"
@@ -2277,20 +2292,50 @@ with tab_live:
                 br = []
                 for _nm, _m in _bench_rows:
                     _hi = "background:#eff6ff;font-weight:700;" if _nm == _strat_label else ""
+                    _short = _m["start"] > _sm["start"]
                     _pc = C_BUY if _m["total_ret"] >= 0 else C_EXIT
+                    if _short:
+                        # not the selected window — say so, and stop the number
+                        # reading as comparable to the rows above it
+                        _pc = "#94a3b8"
+                        _note = (f"<div style='font-size:10px;color:#b45309'>"
+                                 f"⚠️ shorter history — measured "
+                                 f"{_m['start'].strftime('%b %d, %Y')} → "
+                                 f"{_m['end'].strftime('%b %d, %Y')} "
+                                 f"({_m['days']} of {_sm['days']} bars), "
+                                 f"not comparable to the rows above</div>")
+                    else:
+                        _note = ""
                     br.append(
                         f"<tr style='border-bottom:1px solid #eef2f7;{_hi}'>"
                         f"<td style='padding:6px 10px'>{_nm}"
-                        f"{' ◄ this strategy' if _nm == _strat_label else ''}</td>"
+                        f"{' ◄ this strategy' if _nm == _strat_label else ''}"
+                        f"{_note}</td>"
                         f"<td style='text-align:right;color:{_pc};font-weight:600'>"
                         f"{_m['total_ret']*100:+.1f}%</td>"
-                        f"<td style='text-align:right;font-variant-numeric:tabular-nums'>"
+                        f"<td style='text-align:right;color:{_pc};"
+                        f"font-variant-numeric:tabular-nums'>"
                         f"${_m['total_ret']*portfolio_value:+,.0f}</td>"
-                        f"<td style='text-align:right;color:{C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
-                        f"<td style='text-align:right'>{_m['sharpe']:.2f}</td></tr>")
+                        f"<td style='text-align:right;color:"
+                        f"{_pc if _short else C_EXIT}'>{_m['mdd']*100:.1f}%</td>"
+                        f"<td style='text-align:right;color:{_pc}'>"
+                        f"{_m['sharpe']:.2f}</td></tr>")
                 st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
                             f"<table style='width:100%;border-collapse:collapse'>{bh}{''.join(br)}</table></div>",
                             unsafe_allow_html=True)
+                if _n_short:
+                    st.caption(
+                        f"⚠️ {_n_short} row"
+                        + ("s have" if _n_short != 1 else " has")
+                        + " **less history than the window you picked**, so "
+                          "it is measured from its own first bar instead — "
+                          "greyed out above, and on the chart below its line "
+                          "starts mid-plot at the break-even level rather than "
+                          "at the left edge. Its P&L does **not** answer the "
+                          "same question as the other rows and will not change "
+                          "as you move the start date earlier. Pick a start "
+                          "date inside every curve's history to compare them "
+                          "like for like.")
 
             # equity curve re-based to the portfolio value at the chosen start
             _fig_pnl = go.Figure()
@@ -2307,9 +2352,17 @@ with tab_live:
                 if len(_sub) < 2:
                     continue
                 _c, _w = _pnl_styles.get(_nm, ("#888", 1.5))
+                # a curve with less history is re-based at its OWN first bar,
+                # so its line enters mid-plot at break-even while the others
+                # have been compounding since the left edge.  Name it for what
+                # it is, and dash it, so the chart is not read as one window.
+                _late = _sub.index[0] > pd.Timestamp(_sm["start"])
                 _fig_pnl.add_trace(go.Scatter(
                     x=_sub.index, y=(_sub / _sub.iloc[0]).to_numpy() * portfolio_value,
-                    name=_nm, line=dict(color=_c, width=_w)))
+                    name=(f"{_nm} (from {_sub.index[0].strftime('%b %d, %Y')})"
+                          if _late else _nm),
+                    line=dict(color=_c, width=_w,
+                              dash="dot" if _late else "solid")))
             _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
@@ -2332,10 +2385,12 @@ with tab_live:
                            "to equal weight daily and marked at official "
                            "closes, gross of commissions, fills and any "
                            "re-balance costs. The strategy curves plotted "
-                           "alongside are the same window and the same "
-                           "instruments, so the gap between the lines is what "
-                           "the trading rules added or cost. Not investment "
-                           "advice.")
+                           "alongside run on the same instruments, so where "
+                           "they cover the same window the gap between the "
+                           "lines is what the trading rules added or cost — "
+                           "a dotted line is one with less history, re-based "
+                           "at its own first bar, not comparable across the "
+                           "full span. Not investment advice.")
             elif _actual:
                 st.caption("📌 The **as-published record**: each day compounds "
                            "the archived book actually committed from the "
