@@ -222,11 +222,49 @@ def _freeze_enabled() -> bool:
         "1", "true", "yes", "on")
 
 
+def _split_factor(prev: pd.Series, fresh: pd.Series,
+                  eps: float = 1e-6, flatness: float = 1e-5) -> float | None:
+    """The constant that rescales a pinned series onto a fresh pull's scale, or
+    ``None`` when the two are not related by one.
+
+    A corporate action rescales EVERY price at once, so ``fresh/pinned`` is a
+    flat line across the whole shared history.  Genuine data drift is not flat.
+    Requiring that flatness is what separates "MSTU reverse-split 9.9:1" from
+    "these rows are simply wrong", so a corrupted pull can never be waved
+    through as a split."""
+    both = prev.dropna().index.intersection(fresh.dropna().index)
+    if len(both) < 100:
+        return None
+    ratio = (fresh.loc[both] / prev.loc[both]).replace(
+        [np.inf, -np.inf], np.nan).dropna()
+    if len(ratio) < 100:
+        return None
+    k = float(np.median(ratio))
+    if not np.isfinite(k) or k <= 0 or abs(k - 1.0) < eps:
+        return None
+    if float(((ratio - k).abs() / k).max()) > flatness:
+        return None                            # not a clean global rescale
+    return k
+
+
 def _freeze_history(name: str, new_df: pd.DataFrame, csv_path: Path,
-                    tail: int = FREEZE_TAIL) -> pd.DataFrame:
+                    tail: int = FREEZE_TAIL,
+                    split_safe: bool = False) -> pd.DataFrame:
     """Merge a fresh pull onto the pinned on-disk vintage: committed rows older
     than the last ``tail`` keep their pinned values; the tail and new rows take
-    the fresh values; rows the fresh pull lost entirely are restored."""
+    the fresh values; rows the fresh pull lost entirely are restored.
+
+    ``split_safe`` matters for any frozen file carrying SPLIT-ADJUSTED prices.
+    Pinning raw values assumes the past never legitimately changes — false
+    across a corporate action, where the provider restates every historical
+    price onto the new scale.  Pinning then holds the OLD scale while newly
+    appended rows arrive on the NEW one, splicing two scales into one column
+    and fabricating a gap-sized "return" at the join.  That is exactly how
+    mstu_synthetic_daily.csv came to show a +917.81% day on 2026-08-24, when
+    MSTU really moved +5.71% (see scripts/restate_mstu_synthetic.py).  With
+    ``split_safe`` the pinned values are rescaled onto the fresh pull's scale
+    before being pinned, so the vintage keeps its RETURNS — what the freeze is
+    actually protecting — and the splice cannot happen."""
     if not _freeze_enabled():
         print(f"  [freeze] {name}: DISABLED via PULL_UNFROZEN — full restatement")
         return new_df
@@ -241,6 +279,13 @@ def _freeze_history(name: str, new_df: pd.DataFrame, csv_path: Path,
     out = new_df.copy()
     frozen_idx = (prev.index[:-tail] if tail else prev.index).intersection(out.index)
     cols = [c for c in prev.columns if c in out.columns]
+    if split_safe and len(frozen_idx) and cols:
+        for c in cols:
+            k = _split_factor(prev[c], new_df[c])
+            if k is not None:
+                prev[c] = prev[c] * k
+                print(f"  [freeze] {name}: '{c}' pinned vintage rescaled "
+                      f"x{k:.9f} — corporate action; returns preserved")
     if len(frozen_idx) and cols:
         out.loc[frozen_idx, cols] = prev.loc[frozen_idx, cols].to_numpy()
     lost = prev.index.difference(out.index)
@@ -456,8 +501,10 @@ def main() -> int:
     eth      = _freeze_history("eth_usd_daily",  eth,      DATA_DIR / "eth_usd_daily.csv")
     # the OLS synthetic is pre-inception history — a re-fit rewrites the past
     # by definition, so it is fully pinned (tail=0) once committed
+    # split_safe: this file's post-inception half is MSTU's own split-adjusted
+    # closes, so a corporate action legitimately restates it (see _freeze_history)
     mstu_syn = _freeze_history("mstu_synthetic", mstu_syn, DATA_DIR / "mstu_synthetic_daily.csv",
-                               tail=0)
+                               tail=0, split_safe=True)
 
     # ── 7. Quality checks ─────────────────────────────────────────────────────
     print("\nQuality checks:")

@@ -45,6 +45,25 @@ FROZEN_CSVS = {  # path → frozen tail window
     "data/backtest/eth_usd_daily.csv": FREEZE_TAIL,
     "data/backtest/mstu_synthetic_daily.csv": 0,
 }
+# Frozen files whose pinned history may be rescaled as a whole but never
+# reshaped.  mstu_synthetic_daily.csv is half OLS back-fill (rightly pinned —
+# a re-fit rewrites the past) and half MSTU's own split-adjusted closes, which
+# a corporate action legitimately restates.  Checking levels there rejects a
+# real split; checking them after dividing out one global factor still rejects
+# every restatement that changes what happened on a day.  Not applying this
+# is how the 2026-08 MSTU splice reached production.
+SCALE_INVARIANT_FROZEN = {"data/backtest/mstu_synthetic_daily.csv"}
+# A single session moving more than this in a daily close series is a data
+# artifact, not a market: even 3x ETFs cannot get there without a corporate
+# action, and a corporate action is applied to the whole history, not one bar.
+MAX_1D_LOG_MOVE = np.log(1.8)
+JUMP_CSVS = {  # path → close column checked for fabricated single-day jumps
+    "data/backtest/btc_usd_daily.csv": "close",
+    "data/backtest/eth_usd_daily.csv": "close",
+    "data/backtest/mstr_daily.csv": "close",
+    "data/backtest/mstu_daily.csv": "close",
+    "data/backtest/mstu_synthetic_daily.csv": "close",
+}
 RETURNS_CSVS = {  # path → close column checked for return agreement
     "data/backtest/mstr_daily.csv": "close",
     "data/backtest/mstu_daily.csv": "close",
@@ -79,11 +98,36 @@ def _load_head_version(path: str = CSV) -> pd.DataFrame | None:
         return None
 
 
+def _global_scale(a: pd.Series, b: pd.Series, flatness: float = 1e-5) -> float:
+    """``a/b`` when the two series differ by one flat factor (a split), else 1.0.
+
+    Flatness is the whole test: a corporate action rescales every bar by the
+    same number, so anything that only rescales SOME of them is a restatement
+    and must keep failing the frozen check."""
+    both = a.dropna().index.intersection(b.dropna().index)
+    if len(both) < 100:
+        return 1.0
+    ratio = (a.loc[both] / b.loc[both]).replace([np.inf, -np.inf],
+                                                np.nan).dropna()
+    if len(ratio) < 100:
+        return 1.0
+    k = float(np.median(ratio))
+    if not np.isfinite(k) or k <= 0:
+        return 1.0
+    return k if float(((ratio - k).abs() / k).max()) <= flatness else 1.0
+
+
 def check_frozen_history(new: pd.DataFrame, old: pd.DataFrame,
-                         tail: int, rel_tol: float = _REL_TOL) -> list[str]:
+                         tail: int, rel_tol: float = _REL_TOL,
+                         scale_invariant: bool = False) -> list[str]:
     """Errors if any committed row older than ``old``'s last ``tail`` rows was
     dropped or had a shared-column value changed beyond ``rel_tol``.  NaN in
-    both vintages agrees; NaN in exactly one is a restatement."""
+    both vintages agrees; NaN in exactly one is a restatement.
+
+    With ``scale_invariant``, a pinned column that the fresh vintage rescales by
+    one flat factor across its whole history — a split — is compared on that
+    common scale instead of being rejected outright.  Any bar whose value moves
+    RELATIVE to the rest still fails."""
     errs: list[str] = []
     if old is None or not len(old):
         return errs
@@ -99,6 +143,10 @@ def check_frozen_history(new: pd.DataFrame, old: pd.DataFrame,
             continue
         a = pd.to_numeric(old.loc[shared, c], errors="coerce")
         b = pd.to_numeric(new.loc[shared, c], errors="coerce")
+        if scale_invariant:
+            k = _global_scale(b, a)
+            if k != 1.0:
+                a = a * k          # compare the pinned vintage on the new scale
         nan_flip = int((a.isna() != b.isna()).sum())
         both = a.notna() & b.notna()
         denom = a[both].abs().where(a[both].abs() > 0, 1.0)
@@ -129,6 +177,33 @@ def check_returns_agreement(new: pd.DataFrame, old: pd.DataFrame,
     if bad > max_bad:
         return [f"{bad}/{len(shared)} recent daily returns disagree with HEAD "
                 f"(tolerance {tol})"]
+    return []
+
+
+def check_no_new_jumps(new: pd.DataFrame, old: pd.DataFrame, close_col: str,
+                       max_log: float = MAX_1D_LOG_MOVE) -> list[str]:
+    """Errors on an implausible single-day move that is NEW to this refresh.
+
+    Moves already committed at HEAD are left alone — they have been seen, and
+    blocking them forever would wedge every future pull — but a bar that only
+    appears now is the signature of a corrupted splice, and it is exactly what
+    silently reached production in the MSTU case."""
+    if close_col not in new.columns:
+        return [f"close column '{close_col}' missing"]
+    px = pd.to_numeric(new[close_col], errors="coerce")
+    r = np.log(px / px.shift(1)).dropna()
+    bad = r[r.abs() > max_log]
+    if old is not None and close_col in old.columns:
+        po = pd.to_numeric(old[close_col], errors="coerce")
+        known = np.log(po / po.shift(1)).dropna()
+        known = set(known[known.abs() > max_log].index)
+        bad = bad[[d not in known for d in bad.index]]
+    if len(bad):
+        worst = bad.abs().idxmax()
+        return [f"{len(bad)} new single-day move(s) over "
+                f"{(np.exp(max_log)-1)*100:.0f}% (worst "
+                f"{(np.exp(bad.loc[worst])-1)*100:+.1f}% on "
+                f"{pd.Timestamp(worst).date()}) — corrupted splice?"]
     return []
 
 
@@ -190,7 +265,9 @@ def main() -> int:
             except Exception as exc:
                 errs.append(f"{path}: unreadable ({exc})")
                 continue
-            for e in check_frozen_history(cur, _load_head_version(path), tail):
+            for e in check_frozen_history(
+                    cur, _load_head_version(path), tail,
+                    scale_invariant=path in SCALE_INVARIANT_FROZEN):
                 errs.append(f"{Path(path).name}: {e}")
         for path, ccol in RETURNS_CSVS.items():
             if not Path(path).exists():
@@ -203,6 +280,20 @@ def main() -> int:
                 continue
             for e in check_returns_agreement(cur, _load_head_version(path), ccol):
                 errs.append(f"{Path(path).name}: {e}")
+
+    # 6. No fabricated single-day jump (runs even under a deliberate
+    #    re-baseline — a re-baseline is never a reason to accept a broken bar).
+    for path, ccol in JUMP_CSVS.items():
+        if not Path(path).exists():
+            continue
+        try:
+            cur = pd.read_csv(path, index_col=0, parse_dates=True,
+                              float_precision="round_trip")
+        except Exception as exc:
+            errs.append(f"{path}: unreadable ({exc})")
+            continue
+        for e in check_no_new_jumps(cur, _load_head_version(path), ccol):
+            errs.append(f"{Path(path).name}: {e}")
 
     if errs:
         print("VALIDATION FAILED — refuse to commit:")
