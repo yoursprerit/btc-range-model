@@ -343,6 +343,47 @@ def _next_session_close(s: pd.Series, dates: pd.DatetimeIndex) -> np.ndarray:
     return filled.reindex(want).to_numpy(float)
 
 
+# Read-time price sanity floor.  app/data_gate.py is the source of truth — it
+# applies this to every sleeve it gates — but the four CT sleeves never reach
+# that gate: their prices come from the committed data/backtest/ vintage, which
+# this engine consumes on the stated assumption that the pull's own validator
+# already cleared it.  That assumption failed once (mstu_synthetic_daily.csv
+# carried a spliced +917.81% bar for three days in 2026-08 and every sleeve
+# read it), so the assumption is now checked here too.  The literal is a
+# fallback for a checkout where data_gate is unimportable; a test asserts the
+# two never drift apart.
+try:
+    from data_gate import MAX_ABS_TRADED_MOVE as _MAX_ABS_TRADED_MOVE
+except Exception:                                   # pragma: no cover
+    _MAX_ABS_TRADED_MOVE = 0.75
+
+
+def _px_defect(arr: np.ndarray, dates: pd.DatetimeIndex,
+               max_move: float = _MAX_ABS_TRADED_MOVE) -> str | None:
+    """Describe an impossible move in a traded price array, else ``None``.
+
+    Only ADJACENT finite bars are compared, so a NaN hole (a pending fill, or a
+    sleeve that starts late) is skipped rather than read as a gap-sized return.
+    What this catches is the signature of a corrupted splice: two price scales
+    concatenated into one series, which prints a move no market makes.  The
+    bound clears the worst real day a 3x ETF has printed — see data_gate."""
+    a = np.asarray(arr, float)
+    if a.size < 2:
+        return "fewer than 2 bars"
+    ok = np.isfinite(a) & (a > 0)
+    pair = ok[1:] & ok[:-1]
+    if not pair.any():
+        return "no usable prices"
+    r = np.log(a[1:][pair] / a[:-1][pair])
+    i = int(np.argmax(np.abs(r)))
+    if abs(r[i]) <= np.log(1.0 + max_move):
+        return None
+    when = pd.DatetimeIndex(dates)[1:][pair][i]
+    return (f"{(np.exp(r[i]) - 1) * 100:+,.2f}% in one bar on "
+            f"{pd.Timestamp(when).date()} (limit {max_move * 100:.0f}%) — "
+            "corrupted splice or garbage print")
+
+
 def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
     btc = comp["actual_close"].values.astype(float)
     mstr = _next_session_close(T.load_asset("MSTR"), dates)
@@ -391,6 +432,28 @@ def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
             warnings.warn(
                 f"ETH sleeve unavailable ({exc}; fallback: {exc2}) — running "
                 "BTC/MSTR/MSTU only so the BTC app still loads.", RuntimeWarning)
+
+    # Never trade a series carrying an impossible move.  Same rule as the ETH
+    # fallback above — one bad sibling must not kill its parent's sleeves — so
+    # a defective SIBLING is dropped and the rest still load.  BTC is not a
+    # sibling: it is the signal asset every sleeve is gated on, so a defect
+    # there makes the whole engine untrustworthy and must fail loudly (the
+    # Overall app surfaces it as "app failed to load" rather than publishing a
+    # book built on fabricated prices).
+    for key in list(out):
+        why = _px_defect(out[key], dates)
+        if why is None:
+            continue
+        if key == "BTC":
+            raise RuntimeError(
+                f"BTC price series rejected: {why}. Refusing to run the CT "
+                "engine on it — check data/backtest/ against "
+                "scripts/validate_refreshed_data.py.")
+        out.pop(key)
+        warnings.warn(
+            f"{key} sleeve dropped — price series rejected: {why}. The other "
+            "sleeves still load; check data/backtest/ against "
+            "scripts/validate_refreshed_data.py.", RuntimeWarning)
     return out
 
 
