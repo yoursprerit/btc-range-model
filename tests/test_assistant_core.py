@@ -310,6 +310,20 @@ def _fake_client(turns):
     return type("C", (), {"messages": msgs})(), msgs
 
 
+#: A date no published book carries, used as the assistant's *hallucinated*
+#: answer so "the tool really ran" can be told apart from "the model guessed".
+_NOT_THE_BOOKS_DATE = "1970-01-01"
+
+
+def _books_as_of() -> str:
+    """The live ``as_of`` of the target book — the value the read_json tool
+    must surface.  Read from disk at test time rather than pinned, because the
+    daily publisher rewrites this file (see the sibling read_json tests, which
+    likewise assert on structure, never on a committed value)."""
+    book = Path(__file__).resolve().parent.parent / "data/overall/target_book.json"
+    return str(json.loads(book.read_text(encoding="utf-8"))["as_of"])
+
+
 def test_stream_answer_runs_tools_then_answers(monkeypatch):
     """A tool_use turn must execute the tool, feed the result back as a
     tool_result, and continue to a final answer."""
@@ -320,10 +334,15 @@ def test_stream_answer_runs_tools_then_answers(monkeypatch):
                                input={"path": "data/overall/target_book.json",
                                       "pointer": "as_of"})]),
     )
+    # The assistant's answer deliberately states a date the book does NOT
+    # carry.  The point of this test is that the TOOL's output is what gets fed
+    # back, so the two must differ — pinning both to the same literal (as this
+    # once did) let a hallucinated value pass whenever it happened to match.
     answer_turn = (
-        [_Block(type="text", text="The book is as of 2026-08-18.")],
+        [_Block(type="text", text=f"The book is as of {_NOT_THE_BOOKS_DATE}.")],
         _Block(stop_reason="end_turn", usage=_usage(),
-               content=[_Block(type="text", text="The book is as of 2026-08-18.")]),
+               content=[_Block(type="text",
+                               text=f"The book is as of {_NOT_THE_BOOKS_DATE}.")]),
     )
     client, msgs = _fake_client([tool_turn, answer_turn])
     monkeypatch.setattr(ac, "build_client", lambda _k: client)
@@ -349,10 +368,13 @@ def test_stream_answer_runs_tools_then_answers(monkeypatch):
     assert transcript[2]["role"] == "user"
     assert result_block["type"] == "tool_result"
     assert result_block["tool_use_id"] == "tu_1"
-    assert "2026-08-18" in result_block["content"]
+    # the book's real as_of, read at test time: hard-coding it broke the suite
+    # every time the daily publisher committed a new book
+    assert _books_as_of() in result_block["content"]
+    assert _NOT_THE_BOOKS_DATE not in result_block["content"]
 
     text = "".join(e["text"] for e in events if e["type"] == "text")
-    assert text.endswith("The book is as of 2026-08-18.")
+    assert text.endswith(f"The book is as of {_NOT_THE_BOOKS_DATE}.")
 
 
 def test_stream_answer_sends_the_gated_knobs_and_cache_control(monkeypatch):
