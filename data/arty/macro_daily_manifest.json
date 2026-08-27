@@ -1,10 +1,10 @@
 {
  "key": "ARTY",
  "source": "yahoo-live",
- "saved_at_utc": "2026-08-26T13:09:53+00:00",
- "rows": 2050,
+ "saved_at_utc": "2026-08-27T22:12:45+00:00",
+ "rows": 2051,
  "date_from": "2018-06-28",
- "date_to": "2026-08-25",
+ "date_to": "2026-08-26",
  "columns": [
   "px_open",
   "px_high",
@@ -47,18 +47,18 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "46226a89193981b9",
+ "checksum_sha256": "d32dbb82d37e1480",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "2050 rows"
+   "detail": "2051 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "2050 rows (need \u2265 260)"
+   "detail": "2051 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -68,7 +68,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "px_close: 2050 non-null values"
+   "detail": "px_close: 2051 non-null values"
   },
   {
    "name": "required_columns",
@@ -83,12 +83,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "2050 rows vs snapshot 2049"
+   "detail": "2051 rows vs snapshot 2050"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-08-25 vs snapshot 2026-08-24"
+   "detail": "last 2026-08-26 vs snapshot 2026-08-25"
   },
   {
    "name": "no_missing_recent_sessions",
