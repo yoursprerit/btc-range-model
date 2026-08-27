@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-25T12:17:34+00:00",
- "as_of": "2026-08-24",
+ "generated_at_utc": "2026-08-26T12:17:30+00:00",
+ "as_of": "2026-08-25",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
@@ -9,28 +9,28 @@
   "NUGT": 0.1,
   "SOXX": 0.3,
   "SOXL": 0.1,
-  "XLE": 0.08579309914482447,
-  "OIH": 0.1342069008551755,
+  "XLE": 0.08567392663308002,
+  "OIH": 0.1343260733669201,
   "ERX": 0.1
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GDX": 103.54,
-  "NUGT": 210.5,
-  "SOXX": 506.18,
-  "SOXL": 111.16,
-  "XLE": 63.11,
-  "OIH": 408.71,
-  "ERX": 105.66
+  "GDX": 105.52,
+  "NUGT": 218.64,
+  "SOXX": 514.06,
+  "SOXL": 115.67,
+  "XLE": 62.06,
+  "OIH": 405.69,
+  "ERX": 102.14
  },
  "actions": [
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.08579309914482447,
+   "target": 0.08567392663308002,
    "in_pos": true,
-   "priority": 0.8571563290949763,
+   "priority": 0.8171769407282476,
    "exits_next_bar": false
   },
   {
@@ -39,16 +39,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8547464346297381,
-   "exits_next_bar": false
-  },
-  {
-   "key": "OIH",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.1342069008551755,
-   "in_pos": true,
-   "priority": 0.7419283123978662,
+   "priority": 0.8148342603716847,
    "exits_next_bar": false
   },
   {
@@ -57,7 +48,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.7340132052471035,
+   "priority": 0.7386090658748731,
    "exits_next_bar": false
   },
   {
@@ -66,7 +57,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.7076907534828089,
+   "priority": 0.7131308135793196,
+   "exits_next_bar": false
+  },
+  {
+   "key": "OIH",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.1343260733669201,
+   "in_pos": true,
+   "priority": 0.708091772991389,
    "exits_next_bar": false
   },
   {
@@ -75,7 +75,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.41314488080714656,
+   "priority": 0.4698095612564321,
    "exits_next_bar": false
   },
   {
@@ -84,7 +84,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.3857142857142857,
+   "priority": 0.4419047619047619,
    "exits_next_bar": false
   },
   {
@@ -171,7 +171,7 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -189,18 +189,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-25T12:17:33+00:00",
+  "checked_at_utc": "2026-08-26T12:17:29+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Aug 25, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-08-24",
-  "btc_bar_close_utc": "2026-08-25T12:00:00+00:00"
+  "anchor_ct": "Aug 26, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-08-25",
+  "btc_bar_close_utc": "2026-08-26T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "8774a168d091",
+ "code_sha": "3c345b969950",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "395616b88985c41e5e81d1b12c7f613c2a487ee99e46eecccd6ace9f994009b9"
+  "value": "6a60d474c942d24191736c39a99a147b06fb5b4cea5e60919acad36f12696785"
  }
 }
