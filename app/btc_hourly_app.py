@@ -2533,19 +2533,50 @@ mstr_price, mstr_chg, mstu_price, mstu_chg, eth_price, eth_chg, strc_price, strc
 # ── signal-freshness caption + 🕵️ Daily Audit bookkeeping ──────────────────
 # Shared helpers (app/freshness.py) so the closing date/time shown here always
 # matches the Daily Audit tab: BTC daily signal bars close at 12:00 UTC
-# (7:00 AM CT in summer / 6:00 AM CT in winter); the engines' as_of is the bar
-# START date, so the latest completed bar is derived from the newest hourly data.
+# (7:00 AM CT in summer / 6:00 AM CT in winter) and the engines' as_of is the
+# bar START date.
+#
+# as_of is read from the newest COMPLETED daily bar this page actually HOLDS —
+# never from the newest hourly timestamp.  Those two part company whenever a
+# daily bar is dropped for missing hours (a Binance host serving no kline for a
+# run of hours; see scripts/pull_backtest_data.py::_heal_hourly_gaps): the
+# hourly feed stays current while the daily signal bar sits a day behind.
+# Deriving as_of from the hourly clock made this page advertise a close it had
+# no bar for and — via record_refresh, whose record outranks every other source
+# in freshness.freshest_signal_record — hid the same staleness in the
+# 🕵️ Daily Audit tab, while the 🧭 Overall app (which reads the daily bars)
+# correctly flagged BTC STALE.  Observed 2026-08-31: this page showed the
+# Aug 31 7:00 AM CT close while every daily signal here still came from the
+# bar starting Aug 29, and the day's Target Book was withheld.
 try:
     import freshness as _fr
-    _sig_asof = _fr.expected_crypto_asof(pd.Timestamp(latest_t_global)
-                                         + pd.Timedelta(hours=1))
+    _sig_asof = pd.Timestamp(_fetch_daily_raw().index.max())
+    if _sig_asof.tzinfo is not None:
+        _sig_asof = _sig_asof.tz_localize(None)
+    _sig_asof = _sig_asof.normalize()
+    _sig_expected = _fr.expected_crypto_asof()
+    _sig_behind = max(int((_sig_expected - _sig_asof).days), 0)
     st.caption(_fr.signal_close_caption(
         "crypto", _sig_asof,
         extra=("📡 hourly data through "
                f"**{pd.Timestamp(latest_t_global).strftime('%Y-%m-%d %H:%M')} UTC**")))
+    if _sig_behind:
+        st.warning(
+            f"⚠️ **Daily signal bar is {_sig_behind} bar(s) behind.** The newest "
+            f"completed 12:00-UTC bar available here starts **{_sig_asof.date()}**; "
+            f"the freshest one that exists starts **{_sig_expected.date()}** "
+            f"({_fr.close_label('crypto', _sig_expected)}). Every DAILY view on "
+            "this page — H/L forecast, CT signal, position — is computed from "
+            "that older bar, and the 🧭 Overall app flags BTC as STALE for the "
+            "same reason. Usually a Binance host serving an incomplete hour set "
+            "for the newest bar; the next data refresh heals it. The hourly "
+            "views are unaffected."
+        )
     _fr.record_refresh("BTC", kind="crypto", app_label="₿ Bitcoin (BTC)",
                        as_of=str(_sig_asof.date()),
                        close_label=_fr.close_label("crypto", _sig_asof),
+                       expected_asof=str(_sig_expected.date()),
+                       bars_behind=_sig_behind,
                        data_through_utc=str(pd.Timestamp(latest_t_global)))
 except Exception:
     pass

@@ -225,6 +225,57 @@ The fix, mirroring the equity-side pin philosophy:
    hash) — a changed number now always arrives with a changed stamp, and an
    unchanged stamp guarantees unchanged numbers.
 
+## The dropped BTC bar (host hourly-gap → stale sleeve, 2026-08-31)
+
+**Symptom.** The 🧭 Overall app showed **STALE SIGNALS · BTC**, the daily
+audit failed (`stale ['BTC']`) and the day's Target Book was withheld
+(`data/overall/daily_audit.json`: `skip_reason: signal-freshness audit failed`)
+— while the ₿ Bitcoin app looked perfectly fresh.
+
+**Root cause.** `fetch_12utc` builds each 12:00-UTC daily bar from 24 hourly
+Binance klines and emits the bar only when all 24 are present. The first host
+tried, `api.binance.us`, is a *separate venue* — not a mirror — and it served
+no kline at all for 04:00–12:00 UTC on Aug 31 (absent from its 1h **and** 1m
+series; `data-api.binance.vision` had every one of them). Eight of those hours
+belong to the bar starting Aug 30, so that completed bar was dropped: the pull
+at 12:16 UTC — 16 minutes after the bar closed, inside the publish run —
+committed a dataset still ending Aug 29, the BTC/MSTR/MSTU/ETH sleeve stayed a
+bar behind, and the audit correctly refused to publish.
+
+**Why the Bitcoin app hid it.** That page derived its "signals generated from
+…" caption (and the `record_refresh` entry the 🕵️ Daily Audit tab reads) from
+the newest **hourly** candle rather than the newest daily bar it actually held.
+The hourly feed was current, so the page advertised the Aug 31 7:00 AM CT close
+while every daily view on it still came from the Aug 29 bar — and because an
+app's own record outranks the other sources in
+`freshness.freshest_signal_record`, the Daily Audit tab inherited the same
+false freshness.
+
+**The fix.**
+
+1. **Hourly-gap healing in the pull** (`_heal_hourly_gaps`): for a bar whose
+   24-hour window has already CLOSED but whose hours are incomplete, the
+   missing hours are taken from the next host that has them, with the donor's
+   volume **rescaled onto the primary venue's scale** (median volume ratio over
+   the hours both serve). Closes agree across venues to ~0.01%; raw volumes do
+   not (~300×), and `vol_chg_1` / `vol_z_20` / `vol_ma_ratio` would read an
+   unscaled splice as a volume shock lasting the whole 20-bar window. A donor
+   whose prices disagree, or whose scale cannot be calibrated, is refused — the
+   bar is then dropped as before and the audit correctly reports BTC stale.
+   Healing is limited to the freeze-refreshable tail (5 days) and to bars the
+   primary venue actually traded (≥12 of 24 hours), so it can never restate
+   pinned history or import a whole bar from another venue.
+2. **One host owns the series.** Paging used to fall through to the next host
+   on any error, silently splicing two venues' volume scales into one column.
+   The first host that answers now serves the whole series; changing the
+   primary venue is a deliberate re-baseline (`PULL_UNFROZEN=1`).
+3. **Truthful app freshness** (`app/btc_hourly_app.py`): the caption, the
+   staleness warning and the Daily Audit record all come from the newest
+   completed daily bar the page holds, so the Bitcoin app now reports exactly
+   the staleness the Overall app does instead of masking it.
+
+Tests: `tests/test_btc_bar_freshness.py`.
+
 ## What can still move intraday (by design)
 
 * The **live row** (in-progress bar), spot prices, and today's action plan —
