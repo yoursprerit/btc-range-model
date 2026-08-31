@@ -1,21 +1,28 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-08-30T12:17:07+00:00",
- "generated_at_ct": "Aug 30, 2026 at 7:17:07 AM CDT",
+ "generated_at_utc": "2026-08-31T12:19:16+00:00",
+ "generated_at_ct": "Aug 31, 2026 at 7:19:16 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
   "as_of": "2026-08-29",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-08-30T12:17:07+00:00"
+  "computed_at_utc": "2026-08-31T12:19:16+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-08-30T12:17:06+00:00",
-  "checked_at_ct": "Aug 30, 2026 at 7:17:06 AM CDT",
-  "passed": true,
-  "stale_apps": [],
-  "stale_assets": [],
+  "checked_at_utc": "2026-08-31T12:19:16+00:00",
+  "checked_at_ct": "Aug 31, 2026 at 7:19:16 AM CDT",
+  "passed": false,
+  "stale_apps": [
+   "BTC"
+  ],
+  "stale_assets": [
+   "BTC",
+   "MSTR",
+   "MSTU",
+   "ETH"
+  ],
   "rows": [
    {
     "app": "BTC",
@@ -27,11 +34,11 @@
      "ETH"
     ],
     "actual_asof": "2026-08-29",
-    "expected_asof": "2026-08-29",
+    "expected_asof": "2026-08-30",
     "actual_close": "Aug 30, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
-    "expected_close": "Aug 30, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
-    "fresh": true,
-    "age_days": 0
+    "expected_close": "Aug 31, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
+    "fresh": false,
+    "age_days": 1
    },
    {
     "app": "GLDM",
@@ -158,11 +165,7 @@
   ]
  },
  "target_book": {
-  "published": true,
-  "skip_reason": null,
-  "generated_at_utc": "2026-08-30T12:17:07+00:00",
-  "as_of": "2026-08-29",
-  "profile": "Balanced",
-  "signed": true
+  "published": false,
+  "skip_reason": "signal-freshness audit failed: stale ['BTC']"
  }
 }
