@@ -93,8 +93,39 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     df["pred_high"] = raw_ph + bias_hi
     df["pred_low"] = raw_pl + bias_lo
     df["target_date"] = df.index
+    # ── trend signal, computed on the CONTIGUOUS close history ───────────
+    # The dropna above removes any bar whose ridge FEATURES are incomplete (a
+    # single NaN feature — e.g. rsi_14 over a 14-session stretch with no down
+    # day — drops the whole row).  That is right for the H/L model, but it
+    # punches holes in ``px_close``, and the trend family's SMAs
+    # (``_rolling_mean``) count BARS POSITIONALLY: n missing sessions slide
+    # every rolling window n bars further back.  Observed 2026-08: five rows
+    # dropped in April left SOXX's 100-day slow SMA reading 521.32 instead of
+    # 526.44, so the simulation still thought the 25/100 pair was crossed UP
+    # while ``trend_long_now`` (computed on the ungapped frame, and what every
+    # app, chart and live-exit check reads) saw the death cross at the
+    # 2026-08-27 close.  The position therefore never closed in the sim:
+    # ``in_pos_now`` stayed True and the decision stayed the in-position
+    # "EXIT NEXT BAR — BELOW TREND" for as long as the trend stayed broken —
+    # so the Overall action plan re-flagged SOXX/SOXL "exits next bar" every
+    # day, days after the executor had actually sold them and after they had
+    # dropped out of the published Target Book.
+    #
+    # Fix: derive the long/flat signal ONCE from the full input frame — the
+    # same array ``trend_long_array``/``trend_long_now`` build — and carry it
+    # on the rows that survive.  It also warms the SMAs up properly at the
+    # start of the prediction window (previously the first ``ma_slow`` rows
+    # ran on truncated partial windows).  Carried as a COLUMN, not frame
+    # metadata, so it survives the slicing and copying downstream.
+    if cfg.is_trend and "px_close" in daily:
+        _full = daily["px_close"].astype(float)
+        _long = pd.Series(np.asarray(trend_long_array(cfg, _full.to_numpy(float)),
+                                     dtype=bool), index=_full.index)
+        df["trend_long"] = _long.reindex(df.index).fillna(False).astype(bool)
     keep = ["close_asof", "pred_high", "pred_low", "actual_high", "actual_low",
             "target_date", "px_close"] + [c for c in keep_price if c in df and c != "px_close"]
+    if "trend_long" in df:
+        keep.append("trend_long")
     out = df[keep].copy()
     # Model H/L bands for the PENDING next bar — the one after the last
     # completed bar — predicted from features known at the last close only
@@ -306,6 +337,13 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
     n = len(price)
     if ma_window is not None:                               # explicit MA (sweep)
         long_at_close = gcl > _rolling_mean(gcl, ma_window)
+    elif "trend_long" in preds.columns:
+        # Precomputed by build_predictions on the CONTIGUOUS close history, so
+        # the rolling windows can't be slid by rows the feature dropna removed
+        # (see the note there).  This is the SAME array trend_long_now reads,
+        # which is what keeps the simulated position and the displayed decision
+        # from disagreeing — an "exits next bar" that never actually exits.
+        long_at_close = preds["trend_long"].to_numpy(bool)
     else:
         long_at_close = trend_long_array(cfg, gcl)
     i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))

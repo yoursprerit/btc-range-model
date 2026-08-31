@@ -276,6 +276,69 @@ false freshness.
 
 Tests: `tests/test_btc_bar_freshness.py`.
 
+## The stranded pending exit (SOXX/SOXL "exits next bar" forever, 2026-08-31)
+
+**Symptom.** 🎯 Today's action plan kept flagging **SOXX** and **SOXL** red —
+`⚠️ exits next bar` — on 2026-08-29, 08-30 and 08-31, days after the executor
+had actually sold them (`data/overall/executed_archive`: both filled
+2026-08-28, `reason: close (no longer in book)`) and after they had dropped out
+of the published Target Book (`weights` carried only XLE/OIH/ERX from the
+2026-08-27 book onward). Every published book from 08-27 to 08-30 recorded the
+identical row: `action: CLOSE`, `in_pos: true`, `exits_next_bar: true`.
+
+**Root cause — a punched price series, not a stale one.**
+`backtest_ticker.build_predictions` drops any bar whose ridge **features** are
+incomplete (`dropna(subset=feat_cols + …)`). That is right for the H/L model,
+but the trend family's SMAs (`_rolling_mean`) count bars **positionally**: each
+dropped row slides every rolling window one bar further back. SOXX rallied 14
+straight sessions into 2026-04-20, so `rsi_14` — whose average loss was zero —
+came out NaN and five April rows were dropped. From then on the simulation's
+100-day slow SMA read **521.32** where the real one read **526.44**, so
+`simulate_regime` still thought the 25/100 pair was crossed **up**:
+
+| bar | fast 25 | slow 100 | engine (`trend_long_now`, ungapped) | simulation (gapped) |
+|---|---|---|---|---|
+| 2026-08-26 | 524.65 | 523.01 | long | long |
+| 2026-08-27 | 523.62 | **524.83** | **flat** — death cross | long |
+| 2026-08-28 | 522.88 | **526.44** | **flat** | long |
+
+`_net_decision` takes `long_now` from the ungapped frame but `in_pos` from the
+simulation. With the two disagreeing, the position never closed in the sim:
+`in_pos_now` stayed `True` and the decision stayed the **in-position**
+`EXIT NEXT BAR — BELOW TREND` for as long as the trend stayed broken. That is
+a committed pending exit, so `exits_next_bar` rode into every publish and the
+action plan shaded the row red every day — a pending exit that could never
+execute.
+
+This is the *inverse* of the ARTY vintage case above: there the book ran ahead
+of the engine on a data vintage; here the engine's own two halves disagreed on
+the same bar, so nothing flagged it.
+
+**The fix.**
+
+1. **One trend signal, computed on the contiguous history**
+   (`backtest_ticker.build_predictions`): the long/flat array is derived once
+   from the full input frame — the same `trend_long_array` that
+   `trend_long_now`, the trend chart and `live_exit_keys` read — and carried on
+   the surviving rows as a `trend_long` **column** (a column, not frame
+   metadata, so it survives slicing and copying). `simulate_regime` uses it
+   whenever it is present; an explicit `ma_window` (the sweep) still overrides.
+   The simulated position and the displayed decision can no longer disagree,
+   whatever the feature dropna removes. It also warms the SMAs up properly at
+   the start of the prediction window — previously the first `ma_slow` rows ran
+   on truncated partial windows, which is why XLE's `crash_dd` 52-week high was
+   also mis-scaled (its OOS trade count drops 10 → 3, return 220.3% → 210.0%,
+   as the drawdown gate now measures a true 52 weeks).
+2. **RSI is defined without a down bar** (`ticker_core._rsi`, `gldm_core._rsi`):
+   zero average loss is RSI **100**, not NaN (zero average gain is 0; a window
+   that never moved is 50). This removes the drop at its source — SOXX and ARTY
+   now lose no bars at all.
+
+SOXX/SOXL read `FLAT — BELOW TREND` / `STAND ASIDE` on the 2026-08-28 close
+after the fix, matching the executed book and the vacated Target Book.
+
+Tests: `tests/test_trend_signal_alignment.py`.
+
 ## What can still move intraday (by design)
 
 * The **live row** (in-progress bar), spot prices, and today's action plan —

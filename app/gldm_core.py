@@ -367,11 +367,29 @@ def gold_macro_sentiment(df: pd.DataFrame, window: int = 252) -> pd.Series:
 # FEATURE ENGINEERING
 # ════════════════════════════════════════════════════════════════════════
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """RSI on a simple ``period``-bar average of gains and losses.
+
+    A window with NO down bar has zero average loss — RSI is 100 there by
+    definition, not undefined.  Returning NaN instead was silently expensive:
+    ``build_predictions`` drops every row with an incomplete feature, so an
+    unbroken run-up punched holes in the price series the strategy engines walk
+    (observed on the semis sleeve, which rallied 14 straight sessions into
+    2026-04-20: five April rows dropped, sliding the trend engine's SMA windows
+    five bars — see the trend-signal note in
+    ``backtest_ticker.build_predictions``).  The mirror case — no up bar in the
+    window — is RSI 0.
+    """
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    out = 100 - 100 / (1 + rs)
+    # zero average loss: 100 with any up bar in the window, 50 when the window
+    # never moved at all (a flat series is neither over- nor oversold).  Only
+    # warmed-up windows are filled — the leading NaNs stay NaN.
+    warm = gain.notna() & loss.notna()
+    out = out.mask(warm & (loss == 0) & (gain > 0), 100.0)
+    return out.mask(warm & (loss == 0) & (gain == 0), 50.0)
 
 
 def build_daily_features(df: pd.DataFrame) -> pd.DataFrame:
