@@ -31,10 +31,14 @@ except Exception as e:
     print(f"  FAIL {e}")
 
 # 3. Binance hourly (no key) — primary source for BTC.
-# Try api.binance.us first: api.binance.com returns HTTP 451 from US-hosted
-# infrastructure (e.g. Streamlit Community Cloud), the same host order the app uses.
+# Same host order the app and the dataset pull use (binance_bars.BINANCE_HOSTS):
+# api.binance.us first (api.binance.com returns HTTP 451 from US-hosted
+# infrastructure such as Streamlit Community Cloud), then the
+# data-api.binance.vision mirror, which is also the donor the hourly-gap
+# healing borrows from when .us serves no kline for a run of hours.
 print("\n=== Binance klines (no key) ===")
-for host in ("https://api.binance.us", "https://api.binance.com"):
+for host in ("https://api.binance.us", "https://data-api.binance.vision",
+             "https://api.binance.com"):
     try:
         r = requests.get(f"{host}/api/v3/klines",
                          params={"symbol":"BTCUSDT","interval":"1h","limit":1000},

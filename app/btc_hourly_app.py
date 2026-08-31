@@ -45,6 +45,14 @@ except ImportError:
     CONE_14D_MODEL = Path(str(CONE_7D_MODEL)).parent / "inference_assets_14d_cone.joblib"
     MACRO_HOURLY_CACHE_CSV = Path(str(BINANCE_HOURLY_CSV)).parent / "macro_hourly_cache.csv"
 
+# Binance host discipline + hourly-gap healing, shared verbatim with the
+# once-daily dataset pull (scripts/pull_backtest_data.py).  Both build the
+# model's 12:00-UTC bars out of Binance hourly klines and both drop a bar whose
+# 24 hours are not all present, so both need the same healing — when it lived
+# only in the puller, this page went on showing the daily signal bar a day
+# behind while the committed dataset was already healthy.
+import binance_bars as _bb
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -549,15 +557,25 @@ def fetch_data():
             df["coinbase_close"] = cb_aligned
     return df
 
-# Binance public-API hosts, tried in order. `api.binance.com` returns HTTP 451
-# ("Unavailable For Legal Reasons") when called from US-hosted infrastructure
-# such as Streamlit Community Cloud, so `api.binance.us` — which serves the same
-# public klines/ticker endpoints with equally fresh data — is tried FIRST. The
-# global host is kept as a secondary so non-US deployments (where `.us` may be
-# the blocked one) still work. Without this, the daily-bar pipeline silently
-# fell back to rate-limited/stale yfinance hourly data on Streamlit Cloud, so the
-# newest completed daily bar never arrived and Daily H/L predictions went flat.
-BINANCE_API_HOSTS = ("https://api.binance.us", "https://api.binance.com")
+# Binance public-API hosts, tried in order — the SAME list, in the same order,
+# as the dataset pull uses (binance_bars.BINANCE_HOSTS), because this page's
+# live rows and the committed vintage get spliced together in
+# `_seed_daily_raw_from_versioned` and must be on one venue's volume scale.
+# `api.binance.com` returns HTTP 451 ("Unavailable For Legal Reasons") from
+# US-hosted infrastructure such as Streamlit Community Cloud, so `api.binance.us`
+# is tried FIRST and the global host is kept last so non-US deployments (where
+# `.us` may be the blocked one) still work.  Without this, the daily-bar
+# pipeline silently fell back to rate-limited/stale yfinance hourly data on
+# Streamlit Cloud, so the newest completed daily bar never arrived and Daily H/L
+# predictions went flat.
+#
+# `data-api.binance.vision` sits between them: it mirrors Binance.com, it is NOT
+# geo-blocked, and it is the donor `binance_bars.heal_hourly_gaps` borrows from
+# when `api.binance.us` — a separate, far thinner venue — serves no kline at all
+# for a run of hours (observed 2026-08-31: 04:00–12:00 UTC absent from its 1h *and*
+# 1m series).  It was missing from this list entirely, which left this page with
+# exactly ONE usable host: the one with the holes.
+BINANCE_API_HOSTS = _bb.BINANCE_HOSTS
 
 
 def _binance_get(path: str, params: dict, timeout: int = 30):
@@ -797,24 +815,12 @@ ANCHOR_HOUR_UTC = 12  # 7am CDT (summer) / 6am CST (winter)
 def _rebucket_12utc(hourly):
     """Group hourly OHLCV into 24h bars starting at ANCHOR_HOUR_UTC.
 
-    Returns bars indexed by start date D. Drops incomplete bars
-    (anything other than 24 hours)."""
-    if hourly.empty:
-        # Return an empty frame with the correct columns and a DatetimeIndex
-        # so callers that check .empty or iterate over .index don't crash.
-        g = pd.DataFrame(columns=["open","high","low","close","volume"])
-        g.index = pd.DatetimeIndex([], name="bar_start")
-        return g
-    h = hourly.copy()
-    h["bucket"] = (h.index - pd.Timedelta(hours=ANCHOR_HOUR_UTC)).normalize()
-    g = h.groupby("bucket").agg(
-        open=("open", "first"), high=("high", "max"),
-        low=("low", "min"), close=("close", "last"),
-        volume=("volume", "sum"), n_hours=("close", "size"),
-    )
-    g = g[g["n_hours"] == 24].drop(columns="n_hours")
-    g.index.name = "bar_start"
-    return g
+    Returns bars indexed by start date D. Drops incomplete bars (anything other
+    than 24 hours) — so the hourly frame handed in must already have been
+    gap-healed (``_bb.heal_hourly_frame``), or a host's missing hours silently
+    cost an otherwise-complete completed bar.  Shared with the dataset pull so
+    the live page and the committed vintage bucket identically."""
+    return _bb.rebucket_12utc(hourly)
 
 
 def _fetch_yfinance_hourly_fallback():
@@ -878,31 +884,19 @@ def _fetch_binance_hourly(days_back=None):
         start_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - d * 86400_000
 
     end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    cursor = start_ms
-    rows = []
-    while cursor < end_ms:
-        params = dict(symbol="BTCUSDT", interval="1h",
-                      startTime=cursor, limit=1000)
-        batch = _binance_get("/api/v3/klines", params, timeout=30)
-        # Guard: Binance returns an error dict (e.g. rate-limit) instead of a
-        # list of klines — a non-empty dict would pass `if not batch` but then
-        # fail on `batch[-1][0]`.  Also coerce the open-time to int to handle
-        # API versions that return timestamps as strings.
-        if not batch or not isinstance(batch, list) or not isinstance(batch[-1], (list, tuple)):
-            break
-        rows.extend(batch)
-        cursor = int(batch[-1][0]) + 3600_000
-        time.sleep(0.1)
-    if rows:
-        cols = ["open_time","open","high","low","close","volume",
-                "close_time","qv","n","tb","tq","ig"]
-        new_df = pd.DataFrame(rows, columns=cols)
-        new_df["ts"] = pd.to_datetime(new_df["open_time"], unit="ms",
-                                      utc=True).dt.tz_convert(None)
-        for c in ["open","high","low","close","volume"]:
-            new_df[c] = new_df[c].astype(float)
-        new_df = new_df.set_index("ts")[["open","high","low","close","volume"]]
-        parts.append(new_df)
+    # ONE host owns the whole top-up.  Paging with `_binance_get` (which retries
+    # the next host on any per-page failure) could splice `api.binance.us` and
+    # the Binance.com mirror into one column, and their raw volumes differ ~300x
+    # — `vol_chg_1` / `vol_z_20` / `vol_ma_ratio` read that step as a volume
+    # shock lasting the whole 20-bar window.
+    api_hours, primary_host = _bb.fetch_hourly("BTCUSDT", start_ms, end_ms)
+    if api_hours:
+        new_df = pd.DataFrame.from_dict(
+            api_hours, orient="index",
+            columns=["open", "high", "low", "close", "volume"])
+        new_df.index = pd.to_datetime(pd.Index(new_df.index), unit="ms")
+        new_df.index.name = "ts"
+        parts.append(new_df.sort_index())
 
     if not parts:
         # Binance unavailable (blocked, rate-limited, or no CSV on this host).
@@ -911,6 +905,21 @@ def _fetch_binance_hourly(days_back=None):
         return _fetch_yfinance_hourly_fallback()
     df = pd.concat(parts)
     df = df[~df.index.duplicated(keep="last")].sort_index()
+
+    # Heal the hours a CLOSED daily bar is missing before anything rebuckets
+    # this frame.  `api.binance.us` periodically serves no kline at all for a
+    # run of hours; `_rebucket_12utc` emits a bar only when all 24 are present,
+    # so one such hole drops an otherwise-complete completed bar and every DAILY
+    # view on this page (H/L forecast, CT signal, position) silently falls a bar
+    # behind — exactly what the "daily signal bar is N bar(s) behind" warning
+    # reports.  The missing hours are borrowed from the next host that has them
+    # with the donor's volume rescaled onto the primary venue's scale; a donor
+    # that disagrees on price is refused and the bar stays dropped (the warning
+    # then stands, which is the honest outcome).  Runs BEFORE the Yahoo merge
+    # below so the volume-scale calibration only ever sees Binance rows.
+    if not df.empty:
+        df = _bb.heal_hourly_frame(df, "BTCUSDT", primary_host, now_ms=end_ms,
+                                   log=None)
 
     # Staleness guard: if every Binance host failed the top-up but a committed
     # CSV (or an earlier partial pull) left `parts` non-empty, `df` here can be
@@ -2539,8 +2548,11 @@ mstr_price, mstr_chg, mstu_price, mstu_chg, eth_price, eth_chg, strc_price, strc
 # as_of is read from the newest COMPLETED daily bar this page actually HOLDS —
 # never from the newest hourly timestamp.  Those two part company whenever a
 # daily bar is dropped for missing hours (a Binance host serving no kline for a
-# run of hours; see scripts/pull_backtest_data.py::_heal_hourly_gaps): the
-# hourly feed stays current while the daily signal bar sits a day behind.
+# run of hours): the hourly feed stays current while the daily signal bar sits a
+# day behind.  `_fetch_binance_hourly` now heals those gaps itself
+# (binance_bars.heal_hourly_frame, the same code the dataset pull runs), so this
+# warning fires only when the healing was refused as well — never merely because
+# the daily refresh job has not run yet.
 # Deriving as_of from the hourly clock made this page advertise a close it had
 # no bar for and — via record_refresh, whose record outranks every other source
 # in freshness.freshest_signal_record — hid the same staleness in the
@@ -2568,9 +2580,11 @@ try:
             f"({_fr.close_label('crypto', _sig_expected)}). Every DAILY view on "
             "this page — H/L forecast, CT signal, position — is computed from "
             "that older bar, and the 🧭 Overall app flags BTC as STALE for the "
-            "same reason. Usually a Binance host serving an incomplete hour set "
-            "for the newest bar; the next data refresh heals it. The hourly "
-            "views are unaffected."
+            "same reason. The cause is a Binance host serving an incomplete "
+            "hour set for that bar — this page borrows the missing hours from "
+            "another host automatically, so seeing this means the borrow was "
+            "refused too (no host had them, or their prices disagreed); the "
+            "next data refresh should heal it. The hourly views are unaffected."
         )
     _fr.record_refresh("BTC", kind="crypto", app_label="₿ Bitcoin (BTC)",
                        as_of=str(_sig_asof.date()),
@@ -3839,31 +3853,25 @@ def _eth_daily_12utc_bars() -> pd.DataFrame:
     unextended, which is strictly better than mixing anchors.
     """
     try:
-        rows, cursor = [], int((pd.Timestamp.utcnow().tz_localize(None)
-                                - pd.Timedelta(days=30)).timestamp() * 1000)
-        end_ms = int(pd.Timestamp.utcnow().tz_localize(None).timestamp() * 1000)
-        while cursor < end_ms:
-            batch = _binance_get("/api/v3/klines",
-                                 {"symbol": "ETHUSDT", "interval": "1h",
-                                  "startTime": cursor, "limit": 1000})
-            if not batch or not isinstance(batch, list):
-                break
-            rows.extend(batch)
-            cursor = int(batch[-1][0]) + 3_600_000
-        if not rows:
+        # 60 days, not 30: `heal_hourly_frame` calibrates the donor's volume
+        # scale on the hours both venues serve, and 30 days of history is the
+        # minimum overlap that leaves.
+        end_ms = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
+        start_ms = end_ms - 60 * 86_400_000
+        # One host owns the whole series, and the hours a CLOSED bar is missing
+        # are healed from another with the donor's volume rescaled — the same
+        # discipline as the BTC path, for the same reason: `api.binance.us`
+        # periodically serves no kline for a run of hours, and _rebucket_12utc
+        # drops any bar that is short of its 24.
+        hours, primary_host = _bb.fetch_hourly("ETHUSDT", start_ms, end_ms)
+        if not hours:
             return pd.DataFrame()
-        h = pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close",
-                                        "volume", "close_time", "qv", "n", "tb",
-                                        "tq", "ig"])
-        # NB: pd.to_datetime on a Series returns a Series, so the tz strip needs
-        # `.dt.tz_convert` — a bare `.tz_convert` raises TypeError and (being
-        # swallowed by the except below) would silently disable this fetch.
-        h.index = pd.to_datetime(h["open_time"], unit="ms", utc=True).dt.tz_convert(None)
-        for c in ("open", "high", "low", "close", "volume"):
-            h[c] = h[c].astype(float)
-        h = h[["open", "high", "low", "close", "volume"]]
-        h = h[~h.index.duplicated(keep="last")].sort_index()
-        return _rebucket_12utc(h)
+        hours = _bb.heal_hourly_gaps(hours, "ETHUSDT", primary_host, end_ms,
+                                     log=None)
+        h = pd.DataFrame.from_dict(hours, orient="index",
+                                   columns=["open", "high", "low", "close", "volume"])
+        h.index = pd.to_datetime(pd.Index(h.index), unit="ms")
+        return _rebucket_12utc(h.sort_index())
     except Exception:
         return pd.DataFrame()
 

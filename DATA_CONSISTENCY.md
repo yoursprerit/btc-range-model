@@ -274,6 +274,57 @@ false freshness.
    completed daily bar the page holds, so the Bitcoin app now reports exactly
    the staleness the Overall app does instead of masking it.
 
+**The same gap, in the app (2026-08-31, later the same day).** The healing
+above went into the puller only. The live ₿ Bitcoin app builds its OWN
+12:00-UTC bars — `_fetch_binance_hourly` → `_rebucket_12utc` — and had none of
+it, so the split simply moved: by 15:30 UTC `raw_features_daily.csv` carried a
+healthy 08-30 bar while the app went on dropping it and showing *"daily signal
+bar is 1 bar behind"*. Two things made the app worse off than the puller:
+
+* its host list was `("api.binance.us", "api.binance.com")` — no
+  `data-api.binance.vision`. `.com` answers 451 from Streamlit Community Cloud,
+  so the page had exactly ONE usable host: the thin venue with the holes, and
+  the donor the healing borrows from wasn't even reachable from it.
+* `_binance_get` retried the next host **per page**, so a mid-series failure
+  could splice two venues' volume scales into one column — the very thing the
+  puller had just been fixed to stop doing.
+
+What kept the page from being visibly wrong all afternoon was luck:
+`_seed_daily_raw_from_versioned` back-fills `_fetch_daily_raw` from
+`raw_features_daily.csv`, and that CSV happens to carry every column the daily
+H/L model needs, so the healed 08-30 bar arrived via the committed vintage once
+the refresh job had run. That made the app's live freshness a function of a
+once-daily CI job — between a bar's 12:00-UTC close and that job's commit, the
+page was a bar behind every time the venue had a hole.
+
+**The fix.** Host discipline, hourly-gap healing and the 12:00-UTC rebucket now
+live in one module, `binance_bars.py`, imported by both
+`scripts/pull_backtest_data.py` and `app/btc_hourly_app.py`:
+
+* one host owns the whole hourly series on both sides (`fetch_hourly`);
+* both heal the gaps in already-closed bars before rebucketing
+  (`heal_hourly_gaps` / `heal_hourly_frame`), with the donor's volume rescaled
+  onto the primary venue's scale exactly as above — the app heals *before* the
+  Yahoo-fallback merge, so the calibration never sees a non-Binance row;
+* `BINANCE_API_HOSTS` in the app **is** `binance_bars.BINANCE_HOSTS`, so the
+  app's live rows and the committed vintage they get spliced onto stay on one
+  venue's volume scale by construction;
+* the ETH 12:00-UTC builder (`_eth_daily_12utc_bars`) gets the same treatment.
+
+Verified live at 19:00 UTC on 2026-08-31, with `api.binance.us` still missing
+04:00–11:00 UTC: the app's path yields the 08-30 bar at close 78315.43 / volume
+43.162611 — identical to the committed row.
+
+The app's "daily signal bar is N bar(s) behind" warning stays, and now means
+what it says: no host had the missing hours, or the donor was refused. It is no
+longer raised merely because the daily refresh job hasn't run yet.
+
+Note one latent trap left alone: `src/fetch_binance_hourly.py` (a training-time
+script that writes `data/binance_hourly_btc.csv`, absent from the repo) pulls
+from `api.binance.com` — a different venue from the app's primary. Committing a
+CSV from it would splice volume scales into the app's hourly history; doing so
+is a deliberate re-baseline, not a routine refresh.
+
 Tests: `tests/test_btc_bar_freshness.py`.
 
 ## The stranded pending exit (SOXX/SOXL "exits next bar" forever, 2026-08-31)

@@ -46,187 +46,17 @@ _ONCHAIN = [
 ]
 _CB_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
-# Binance public hosts for hourly klines, in the order they are tried.
-# `api.binance.com` returns HTTP 451 from US-hosted infrastructure (GitHub
-# Actions, Streamlit Community Cloud), so it comes last.  These hosts do NOT
-# serve the same klines: `api.binance.us` is a separate venue with its own
-# (far thinner) order book, while `data-api.binance.vision` mirrors
-# Binance.com.  The FIRST host that answers owns the whole series — the
-# committed vintage's volume history is on that venue's scale and the vintage
-# freeze pins it, so a mid-series host swap would splice two scales into one
-# column.  Only gaps are borrowed from another host, rescaled (see
-# `_heal_hourly_gaps`); changing the primary venue outright is a deliberate
-# re-baseline (PULL_UNFROZEN=1, see DATA_CONSISTENCY.md).
-_BINANCE_HOSTS = ("https://api.binance.us", "https://data-api.binance.vision",
-                  "https://api.binance.com")
-ANCHOR_HOUR_UTC = 12  # 7am CDT / 6am CST — the daily model's bar boundary
+# Binance hourly klines → 12:00-UTC bars, host discipline and hourly-gap
+# healing all live in the shared `binance_bars` module so the live app
+# (app/btc_hourly_app.py) builds its bars from exactly the same rules.  When
+# the healing lived here alone, the app went on dropping the same bars this
+# script had learned to recover.
+sys.path.insert(0, str(REPO_ROOT))
+from binance_bars import (                                    # noqa: E402
+    fetch_hourly, heal_hourly_gaps, rebucket_12utc,
+)
 
 # ─── helpers ────────────────────────────────────────────────────────────────
-
-_HOUR_MS = 3_600_000
-_DAY_MS  = 86_400_000
-
-# ── hourly-gap healing ──────────────────────────────────────────────────────
-# The hosts above are NOT interchangeable. `api.binance.us` is a SEPARATE venue
-# carrying ~0.3% of Binance.com's BTC volume, and it periodically serves no
-# hourly kline at all for a run of hours — observed 2026-08-31: 04:00–12:00 UTC
-# absent from its 1h *and* 1m series while the .com mirror had every one of
-# them.  A 12:00-UTC daily bar is only emitted when all 24 of its hours are
-# present, so one such hole silently DROPS an otherwise-complete daily bar: the
-# committed dataset stops a bar short, the BTC/MSTR/MSTU/ETH sleeve freezes on
-# the previous bar, the publisher's freshness audit flags BTC stale and the
-# day's target book is withheld (exactly what happened on 2026-08-31 — the
-# 08-30 bar was missing 8 of its 24 hours).
-#
-# Healing rule: for a bar whose 24-hour window has already CLOSED but whose
-# hours are incomplete, take the missing hours from the next host that has
-# them, with the donor's volume rescaled onto the primary venue's own scale
-# (calibrated on the hours both hosts serve).  Closes agree across venues to
-# ~0.01%, so prices splice cleanly; raw volumes do NOT (a ~300x step), and the
-# model's volume features (`vol_chg_1` = log-diff, `vol_z_20`, `vol_ma_ratio`)
-# would read an unscaled venue switch as a volume shock lasting the whole
-# 20-bar window.  A donor whose prices disagree, or whose volume scale cannot
-# be calibrated, is REFUSED — the bar is then dropped exactly as before and the
-# audit correctly reports BTC stale rather than the dataset carrying a splice.
-HEAL_LOOKBACK_DAYS      = 5     # the freeze-refreshable tail only (see FREEZE_TAIL)
-HEAL_MIN_PRIMARY_HOURS  = 12    # patch a hole in a bar the venue traded; never import a whole bar
-HEAL_MIN_OVERLAP        = 48    # hours both hosts must share to calibrate the volume scale
-HEAL_MAX_PX_DIVERGENCE  = 0.01  # 1% median |close ratio − 1| tolerated between venues
-
-
-def _klines_page(host: str, symbol: str, start_ms: int, limit: int = 1000,
-                 timeout: int = 30):
-    """One page of hourly klines from ONE host, or ``None`` if it does not
-    answer 200 with a JSON list."""
-    try:
-        r = requests.get(host + "/api/v3/klines",
-                         params=dict(symbol=symbol, interval="1h",
-                                     startTime=start_ms, limit=limit),
-                         timeout=timeout)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list):
-                return data
-    except Exception:
-        return None
-    return None
-
-
-def _hourly_from_host(host: str, symbol: str, start_ms: int,
-                      end_ms: int) -> dict[int, tuple]:
-    """Every hourly kline in ``[start_ms, end_ms)`` from ONE host, keyed by open
-    time in ms → ``(open, high, low, close, volume)``.
-
-    One host serves the WHOLE series: paging across hosts on the first error
-    (as this did before) spliced two venues' volume scales into one column
-    without any trace in the data."""
-    out: dict[int, tuple] = {}
-    cursor = start_ms
-    while cursor < end_ms:
-        batch = _klines_page(host, symbol, cursor)
-        if not batch or not isinstance(batch[-1], (list, tuple)):
-            break
-        for k in batch:
-            t = int(k[0])
-            if start_ms <= t < end_ms:
-                out[t] = tuple(float(k[i]) for i in (1, 2, 3, 4, 5))
-        cursor = int(batch[-1][0]) + _HOUR_MS
-        time.sleep(0.05)
-    return out
-
-
-def _bar_start_ms(t_ms: int) -> int:
-    """The 12:00-UTC bar (its START date, midnight-aligned ms) that an hourly
-    open time belongs to.  Bar D spans ``[D 12:00 UTC, D+1 12:00 UTC)``."""
-    return ((t_ms - ANCHOR_HOUR_UTC * _HOUR_MS) // _DAY_MS) * _DAY_MS
-
-
-def _bar_hours(bar_ms: int) -> list[int]:
-    """The 24 hourly open times a bar is made of."""
-    return [bar_ms + (ANCHOR_HOUR_UTC + i) * _HOUR_MS for i in range(24)]
-
-
-def _missing_hours(hours: dict[int, tuple], now_ms: int,
-                   lookback_days: int = HEAL_LOOKBACK_DAYS) -> list[int]:
-    """Open times absent from RECENT bars whose 24-hour window has already
-    closed — exactly the hours whose absence drops a completed bar.
-
-    Bars still in progress are skipped (they are *meant* to be incomplete), and
-    so are bars older than ``lookback_days``: those rows are pinned history
-    under the vintage freeze, so inserting one now would restate a committed
-    vintage.  A bar the primary venue barely traded (< ``HEAL_MIN_PRIMARY_HOURS``
-    hours) is skipped too — healing patches a hole in a bar the venue has,
-    it does not import a whole bar from somewhere else."""
-    newest_closed = ((now_ms - (ANCHOR_HOUR_UTC + 24) * _HOUR_MS) // _DAY_MS) * _DAY_MS
-    missing: list[int] = []
-    for i in range(lookback_days + 1):
-        bar = newest_closed - i * _DAY_MS
-        want = _bar_hours(bar)
-        have = [t for t in want if t in hours]
-        if len(have) == 24 or len(have) < HEAL_MIN_PRIMARY_HOURS:
-            continue
-        missing += [t for t in want if t not in hours]
-    return sorted(missing)
-
-
-def _volume_scale(primary: dict[int, tuple], donor: dict[int, tuple],
-                  since_ms: int) -> float | None:
-    """The factor that puts a donor's klines on the primary venue's volume
-    scale: the median ``primary/donor`` volume ratio over the hours both serve.
-
-    ``None`` — refuse the donor — when the two disagree on PRICE (a different
-    symbol or a broken feed, not merely a thinner venue) or when too few hours
-    overlap to calibrate."""
-    common = [t for t in donor if t in primary and t >= since_ms]
-    px = [primary[t][3] / donor[t][3] for t in common if donor[t][3] > 0]
-    vol = [primary[t][4] / donor[t][4] for t in common
-           if donor[t][4] > 0 and primary[t][4] > 0]
-    if len(px) < HEAL_MIN_OVERLAP or len(vol) < HEAL_MIN_OVERLAP:
-        return None
-    if abs(float(np.median(px)) - 1.0) > HEAL_MAX_PX_DIVERGENCE:
-        return None
-    k = float(np.median(vol))
-    return k if np.isfinite(k) and k > 0 else None
-
-
-def _heal_hourly_gaps(hours: dict[int, tuple], symbol: str, primary_host: str,
-                      now_ms: int) -> dict[int, tuple]:
-    """Fill the hours a completed bar is missing from the next host that has
-    them (see the healing rule above).  Returns ``hours``, mutated in place;
-    a no-op when nothing is missing or no donor qualifies."""
-    missing = _missing_hours(hours, now_ms)
-    if not missing:
-        return hours
-    print(f"  [gap] {symbol}: {len(missing)} hour(s) missing from completed "
-          f"12:00-UTC bar(s) on {primary_host} — trying the other hosts")
-    since = min(missing) - 30 * _DAY_MS
-    for host in _BINANCE_HOSTS:
-        if host == primary_host:
-            continue
-        donor = _hourly_from_host(host, symbol, since, now_ms)
-        if not donor:
-            continue
-        k = _volume_scale(hours, donor, since)
-        if k is None:
-            print(f"  [gap] {symbol}: {host} REFUSED — prices disagree or the "
-                  f"volume scale could not be calibrated")
-            continue
-        filled = 0
-        for t in missing:
-            if t in donor and t not in hours:
-                o, h, l_, c, v = donor[t]
-                hours[t] = (o, h, l_, c, v * k)
-                filled += 1
-        print(f"  [gap] {symbol}: {filled}/{len(missing)} hour(s) filled from "
-              f"{host} (volume rescaled x{k:.6g} onto {primary_host}'s scale)")
-        missing = _missing_hours(hours, now_ms)
-        if not missing:
-            return hours
-    print(f"  [gap] {symbol}: {len(missing)} hour(s) still missing — the "
-          f"affected completed bar(s) stay dropped (the freshness audit will "
-          f"flag the sleeve stale rather than publish a spliced bar)")
-    return hours
-
 
 def fetch_12utc(start_iso: str, symbol: str = "BTCUSDT") -> pd.DataFrame:
     """Daily OHLCV anchored at 12:00 UTC (7am CT), rebucketed from Binance
@@ -241,34 +71,23 @@ def fetch_12utc(start_iso: str, symbol: str = "BTCUSDT") -> pd.DataFrame:
 
     The whole hourly series comes from ONE host — the first that answers — with
     only the gaps in already-closed bars healed from another (see
-    ``_heal_hourly_gaps``), so a bar is never half one venue's volume scale and
-    half another's.  A bar whose 24 hours are still not complete after healing
-    is dropped, exactly as before.
+    ``binance_bars.heal_hourly_gaps``), so a bar is never half one venue's
+    volume scale and half another's.  A bar whose 24 hours are still not
+    complete after healing is dropped, exactly as before.
 
     Volume is the summed Binance base-asset volume; every volume feature
     downstream (log-diff, z-score, MA ratio) is scale-invariant.
     """
     start_ms = int(pd.Timestamp(start_iso, tz="UTC").timestamp() * 1000)
     now_ms   = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
-    hours, primary_host = {}, None
-    for host in _BINANCE_HOSTS:
-        got = _hourly_from_host(host, symbol, start_ms, now_ms)
-        if got:
-            hours, primary_host = got, host
-            break
+    hours, primary_host = fetch_hourly(symbol, start_ms, now_ms)
     if not hours:
         raise RuntimeError(f"Binance hourly klines unavailable for {symbol} (all hosts failed)")
-    hours = _heal_hourly_gaps(hours, symbol, primary_host, now_ms)
+    hours = heal_hourly_gaps(hours, symbol, primary_host, now_ms)
     h = pd.DataFrame.from_dict(hours, orient="index",
                                columns=["open", "high", "low", "close", "volume"])
     h.index = pd.to_datetime(pd.Index(h.index), unit="ms", utc=True).tz_convert(None)
-    h = h.sort_index()
-    # Rebucket into 24h bars starting at ANCHOR_HOUR_UTC (identical to the app).
-    h["bucket"] = (h.index - pd.Timedelta(hours=ANCHOR_HOUR_UTC)).normalize()
-    g = h.groupby("bucket").agg(
-        open=("open", "first"), high=("high", "max"), low=("low", "min"),
-        close=("close", "last"), volume=("volume", "sum"), n_hours=("close", "size"))
-    g = g[g["n_hours"] == 24].drop(columns="n_hours")
+    g = rebucket_12utc(h.sort_index())
     g.index.name = "Date"
     return g
 
