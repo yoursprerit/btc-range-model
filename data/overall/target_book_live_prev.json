@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-08-29T12:17:25+00:00",
- "as_of": "2026-08-28",
+ "generated_at_utc": "2026-08-30T12:17:07+00:00",
+ "as_of": "2026-08-29",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
@@ -42,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.7266666666666667,
+   "priority": 0.7257142857142858,
    "exits_next_bar": false
   },
   {
@@ -51,7 +51,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.7223469880136912,
+   "priority": 0.7213946070613103,
    "exits_next_bar": false
   },
   {
@@ -60,7 +60,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.5466666666666667,
+   "priority": 0.5457142857142857,
    "exits_next_bar": false
   },
   {
@@ -183,18 +183,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-08-29T12:17:23+00:00",
+  "checked_at_utc": "2026-08-30T12:17:06+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Aug 29, 2026 at 7:15 AM CDT",
+  "anchor_ct": "Aug 30, 2026 at 7:15 AM CDT",
   "equity_close": "2026-08-28",
-  "btc_bar_close_utc": "2026-08-29T12:00:00+00:00"
+  "btc_bar_close_utc": "2026-08-30T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "c6cc4a407687",
+ "code_sha": "4faccdc0be22",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "b6fad5647bbd2eeb5d405dd94aba225b4e4fef27ca607c7439e950f90eb55746"
+  "value": "5a8fc9d6bf4aa8ebd5f89ef0bede772b4361518f2e35154330cd9f495244e7e9"
  }
 }
