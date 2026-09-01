@@ -276,6 +276,74 @@ false freshness.
 
 Tests: `tests/test_btc_bar_freshness.py`.
 
+## The live app's own stale signal bar (unreachable seed + no gap repair, 2026-09-01)
+
+**Symptom.** The ₿ Bitcoin page banner read **"Daily signal bar is 2 bar(s)
+behind. The newest completed 12:00-UTC bar available here starts 2026-08-29;
+the freshest one that exists starts 2026-08-31"** — while
+`data/backtest/raw_features_daily.csv`, committed 20 minutes earlier, already
+held **both** of the bars it said were missing. Every DAILY view on the page
+(H/L forecast, CT signal, position) was computed from the 08-29 bar and the
+🧭 Overall app flagged BTC STALE off the same frame. The hourly views, which
+never go through the daily rebucketer, were fine.
+
+This is the previous incident's banner working exactly as designed — it told
+the truth about a frame that was genuinely two bars behind. What follows is why
+the frame was behind at all.
+
+**Root cause 1 — the versioned seed never ran.** `_fetch_daily_raw_inner`
+finishes by calling `_seed_daily_raw_from_versioned`, which repairs the live
+frame from the git-tracked (already gap-healed) daily dataset. That seeder calls
+`_load_raw_features`, which was defined **~3,200 lines further down the
+module**. Streamlit executes the script top-to-bottom and the freshness-caption
+block calls `_fetch_daily_raw()` at line ~2,580 — long before the interpreter
+reaches that `def` — so the call raised `NameError`, the seeder's blanket
+`except Exception: return df` swallowed it, and the repaired bars never reached
+the frame. The result was cached under a 6-hour TTL, so the page then served the
+stale frame for hours. Nothing logged, nothing failed: the seed had simply never
+worked on the live path.
+
+**Root cause 2 — the live app had no gap repair of its own.** The page does not
+read the committed daily CSV directly; it rebuilds its own 12:00-UTC bars from
+its own hourly pull, and `_rebucket_12utc` keeps a bar only when all 24 of its
+hourly klines are present. The puller heals such holes (previous section); the
+app did not. Its only fallback trigger was a **stale tail** — `max(index)` more
+than three hours old — which an INTERIOR hole never trips, because the hourly
+feed stays perfectly current while a bar in the middle of the window is short.
+That is precisely the failure mode the banner itself names ("a Binance host
+serving an incomplete hour set"), so the one guard the app had could not fire
+for it.
+
+**Root cause 3 — the app spliced venues while paging.** `_fetch_binance_hourly`
+paged through `_binance_get`, which fails over to the next host **per request**.
+An intermittent error on `api.binance.us` therefore mixed `api.binance.com`
+pages into the same series — the same unscaled volume splice the puller was
+fixed for in the previous incident, still live in the app.
+
+**The fix.**
+
+1. **`_load_raw_features` is defined above its first caller**, and the seeder
+   now **re-raises `NameError`** instead of swallowing it. The safety net still
+   absorbs a missing or short CSV — a data problem — but an ordering regression
+   surfaces loudly rather than silently stranding the page bars behind.
+2. **Interior-gap healing in the live app** (`app/hourly_gaps.py`): the same
+   contract as the puller, on the app's DataFrame representation — only hours
+   of ALREADY-CLOSED bars, only the recent window (5 days), only bars the
+   primary feed actually traded (≥12 of 24 hours), donor volume rescaled by the
+   median volume ratio, and a donor whose prices disagree by more than 1%
+   REFUSED so the bar is dropped rather than spliced. Donors (the other Binance
+   host, then Yahoo) are lazy: a healthy feed costs no extra round-trip.
+3. **One host owns the app's hourly pull too** (`_binance_hourly_from_host`),
+   closing the per-page failover splice. A host that gives nothing at all is
+   still skipped; a host that gives a short series is now repaired by (2), with
+   the donor rescaled, instead of being silently concatenated.
+
+Note what is deliberately NOT changed: `_rebucket_12utc` still refuses any bar
+without all 24 hours. The repair happens on the hourly input, so a bar that
+cannot be honestly completed is still dropped and still reported stale.
+
+Tests: `tests/test_live_bar_freshness.py`.
+
 ## The stranded pending exit (SOXX/SOXL "exits next bar" forever, 2026-08-31)
 
 **Symptom.** 🎯 Today's action plan kept flagging **SOXX** and **SOXL** red —
