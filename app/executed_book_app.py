@@ -8,8 +8,9 @@ human-readable way:
   * a run header (when it ran, account, mode, net-liq, cash) with signature +
     freshness badges,
   * the **trades executed** (buys/sells, quantity, fill price, status),
-  * the **current IBKR positions** (shares, cost, market value, unrealised P&L,
-    weight) with a donut.
+  * the **current IBKR positions** (shares, cost, market value, unrealised and
+    realised P&L in both dollars and percent of cost basis, weight) with a
+    donut.
 
 Two tabs:
 
@@ -214,13 +215,18 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
         # realised: nullable on purpose — an older report has no such field,
         # and "not recorded" must not render as a confident $0
         rpnl = eb.opt_float(p.get("realized_pnl"))
+        # the same dollars as a return on the cost basis that earned them —
+        # None (not 0 %) whenever there is no basis to divide by
+        u_pct, r_pct = eb.position_pnl_pct(p, trades)
         prows.append(dict(
             Instrument=_name(p.get("key"), p.get("symbol")), IBKR=p.get("symbol"),
             Shares=shares, Avg_cost=(f"${avg_cost:,.2f}" if avg_cost else "—"),
             Price=(f"${mpx:,.2f}" if mpx else "—"),
             Value=(f"${mv:,.0f}" if mv else "—"),
             Unreal_PnL=(f"${upnl:,.0f}" if mv else "—"),
+            Unreal_Pct=("—" if (u_pct is None or not mv) else f"{u_pct:+.2f}%"),
             Real_PnL=("—" if rpnl is None else f"${rpnl:,.2f}"),
+            Real_Pct=("—" if r_pct is None else f"{r_pct:+.2f}%"),
             Weight=wt))
     pdf = pd.DataFrame(prows)
 
@@ -232,12 +238,23 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
                 "Shares": st.column_config.NumberColumn("Shares", format="%.0f"),
                 "Avg_cost": st.column_config.TextColumn("Avg cost"),
                 "Unreal_PnL": st.column_config.TextColumn("Unreal. P&L"),
+                "Unreal_Pct": st.column_config.TextColumn(
+                    "Unreal. P&L %",
+                    help="Unrealised P&L over this position's cost basis "
+                         "(shares × average cost) — what the open position is "
+                         "up or down in return terms, not dollars."),
                 "Real_PnL": st.column_config.TextColumn(
                     "Realised P&L",
                     help="Booked by the shares this run SOLD — a trim leaves "
                          "the remaining shares' average cost untouched, so it "
                          "shows up nowhere else. Per session; “—” means the "
                          "report predates the field."),
+                "Real_Pct": st.column_config.TextColumn(
+                    "Realised P&L %",
+                    help="Realised P&L over what the shares SOLD this run "
+                         "cost (sold shares × average cost). “—” when the "
+                         "report records no realised figure or no fill to "
+                         "measure it against."),
                 "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%")})
         tot_upnl = sum(float(p.get("unrealized_pnl") or 0.0) for p in positions)
         _rl = [eb.opt_float(p.get("realized_pnl")) for p in positions]
@@ -245,13 +262,17 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
         _acct_rl = eb.opt_float(payload.get("realized_pnl"))
         _rl_tot = _acct_rl if _acct_rl is not None else (
             sum(_rl_known) if _rl_known else None)
+        _u_pct_tot, _r_pct_tot = eb.book_pnl_pct(payload)
         # \$ — several bare dollar amounts in one markdown string read as a
         # $…$ LaTeX span and render as upside-down maths
-        st.caption((f"Total unrealised P&L: **${tot_upnl:,.0f}** · "
-                    f"invested **${mv_total:,.0f}**"
+        st.caption((f"Total unrealised P&L: **${tot_upnl:,.0f}**"
+                    + ("" if _u_pct_tot is None else f" (**{_u_pct_tot:+.2f}%**)")
+                    + f" · invested **${mv_total:,.0f}**"
                     + (f" · cash **${cash:,.0f}**" if cash else "")
                     + ("" if _rl_tot is None else
-                       f" · **realised this run ${_rl_tot:,.2f}**")
+                       f" · **realised this run ${_rl_tot:,.2f}"
+                       + ("" if _r_pct_tot is None else f" ({_r_pct_tot:+.2f}%)")
+                       + "**")
                     ).replace("$", "\\$"))
     with right:
         if mv_total:
