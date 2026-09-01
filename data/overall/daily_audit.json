@@ -1,39 +1,21 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-09-01T13:54:39+00:00",
- "generated_at_ct": "Sep 1, 2026 at 8:54:39 AM CDT",
+ "generated_at_utc": "2026-09-01T15:29:08+00:00",
+ "generated_at_ct": "Sep 1, 2026 at 10:29:08 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
   "as_of": "2026-08-31",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-09-01T13:54:39+00:00"
+  "computed_at_utc": "2026-09-01T15:29:08+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-09-01T13:54:39+00:00",
-  "checked_at_ct": "Sep 1, 2026 at 8:54:39 AM CDT",
-  "passed": false,
-  "stale_apps": [
-   "GLDM",
-   "GDXM",
-   "GRID",
-   "REMX",
-   "WGMI",
-   "PBW",
-   "ARTY"
-  ],
-  "stale_assets": [
-   "GLDM",
-   "UGL",
-   "GDX",
-   "NUGT",
-   "GRID",
-   "REMX",
-   "WGMI",
-   "PBW",
-   "ARTY"
-  ],
+  "checked_at_utc": "2026-09-01T15:29:06+00:00",
+  "checked_at_ct": "Sep 1, 2026 at 10:29:06 AM CDT",
+  "passed": true,
+  "stale_apps": [],
+  "stale_assets": [],
   "rows": [
    {
     "app": "BTC",
@@ -58,12 +40,20 @@
      "GLDM",
      "UGL"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "GDXM",
@@ -72,12 +62,20 @@
      "GDX",
      "NUGT"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "SOXX",
@@ -91,7 +89,15 @@
     "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
-    "age_days": 0
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": ""
+    }
    },
    {
     "app": "GRID",
@@ -99,12 +105,20 @@
     "instruments": [
      "GRID"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "XLE",
@@ -119,7 +133,15 @@
     "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
-    "age_days": 0
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "REMX",
@@ -127,12 +149,20 @@
     "instruments": [
      "REMX"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "WGMI",
@@ -140,12 +170,20 @@
     "instruments": [
      "WGMI"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "PBW",
@@ -153,12 +191,20 @@
     "instruments": [
      "PBW"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    },
    {
     "app": "ARTY",
@@ -166,17 +212,31 @@
     "instruments": [
      "ARTY"
     ],
-    "actual_asof": "2026-08-28",
+    "actual_asof": "2026-08-31",
     "expected_asof": "2026-08-31",
-    "actual_close": "Aug 28, 2026, 4:00 PM EDT (US market close)",
+    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
     "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "fresh": false,
-    "age_days": 3
+    "fresh": true,
+    "age_days": 0,
+    "data_gate": {
+     "decision": "refreshed",
+     "source": "yahoo-live",
+     "served_through": "2026-08-31",
+     "qc_passed": true,
+     "failed_checks": [],
+     "note": "restored from the pinned snapshot: 2026-08-28"
+    }
    }
   ]
  },
  "target_book": {
-  "published": false,
-  "skip_reason": "signal-freshness audit failed: stale ['GLDM', 'GDXM', 'GRID', 'REMX', 'WGMI', 'PBW', 'ARTY']"
+  "published": true,
+  "skip_reason": null,
+  "withheld_since_ct": null,
+  "consecutive_withheld_days": 0,
+  "generated_at_utc": "2026-09-01T15:29:08+00:00",
+  "as_of": "2026-08-31",
+  "profile": "Balanced",
+  "signed": true
  }
 }
