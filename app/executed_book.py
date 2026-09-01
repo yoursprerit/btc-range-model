@@ -234,6 +234,114 @@ def validate(payload: dict, today: pd.Timestamp, *,
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# P&L PERCENTAGES  (a dollar figure says nothing without the basis it earned on)
+# ════════════════════════════════════════════════════════════════════════════
+# Both percentages are "return on the cost basis that produced them", so a
+# small position's good trade and a big one's mediocre one stop looking alike:
+#
+#   unrealised %  =  unrealized_pnl / |shares × avg_cost|
+#   realised   %  =  realized_pnl   / |shares SOLD this run × avg_cost|
+#
+# The realised basis leans on IBKR's average-cost accounting: selling part of a
+# long leaves the REMAINING shares' ``avg_cost`` untouched, so that same average
+# is what the sold slice cost too — the executed report already carries it, and
+# the shares sold come from this run's filled SELL trades.  Everything is
+# nullable: no basis (a report with no fills, or one predating ``realized_pnl``)
+# means "cannot be expressed as a percentage", never 0 %.
+
+
+def pct_of_basis(pnl: float | None, basis: float | None) -> float | None:
+    """*pnl* as a percentage of *basis*, or None when there is no basis.
+
+    A zero/absent basis is not a 0 % return — it is an unanswerable question,
+    so it stays None and the UI renders "—"."""
+    pnl = opt_float(pnl)
+    basis = opt_float(basis)
+    if pnl is None or not basis:
+        return None
+    return pnl / abs(basis) * 100
+
+
+def sold_qty(trades: list[dict] | None, key: str | None,
+             symbol: str | None = None) -> float:
+    """Shares of one instrument SOLD (filled) by this run's trades.
+
+    Matched on ``key`` first — the strategy-side identity, stable across the
+    BTC→IBIT style mappings — and on ``symbol`` for a row that carries only
+    the broker ticker.  Planned/unfilled orders contribute nothing: ``filled``
+    is what actually printed."""
+    total = 0.0
+    for t in trades or []:
+        if (t.get("action") or "").upper() != "SELL":
+            continue
+        t_key, t_sym = t.get("key"), t.get("symbol")
+        if key and t_key and t_key != key:
+            continue
+        if not (key and t_key):                    # fall back to the ticker
+            if not (symbol and t_sym and t_sym == symbol):
+                continue
+        total += float(t.get("filled") or 0.0)
+    return total
+
+
+def position_pnl_pct(position: dict,
+                     trades: list[dict] | None = None) -> tuple[float | None,
+                                                                float | None]:
+    """``(unrealised %, realised %)`` for one execution-report position."""
+    shares = float(position.get("shares") or 0.0)
+    avg_cost = float(position.get("avg_cost") or 0.0)
+    unreal_pct = pct_of_basis(position.get("unrealized_pnl"), shares * avg_cost)
+    sold = sold_qty(trades, position.get("key"), position.get("symbol"))
+    real_pct = pct_of_basis(opt_float(position.get("realized_pnl")),
+                            sold * avg_cost)
+    return unreal_pct, real_pct
+
+
+def book_pnl_pct(payload: dict | None) -> tuple[float | None, float | None]:
+    """``(unrealised %, realised %)`` for the whole execution report.
+
+    The unrealised basis is every held position's cost basis.  The realised one
+    is what this run's filled SELLs cost, priced at each name's ``avg_cost``;
+    a name closed out ENTIRELY has no position row left to read that from, so
+    its proceeds stand in — which understates a winner's percentage slightly
+    rather than dropping the sale from the basis and overstating it."""
+    payload = payload or {}
+    positions = payload.get("positions") or []
+    trades = payload.get("trades") or []
+
+    cost = sum(abs(float(p.get("shares") or 0.0) * float(p.get("avg_cost") or 0.0))
+               for p in positions)
+    unreal = sum(float(p.get("unrealized_pnl") or 0.0) for p in positions)
+
+    avg_by_key = {}
+    avg_by_sym = {}
+    for p in positions:
+        avg = float(p.get("avg_cost") or 0.0)
+        if avg <= 0:
+            continue
+        if p.get("key"):
+            avg_by_key[p["key"]] = avg
+        if p.get("symbol"):
+            avg_by_sym[p["symbol"]] = avg
+    sold_cost = 0.0
+    for t in trades:
+        if (t.get("action") or "").upper() != "SELL":
+            continue
+        filled = float(t.get("filled") or 0.0)
+        if not filled:
+            continue
+        avg = avg_by_key.get(t.get("key")) or avg_by_sym.get(t.get("symbol"))
+        if not avg:                       # closed out entirely — proceeds stand in
+            avg = float(t.get("avg_fill_price") or 0.0) or float(t.get("price") or 0.0)
+        sold_cost += abs(filled * avg)
+
+    per_pos = [opt_float(p.get("realized_pnl")) for p in positions]
+    known = [v for v in per_pos if v is not None]
+    acct = opt_float(payload.get("realized_pnl"))
+    realized = acct if acct is not None else (sum(known) if known else None)
+    return pct_of_basis(unreal, cost), pct_of_basis(realized, sold_cost)
+
+# ════════════════════════════════════════════════════════════════════════════
 # DATED ARCHIVE  (executed_archive/<as_of>[_live].json)
 # ════════════════════════════════════════════════════════════════════════════
 # The live report files (``executed_book.json`` / ``executed_book_live.json``)
