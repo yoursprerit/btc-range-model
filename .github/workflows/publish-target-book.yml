@@ -239,13 +239,21 @@ jobs:
           # response — exactly the drift the gate exists to prevent — AND they
           # were the "unstaged changes" that made the rebase below fail on every
           # single run.
-          git add data/overall/target_book.json data/overall/target_book_live.json \
-                  data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
-                  data/overall/book_archive/ \
-                  data/overall/strategy_health.json data/overall/health_history.csv \
-                  data/overall/daily_audit.json data/backtest/ \
-                  data/arty data/gldm data/grid data/pbw data/remx data/soxx \
-                  data/wgmi data/xle || true
+          # Staged ONE PATH AT A TIME on purpose: `git add a b c` stages NOTHING
+          # when any single pathspec matches no file, and the trailing `|| true`
+          # then hid it — so a cycle where an optional artifact is absent (no
+          # *_prev.json before the first rotation, no book_archive yet) would
+          # commit nothing, report "No changes", and go green having published
+          # nothing. Per-path keeps the others landing.
+          for p in data/overall/target_book.json data/overall/target_book_live.json \
+                   data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
+                   data/overall/book_archive/ \
+                   data/overall/strategy_health.json data/overall/health_history.csv \
+                   data/overall/daily_audit.json data/backtest/ \
+                   data/arty data/gldm data/grid data/pbw data/remx data/soxx \
+                   data/wgmi data/xle; do
+            git add "$p" 2>/dev/null || echo "  (skipped absent path: $p)"
+          done
           if git diff --cached --quiet; then
             echo "No changes — nothing to commit."
             exit 0
@@ -259,16 +267,44 @@ jobs:
           git commit \
             -m "chore(ibkr): scheduled ${{ steps.guard.outputs.slot }}-cycle publish (as-of ${ASOF}, audit passed=${OK})" \
             -m "Automated via .github/workflows/publish-target-book.yml"
-          # Tolerate a concurrent push (e.g. the data-refresh workflow) by
-          # rebasing before pushing back to the branch this ran from.
-          # --autostash: anything still unstaged (runtime/ scratch, a sleeve the
-          # gate rewrote after the add above) otherwise aborts the rebase with
-          # "cannot pull with rebase: You have unstaged changes" — which the old
-          # `|| true` swallowed, so the push only ever succeeded because nothing
-          # had pushed concurrently.
-          git fetch origin "${GITHUB_REF_NAME}"
-          git rebase --autostash "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # Land the artifacts on top of whatever is on the branch RIGHT NOW.
+          #
+          # Two publish runs legitimately overlap: a delayed cron slot and the
+          # UI's 🚀 button (a dispatch deliberately bypasses the guard) can run
+          # minutes apart, and the data-refresh workflow pushes to the same
+          # branch. Both regenerate the SAME files with different timestamps and
+          # content hashes, so a plain rebase conflicts on every artifact —
+          # observed 2026-09-01 run #493: 17 conflicts, the abort left HEAD
+          # behind the remote, the push was rejected non-fast-forward and the
+          # run's work was silently lost.
+          #
+          # These paths are machine-generated from ONE pinned 7:15-AM-CT basis,
+          # so the resolution is deterministic rather than a judgement call:
+          # this run's freshly-computed output wins. `-X theirs` in a rebase
+          # means the commit being replayed (ours), not the new base — verified,
+          # and it settles add/add on a new book_archive/<date>.json too. Only
+          # the generated data paths staged above are in the commit, so nothing
+          # else is in range of that strategy.
+          #
+          # --autostash keeps anything still unstaged (runtime/ scratch, a sleeve
+          # the gate rewrote after the add) from aborting the rebase outright,
+          # which is what the old `git pull --rebase || true` hit on every run.
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}"; then
+              if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+                echo "Artifacts pushed on attempt ${attempt}."
+                exit 0
+              fi
+            else
+              git rebase --abort || true
+            fi
+            echo "Concurrent push on attempt ${attempt} — refetching and retrying."
+            sleep $((attempt * 5))
+          done
+          echo "::error title=Publish artifacts not landed::Could not push the \
+            target book after 3 attempts against a moving branch."
+          exit 1
 
       - name: Classify + record the failure (stale-withheld vs engine error)
         id: classify

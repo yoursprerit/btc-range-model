@@ -90,12 +90,21 @@ jobs:
           git commit \
             -m "chore(data): refresh backtest dataset (through ${NEWDATE})" \
             -m "Automated refresh via .github/workflows/refresh-backtest-data.yml"
-          # The publish workflow pushes to the same branch on an overlapping
-          # schedule; rebase (autostashing the sleeve files the gate may have
-          # rewritten) so a race retries instead of failing the job.
-          git fetch origin "${GITHUB_REF_NAME}"
-          git rebase --autostash "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # The publish workflow regenerates the same files and pushes to this
+          # branch on an overlapping schedule, so a plain rebase conflicts on
+          # every artifact. Same deterministic resolution as the publish job:
+          # this run's freshly-pulled vintage wins (see publish-target-book.yml).
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}"; then
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            else
+              git rebase --abort || true
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not push the refreshed dataset after 3 attempts."
+          exit 1
 
       - name: Refresh + QC-pin the equity/gold sleeve snapshots
         # Runs the same quality gate the apps use (app/data_gate.py) for every
@@ -124,9 +133,17 @@ jobs:
           git commit \
             -m "chore(data): refresh QC-pinned sleeve snapshots" \
             -m "Automated refresh via scripts/refresh_sleeve_snapshots.py (quality-gated; see app/data_gate.py)"
-          git fetch origin "${GITHUB_REF_NAME}"
-          git rebase --autostash "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}"; then
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            else
+              git rebase --abort || true
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not push the refreshed snapshots after 3 attempts."
+          exit 1
 
       - name: Alarm if dataset is stale
         # Runs whether or not anything was committed: surfaces a silently broken
