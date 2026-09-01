@@ -19,6 +19,16 @@ on:
     # make the publish stale.
     - cron: "3 12 * * *"
     - cron: "3 13 * * *"
+    # 2026-09-01: BOTH slots above were dropped outright (the last run before the
+    # day's publish was 2026-08-31 19:27 UTC), so no sleeve snapshot was pinned
+    # for the 08-31 session and the publish had nothing current to fall back on.
+    # GitHub cron is best-effort — fires are routinely delayed an hour or more
+    # and are sometimes dropped entirely — so the cycle gets catch-up slots, the
+    # same hardening .github/workflows/publish-target-book.yml already carries.
+    # Every step here is idempotent (the commits fire only when a file actually
+    # changed, and refresh_sleeve_snapshots.py pins completed bars at the publish
+    # anchor), so a slot on a day that already refreshed costs one no-op run.
+    - cron: "3 14-23 * * *"
   workflow_dispatch: {}   # allow manual runs from the Actions tab
 
 # Allow the built-in token to push the refreshed data back to the branch.
@@ -80,7 +90,12 @@ jobs:
           git commit \
             -m "chore(data): refresh backtest dataset (through ${NEWDATE})" \
             -m "Automated refresh via .github/workflows/refresh-backtest-data.yml"
-          git push
+          # The publish workflow pushes to the same branch on an overlapping
+          # schedule; rebase (autostashing the sleeve files the gate may have
+          # rewritten) so a race retries instead of failing the job.
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase --autostash "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Refresh + QC-pin the equity/gold sleeve snapshots
         # Runs the same quality gate the apps use (app/data_gate.py) for every
@@ -109,7 +124,9 @@ jobs:
           git commit \
             -m "chore(data): refresh QC-pinned sleeve snapshots" \
             -m "Automated refresh via scripts/refresh_sleeve_snapshots.py (quality-gated; see app/data_gate.py)"
-          git push
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase --autostash "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Alarm if dataset is stale
         # Runs whether or not anything was committed: surfaces a silently broken

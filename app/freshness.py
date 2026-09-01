@@ -41,9 +41,23 @@ relaxed audit, and the daily fetchers apply them in this order:
    quote API), with a split-scale guard because the two providers differ in
    split/dividend adjustment.
 
-Both are strictly additive: they never overwrite a session the primary feed has,
-never add an in-progress or non-trading session, and no-op when the frame is
-already current — so a genuinely stale feed still fails the audit.
+3. ``repair_missing_closes`` — when the withheld close belongs to a traded
+   SIBLING (SOXL / OIH / ERX / UGL / NUGT) the session row survives on the
+   primary's price and only that cell is null, so it is repaired cell-by-cell
+   from the same two sources rather than forward-filled into a fabricated price.
+
+``repair_daily_frame`` applies all three in that order and is what the daily
+fetchers call.
+
+Every one of them is strictly additive: they never overwrite a value the primary
+feed has, never add an in-progress or non-trading session, and no-op when nothing
+is missing — so a genuinely stale feed still fails the audit.
+
+Crucially the hole they look for is any COMPLETED session missing from the recent
+window, not merely a short tail: a feed that WITHDRAWS an already-published close
+(Yahoo began serving a null for the 2026-08-28 bar of nine tickers on
+2026-09-01) leaves the frame's newest session perfectly current with the gap
+buried inside it, which a tail-only test cannot see.  See ``missing_sessions``.
 """
 from __future__ import annotations
 
@@ -51,6 +65,7 @@ import json
 import os
 import tempfile
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -139,10 +154,15 @@ def _observed(d: date) -> date:
     return d
 
 
-def us_market_holidays(year: int) -> set[date]:
+@lru_cache(maxsize=64)
+def us_market_holidays(year: int) -> frozenset:
     """NYSE full-day closures for ``year`` (regular schedule; one-off special
     closures such as national days of mourning are not modelled — they would
-    surface as a one-day STALE flag, which is the safe direction)."""
+    surface as a one-day STALE flag, which is the safe direction).
+
+    Cached and returned immutable: the interior-gap repair walks up to
+    ``REPAIR_LOOKBACK_SESSIONS`` sessions per frame and would otherwise rebuild
+    this set hundreds of times per fetch, across every sleeve, on every load."""
     hol = {
         _observed(date(year, 1, 1)),                    # New Year's Day
         _nth_weekday(year, 1, 0, 3),                    # MLK Day (3rd Mon Jan)
@@ -161,7 +181,7 @@ def us_market_holidays(year: int) -> set[date]:
     if date(year, 1, 1).weekday() == 5:
         hol.discard(date(year - 1, 12, 31))
         hol.discard(date(year, 1, 1))
-    return hol
+    return frozenset(hol)
 
 
 def is_us_trading_day(d) -> bool:
@@ -174,6 +194,25 @@ def _prev_trading_day(d: date) -> date:
     while not is_us_trading_day(d):
         d -= timedelta(days=1)
     return d
+
+
+def _nth_prev_trading_day(d: date, n: int) -> date:
+    """The session ``n`` trading days before ``d`` (``n`` <= 0 → ``d``)."""
+    for _ in range(max(0, int(n))):
+        d = _prev_trading_day(d)
+    return d
+
+
+def us_sessions_between(start, end) -> list:
+    """Every NYSE session date in ``[start, end]`` inclusive, oldest first."""
+    a = pd.Timestamp(start).date()
+    b = pd.Timestamp(end).date()
+    out = []
+    while a <= b:
+        if is_us_trading_day(a):
+            out.append(pd.Timestamp(a))
+        a += timedelta(days=1)
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -309,6 +348,13 @@ def drop_in_progress_us_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
 _AGG_BY_SUFFIX = {"open": "first", "high": "max", "low": "min",
                   "close": "last", "volume": "sum"}
 
+# How far back the repair helpers look for holes.  Kept in lock-step with the
+# data gate's ``no_missing_recent_sessions`` window (``data_gate.
+# _RECENT_SESSION_DAYS``): the repair must cover exactly the sessions the gate
+# refuses to lose, or a hole inside that window makes the gate reject every
+# future fetch and the sleeve freezes on its pinned snapshot for good.
+REPAIR_LOOKBACK_SESSIONS = 150
+
 
 def et_session_dates(idx) -> pd.DatetimeIndex:
     """Map intraday (tz-naive UTC) timestamps to their US/Eastern session date."""
@@ -317,35 +363,140 @@ def et_session_dates(idx) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(i.tz_convert(ET).normalize().tz_localize(None))
 
 
-def backfill_sessions_from_hourly(daily: pd.DataFrame, hourly: pd.DataFrame,
-                                  price_col: str, now=None) -> pd.DataFrame:
-    """Append any COMPLETED US sessions the daily frame lacks, aggregated from
-    ``hourly``.  No-op when the daily frame is already current, when ``hourly`` is
-    empty/no fresher, or when the synthesized session has no primary-price data."""
-    if daily is None or daily.empty or hourly is None or hourly.empty:
-        return daily
+def missing_sessions(index, now=None,
+                     lookback: int = REPAIR_LOOKBACK_SESSIONS) -> list:
+    """COMPLETED US sessions the frame LACKS inside the recent window, oldest first.
+
+    This is the gap test the repair helpers below run on, and it deliberately
+    looks at the whole window rather than only the tail.  Two different feed
+    defects produce a hole:
+
+    * the newest session simply has not arrived yet (the classic lag), and
+    * an ALREADY-PUBLISHED session is withdrawn — Yahoo starts serving a null
+      close for a bar it served correctly the day before, and ``_chart`` drops
+      null-close rows.  Observed 2026-09-01, when the 2026-08-28 close vanished
+      for GLDM/GRID/REMX/WGMI/PBW/ARTY/NUGT/OIH/ERX while 08-31 was present.
+
+    Only the first is visible to a tail test (``last_completed_session(...) <
+    expected_equity_asof(...)``): in the second the frame's newest session is
+    perfectly current and the hole sits INSIDE the history, so the tail test
+    reports "nothing to do", every backstop no-ops, and the data gate's
+    ``no_missing_recent_sessions`` check then refuses the frame — stranding the
+    sleeve on its pinned snapshot until someone intervenes.
+
+    The window is bounded by ``lookback`` sessions before the cutoff and by the
+    frame's own first session, so a short history is never asked to grow
+    backwards.
+    """
+    try:
+        idx = pd.DatetimeIndex(index).normalize()
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+    except Exception:
+        return []
+    if not len(idx):
+        return []
     cutoff = expected_equity_asof(now)
-    # Completed sessions only: an in-progress *today* row (which Yahoo's daily
-    # feed serves during market hours even while a prior close is missing)
-    # must not mask the gap — see last_completed_session.
-    last = last_completed_session(daily.index, now)
-    if last is not None and last >= cutoff:
-        return daily                            # already current — nothing to do
+    window_start = pd.Timestamp(_nth_prev_trading_day(cutoff.date(), lookback))
+    first = max(window_start, pd.Timestamp(idx.min()))
+    if first > cutoff:
+        return []
+    have = set(idx)
+    return [d for d in us_sessions_between(first, cutoff) if d not in have]
+
+
+def missing_closes(df: pd.DataFrame, cols, now=None,
+                   lookback: int = REPAIR_LOOKBACK_SESSIONS) -> dict:
+    """``{column: [session dates whose close is NULL]}`` inside the recent window.
+
+    The row-level helpers above only see a session that is missing ENTIRELY —
+    i.e. one the frame's PRIMARY price column dropped.  When the withdrawn close
+    belongs to a traded SIBLING (SOXL, OIH, ERX, UGL, NUGT …) the session row
+    survives on the primary's price and the sibling's cell is merely null, which
+    the fetchers used to forward-fill — silently fabricating a traded price
+    equal to the previous session's.  Observed 2026-09-01: the live XLE fetch
+    carried Thursday's 414.95 / 103.10 as OIH's and ERX's Friday 08-28 closes
+    (true closes 418.31 / 104.02).  The committed snapshot escaped only because
+    it had been pinned on 08-29, before the feed withdrew those bars — a refresh
+    landing during the withdrawal would have pinned the fabrication, and no
+    quality check can catch it (a 0% move is perfectly plausible).  These are
+    the prices the target book's execution legs read, so they get repaired from
+    a real source, never invented.
+    """
+    out: dict = {}
+    if df is None or len(df) == 0:
+        return out
+    try:
+        idx = pd.DatetimeIndex(df.index).normalize()
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+    except Exception:
+        return out
+    cutoff = expected_equity_asof(now)
+    window_start = pd.Timestamp(_nth_prev_trading_day(cutoff.date(), lookback))
+    for c in cols:
+        if c not in df.columns:
+            continue
+        s = pd.to_numeric(df[c], errors="coerce")
+        s.index = idx
+        s = s[(s.index >= window_start) & (s.index <= cutoff)]
+        bad = [d for d in s.index[s.isna()] if is_us_trading_day(d)]
+        if bad:
+            out[c] = bad
+    return out
+
+
+def sessions_from_hourly(hourly: pd.DataFrame, columns, price_col: str):
+    """Aggregate an intraday frame into daily US-session bars (OHLCV rules).
+
+    Returns ``None`` when the hourly frame carries no usable primary price.
+    """
+    if hourly is None or hourly.empty:
+        return None
     h = hourly.copy()
     h["_sess"] = et_session_dates(h.index)
-    want = [d for d in sorted(set(h["_sess"]))
-            if (last is None or last < d) and d <= cutoff and is_us_trading_day(d)]
-    if not want:
-        return daily
     agg = {}
-    for c in daily.columns:
+    for c in columns:
         if c not in h.columns:
             continue
         agg[c] = _AGG_BY_SUFFIX.get(str(c).rsplit("_", 1)[-1], "last")
     if price_col not in agg:
+        return None
+    return h.groupby("_sess").agg(agg)
+
+
+def _nearest_prior_close(series: pd.Series, when) -> float | None:
+    """The newest non-null value at or before ``when`` (else the newest of all).
+
+    The split-scale guard compares a candidate against this rather than against
+    the series' final value, so an INTERIOR session is judged against the level
+    that actually prevailed around it instead of against a level several
+    sessions away.
+    """
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if not len(s):
+        return None
+    prior = s[s.index <= pd.Timestamp(when)]
+    ref = prior if len(prior) else s
+    v = float(ref.iloc[-1])
+    return v if v > 0 else None
+
+
+def backfill_sessions_from_hourly(daily: pd.DataFrame, hourly: pd.DataFrame,
+                                  price_col: str, now=None) -> pd.DataFrame:
+    """Add every COMPLETED US session the daily frame lacks, aggregated from
+    ``hourly`` — tail gaps AND interior holes alike (see ``missing_sessions``).
+    No-op when nothing is missing, when ``hourly`` is empty or does not cover the
+    gap, or when the synthesized session has no primary-price data."""
+    if daily is None or daily.empty or hourly is None or hourly.empty:
         return daily
-    rows = h[h["_sess"].isin(want)].groupby("_sess").agg(agg)
-    rows = rows.dropna(subset=[price_col])
+    want = missing_sessions(daily.index, now)
+    if not want:
+        return daily                            # already complete — nothing to do
+    rows = sessions_from_hourly(hourly, list(daily.columns), price_col)
+    if rows is None or rows.empty:
+        return daily
+    rows = rows[rows.index.isin(want)].dropna(subset=[price_col])
     rows = rows[~rows.index.isin(daily.index)]
     if rows.empty:
         return daily
@@ -355,7 +506,7 @@ def backfill_sessions_from_hourly(daily: pd.DataFrame, hourly: pd.DataFrame,
 
 def merge_missing_sessions(daily: pd.DataFrame, alt: pd.DataFrame, price_col: str,
                           now=None, max_rel_jump: float = 0.60) -> pd.DataFrame:
-    """Append COMPLETED US sessions that ``daily`` lacks, taken from an alternate
+    """Add COMPLETED US sessions that ``daily`` lacks, taken from an alternate
     DAILY-indexed frame (a second provider — see ``app/market_fallback.py``).
 
     Used after the hourly backstop, when Yahoo is withholding sessions entirely.
@@ -364,40 +515,172 @@ def merge_missing_sessions(daily: pd.DataFrame, alt: pd.DataFrame, price_col: st
     * never touches a session ``daily`` already has, and never adds one past the
       last completed close (``expected_equity_asof``) or on a non-trading day;
     * requires the primary price column to be present and non-null;
-    * **split-scale guard** — a candidate whose close differs from the newest
-      known close by more than ``max_rel_jump`` is DROPPED.  The two providers
-      differ in split/dividend adjustment, so this is what stops a raw,
-      unadjusted print being spliced onto an adjusted series (a 10-for-1 split
-      shows up as a ~90% gap; a genuine leveraged-ETF day stays well inside 60%).
+    * **split-scale guard** — a candidate whose close differs from the nearest
+      KNOWN close at or before that session by more than ``max_rel_jump`` is
+      DROPPED.  The two providers differ in split/dividend adjustment, so this is
+      what stops a raw, unadjusted print being spliced onto an adjusted series (a
+      10-for-1 split shows up as a ~90% gap; a genuine leveraged-ETF day stays
+      well inside 60%).
     """
     if daily is None or daily.empty or alt is None or alt.empty:
-        return daily
-    cutoff = expected_equity_asof(now)
-    # Completed sessions only, for the same reason as the hourly backstop.
-    last = last_completed_session(daily.index, now)
-    if last is not None and last >= cutoff:
         return daily
     a = alt.copy()
     a.index = pd.DatetimeIndex(a.index).normalize()
     a = a[~a.index.duplicated(keep="last")].sort_index()
-    want = [d for d in a.index
-            if (last is None or last < d) and d <= cutoff
-            and d not in daily.index and is_us_trading_day(d)]
-    if not want or price_col not in a.columns:
+    if price_col not in a.columns:
+        return daily
+    want = [d for d in missing_sessions(daily.index, now) if d in a.index]
+    if not want:
         return daily
     rows = a.loc[want].dropna(subset=[price_col])
     if rows.empty:
         return daily
-    ref = pd.to_numeric(daily[price_col], errors="coerce").dropna()
-    if len(ref):
-        base = float(ref.iloc[-1])
-        if base > 0:
-            keep = (rows[price_col].astype(float) / base - 1.0).abs() <= max_rel_jump
-            rows = rows[keep]
+    ref = pd.to_numeric(daily[price_col], errors="coerce")
+    ref.index = pd.DatetimeIndex(daily.index).normalize()
+    keep = []
+    for d in rows.index:
+        base = _nearest_prior_close(ref, d)
+        keep.append(base is None
+                    or abs(float(rows.loc[d, price_col]) / base - 1.0) <= max_rel_jump)
+    rows = rows[keep]
     if rows.empty:
         return daily
     out = pd.concat([daily, rows.reindex(columns=daily.columns)]).sort_index()
     return out[~out.index.duplicated(keep="last")]
+
+
+def repair_missing_closes(daily: pd.DataFrame, alt: pd.DataFrame, cols,
+                          now=None, max_rel_jump: float = 0.60) -> pd.DataFrame:
+    """Fill NULL cells of ``cols`` from ``alt``, cell by cell, inside the recent
+    window — the sibling-level counterpart of ``merge_missing_sessions``.
+
+    Only ever writes where the frame holds no value, only on completed trading
+    sessions the frame already carries, and only when the candidate passes the
+    same split-scale guard against the column's nearest prior known value.  The
+    matching OHLCV cells of a repaired close are filled alongside it so the bar
+    stays internally consistent; anything the alternate feed cannot supply is
+    left NULL for the data gate to judge.
+    """
+    if daily is None or len(daily) == 0 or alt is None or len(alt) == 0:
+        return daily
+    holes = missing_closes(daily, list(cols), now)
+    if not holes:
+        return daily
+    a = alt.copy()
+    try:
+        a.index = pd.DatetimeIndex(a.index).normalize()
+    except Exception:
+        return daily
+    a = a[~a.index.duplicated(keep="last")].sort_index()
+    out = daily.copy()
+    out.index = pd.DatetimeIndex(out.index).normalize()
+    for col, days in holes.items():
+        if col not in a.columns:
+            continue
+        stem = str(col).rsplit("_", 1)[0]
+        ref = pd.to_numeric(out[col], errors="coerce")
+        for d in days:
+            if d not in a.index:
+                continue
+            v = pd.to_numeric(pd.Series([a.loc[d, col]]), errors="coerce").iloc[0]
+            if pd.isna(v) or float(v) <= 0:
+                continue
+            base = _nearest_prior_close(ref, d)
+            if base is not None and abs(float(v) / base - 1.0) > max_rel_jump:
+                continue                        # raw/unadjusted print — refuse
+            for suffix in _AGG_BY_SUFFIX:
+                c2 = f"{stem}_{suffix}"
+                if c2 in out.columns and c2 in a.columns and pd.isna(out.at[d, c2]):
+                    out.at[d, c2] = a.at[d, c2]
+    return out
+
+
+def repair_daily_frame(df: pd.DataFrame, price_col: str, *,
+                       traded_cols=(), macro_cols=(),
+                       fetch_hourly=None, fetch_alt=None,
+                       now=None, ffill_limit: int = 5) -> pd.DataFrame:
+    """Repair a freshly-fetched daily frame, then forward-fill the macro columns.
+
+    One shared implementation of the resolution order documented in
+    ``app/market_fallback.py`` — Yahoo daily → Yahoo hourly → Nasdaq daily —
+    applied to BOTH kinds of hole: whole sessions the primary price column
+    dropped, and null closes on traded siblings.  Each network fetch is made
+    lazily and only while something is still missing, so a healthy frame costs
+    no extra requests.
+
+    ``fetch_hourly`` / ``fetch_alt`` are zero-argument callables returning an
+    hourly frame and an alternate daily frame (either may be ``None``).  Failures
+    are swallowed: the repair is best-effort, and whatever it cannot fix is left
+    for the freshness audit and the data gate to catch rather than papered over.
+    """
+    traded_cols = [c for c in traded_cols if c in getattr(df, "columns", [])]
+    macro_cols = [c for c in macro_cols if c in getattr(df, "columns", [])]
+
+    def _ffill(frame):
+        if macro_cols:
+            frame[macro_cols] = frame[macro_cols].ffill(limit=ffill_limit)
+        return frame
+
+    if df is None or len(df) == 0:
+        return df
+    repaired_sessions: list = []
+    repaired_cells: dict = {}
+
+    def _stamp(frame):
+        """Record what was synthesized rather than served by the primary feed.
+
+        A rebuilt bar is real data but not the OFFICIAL print — an hourly
+        aggregate closes on the last intraday bar, which lands within ~0.1% of
+        the 4:00-PM-ET close, and a second provider carries its own adjustment
+        basis.  Downstream (``data_gate``) prefers a pinned snapshot's exact
+        value for any session flagged here, so a repair can never silently
+        RESTATE history that was already pinned from the official print.
+        """
+        frame.attrs["repaired_sessions"] = [str(pd.Timestamp(d).date())
+                                            for d in repaired_sessions]
+        frame.attrs["repaired_cells"] = {
+            c: [str(pd.Timestamp(d).date()) for d in ds]
+            for c, ds in repaired_cells.items() if ds}
+        return frame
+
+    try:
+        def _outstanding():
+            return (missing_sessions(df.index, now),
+                    missing_closes(df, traded_cols, now))
+
+        gaps, holes = _outstanding()
+        if not gaps and not holes:
+            return _stamp(_ffill(df))
+        def _absorb(before_gaps, before_holes):
+            """Note what the step just fixed, and report what is still open."""
+            after_gaps, after_holes = _outstanding()
+            still = set(after_gaps)
+            repaired_sessions.extend(d for d in before_gaps if d not in still)
+            for c, ds in before_holes.items():
+                left = set(after_holes.get(c, []))
+                fixed = [d for d in ds if d not in left]
+                if fixed:
+                    repaired_cells.setdefault(c, []).extend(fixed)
+            return after_gaps, after_holes
+
+        if fetch_hourly is not None:
+            h = fetch_hourly()
+            if h is not None and len(h):
+                df = backfill_sessions_from_hourly(df, h, price_col, now=now)
+                agg = sessions_from_hourly(h, list(df.columns), price_col)
+                if agg is not None and len(agg):
+                    df = repair_missing_closes(df, agg, traded_cols, now=now)
+            gaps, holes = _absorb(gaps, holes)
+        if (gaps or holes) and fetch_alt is not None:
+            a = fetch_alt(gaps[0] if gaps else min(
+                (d for ds in holes.values() for d in ds), default=None))
+            if a is not None and len(a):
+                df = merge_missing_sessions(df, a, price_col, now=now)
+                df = repair_missing_closes(df, a, traded_cols, now=now)
+            _absorb(gaps, holes)
+    except Exception:
+        pass                # best-effort; the audit still flags what is left
+    return _stamp(_ffill(df))
 
 
 def close_moment(kind: str, asof) -> pd.Timestamp:

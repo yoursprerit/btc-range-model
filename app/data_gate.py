@@ -499,20 +499,101 @@ def _append_partial_bar(hist: pd.DataFrame, recent: pd.DataFrame | None,
         return hist, 0
 
 
+def _restore_from_snapshot(hist: pd.DataFrame, snap: pd.DataFrame | None,
+                           cut, price_col: str) -> tuple[pd.DataFrame, list]:
+    """Prefer the pinned snapshot's own values wherever this fetch lost or only
+    RECONSTRUCTED a session.  Returns the frame plus the sessions it restored.
+
+    Two cases, both about the same failure — a provider WITHDRAWING a close it
+    already published (Yahoo began serving a null for the 2026-08-28 bar of nine
+    tickers on 2026-09-01, and `_chart` drops null-close rows):
+
+    1. The session is missing from the fetch outright.  Without this the fetch
+       keeps failing ``no_missing_recent_sessions`` forever and the sleeve is
+       frozen on that same snapshot, one session behind, with every retry
+       hitting the identical hole — no path back without a human.
+    2. The session was rebuilt upstream by ``freshness.repair_daily_frame`` (it
+       stamps ``repaired_sessions`` / ``repaired_cells``).  That is real data,
+       but an hourly aggregate closes on the last intraday bar rather than the
+       official 4:00-PM-ET print (~0.1% apart) and a second provider carries its
+       own adjustment basis.  The snapshot holds the OFFICIAL close, pinned when
+       the feed still served it and cross-checked against Nasdaq's independent
+       tape at that moment — so it wins, and a repair can never silently restate
+       history this module has already pinned.
+
+    Strictly bounded: only sessions inside the guard window, only at or before
+    the last completed close, and never past the span the fetch itself covers —
+    so a genuinely truncated or backdated fetch is still caught by the span/row
+    regression checks instead of being papered over.
+
+    NOTE the deliberate asymmetry with the "re-pin from scratch" escape hatch in
+    this module's docstring: if a session is *legitimately* withdrawn upstream,
+    this keeps restoring it, and deleting the snapshot CSV + manifest remains the
+    way to force a clean re-baseline.  That is the safe default — a session
+    vanishing from a feed is overwhelmingly a feed defect, not a correction, and
+    silently dropping it re-links the signature engines' consecutive-bar streaks
+    (see _RECENT_SESSION_DAYS).
+    """
+    if (hist is None or not len(hist) or snap is None or not len(snap)
+            or price_col not in hist.columns or price_col not in snap.columns):
+        return hist, []
+    # read the repair stamp BEFORE any concat below can drop frame attrs
+    rebuilt = set(hist.attrs.get("repaired_sessions") or [])
+    rebuilt_cells = dict(hist.attrs.get("repaired_cells") or {})
+
+    window = pd.DatetimeIndex(snap.index)[-_RECENT_SESSION_DAYS:]
+    window = window[(window <= pd.Timestamp(cut))
+                    & (window <= pd.Timestamp(hist.index.max()))]
+    absent = window.difference(pd.DatetimeIndex(hist.index))
+    reconstructed = pd.DatetimeIndex(
+        [d for d in window if str(pd.Timestamp(d).date()) in rebuilt])
+
+    out, restored = hist, []
+    take = absent.union(reconstructed)
+    if len(take):
+        rows = snap.loc[take].reindex(columns=hist.columns).dropna(
+            subset=[price_col])
+        if len(rows):
+            out = pd.concat([hist.drop(index=rows.index, errors="ignore"), rows])
+            out = out.sort_index()
+            out = out[~out.index.duplicated(keep="last")]
+            restored = [str(pd.Timestamp(d).date()) for d in rows.index]
+
+    # sibling closes rebuilt cell-by-cell on a session the frame already had
+    for col, days in rebuilt_cells.items():
+        if col not in snap.columns or col not in out.columns:
+            continue
+        stem = str(col).rsplit("_", 1)[0]
+        for ds in days:
+            d = pd.Timestamp(ds)
+            if d not in out.index or d not in snap.index or d > pd.Timestamp(cut):
+                continue
+            for suffix in ("open", "high", "low", "close", "volume"):
+                c2 = f"{stem}_{suffix}"
+                if c2 in out.columns and c2 in snap.columns and pd.notna(
+                        snap.at[d, c2]):
+                    out.at[d, c2] = snap.at[d, c2]
+            if ds not in restored:
+                restored.append(ds)
+
+    return out, sorted(restored)
+
+
 def _finish(spec: GateSpec, df: pd.DataFrame, decision: str, source: str,
-            report: dict | None, cut) -> pd.DataFrame:
+            report: dict | None, cut, spliced: list | None = None) -> pd.DataFrame:
     df.attrs["data_gate"] = dict(
         key=spec.key, decision=decision, source=source,
         qc_passed=bool(report.get("passed")) if report else None,
         failed_checks=(report or {}).get("failed", []),
         completed_through=str(pd.Timestamp(cut).date()),
+        spliced_sessions=list(spliced or []),
         sha256=frame_sha(df) if len(df) else "—",
     )
     return df
 
 
 def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
-                consumer: str = "") -> pd.DataFrame:
+                consumer: str = "", read_only: bool = False) -> pd.DataFrame:
     """Quality-gated, snapshot-pinned daily history for one sleeve.
 
     * ``fetch_full``   — zero-arg callable returning the full live daily frame
@@ -522,6 +603,12 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
       the pinned history; skipped entirely in publisher mode.
     * ``consumer``     — who is loading (an app key or "OVERALL"), recorded in
       the audit trail so each dataset's usage is traceable.
+    * ``read_only``    — do not re-pin: a passing fetch is served but NOT written
+      to the snapshot.  Pinning is a side effect of merely LOADING a sleeve, so
+      any diagnostic, backtest or CLI run that touches an engine silently
+      re-baselines the committed vintage from whatever the feed happened to
+      return on that machine.  Callers that are not the app or the publisher
+      should pass ``read_only=True``.
     """
     basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
     cut = _fr.expected_equity_asof(basis_now)
@@ -556,6 +643,7 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
     # ── refresh path: fetch live, validate, pin on success ────────────────
     report: dict | None = None
     fresh = None
+    spliced: list = []
     for _attempt in (1, 2):
         try:
             fresh = fetch_full()
@@ -568,6 +656,12 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
             continue
         fresh = _norm_index(fresh)
         hist = _fr.drop_in_progress_us_bar(fresh, basis_now)
+        # A completed session the feed has since WITHDRAWN is taken back from the
+        # pinned snapshot before QC judges the frame — both when the fetch lost
+        # it outright (else the sleeve freezes forever) and when it was rebuilt
+        # upstream from hourly/second-provider data (the pinned OFFICIAL close
+        # wins, so a repair never restates already-pinned history).
+        hist, spliced = _restore_from_snapshot(hist, snap, cut, spec.price_col)
         report = run_quality_checks(spec, hist, snapshot=snap)
         if report["passed"]:
             # sessions entering the snapshot for the first time get a second
@@ -583,7 +677,8 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
                     report["failed"] = list(report["failed"]) + [xc["name"]]
                     report["passed"] = False
                     continue                    # retry once, then fall back
-            save_snapshot(spec, hist, report)
+            if not read_only:
+                save_snapshot(spec, hist, report)
             out = hist
             n_part = 0
             if not _fr.completed_bars_only():
@@ -593,8 +688,11 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
                     out = out[~out.index.duplicated(keep="last")]
                     n_part = int(len(partial))
             _record_audit(spec, "refreshed", "yahoo-live", consumer, hist,
-                          report, partial_rows=n_part)
-            return _finish(spec, out, "refreshed", "yahoo-live", report, cut)
+                          report, partial_rows=n_part,
+                          note=("restored from the pinned snapshot: "
+                                + ", ".join(spliced)) if spliced else "")
+            return _finish(spec, out, "refreshed", "yahoo-live", report, cut,
+                           spliced)
 
     # ── fetch rejected: serve the last known-good snapshot ────────────────
     if snap is not None:

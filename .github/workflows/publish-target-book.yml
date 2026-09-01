@@ -232,11 +232,20 @@ jobs:
           # detects a brand-new file too. The audit trail + refreshed BTC data
           # are committed EVEN when the audit failed and no book was written, so
           # the 🕵️ Daily Audit tab shows the stale-run record.
+          # data/<sleeve> is included because the engine run above re-pins any
+          # sleeve whose fetch passed quality control (app/data_gate.py). Those
+          # snapshots used to be left unstaged and thrown away with the runner,
+          # so every run re-fetched full history and re-trusted a live Yahoo
+          # response — exactly the drift the gate exists to prevent — AND they
+          # were the "unstaged changes" that made the rebase below fail on every
+          # single run.
           git add data/overall/target_book.json data/overall/target_book_live.json \
                   data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
                   data/overall/book_archive/ \
                   data/overall/strategy_health.json data/overall/health_history.csv \
-                  data/overall/daily_audit.json data/backtest/ || true
+                  data/overall/daily_audit.json data/backtest/ \
+                  data/arty data/gldm data/grid data/pbw data/remx data/soxx \
+                  data/wgmi data/xle || true
           if git diff --cached --quiet; then
             echo "No changes — nothing to commit."
             exit 0
@@ -252,7 +261,13 @@ jobs:
             -m "Automated via .github/workflows/publish-target-book.yml"
           # Tolerate a concurrent push (e.g. the data-refresh workflow) by
           # rebasing before pushing back to the branch this ran from.
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          # --autostash: anything still unstaged (runtime/ scratch, a sleeve the
+          # gate rewrote after the add above) otherwise aborts the rebase with
+          # "cannot pull with rebase: You have unstaged changes" — which the old
+          # `|| true` swallowed, so the push only ever succeeded because nothing
+          # had pushed concurrently.
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase --autostash "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Classify + record the failure (stale-withheld vs engine error)
@@ -266,11 +281,20 @@ jobs:
         # (they are disabled on this repo — see the "Report failure" step).
         run: |
           set -uo pipefail
-          KIND="error"; STALE="unknown"; ASOF="unknown"; REASON=""
+          KIND="error"; STALE="unknown"; ASOF="unknown"; REASON=""; DAYS=1; GATES=""
           if [ -f data/overall/daily_audit.json ]; then
             ASOF="$(jq -r '.overall.as_of // "unknown"' data/overall/daily_audit.json)"
             STALE="$(jq -r '(.audit.stale_apps // []) | join(", ")' data/overall/daily_audit.json)"
             REASON="$(jq -r '.target_book.skip_reason // ""' data/overall/daily_audit.json)"
+            DAYS="$(jq -r '.target_book.consecutive_withheld_days // 1' data/overall/daily_audit.json)"
+            # Why each stale app is stale — the data gate's own verdict, which
+            # used to exist only in a gitignored runtime file nobody ever saw.
+            GATES="$(jq -r '[.audit.rows[]? | select(.fresh == false)
+                             | "- `\(.app)` as-of `\(.actual_asof)` — gate: `\(.data_gate.decision // "n/a")`"
+                             + (if (.data_gate.failed_checks // []) | length > 0
+                                then " (failed: `" + ((.data_gate.failed_checks) | join(", ")) + "`)"
+                                else "" end)] | join("\n")' \
+                        data/overall/daily_audit.json 2>/dev/null || true)"
             # NB: jq's `//` treats `false` as empty, so `.audit.passed // "unknown"`
             # would report "unknown" for a genuinely FAILED audit and misclassify a
             # withheld book as an engine error. Test for the key, then stringify.
@@ -288,8 +312,15 @@ jobs:
               echo ""
               echo "- Stale apps: \`${STALE:-none}\`"
               echo "- Engine as-of: \`${ASOF}\`"
+              echo "- Withheld for: \`${DAYS}\` consecutive daily cycle(s)"
               [ -n "$REASON" ] && echo "- Reason: \`${REASON}\`"
               echo ""
+              if [ -n "$GATES" ]; then
+                echo "**Per-app data-gate verdict**"
+                echo ""
+                echo "$GATES"
+                echo ""
+              fi
               echo "A later catch-up slot re-runs automatically and publishes once the feeds"
               echo "catch up (the guard is idempotent, and the book's basis stays pinned to"
               echo "today's 7:15 AM CT anchor, so a later publish yields the same book)."
@@ -300,12 +331,40 @@ jobs:
               echo "freshness audit (engine, data feed, or dependency error). See the step log."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          # A withhold on its FIRST cycle is the designed safe path and usually
+          # clears at the next catch-up slot, so it annotates loudly but does not
+          # fail the job — otherwise a transient feed lag is indistinguishable
+          # from a crash and the red X stops meaning anything. A withhold that
+          # persists into a second cycle is a real outage: fail, and let the
+          # "Report failure" step raise it.
+          if [ "$KIND" = "withheld" ] && [ "${DAYS:-1}" -le 1 ]; then
+            echo "::warning title=Target book withheld::Freshness audit failed (stale: ${STALE:-none}) — book not published; a catch-up slot will retry today."
+            exit 0
+          fi
           if [ "$KIND" = "withheld" ]; then
-            echo "::warning title=Target book withheld::Freshness audit failed (stale: ${STALE:-none}) — book not published; a catch-up slot will retry."
+            echo "::error title=Target book STILL withheld::No book published for ${DAYS} consecutive cycles (stale: ${STALE:-none}) — the feeds are not recovering on their own."
           else
             echo "::error title=Target-book publish errored::Publish step outcome ${{ steps.publish.outcome }} (not an audit refusal) — see log."
           fi
           exit 1
+
+      - name: Upload the data-gate audit trail
+        # runtime/dataset_audit.json records every sleeve's gate decision
+        # (pinned / refreshed / fallback_snapshot / live_unvalidated) with the
+        # failed checks and content hashes. It is gitignored, so before this it
+        # died with the runner and a stale sleeve had to be re-diagnosed from
+        # scratch. Always uploaded — a GREEN run's trail is what you diff
+        # against when the next one goes red.
+        if: always() && steps.guard.outputs.run == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: dataset-audit-${{ github.run_id }}
+          path: |
+            runtime/dataset_audit.json
+            data/overall/daily_audit.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       # Make a broken publish loud: on any failure above, open a tracking issue
       # (or comment on the existing open one, so daily failures don't spam new

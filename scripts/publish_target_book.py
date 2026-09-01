@@ -45,12 +45,88 @@ SATA_KEY = "SATA"
 AUDIT_SCHEMA = "overall-daily-audit/v1"
 AUDIT_RETRY_WAIT_S = 90          # let a detached BTC feature re-pull land, then retry
 
+# Signal app → data-gate dataset key.  Everything not listed shares its own name;
+# the ⛏️ miners sleeve reads the SAME gold dataset as 🥇 GLDM (see
+# gldm_engine._load_daily), so a hole there strands both apps at once.
+GATE_DATASET = {"GDXM": "GLDM"}
+
+
+def _gate_decisions() -> dict:
+    """Newest data-gate decision per dataset key (runtime/dataset_audit.json).
+
+    Without this the publish log says only "STALE (3d behind)" and gives no clue
+    WHY — whether the fetch came back empty, was rejected by quality control, or
+    was served from a pinned snapshot — because every gate decision went to a
+    gitignored runtime file that is never printed, committed or uploaded.  That
+    is what turned the 2026-09-01 stale-withhold into a code-archaeology
+    exercise.  Best-effort: reporting must never break a publish.
+    """
+    try:
+        import data_gate as dg
+        log = dg.read_audit() or {}
+    except Exception:
+        return {}
+    out = {}
+    for key, entries in log.items():
+        if not entries:
+            continue
+        e = entries[0]
+        out[key] = dict(decision=e.get("decision"), source=e.get("source"),
+                        served_through=e.get("date_to"),
+                        qc_passed=e.get("qc_passed"),
+                        failed_checks=list(e.get("failed_checks") or []),
+                        note=e.get("note") or "")
+    return out
+
+
+def _attach_gate_decisions(audit: dict) -> dict:
+    """Fold each app's gate decision into its audit row, so the committed audit
+    trail (and the 🕵️ Daily Audit tab) explains a stale app instead of just
+    reporting one."""
+    gates = _gate_decisions()
+    for row in audit.get("rows", []):
+        key = GATE_DATASET.get(row.get("app"), row.get("app"))
+        if key in gates:
+            row["data_gate"] = gates[key]
+    return audit
+
+
+def _withheld_streak(path: Path, published: bool, now) -> tuple:
+    """``(withheld_since_ct, consecutive_withheld_days)`` for the current streak.
+
+    Lets the workflow tell a ONE-CYCLE withhold (a feed that is briefly behind —
+    the designed safe path, and usually fixed by the next catch-up slot) from a
+    withhold that is STUCK, which is a real outage needing a human.  Both used to
+    surface as the same red X, so the safe path and a genuine engine crash were
+    indistinguishable at a glance.
+
+    Counted in CT calendar days, not runs, because several catch-up slots fire
+    per cycle and must not inflate the streak.
+    """
+    today = fr._as_utc(now).tz_convert(fr.CT).date()
+    if published:
+        return None, 0
+    prev = {}
+    try:
+        prev = (json.loads(path.read_text()) or {}).get("target_book") or {}
+    except Exception:
+        prev = {}
+    since = prev.get("withheld_since_ct") if not prev.get("published", True) else None
+    try:
+        since_d = pd.Timestamp(since).date() if since else today
+    except Exception:
+        since_d = today
+    if since_d > today:
+        since_d = today
+    return str(since_d), int((today - since_d).days) + 1
+
 
 def _write_audit(path: Path, *, audit: dict, results: list, profile: str,
                  book_published: bool, book_info: dict | None,
                  skip_reason: str | None) -> None:
     """Persist the scheduled-run audit trail the 🕵️ Daily Audit tab reads."""
     now = fr.now_utc()
+    withheld_since, withheld_days = _withheld_streak(path, book_published, now)
     as_of = max((str(pd.Timestamp(r["as_of"]).date()) for r in results), default="")
     payload = dict(
         schema=AUDIT_SCHEMA,
@@ -63,7 +139,10 @@ def _write_audit(path: Path, *, audit: dict, results: list, profile: str,
                      computed_at_utc=now.isoformat(timespec="seconds")),
         audit=audit,
         target_book=dict(published=bool(book_published),
-                         skip_reason=skip_reason, **(book_info or {})),
+                         skip_reason=skip_reason,
+                         withheld_since_ct=withheld_since,
+                         consecutive_withheld_days=withheld_days,
+                         **(book_info or {})),
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=1, default=str))
@@ -150,10 +229,20 @@ def main() -> int:
         results = oc.run_universe() or results
         audit = fr.audit_universe(results, parent_order=oc.PARENT_KEYS,
                                   expected_now=anchor)
+    audit = _attach_gate_decisions(audit)
     for row in audit["rows"]:
         mark = "✅ fresh" if row["fresh"] else f"🚨 STALE ({row['age_days']}d behind)"
         print(f"  audit {row['app']:5s} as-of {row['actual_asof']} "
               f"(expected ≥ {row['expected_asof']})  {mark}")
+        g = row.get("data_gate")
+        if g:
+            bits = [f"{g['decision']} ({g['source']})",
+                    f"through {g['served_through']}"]
+            if g["failed_checks"]:
+                bits.append("FAILED: " + ", ".join(g["failed_checks"]))
+            if g["note"]:
+                bits.append(g["note"])
+            print(f"        └ data gate: {' — '.join(bits)}")
 
     if not audit["passed"] and not args.allow_stale:
         print(f"\nAUDIT FAILED — stale signal apps: {audit['stale_apps']}. "

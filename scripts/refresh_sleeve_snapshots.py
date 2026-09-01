@@ -79,10 +79,16 @@ def main() -> int:
         decision = info.get("decision", "error")
         span = (f"{df.index.min().date()} → {df.index.max().date()}"
                 if df is not None and len(df) else "—")
+        notes = list(info.get("failed_checks") or [])
+        # sessions taken back from the pinned snapshot because the feed had
+        # withdrawn or only reconstructed them — the repair should be visible in
+        # the refresh log, not silent (see data_gate._restore_from_snapshot)
+        if info.get("spliced_sessions"):
+            notes.append("restored: " + ", ".join(info["spliced_sessions"]))
         print(f"{key:8} {decision:20} {span:26} "
               f"{(len(df) if df is not None else 0):>6}  "
               f"{info.get('sha256', '—'):16}  "
-              f"{', '.join(info.get('failed_checks') or []) or '—'}")
+              f"{', '.join(notes) or '—'}")
         if decision not in ("pinned", "refreshed"):
             bad.append(key)
 

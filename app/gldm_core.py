@@ -252,6 +252,16 @@ def _merge(symbol_map: dict, interval: str, start: str | None = None,
     return pd.concat(frames, axis=1).sort_index()
 
 
+def _alt_daily(syms: dict, index, since=None) -> pd.DataFrame:
+    """Second-provider (Nasdaq) daily frame covering the sessions still missing —
+    mirrors ``ticker_core._alt_daily``."""
+    import market_fallback as _mf
+    if since is None:
+        since = pd.DatetimeIndex(index).min()
+    start = (pd.Timestamp(since) - pd.Timedelta(days=10)).date()
+    return _mf.merge_frame(syms, start=str(start))
+
+
 def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:
     """Daily OHLCV for GLDM + leveraged analogs + macro, aligned on a daily
     grid, macro forward-filled across gaps. Index = tz-naive dates (UTC)."""
@@ -264,44 +274,26 @@ def fetch_daily(start: str = "2015-01-01") -> pd.DataFrame:
     df.index = pd.to_datetime(df.index).normalize()
     df = df[~df.index.duplicated(keep="last")]
     df = df.dropna(subset=["gldm_close"])
-    # forward-fill macro / analog columns across holidays (limit ~5 days)
-    macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
-    df[macro_cols] = df[macro_cols].ffill(limit=5)
+    import freshness as _fr
+    # GLDM + the leveraged analogs (UGL) and the miners legs (GDX/NUGT attached
+    # by gldm_engine) are TRADED; only the true macro drivers may be
+    # forward-filled.  A ffilled traded close is a fabricated execution price —
+    # see ticker_core.fetch_daily.  This one frame backs BOTH the 🥇 GLDM and
+    # ⛏️ GDXM sleeves, so a hole here strands two apps at once.
+    _traded = ["gldm"] + [t.lower() for t in LEVERAGED_SYMBOLS] + ["gdx", "nugt"]
+    _traded_close = [f"{n}_close" for n in _traded if f"{n}_close" in df.columns]
+    _macro_cols = [c for c in df.columns
+                   if str(c).rsplit("_", 1)[0] not in _traded]
+    _basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
+    df = _fr.repair_daily_frame(
+        df, "gldm_close",
+        traded_cols=_traded_close, macro_cols=_macro_cols,
+        fetch_hourly=lambda: _merge(syms, "1h", range_="1mo"),
+        fetch_alt=lambda since: _alt_daily(syms, df.index, since),
+        now=_basis_now)
     # publisher mode: trim every US bar after the publish day's 7:15-AM-CT
     # anchor basis session, so a published Target Book only ever sees the
     # pre-anchor market close (see app/freshness.py).
-    import freshness as _fr
-    # See ticker_core.fetch_daily: Yahoo's daily feed can sit a session behind its
-    # hourly feed, stranding the gold apps one bar back and tripping the Overall
-    # STALE-SIGNALS alert. Rebuild the missing completed session from hourly.
-    try:
-        # "Behind" must be measured on COMPLETED sessions only — an in-progress
-        # *today* row otherwise masks a missing prior close and the backstops
-        # never fire (see ticker_core.fetch_daily / freshness.last_completed_session).
-        # In publisher mode the moment of record is the 7:15-AM-CT anchor.
-        _basis_now = _fr.publish_anchor_ct() if _fr.completed_bars_only() else None
-        _cut = _fr.expected_equity_asof(_basis_now)
-        _lc = _fr.last_completed_session(df.index, _basis_now)
-        if _lc is None or _lc < _cut:
-            _h = _merge(syms, "1h", range_="1mo")
-            df = _fr.backfill_sessions_from_hourly(df, _h, "gldm_close",
-                                                   now=_basis_now)
-            macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
-            df[macro_cols] = df[macro_cols].ffill(limit=5)
-        # Still behind? Yahoo is withholding the session on both its feeds, so
-        # fall back to an INDEPENDENT provider (Nasdaq's keyless quote API) for
-        # the listed tickers. Indices/futures aren't served there and stay
-        # ffilled. See app/market_fallback.py for why Yahoo remains primary.
-        _lc = _fr.last_completed_session(df.index, _basis_now)
-        if _lc is None or _lc < _cut:
-            import market_fallback as _mf
-            _start = _lc if _lc is not None else pd.DatetimeIndex(df.index).min()
-            _alt = _mf.merge_frame(syms, start=str(pd.Timestamp(_start).date()))
-            df = _fr.merge_missing_sessions(df, _alt, "gldm_close", now=_basis_now)
-            macro_cols = [c for c in df.columns if not c.startswith("gldm_")]
-            df[macro_cols] = df[macro_cols].ffill(limit=5)
-    except Exception:
-        pass                    # best-effort; the audit still flags real staleness
     if _fr.completed_bars_only():
         df = _fr.drop_in_progress_us_bar(df, _fr.publish_anchor_ct())
     return df

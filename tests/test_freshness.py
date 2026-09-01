@@ -480,6 +480,174 @@ def test_merge_missing_sessions_degrades_safely():
     assert len(fr.merge_missing_sessions(daily, alt, "px_close", now=now)) == 2
 
 
+# ── interior-gap repair (a session the feed WITHDRAWS, not one it lags on) ───
+def _sib(days, px, sib, sib_name="soxl"):
+    """Daily frame with a primary + one traded sibling + one macro column."""
+    return pd.DataFrame(
+        {"px_open": px, "px_high": [c + 2 for c in px], "px_low": [c - 2 for c in px],
+         "px_close": px, "px_volume": [100] * len(days),
+         f"{sib_name}_open": sib, f"{sib_name}_high": sib, f"{sib_name}_low": sib,
+         f"{sib_name}_close": sib, f"{sib_name}_volume": [10] * len(days),
+         "vix_close": [21] * len(days)},
+        index=pd.DatetimeIndex([pd.Timestamp(d) for d in days]))
+
+
+def test_missing_sessions_finds_an_interior_hole():
+    """Regression for 2026-09-01.  Yahoo withdrew the already-published
+    2026-08-28 close (served a null; `_chart` drops null-close rows) while still
+    serving 08-31, so the frame's newest session was perfectly current and the
+    hole sat INSIDE the history.  The old tail test
+    (`last_completed_session < expected_equity_asof`) reported "nothing to do",
+    every backstop no-oped, and the gate then refused the frame forever."""
+    now = "2026-09-01T13:00:00Z"                 # Tue, pre-open; expected = Mon 08-31
+    idx = pd.to_datetime(["2026-08-26", "2026-08-27", "2026-08-31"])
+    assert fr.expected_equity_asof(now) == pd.Timestamp("2026-08-31")
+    # the tail looks entirely healthy — this is exactly what fooled the backstops
+    assert fr.last_completed_session(idx, now) == pd.Timestamp("2026-08-31")
+    assert fr.missing_sessions(idx, now) == [pd.Timestamp("2026-08-28")]
+
+
+def test_missing_sessions_is_empty_on_a_complete_frame():
+    now = "2026-09-01T13:00:00Z"
+    idx = pd.to_datetime(["2026-08-26", "2026-08-27", "2026-08-28", "2026-08-31"])
+    assert fr.missing_sessions(idx, now) == []
+    # never demands history older than the frame itself, nor a future session
+    assert fr.missing_sessions(pd.to_datetime(["2026-08-31"]), now) == []
+    assert fr.missing_sessions(pd.DatetimeIndex([]), now) == []
+
+
+def test_backfill_repairs_an_interior_hole_from_hourly():
+    now = "2026-09-01T13:00:00Z"
+    daily = _daily(["2026-08-26", "2026-08-27", "2026-08-31"], [100.0, 101.0, 103.0])
+    hourly = _hourly_session("2026-08-28", [102.0, 103.0, 104.0, 105.5])
+    out = fr.backfill_sessions_from_hourly(daily, hourly, "px_close", now=now)
+    assert out.loc[pd.Timestamp("2026-08-28"), "px_close"] == 105.5
+    assert out.loc[pd.Timestamp("2026-08-31"), "px_close"] == 103.0   # untouched
+    assert list(out.index) == sorted(out.index)
+
+
+def test_merge_repairs_an_interior_hole_from_second_provider():
+    now = "2026-09-01T13:00:00Z"
+    daily = _daily(["2026-08-26", "2026-08-27", "2026-08-31"], [100.0, 101.0, 103.0])
+    alt = _daily(["2026-08-28"], [102.5])
+    out = fr.merge_missing_sessions(daily, alt, "px_close", now=now)
+    assert out.loc[pd.Timestamp("2026-08-28"), "px_close"] == 102.5
+    assert out.loc[pd.Timestamp("2026-08-31"), "px_close"] == 103.0
+
+
+def test_interior_split_scale_guard_uses_the_nearest_prior_close():
+    """An interior candidate is judged against the level that prevailed AROUND
+    it, not against the frame's final close several sessions later."""
+    now = "2026-09-01T13:00:00Z"
+    daily = _daily(["2026-08-26", "2026-08-27", "2026-08-31"], [100.0, 101.0, 103.0])
+    # a raw/unadjusted print ~10x the prevailing level is refused
+    out = fr.merge_missing_sessions(daily, _daily(["2026-08-28"], [1010.0]),
+                                    "px_close", now=now)
+    assert pd.Timestamp("2026-08-28") not in out.index
+    # a plausible one is accepted
+    ok = fr.merge_missing_sessions(daily, _daily(["2026-08-28"], [102.0]),
+                                   "px_close", now=now)
+    assert ok.loc[pd.Timestamp("2026-08-28"), "px_close"] == 102.0
+
+
+# ── traded-sibling close repair (never forward-fill an execution price) ──────
+def test_missing_closes_spots_a_withheld_sibling_close():
+    """2026-09-01: OIH/ERX had a null 08-28 close while XLE (the primary) did
+    not, so the session row survived and only the sibling cell was empty — the
+    row-level helpers cannot see that at all."""
+    now = "2026-09-01T13:00:00Z"
+    df = _sib(["2026-08-27", "2026-08-28", "2026-08-31"],
+              [101.0, 102.0, 103.0], [50.0, float("nan"), 52.0])
+    assert fr.missing_sessions(df.index, now) == []          # no session missing
+    assert fr.missing_closes(df, ["soxl_close"], now) == {
+        "soxl_close": [pd.Timestamp("2026-08-28")]}
+
+
+def test_repair_missing_closes_fills_the_whole_bar_from_the_alt_feed():
+    now = "2026-09-01T13:00:00Z"
+    df = _sib(["2026-08-27", "2026-08-28", "2026-08-31"],
+              [101.0, 102.0, 103.0], [50.0, float("nan"), 52.0])
+    alt = _sib(["2026-08-28"], [102.0], [51.5])
+    out = fr.repair_missing_closes(df, alt, ["soxl_close"], now=now)
+    assert out.loc[pd.Timestamp("2026-08-28"), "soxl_close"] == 51.5
+    assert out.loc[pd.Timestamp("2026-08-28"), "soxl_open"] == 51.5   # bar stays whole
+    assert out.loc[pd.Timestamp("2026-08-31"), "soxl_close"] == 52.0  # untouched
+
+
+def test_repair_missing_closes_refuses_a_raw_unadjusted_print():
+    now = "2026-09-01T13:00:00Z"
+    df = _sib(["2026-08-27", "2026-08-28", "2026-08-31"],
+              [101.0, 102.0, 103.0], [50.0, float("nan"), 52.0])
+    out = fr.repair_missing_closes(df, _sib(["2026-08-28"], [102.0], [500.0]),
+                                   ["soxl_close"], now=now)
+    assert pd.isna(out.loc[pd.Timestamp("2026-08-28"), "soxl_close"])
+
+
+def test_repair_daily_frame_ffills_macro_but_never_a_traded_close():
+    """The bug this closes: traded siblings were lumped in with the macro
+    columns and forward-filled, so OIH/ERX carried Thursday's close as Friday's
+    — a fabricated execution price that the data gate cannot detect (a 0% move
+    is perfectly plausible) and that any refresh landing during the withdrawal
+    would have pinned."""
+    now = "2026-09-01T13:00:00Z"
+    df = _sib(["2026-08-27", "2026-08-28", "2026-08-31"],
+              [101.0, 102.0, 103.0], [50.0, float("nan"), 52.0])
+    df.loc[pd.Timestamp("2026-08-28"), "vix_close"] = float("nan")
+    out = fr.repair_daily_frame(
+        df, "px_close", traded_cols=["soxl_close"], macro_cols=["vix_close"],
+        fetch_hourly=None, fetch_alt=None, now=now)
+    # macro gaps are still bridged …
+    assert out.loc[pd.Timestamp("2026-08-28"), "vix_close"] == 21.0
+    # … but an unrepairable traded close is left NULL for the gate to judge,
+    # never invented from the prior session
+    assert pd.isna(out.loc[pd.Timestamp("2026-08-28"), "soxl_close"])
+
+
+def test_repair_daily_frame_uses_hourly_then_the_second_provider():
+    now = "2026-09-01T13:00:00Z"
+    daily = _daily(["2026-08-26", "2026-08-27", "2026-08-31"], [100.0, 101.0, 103.0])
+    calls = []
+
+    def _hourly():
+        calls.append("hourly")
+        return _hourly_session("2026-08-28", [102.0, 103.0, 104.0, 105.5])
+
+    def _alt(since):
+        calls.append(("alt", since))
+        return _daily(["2026-08-28"], [99.0])
+
+    out = fr.repair_daily_frame(daily, "px_close", macro_cols=["vix_close"],
+                                fetch_hourly=_hourly, fetch_alt=_alt, now=now)
+    assert out.loc[pd.Timestamp("2026-08-28"), "px_close"] == 105.5
+    assert calls == ["hourly"]          # hourly sufficed — no second-provider hit
+
+
+def test_repair_daily_frame_makes_no_network_call_on_a_healthy_frame():
+    now = "2026-09-01T13:00:00Z"
+    daily = _daily(["2026-08-26", "2026-08-27", "2026-08-28", "2026-08-31"],
+                   [100.0, 101.0, 102.0, 103.0])
+
+    def _boom(*a, **k):
+        raise AssertionError("must not fetch when nothing is missing")
+
+    out = fr.repair_daily_frame(daily, "px_close", macro_cols=["vix_close"],
+                                fetch_hourly=_boom, fetch_alt=_boom, now=now)
+    assert len(out) == 4
+
+
+def test_repair_daily_frame_degrades_safely_on_a_failing_source():
+    now = "2026-09-01T13:00:00Z"
+    daily = _daily(["2026-08-26", "2026-08-27", "2026-08-31"], [100.0, 101.0, 103.0])
+
+    def _boom(*a, **k):
+        raise RuntimeError("feed down")
+
+    out = fr.repair_daily_frame(daily, "px_close", macro_cols=["vix_close"],
+                                fetch_hourly=_boom, fetch_alt=_boom, now=now)
+    assert len(out) == 3                       # unrepaired, but never raised
+    assert fr.missing_sessions(out.index, now) == [pd.Timestamp("2026-08-28")]
+
+
 # ── pending "next bar" execution moment (next_session_date / next_close_label) ─
 def test_next_session_date_skips_weekends_and_holidays():
     # Fri Jul 2 2026 → Mon Jul 6 (Jul 3 is the observed July-4th closure)

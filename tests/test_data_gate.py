@@ -124,13 +124,10 @@ def test_dropped_session_check_passes_on_growing_history(tmp_path):
     assert rep["passed"], rep["failed"]
 
 
-def test_gate_rejects_fetch_that_drops_a_recent_session(tmp_path):
-    """End to end: the corrupt vintage never reaches the models, and the pinned
-    snapshot (with the session intact) is served and left untouched."""
-    spec = _spec(tmp_path)
-    base = _frame(n=322)
+def _aged_snapshot(spec, base):
+    """Pin ``base`` then roll the snapshot back two sessions, so the next
+    ``gated_daily`` MUST take the refresh path rather than the pinned fast path."""
     dg.gated_daily(spec, fetch_full=lambda: base.iloc[2:], consumer="UNIT")
-    # age the pinned snapshot so the gate MUST take the refresh path
     man_p = Path(spec.manifest_json)
     man = json.loads(man_p.read_text())
     stale = dg._norm_index(pd.read_csv(spec.snapshot_csv, index_col=0,
@@ -138,17 +135,93 @@ def test_gate_rejects_fetch_that_drops_a_recent_session(tmp_path):
     dg._atomic_write(spec.snapshot_csv, stale.to_csv())
     man["checksum_sha256"] = dg.frame_sha(stale)
     man_p.write_text(json.dumps(man))
+    return stale
+
+
+def test_gate_restores_a_session_the_feed_withdrew(tmp_path):
+    """Regression for 2026-09-01: Yahoo started serving a NULL close for the
+    already-published 2026-08-28 bar of nine tickers, `_chart` dropped the row,
+    and `no_missing_recent_sessions` then refused every fetch — freezing seven
+    sleeves on their pinned snapshot and withholding the target book with no
+    path back, because each retry hit the identical hole.
+
+    The withdrawn session must be restored from the snapshot (which still holds
+    it, Nasdaq-verified from when it was added) so the frame the models see has
+    NO hole and the sleeve keeps advancing."""
+    spec = _spec(tmp_path)
+    base = _frame(n=322)
+    stale = _aged_snapshot(spec, base)
 
     dropped_date = stale.index[-4]
     out = dg.gated_daily(spec, fetch_full=lambda: base.drop(dropped_date),
                          consumer="UNIT")
     gi = out.attrs["data_gate"]
+    assert gi["decision"] == "refreshed"
+    assert gi["failed_checks"] == []
+    assert str(dropped_date.date()) in gi["spliced_sessions"]
+    # restored from the snapshot byte-for-byte, not re-derived or interpolated
+    assert dropped_date in out.index
+    assert out.loc[dropped_date, "px_close"] == stale.loc[dropped_date, "px_close"]
+    # and the sleeve actually moves forward instead of freezing
+    assert out.index.max() > stale.index.max()
+
+
+def test_splice_does_not_mask_a_truncated_fetch(tmp_path):
+    """The splice is a repair, not a blanket pass: a fetch that is genuinely
+    short/backdated must still be rejected and the snapshot served."""
+    spec = _spec(tmp_path)
+    base = _frame(n=322)
+    _aged_snapshot(spec, base)
+    out = dg.gated_daily(spec, fetch_full=lambda: base.iloc[:-40], consumer="UNIT")
+    gi = out.attrs["data_gate"]
     assert gi["decision"] == "fallback_snapshot"
-    assert "no_missing_recent_sessions" in gi["failed_checks"]
-    assert dropped_date in out.index                 # served history is intact
-    # the corrupt vintage is never pinned — the snapshot stays where it was,
-    # so the sleeve visibly stops advancing instead of silently changing shape
-    assert dg.frame_sha(dg.load_snapshot(spec)[0]) == dg.frame_sha(stale)
+    assert "no_span_regression" in gi["failed_checks"]
+
+
+def test_pinned_official_close_beats_an_upstream_repair(tmp_path):
+    """A session the fetcher REBUILT (from hourly bars or a second provider) is
+    real data, but not the official 4:00-PM-ET print — an hourly aggregate lands
+    ~0.1% off it and a second provider carries its own adjustment basis.  When
+    the snapshot already holds that session's official close, the pinned value
+    must win, so a repair can never silently restate pinned history.
+
+    freshness.repair_daily_frame stamps what it rebuilt; the gate reads it.
+    """
+    spec = _spec(tmp_path)
+    base = _frame(n=322)
+    stale = _aged_snapshot(spec, base)
+    session = stale.index[-4]
+    official = float(stale.loc[session, "px_close"])
+
+    rebuilt = base.copy()
+    rebuilt.loc[session, "px_close"] = official * 1.001      # hourly-ish drift
+    rebuilt.attrs["repaired_sessions"] = [str(session.date())]
+
+    out = dg.gated_daily(spec, fetch_full=lambda: rebuilt, consumer="UNIT",
+                         read_only=True)
+    gi = out.attrs["data_gate"]
+    assert gi["decision"] == "refreshed"
+    assert str(session.date()) in gi["spliced_sessions"]
+    assert float(out.loc[session, "px_close"]) == official   # pinned value wins
+    # sessions it did NOT rebuild are left exactly as the feed served them
+    untouched = base.index[-1]
+    assert float(out.loc[untouched, "px_close"]) == float(base.loc[untouched, "px_close"])
+
+
+def test_read_only_never_repins_the_snapshot(tmp_path):
+    """Pinning is a side effect of merely LOADING a sleeve, so a diagnostic or
+    backtest run used to re-baseline the committed vintage from whatever the
+    feed returned on that machine.  read_only=True must serve the fetch without
+    writing it."""
+    spec = _spec(tmp_path)
+    base = _frame(n=322)
+    stale = _aged_snapshot(spec, base)
+    before = dg.frame_sha(dg.load_snapshot(spec)[0])
+    out = dg.gated_daily(spec, fetch_full=lambda: base, consumer="UNIT",
+                         read_only=True)
+    assert out.attrs["data_gate"]["decision"] == "refreshed"
+    assert out.index.max() > stale.index.max()          # caller still gets it
+    assert dg.frame_sha(dg.load_snapshot(spec)[0]) == before   # but nothing pinned
 
 
 def test_checks_fail_on_rewritten_history(tmp_path):
