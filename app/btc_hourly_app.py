@@ -24,6 +24,9 @@ try:
 except ImportError:
     _HAS_LEADING_INDICATORS = False
 
+# Interior-gap repair for the 12:00-UTC bar builder (same app/ directory).
+import hourly_gaps as _hg
+
 # Make the repo root importable so `from paths import …` works regardless
 # of the cwd from which Streamlit is launched.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -850,6 +853,56 @@ def _fetch_yfinance_hourly_fallback():
         return empty
 
 
+def _klines_to_frame(rows) -> pd.DataFrame:
+    """Binance kline rows → the app's [open, high, low, close, volume] frame,
+    indexed by UTC-naive open time."""
+    cols = ["open_time", "open", "high", "low", "close", "volume",
+            "close_time", "qv", "n", "tb", "tq", "ig"]
+    if not rows:
+        empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        empty.index = pd.DatetimeIndex([], name="ts")
+        return empty
+    df = pd.DataFrame(rows, columns=cols)
+    df["ts"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.tz_convert(None)
+    for c in ["open", "high", "low", "close", "volume"]:
+        df[c] = df[c].astype(float)
+    df = df.set_index("ts")[["open", "high", "low", "close", "volume"]]
+    return df[~df.index.duplicated(keep="last")].sort_index()
+
+
+def _binance_hourly_from_host(host: str, start_ms: int, end_ms: int,
+                              symbol: str = "BTCUSDT") -> pd.DataFrame:
+    """Every hourly kline in ``[start_ms, end_ms)`` from ONE host.
+
+    ONE host serves the whole pull.  Paging through ``_binance_get`` (as this
+    did before) fails over PER PAGE, so an intermittent 5xx on api.binance.us
+    silently spliced api.binance.com's pages into the same series — and the two
+    venues' raw volumes differ by ~2 orders of magnitude, which the model's
+    volume features (vol_chg_1, vol_z_20, vol_ma_ratio) read as a volume shock
+    lasting the whole 20-bar window.  Returns an empty frame if this host does
+    not answer 200 with a JSON list."""
+    rows, cursor = [], start_ms
+    while cursor < end_ms:
+        try:
+            r = requests.get(f"{host}/api/v3/klines",
+                             params=dict(symbol=symbol, interval="1h",
+                                         startTime=cursor, limit=1000),
+                             timeout=30)
+            batch = r.json() if r.status_code == 200 else None
+        except Exception:
+            batch = None
+        # Guard: Binance returns an error dict (e.g. rate-limit) instead of a
+        # list of klines — a non-empty dict would pass `if not batch` but then
+        # fail on `batch[-1][0]`.  Also coerce the open-time to int to handle
+        # API versions that return timestamps as strings.
+        if not batch or not isinstance(batch, list) or not isinstance(batch[-1], (list, tuple)):
+            break
+        rows.extend(batch)
+        cursor = int(batch[-1][0]) + 3600_000
+        time.sleep(0.1)
+    return _klines_to_frame(rows)
+
+
 @st.cache_data(ttl=600, show_spinner="Fetching BTC hourly from Binance …")
 def _fetch_binance_hourly(days_back=None):
     """Return BTC hourly OHLCV with full history.
@@ -878,31 +931,15 @@ def _fetch_binance_hourly(days_back=None):
         start_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - d * 86400_000
 
     end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    cursor = start_ms
-    rows = []
-    while cursor < end_ms:
-        params = dict(symbol="BTCUSDT", interval="1h",
-                      startTime=cursor, limit=1000)
-        batch = _binance_get("/api/v3/klines", params, timeout=30)
-        # Guard: Binance returns an error dict (e.g. rate-limit) instead of a
-        # list of klines — a non-empty dict would pass `if not batch` but then
-        # fail on `batch[-1][0]`.  Also coerce the open-time to int to handle
-        # API versions that return timestamps as strings.
-        if not batch or not isinstance(batch, list) or not isinstance(batch[-1], (list, tuple)):
+    # One host serves the whole top-up; the next is tried only if this one gives
+    # us nothing at all (geo-block, rate-limit, network error).
+    served_by = None
+    for host in BINANCE_API_HOSTS:
+        new_df = _binance_hourly_from_host(host, start_ms, end_ms)
+        if not new_df.empty:
+            parts.append(new_df)
+            served_by = host
             break
-        rows.extend(batch)
-        cursor = int(batch[-1][0]) + 3600_000
-        time.sleep(0.1)
-    if rows:
-        cols = ["open_time","open","high","low","close","volume",
-                "close_time","qv","n","tb","tq","ig"]
-        new_df = pd.DataFrame(rows, columns=cols)
-        new_df["ts"] = pd.to_datetime(new_df["open_time"], unit="ms",
-                                      utc=True).dt.tz_convert(None)
-        for c in ["open","high","low","close","volume"]:
-            new_df[c] = new_df[c].astype(float)
-        new_df = new_df.set_index("ts")[["open","high","low","close","volume"]]
-        parts.append(new_df)
 
     if not parts:
         # Binance unavailable (blocked, rate-limited, or no CSV on this host).
@@ -924,6 +961,27 @@ def _fetch_binance_hourly(days_back=None):
         if not yf_df.empty and (df.empty or yf_df.index.max() > df.index.max()):
             df = pd.concat([df, yf_df])
             df = df[~df.index.duplicated(keep="last")].sort_index()
+
+    # INTERIOR-gap guard.  The tail check above only sees a feed that stopped;
+    # a host that serves an incomplete hour set for a bar in the MIDDLE of the
+    # window leaves max(index) perfectly current, so it never fired for the one
+    # failure mode that actually drops a daily bar — _rebucket_12utc keeps a bar
+    # only when all 24 of its hours are present, so a single hole strands every
+    # DAILY view a bar behind ("Daily signal bar is N bar(s) behind").  Donors
+    # are lazy: nothing is fetched unless a completed bar is genuinely short,
+    # and a donor that disagrees on price is refused rather than spliced in.
+    try:
+        # A donor is calibrated against >= HEAL_MIN_OVERLAP shared hours, so it
+        # must be pulled over a window WIDER than the top-up (which can be a
+        # handful of hours) — 40 days covers the 30-day calibration window plus
+        # the heal lookback, and is a single kline page.
+        donor_start_ms = end_ms - 40 * 86400_000
+        donors = [(h, (lambda h=h: _binance_hourly_from_host(h, donor_start_ms, end_ms)))
+                  for h in BINANCE_API_HOSTS if h != served_by]
+        donors.append(("yahoo", _fetch_yfinance_hourly_fallback))
+        df = _hg.heal_hourly_gaps(df, donors, now=now_utc)
+    except Exception:
+        pass
 
     if days_back is not None and len(df):
         cutoff = df.index.max() - pd.Timedelta(days=days_back)
@@ -1068,6 +1126,27 @@ def _fetch_daily_raw_inner(bar_start_iso: str, hourly_end_iso: str = "", utc_hou
     return df
 
 
+# Defined HERE, above _seed_daily_raw_from_versioned, and not with the other
+# CSV loaders ~3,200 lines below: Streamlit executes this script top-to-bottom,
+# and the freshness-caption block calls _fetch_daily_raw() long before that
+# point.  With the `def` still ahead of the interpreter the seeder raised
+# NameError, its `except Exception` swallowed it, and the versioned (already
+# gap-healed) daily bars NEVER reached the live frame — which is how the page
+# came to show "Daily signal bar is 2 bar(s) behind" while
+# data/backtest/raw_features_daily.csv held both of the missing bars.
+@st.cache_data(ttl=86_400)
+def _load_raw_features() -> pd.DataFrame | None:
+    """Full merged raw_features dataframe (BTC OHLCV + 7 macro + 11 on-chain + Coinbase premium)."""
+    try:
+        df = pd.read_csv(
+            _BACKTEST_DATA_DIR / "raw_features_daily.csv", index_col=0, parse_dates=True
+        )
+        df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
+        return df
+    except (FileNotFoundError, Exception):
+        return None
+
+
 def _seed_daily_raw_from_versioned(df: pd.DataFrame) -> pd.DataFrame:
     """Back-fill _fetch_daily_raw()'s deep history from the versioned dataset.
 
@@ -1110,6 +1189,12 @@ def _seed_daily_raw_from_versioned(df: pd.DataFrame) -> pd.DataFrame:
         # combine_first: live values win where present; CSV fills older dates (and
         # supplies whole columns the live fetch dropped).
         return df.combine_first(seed).sort_index()
+    except NameError:
+        # A helper this seeder needs is not defined YET (see the note above
+        # _load_raw_features).  That is a source-ordering bug, not a data
+        # problem — swallowing it silently strands the page bars behind, so
+        # let it surface instead.
+        raise
     except Exception:
         return df
 
@@ -4293,19 +4378,6 @@ def _read_price_csv(filename: str) -> pd.DataFrame | None:
         )
         df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
         df.columns = [c.lower() for c in df.columns]
-        return df
-    except (FileNotFoundError, Exception):
-        return None
-
-
-@st.cache_data(ttl=86_400)
-def _load_raw_features() -> pd.DataFrame | None:
-    """Full merged raw_features dataframe (BTC OHLCV + 7 macro + 11 on-chain + Coinbase premium)."""
-    try:
-        df = pd.read_csv(
-            _BACKTEST_DATA_DIR / "raw_features_daily.csv", index_col=0, parse_dates=True
-        )
-        df.index = pd.DatetimeIndex(df.index).tz_localize(None).normalize()
         return df
     except (FileNotFoundError, Exception):
         return None
