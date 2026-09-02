@@ -155,6 +155,33 @@ quantifies each layer's effect. Remaining honest limits: per-sleeve strategy
 into the displayed period, no transaction costs are charged, and SATA's yield
 is assumed constant across the whole history.
 
+### Reading the as-published 🧾 daily trade log
+
+The P&L section's second source — the **as-published record** — compounds the
+archived target books (`data/overall/book_archive/`, one per signal day), and
+its trade log lists one row per book that actually *moved*. Two properties of
+that record decide where the log's newest row sits, and neither means the feed
+has stalled:
+
+* **A publish that repeats the previous book produces no ticket.** Once every
+  surviving sleeve sits at its profile cap, the water-fill has nothing left to
+  re-size: the book is re-committed unchanged day after day (turnover 0.0%) and
+  the idle remainder simply earns SATA. The log's newest row then stays at the
+  last book that changed while the archive keeps advancing — e.g. the record
+  ran unchanged from the 2026-08-27 book (XLE 30% · OIH 18% · ERX 10% ·
+  SATA 42%, all three at cap) for the following week. `book_change_status`
+  counts that run so the table can say so in a 🟰 row instead of just ending.
+* **The newest publish is not in the weight matrix yet.** Day *d* is earned by
+  the latest book with `as_of` strictly before *d*, so the book committed this
+  morning (whose `as_of` is the last completed bar) reaches the matrix only
+  once the next bar prints. `pending_book_tickets` lists those tickets
+  separately — marked ⏳, with no P&L, because the bar they will earn has not
+  happened — so an open or a close is visible in the log the day it is
+  published rather than a day later.
+
+Both helpers live in `app/overall_core.py` and are covered by
+`tests/test_book_ticket_visibility.py`.
+
 ---
 
 ## 5. How the allocation mix is determined & optimised

@@ -2728,6 +2728,128 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                 books=parsed, version_spans=spans, dropped=sorted(dropped))
 
 
+def _book_legs(b: dict) -> tuple:
+    """``(as_of, {sleeve: weight}, cash)`` for either book shape — a raw
+    archived JSON record or a ``published_book_replay`` parsed entry.  The
+    live publisher parks idle capital as a real ``SATA`` weights entry, so
+    that leg is folded into cash exactly as the replay folds it."""
+    as_of = pd.Timestamp(b["as_of"])
+    w = {k: float(v) for k, v in (b.get("weights") or {}).items()}
+    cash = float(b.get("cash", b.get("cash_weight", 0.0)) or 0.0) \
+        + w.pop("SATA", 0.0)
+    return as_of, w, cash
+
+
+def _book_ticket(prev: dict, cur: dict, min_delta: float) -> dict | None:
+    """The trade ticket between two consecutive published books, in the
+    exact per-day shape ``daily_trade_log`` emits (dated at the later book's
+    ``as_of`` — the close its weights are put on under the
+    decided-at-previous-close convention).  ``None`` when no sleeve moved
+    beyond ``min_delta``, matching the log's quiet-day omission.  Signal
+    changes are inferred from the weights (a full open or close), the only
+    classification the archive supports."""
+    _, w0, c0 = _book_legs(prev)
+    as_of, w1, c1 = _book_legs(cur)
+    actions = []
+    for k in sorted(set(w0) | set(w1)):
+        was, now = w0.get(k, 0.0), w1.get(k, 0.0)
+        d = now - was
+        if abs(d) < min_delta:
+            continue
+        if was < min_delta:
+            act = "buy"
+        elif now < min_delta:
+            act = "sell"
+        else:
+            act = "add" if d > 0 else "trim"
+        actions.append(dict(key=k, w0=was, w1=now, delta=d, action=act,
+                            signal_change=act in ("buy", "sell"),
+                            pnl=None, entry_date=None, sold=None, basis=None))
+    if not actions:
+        return None
+    actions.sort(key=lambda a: -abs(a["delta"]))
+    gross = sum(abs(w1.get(k, 0.0) - w0.get(k, 0.0))
+                for k in set(w0) | set(w1))
+    return dict(
+        date=as_of, actions=actions, gross=gross,
+        turnover=0.5 * (gross + abs(c1 - c0)), cash0=c0, cash1=c1,
+        n_buys=sum(a["action"] == "buy" for a in actions),
+        n_sells=sum(a["action"] == "sell" for a in actions),
+        n_resize=sum(not a["signal_change"] for a in actions))
+
+
+def pending_book_tickets(books: list[dict], covered_through,
+                         min_delta: float = 0.0005) -> list[dict]:
+    """Tickets from archived books the replay's weight matrix does not cover
+    yet — newest first, in ``daily_trade_log``'s per-day shape plus
+    ``pending=True``.
+
+    ``published_book_replay`` maps day *d* to the latest book with ``as_of``
+    strictly before *d*, so a book only reaches the weight matrix once a
+    LATER bar has printed: the book published this morning (``as_of`` =
+    the last completed bar) is in nobody's weights and its ticket cannot
+    appear in the log until tomorrow's bar exists.  That one-bar blind spot
+    reads as "the trade log stopped updating" on the very days it matters —
+    the morning a position is opened or closed.  Feeding these rows into the
+    log closes it: they carry no P&L (the bar they will earn has not
+    happened), which is why they stay a separate, clearly-marked list rather
+    than being folded into the replay's matrices.
+
+    ``books`` is either the archive as loaded or ``published_book_replay``'s
+    ``books``; ``covered_through`` is the last bar of the weight matrix
+    (``None`` → nothing is covered, so every book after the first is
+    pending).  Quiet publishes — an identical book, the common case while a
+    position simply runs — yield no row, exactly as in the log."""
+    parsed = sorted((b for b in books or []),
+                    key=lambda b: pd.Timestamp(b["as_of"]))
+    if len(parsed) < 2:
+        return []
+    cut = (pd.Timestamp(covered_through)
+           if covered_through is not None else None)
+    # the book in the matrix's last row is the newest one published strictly
+    # before that bar; everything from it onwards is still unrepresented
+    rep = [i for i, b in enumerate(parsed)
+           if cut is not None and pd.Timestamp(b["as_of"]) < cut]
+    start = rep[-1] if rep else 0
+    out = [t for t in (_book_ticket(prev, cur, min_delta)
+                       for prev, cur in zip(parsed[start:],
+                                            parsed[start + 1:]))
+           if t is not None]
+    for t in out:
+        t["pending"] = True
+    out.reverse()
+    return out
+
+
+def book_change_status(books: list[dict],
+                       min_delta: float = 0.0005) -> dict | None:
+    """Why the as-published trade log ends where it does: ``n_books``,
+    ``latest`` (newest ``as_of`` archived), ``last_change`` (newest book
+    that actually moved a sleeve — the log's newest possible ticket),
+    ``quiet`` (how many publishes since carried an identical book) and
+    ``quiet_from`` (the first of them).
+
+    A book whose weights repeat the previous one produces no ticket, so a
+    run of unchanged publishes leaves the log frozen at an older date while
+    the record itself is perfectly current — indistinguishable, without this,
+    from a broken feed.  ``None`` when there are no books."""
+    parsed = sorted((b for b in books or []),
+                    key=lambda b: pd.Timestamp(b["as_of"]))
+    if not parsed:
+        return None
+    last_change = quiet_from = None
+    quiet = 0
+    for prev, cur in zip(parsed, parsed[1:]):
+        if _book_ticket(prev, cur, min_delta) is not None:
+            last_change = pd.Timestamp(cur["as_of"])
+            quiet, quiet_from = 0, None
+        else:
+            quiet += 1
+            quiet_from = quiet_from or pd.Timestamp(cur["as_of"])
+    return dict(n_books=len(parsed), latest=pd.Timestamp(parsed[-1]["as_of"]),
+                last_change=last_change, quiet=quiet, quiet_from=quiet_from)
+
+
 # ── equal-weight buy & hold — the "do nothing" alternative, in replay shape ──
 # The strategy sections all run off one triple: a per-day WEIGHT matrix, a
 # per-day SATA (idle-cash) weight, and a per-asset RETURN matrix.  Buy & hold

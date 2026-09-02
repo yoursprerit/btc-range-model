@@ -2493,6 +2493,26 @@ with tab_live:
                 _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"],
                                           _start_sel, returns=_rets_win,
                                           active=_wf.get("active"))
+                # the as-published record maps each day to the newest book
+                # published STRICTLY BEFORE it, so the book committed this
+                # morning (as_of = the last completed bar) is in no weights
+                # row yet and its ticket cannot reach the log until the next
+                # bar prints.  List those publishes separately — marked, and
+                # without P&L, since the bar they will earn has not happened —
+                # so an open/close shows up the day it is published instead of
+                # the log looking a day behind the Targetbook.  _bk_status
+                # explains the other reason the log can look stale: a run of
+                # identical publishes (a position simply running) produces no
+                # tickets at all.
+                # (both only make sense while the window still runs to the
+                # latest bar — with an earlier end date picked, the log
+                # stopping short is the user's own cut-off, not the archive's)
+                _dtl_pending, _bk_status = [], None
+                if _actual and _bookrep is not None and _end_arg is None \
+                        and len(_wf["weights"]):
+                    _bk_status = ov.book_change_status(_bookrep["books"])
+                    _dtl_pending = ov.pending_book_tickets(
+                        _bookrep["books"], _wf["weights"].index[-1])
                 _dtl_buys = sum(d["n_buys"] for d in _dtl)
                 _dtl_sells = sum(d["n_sells"] for d in _dtl)
                 _dtl_resz = sum(d["n_resize"] for d in _dtl)
@@ -2540,7 +2560,13 @@ with tab_live:
                            "the trade ticket executed at that bar's close "
                            "(the book earns from the next bar — the "
                            "decided-at-previous-close convention), newest "
-                           "first; days with no changes are omitted. "
+                           "first; days with no changes are omitted — a run "
+                           "of publishes that repeated the previous book is "
+                           "summarised in one 🟰 row, so the table always "
+                           "reaches the newest archived book instead of "
+                           "simply ending, and a book already published but "
+                           "not yet earning (its first bar has not printed) "
+                           "leads the table marked ⏳. "
                            "**≈ $ traded** scales the day's gross weight "
                            "movement (Σ|Δweight|) by the 💼 portfolio value; "
                            "turnover is one-way (½·Σ|Δweight|, cash leg "
@@ -2570,7 +2596,7 @@ with tab_live:
                            "book is the cost basis, so the log starts with "
                            "the changes after it. (The 📆 Daily P&L toggle "
                            "below charts every day, quiet ones included.)")
-                if not _dtl:
+                if not _dtl and not _dtl_pending:
                     st.info("The book never changed in this window — no daily "
                             "trades to list.")
                 else:
@@ -2622,7 +2648,35 @@ with tab_live:
                            "Day P&amp;L breakdown</th>"
                            "<th style='text-align:right'>Day P&amp;L</th></tr>")
                     _drs = []
-                    for _d in _dtl:
+                    # WHY THE NEWEST ROW CAN BE DAYS OLD: a publish that
+                    # repeats the previous book — the normal state while
+                    # positions simply run at their caps — produces no ticket,
+                    # so the log legitimately stops at the last book that
+                    # moved.  Say so in the table itself, at the top, or a
+                    # current record is indistinguishable from a broken feed.
+                    if (_bk_status and _bk_status["quiet"]
+                            and _bk_status["quiet_from"] is not None
+                            and _bk_status["quiet_from"]
+                            >= pd.Timestamp(_start_sel)):
+                        _q_n = _bk_status["quiet"]
+                        _drs.append(
+                            f"<tr style='background:#f8fafc;"
+                            f"border-bottom:1px solid #eef2f7'>"
+                            f"<td colspan='7' style='padding:7px 10px;"
+                            f"font-size:11.5px;color:#475569'>"
+                            f"🟰 <b>{_bk_status['quiet_from']:%b %d}"
+                            f" – {_bk_status['latest']:%b %d, %Y}</b> — "
+                            f"the publisher committed {_q_n} further "
+                            f"book{'s' if _q_n != 1 else ''}, each identical "
+                            f"to the one before it (0.0% turnover), so there "
+                            f"is <b>no ticket to log</b> for those days: the "
+                            f"positions simply ran. The record is current "
+                            f"through <b>{_bk_status['latest']:%b %d, %Y}</b>."
+                            f"</td></tr>")
+                    # a published-but-not-yet-earning book leads the table:
+                    # same ticket shape, no Day P&L (its first bar has not
+                    # printed), flagged so it is never read as settled record
+                    for _d in _dtl_pending + _dtl:
                         _sig = " · ".join(_dtl_chip(a) for a in _d["actions"]
                                           if a["signal_change"])
                         _tilt = " · ".join(_dtl_chip(a) for a in _d["actions"]
@@ -2676,7 +2730,11 @@ with tab_live:
                             f"<td style='padding:6px 10px;font-weight:700;"
                             f"font-variant-numeric:tabular-nums;"
                             f"white-space:nowrap'>"
-                            f"{_d['date'].strftime('%b %d, %Y')}</td>"
+                            f"{_d['date'].strftime('%b %d, %Y')}"
+                            + ("<div style='font-size:9.5px;font-weight:600;"
+                               "color:#b45309'>⏳ published — earns from the "
+                               "next bar</div>" if _d.get("pending") else "")
+                            + f"</td>"
                             f"<td style='padding:6px 10px;font-size:11.5px'>"
                             f"{_sig or _none}</td>"
                             f"<td style='padding:6px 10px;font-size:11.5px'>"
@@ -2698,6 +2756,29 @@ with tab_live:
                         f"<table style='width:100%;border-collapse:collapse'>"
                         f"{_dh}{''.join(_drs)}</table></div>",
                         unsafe_allow_html=True)
+                # coverage line: which archive the rows came from and how
+                # far it reaches, so "the newest row is dated X" is always
+                # readable against "the record runs to Y" — printed whether
+                # or not the window happened to contain any ticket
+                if _bk_status:
+                    st.caption(
+                        f"📌 Archive coverage: **{_bk_status['n_books']} "
+                        f"published book"
+                        f"{'s' if _bk_status['n_books'] != 1 else ''}** "
+                        f"through **{_bk_status['latest']:%b %d, %Y}**"
+                        + (f", last one that changed the book "
+                           f"**{_bk_status['last_change']:%b %d, %Y}**"
+                           if _bk_status["last_change"] is not None
+                           else ", none of which changed the book")
+                        + f" · P&L window's last bar "
+                          f"**{_wf['weights'].index[-1]:%b %d, %Y}**"
+                        + (f" · {len(_dtl_pending)} ticket"
+                           f"{'s' if len(_dtl_pending) != 1 else ''} "
+                           "published but not yet earning (⏳ above)"
+                           if _dtl_pending else "")
+                        + ". A book that repeats the previous one is not a "
+                          "missing row — it is a day the strategy chose to "
+                          "hold.")
 
             # ── realized P&L by asset — what the sell tickets locked in ──────
             # (the 🧾 trade log's ⚖️ tilt trims + 🚦 sell signals rolled up
