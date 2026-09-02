@@ -1,18 +1,18 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-09-01T15:29:08+00:00",
- "generated_at_ct": "Sep 1, 2026 at 10:29:08 AM CDT",
+ "generated_at_utc": "2026-09-02T12:18:06+00:00",
+ "generated_at_ct": "Sep 2, 2026 at 7:18:06 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
-  "as_of": "2026-08-31",
+  "as_of": "2026-09-01",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-09-01T15:29:08+00:00"
+  "computed_at_utc": "2026-09-02T12:18:06+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-09-01T15:29:06+00:00",
-  "checked_at_ct": "Sep 1, 2026 at 10:29:06 AM CDT",
+  "checked_at_utc": "2026-09-02T12:18:05+00:00",
+  "checked_at_ct": "Sep 2, 2026 at 7:18:05 AM CDT",
   "passed": true,
   "stale_apps": [],
   "stale_assets": [],
@@ -26,10 +26,10 @@
      "MSTU",
      "ETH"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Sep 1, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
-    "expected_close": "Sep 1, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 2, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
+    "expected_close": "Sep 2, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
     "fresh": true,
     "age_days": 0
    },
@@ -40,16 +40,16 @@
      "GLDM",
      "UGL"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -62,16 +62,16 @@
      "GDX",
      "NUGT"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -84,16 +84,16 @@
      "SOXX",
      "SOXL"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": ""
@@ -105,16 +105,16 @@
     "instruments": [
      "GRID"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -128,16 +128,16 @@
      "OIH",
      "ERX"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -149,16 +149,16 @@
     "instruments": [
      "REMX"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -170,16 +170,16 @@
     "instruments": [
      "WGMI"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -191,16 +191,16 @@
     "instruments": [
      "PBW"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -212,16 +212,16 @@
     "instruments": [
      "ARTY"
     ],
-    "actual_asof": "2026-08-31",
-    "expected_asof": "2026-08-31",
-    "actual_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
-    "expected_close": "Aug 31, 2026, 4:00 PM EDT (US market close)",
+    "actual_asof": "2026-09-01",
+    "expected_asof": "2026-09-01",
+    "actual_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
+    "expected_close": "Sep 1, 2026, 4:00 PM EDT (US market close)",
     "fresh": true,
     "age_days": 0,
     "data_gate": {
      "decision": "refreshed",
      "source": "yahoo-live",
-     "served_through": "2026-08-31",
+     "served_through": "2026-09-01",
      "qc_passed": true,
      "failed_checks": [],
      "note": "restored from the pinned snapshot: 2026-08-28"
@@ -234,8 +234,8 @@
   "skip_reason": null,
   "withheld_since_ct": null,
   "consecutive_withheld_days": 0,
-  "generated_at_utc": "2026-09-01T15:29:08+00:00",
-  "as_of": "2026-08-31",
+  "generated_at_utc": "2026-09-02T12:18:06+00:00",
+  "as_of": "2026-09-01",
   "profile": "Balanced",
   "signed": true
  }
