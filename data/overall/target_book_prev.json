@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-01T15:29:08+00:00",
- "as_of": "2026-08-31",
+ "generated_at_utc": "2026-09-02T12:18:06+00:00",
+ "as_of": "2026-09-01",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -11,9 +11,9 @@
  },
  "cash_weight": 0.42000000000000004,
  "exec_price": {
-  "XLE": 64.465,
-  "OIH": 430.19,
-  "ERX": 110.14
+  "XLE": 64.77,
+  "OIH": 426.88,
+  "ERX": 111.09
  },
  "actions": [
   {
@@ -22,7 +22,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.8180952380952381,
+   "priority": 0.8295238095238096,
    "exits_next_bar": false
   },
   {
@@ -31,7 +31,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8139091275297007,
+   "priority": 0.8254947723211664,
    "exits_next_bar": false
   },
   {
@@ -40,7 +40,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.638095238095238,
+   "priority": 0.6495238095238096,
    "exits_next_bar": false
   },
   {
@@ -172,7 +172,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -181,18 +181,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-01T15:29:06+00:00",
+  "checked_at_utc": "2026-09-02T12:18:05+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 1, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-08-31",
-  "btc_bar_close_utc": "2026-09-01T12:00:00+00:00"
+  "anchor_ct": "Sep 2, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-01",
+  "btc_bar_close_utc": "2026-09-02T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "6b7d4a91cc51",
+ "code_sha": "f68b95743946",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "0e2b79c2239a93d01a833e4703834e649d5db4dca1884318997e1e2d585495a8"
+  "value": "54ca2d9217e491f0369a506cd21681e53df4d584d3b2dabbe311cf47344b245e"
  }
 }
