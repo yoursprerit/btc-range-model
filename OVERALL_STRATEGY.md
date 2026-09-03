@@ -391,6 +391,13 @@ blends of the strategies. Numbers and the full walk-forward are in
 - **Leveraged 2× / 3× sleeves compound decay and gap risk**; the caps bound but
   don't remove it. See [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md)
   and [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md).
+- **There is no portfolio-level risk control.** Caps are per *instrument*, so one
+  parent signal's core + beta + lev sleeves can stack to 58% of NAV, and the
+  water-fill keeps the book ~98% deployed on every bar (SATA's mean weight in the
+  replay is 1.6%, and it never exceeds 50%). Exiting sleeves concentrate the book
+  rather than raise cash. Emergency circuit breakers were evaluated against this
+  and rejected — a parent-signal cap dominates them — in
+  [`KILL_SWITCH_EVAL.md`](KILL_SWITCH_EVAL.md).
 - This is a **daily** engine. The BTC and Gold apps' canonical **hourly**
   Pure-Regime signals live in those apps.
 - Nothing here is investment advice.
@@ -406,6 +413,7 @@ blends of the strategies. Numbers and the full walk-forward are in
 | Per-asset engines reused | `app/btc_ct_engine.py` · `app/gldm_engine.py` · `backtest_ticker.py` |
 | Out-of-sample performance | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
 | Universe composition changes | [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
+| Portfolio-level risk controls (kill switch, vol target, parent cap) | [`KILL_SWITCH_EVAL.md`](KILL_SWITCH_EVAL.md) · `scripts/eval_kill_switch.py` |
 | Per-signal strategy specs | [`TRADING_STRATEGY.md`](TRADING_STRATEGY.md) · [`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md) · [`TICKER_APPS_README.md`](TICKER_APPS_README.md) |
 | Live execution on IBKR | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) |
 | Signal-freshness source of truth (closes, audit, refresh log) | `app/freshness.py` |
