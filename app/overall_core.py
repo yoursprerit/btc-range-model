@@ -1189,6 +1189,63 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
     return days
 
 
+def trade_log_win_stats(log: list[dict]) -> dict | None:
+    """Hit rate of the tickets that ACTUALLY realized P&L — the sale side of
+    ``daily_trade_log``, judged one ticket at a time.
+
+    The headline ``Win rate`` (``overall_trade_stats``) counts each sleeve's
+    round-trip strategy trades: what the per-asset ENGINES did, whether or
+    not the blend had money in that sleeve, and with open positions marked
+    at their unrealised P&L.  This instead counts what the BOOK did — every
+    🚦 exit-signal close and every ⚖️ daily-tilt trim the selected P&L source
+    actually executed in the window, each carrying the realized return on
+    the slice sold over its average cost.  It is therefore the win rate
+    *behind the realized P&L*: the same tickets the 🧾 trade log lists and
+    the 💰 realized-P&L-by-asset table rolls up, and it moves with the
+    performance-source toggle (as-published books vs walk-forward replay).
+
+    Positions still open contribute nothing — their P&L is unrealised, so
+    there is no ticket and nothing to win or lose yet.
+
+    Returns ``None`` when no sale ticket carries P&L (nothing sold in the
+    window, or the log was built without ``returns``); otherwise:
+
+      n_tickets   sale tickets counted — the denominator
+      wins        tickets closed above their average cost (flat is not a win)
+      losses      tickets closed below it
+      win_rate    wins / n_tickets
+      ci_lo/ci_hi Wilson 95% interval on that rate — a handful of tickets is
+                  a wide interval, and the headline should be read with it
+      n_sells/sell_wins   the 🚦 exit-signal closes inside those totals
+      n_trims/trim_wins   the ⚖️ tilt trims inside them
+      avg_win/avg_loss    mean realized % on winning / losing tickets
+      payoff      avg_win / |avg_loss|, ``None`` with no losing ticket
+      net         realized gain summed over every ticket, per $1 invested at
+                  the anchor close (scale by the portfolio value for dollars)
+    """
+    tickets = [a for d in (log or []) for a in d["actions"]
+               if a["delta"] < 0 and a.get("pnl") is not None]
+    if not tickets:
+        return None
+    wins = [a for a in tickets if a["pnl"] > 0]
+    losses = [a for a in tickets if a["pnl"] < 0]
+    sells = [a for a in tickets if a["action"] == "sell"]
+    trims = [a for a in tickets if a["action"] != "sell"]
+    ci_lo, ci_hi = _wilson(len(wins), len(tickets))
+    avg_win = float(np.mean([a["pnl"] for a in wins])) if wins else 0.0
+    avg_loss = float(np.mean([a["pnl"] for a in losses])) if losses else 0.0
+    return dict(
+        n_tickets=len(tickets), wins=len(wins), losses=len(losses),
+        win_rate=len(wins) / len(tickets), ci_lo=ci_lo, ci_hi=ci_hi,
+        n_sells=len(sells), sell_wins=sum(1 for a in sells if a["pnl"] > 0),
+        n_trims=len(trims), trim_wins=sum(1 for a in trims if a["pnl"] > 0),
+        avg_win=avg_win, avg_loss=avg_loss,
+        payoff=(avg_win / abs(avg_loss)) if avg_loss < 0 else None,
+        net=float(sum(a["sold"] - a["basis"] for a in tickets
+                      if a.get("sold") is not None
+                      and a.get("basis") is not None)))
+
+
 def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
                           returns: pd.DataFrame,
                           min_delta: float = 0.0005,

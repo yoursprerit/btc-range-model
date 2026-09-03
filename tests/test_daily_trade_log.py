@@ -386,3 +386,94 @@ def test_runs_off_the_as_published_replay_unchanged():
     assert acts["AAA"]["action"] == "trim" and not acts["AAA"]["signal_change"]
     # ½ × (|Δ AAA| + |Δ BBB| + |Δcash|) = ½ × (0.2 + 0.3 + 0.1)
     assert np.isclose(log[0]["turnover"], 0.3)
+
+
+# ── Actual win rate — the hit rate behind the realized P&L ──────────────────
+# (``trade_log_win_stats``: the P&L metrics row's "Actual win rate", counted
+# off the same sale tickets the log lists, one ticket at a time)
+def test_win_stats_counts_every_realized_sale_ticket():
+    # AAA: bought at IDX0's close, trimmed at IDX2's close (up), rest sold at
+    # IDX3's close (still up).  BBB: held from row 0, sold at IDX2's close
+    # (down).  Three sale tickets, two of them winners.
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.0],
+               BBB=[0.4, 0.4, 0.4, 0.0, 0.0])
+    rets = _frame(AAA=[0.0, 0.10, 0.05, 0.02, 0.0],
+                  BBB=[0.0, -0.08, -0.04, 0.0, 0.0])
+    log = oc.daily_trade_log(w, 1.0 - w.sum(axis=1), IDX[0], returns=rets,
+                             sata_daily=0.0)
+    s = oc.trade_log_win_stats(log)
+    assert (s["n_tickets"], s["wins"], s["losses"]) == (3, 2, 1)
+    assert np.isclose(s["win_rate"], 2 / 3)
+    # the split by ticket type: one tilt trim, two full exit-signal closes
+    assert (s["n_trims"], s["trim_wins"]) == (1, 1)
+    assert (s["n_sells"], s["sell_wins"]) == (2, 1)
+    # payoff side comes off the same tickets
+    assert s["avg_win"] > 0 > s["avg_loss"]
+    assert np.isclose(s["payoff"], s["avg_win"] / abs(s["avg_loss"]))
+    # the Wilson interval brackets the rate on so few tickets
+    assert s["ci_lo"] < s["win_rate"] < s["ci_hi"]
+
+
+def test_win_stats_net_is_the_ledger_dollars_realized():
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.0, 0.0])
+    rets = _frame(AAA=[0.03, 0.10, 0.05, -0.02, 0.01])
+    log = oc.daily_trade_log(w, _sata([1.0, 0.6, 0.6, 1.0, 1.0]), IDX[0],
+                             returns=rets, sata_daily=0.0)
+    sell = next(a for d in log for a in d["actions"] if a["action"] == "sell")
+    s = oc.trade_log_win_stats(log)
+    # per $1 at the anchor close — exactly the ledger's own flows
+    assert np.isclose(s["net"], sell["sold"] - sell["basis"])
+    assert (s["n_tickets"], s["wins"]) == (1, 1)
+
+
+def test_win_stats_ignores_buys_and_open_positions():
+    # bought and still held at the end: nothing realized, so no ticket
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.4, 0.4])
+    rets = _frame(AAA=[0.0, 0.10, 0.05, 0.02, 0.01])
+    log = oc.daily_trade_log(w, 1.0 - w.sum(axis=1), IDX[0], returns=rets,
+                             sata_daily=0.0)
+    assert [a["action"] for d in log for a in d["actions"]] == ["buy"]
+    assert oc.trade_log_win_stats(log) is None
+
+
+def test_win_stats_none_without_pnl_and_on_an_empty_log():
+    # a log built without ``returns`` carries no realized P&L to judge
+    w = _frame(AAA=[0.5, 0.5, 0.3, 0.3, 0.3])
+    log = oc.daily_trade_log(w, _sata([0.5, 0.5, 0.7, 0.7, 0.7]), IDX[0])
+    assert log and oc.trade_log_win_stats(log) is None
+    assert oc.trade_log_win_stats([]) is None
+    assert oc.trade_log_win_stats(None) is None
+
+
+def test_win_stats_flat_ticket_is_not_a_win():
+    # sold at exactly its average cost — neither a win nor a loss, but it
+    # still counts in the denominator (it consumed a decision)
+    w = _frame(AAA=[0.4, 0.4, 0.0, 0.0, 0.0])
+    rets = _frame(AAA=[0.0, 0.0, 0.0, 0.0, 0.0])
+    log = oc.daily_trade_log(w, 1.0 - w.sum(axis=1), IDX[0], returns=rets,
+                             sata_daily=0.0)
+    s = oc.trade_log_win_stats(log)
+    assert (s["n_tickets"], s["wins"], s["losses"]) == (1, 0, 0)
+    assert s["win_rate"] == 0.0
+    assert s["payoff"] is None
+
+
+def test_win_stats_runs_off_the_as_published_replay_unchanged():
+    # the metric follows the performance-source toggle: the as-published
+    # weights feed the same call, so it measures the BOOK's own tickets
+    idx = pd.date_range("2026-07-06", periods=6, freq="D")
+    rets = pd.DataFrame({"AAA": [0.0, 0.05, 0.05, 0.05, 0.05, 0.05]},
+                        index=idx)
+    books = [
+        {"schema": "overall-target-book/v1", "as_of": "2026-07-06",
+         "profile": "Balanced", "book_mode": "live",
+         "weights": {"AAA": 0.6}, "cash_weight": 0.4, "exec_price": {}},
+        {"schema": "overall-target-book/v1", "as_of": "2026-07-08",
+         "profile": "Balanced", "book_mode": "live",
+         "weights": {"AAA": 0.3}, "cash_weight": 0.7, "exec_price": {}},
+    ]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0)
+    log = oc.daily_trade_log(rep["weights"], rep["sata"], idx[0], returns=rets)
+    s = oc.trade_log_win_stats(log)
+    assert (s["n_tickets"], s["wins"], s["n_trims"]) == (1, 1, 1)
+    assert s["win_rate"] == 1.0

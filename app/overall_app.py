@@ -2182,7 +2182,22 @@ with tab_live:
             # days would otherwise count as tiny guaranteed wins
             _dw = ov.daily_win_stats(_curve_all, _start_sel,
                                      active=_wf["weights"].sum(axis=1))
-            pm2 = st.columns(6)
+            # the day-by-day ticket log behind the 🧾 section below — computed
+            # once here because the ACTUAL win rate metric needs it on every
+            # load, and handed to the toggle so the log is never diffed twice
+            _dtl_memo = {}
+
+            def _get_dtl():
+                if "v" not in _dtl_memo:
+                    _dtl_memo["v"] = ov.daily_trade_log(
+                        _wf["weights"], _wf["sata"], _start_sel,
+                        returns=_rets_win, active=_wf.get("active"))
+                return _dtl_memo["v"]
+
+            # buy & hold never sells, so it has no realized ticket to judge —
+            # the extra column only exists for the two trading sources
+            _tws = None if _bh_src else ov.trade_log_win_stats(_get_dtl())
+            pm2 = st.columns(6 if _bh_src else 7)
             # buy & hold is invested every single day, so the "(invested)"
             # qualifier — and the SATA caveat behind it — mean nothing there
             _wd_lbl = "Winning days" if _bh_src else "Winning days (invested)"
@@ -2257,7 +2272,60 @@ with tab_live:
                               delta_color="off",
                               help="Winning trades out of all counted trades: closed "
                                    "trades on their realised return, open positions on "
-                                   "their current unrealised P&L.")
+                                   "their current unrealised P&L. Measured on each "
+                                   "SLEEVE'S OWN strategy trades, whether or not the "
+                                   "blend had capital in that sleeve — see **Actual "
+                                   "win rate** for the book's own tickets.")
+                # the win rate BEHIND THE REALIZED P&L: every sale ticket the
+                # selected source's book actually executed in this window (🚦
+                # exit-signal closes + ⚖️ tilt trims), judged on the realized
+                # return of the slice sold.  Same tickets the 🧾 trade log
+                # lists and 💰 realized P&L by asset rolls up — so the number
+                # moves with the performance-source toggle, unlike Win rate.
+                _awr_help = (
+                    "Winning **tickets the book actually executed** out of "
+                    "every sale it made in this window — each 🚦 exit-signal "
+                    "close and ⚖️ daily-tilt trim, judged on the realized "
+                    "return of the slice sold over its average cost. This is "
+                    "the win rate the **realized P&L was earned through**: "
+                    "the same tickets the 🧾 daily trade log lists and the 💰 "
+                    "realized P&L by asset table rolls up, from the "
+                    + ("**as-published books**" if _actual
+                       else "**walk-forward replay**")
+                    + " selected above. Positions still open count for "
+                      "nothing here — their P&L is unrealised, so no ticket "
+                      "exists yet. The Wilson 95% interval says how seriously "
+                      "to take it: over a handful of tickets a coin flip sits "
+                      "inside it.")
+                if _tws is None:
+                    pm2[6].metric("Actual win rate", "—", delta="no sales yet",
+                                  delta_color="off",
+                                  help=_awr_help + " Nothing has been sold in "
+                                       "this window, so there is no realized "
+                                       "ticket to judge.")
+                else:
+                    # the mix matters as much as the rate: a book that trims
+                    # daily books many small winning tickets against a few
+                    # full exits, so spell the split out rather than let one
+                    # headline stand for both kinds of decision
+                    pm2[6].metric(
+                        "Actual win rate", f"{_tws['win_rate']*100:.0f}%",
+                        delta=(f"{_tws['wins']}/{_tws['n_tickets']} tickets · "
+                               f"CI {_tws['ci_lo']*100:.0f}–"
+                               f"{_tws['ci_hi']*100:.0f}%"),
+                        delta_color="off",
+                        help=_awr_help + _no_tex(
+                            f" In this window: **{_tws['n_sells']} 🚦 "
+                            f"exit-signal close"
+                            f"{'s' if _tws['n_sells'] != 1 else ''}** "
+                            f"({_tws['sell_wins']} won) and "
+                            f"**{_tws['n_trims']} ⚖️ tilt trim"
+                            f"{'s' if _tws['n_trims'] != 1 else ''}** "
+                            f"({_tws['trim_wins']} won), averaging "
+                            f"{_tws['avg_win']*100:+.1f}% on a winner and "
+                            f"{_tws['avg_loss']*100:+.1f}% on a loser, for "
+                            f"**${_tws['net']*portfolio_value:+,.0f}** "
+                            "realized in total on the 💼 portfolio value."))
 
             # Benchmark comparison over the SELECTED window — is the strategy
             # earning its keep?  In as-published mode the walk-forward replay
@@ -2447,9 +2515,11 @@ with tab_live:
             # per-day $ / % P&L off the same weights + returns as the P&L-by-
             # asset attribution — shared by the trade log's Day-P&L column and
             # the 📆 Daily P&L chart, and exact for both sources.  LAZY: the
-            # series (and the trade-log diff) are computed only when a toggle
-            # that needs them is actually on, so the default page load pays
-            # nothing for these sections.
+            # series are computed only when a toggle that needs them is
+            # actually on, so the default page load pays nothing for these
+            # sections.  (The trade-log diff itself is no longer deferred —
+            # the Actual win rate metric above needs it on every load — but it
+            # is memoised in _get_dtl, so the toggle re-uses that one call.)
             _dpl_memo = {}
 
             def _get_dpl():
@@ -2490,9 +2560,7 @@ with tab_live:
                     f"🧾 Daily trade log {_win_lbl} — positions bought "
                     "& sold day by day, with each day's P&L (toggle on/off)",
                     key="overall_daily_trade_log"):
-                _dtl = ov.daily_trade_log(_wf["weights"], _wf["sata"],
-                                          _start_sel, returns=_rets_win,
-                                          active=_wf.get("active"))
+                _dtl = _get_dtl()
                 # the as-published record maps each day to the newest book
                 # published STRICTLY BEFORE it, so the book committed this
                 # morning (as_of = the last completed bar) is in no weights
