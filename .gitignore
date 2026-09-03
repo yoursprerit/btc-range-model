@@ -68,3 +68,6 @@ data/gldm/macro_daily_manifest.json
 runtime/freshness_log.json
 # per-deployment dataset audit trail (app/data_gate.py) — server-local state
 runtime/dataset_audit.json
+
+# regenerable Coinbase pull for the liquidity study (src/research_liquidity_features.py)
+data/liquidity/cb_hourly.csv
