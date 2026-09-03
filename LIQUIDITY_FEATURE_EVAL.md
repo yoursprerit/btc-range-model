@@ -4,7 +4,10 @@
 daily High/Low model. On the production feature set and production learners it
 *costs* ~2.3 bp of mean absolute error (p = 0.034) — statistically
 indistinguishable from the cost of adding the same number of **random** columns
-(1.4 bp). No production feature set, model or config was changed.
+(1.4 bp). On eight years of history the verdict is sharper still: liquidity
+costs 1.27 bp (p = 0.0005) where the random columns cost nothing measurable
+(p = 0.37) — it is worse than noise. No production feature set, model or config
+was changed.
 
 **Question.** The daily High/Low model (`src/pipeline_ct.py`) currently sees BTC
 price/volume, seven cross-asset macro series, eleven blockchain.info on-chain
@@ -148,26 +151,47 @@ the condition the pipeline's α-blend exists to handle. Once α is applied,
 `liq_only`'s apparent advantage disappears (p = 0.428). The liquidity features
 are not predicting; they are failing to predict quietly.
 
-## 4. Same answer on eight years of history
+## 4. Eight years of history gives the same answer, more sharply
 
 The 2024-2026 window is thin for a weekly macro series (~145 independent
 liquidity releases), so the study was repeated on 2018-06 → 2026-09 using
 Coinbase 12:00-UTC bars and FRED macro equivalents — a sample that contains the
 2020-21 QE surge and the 2022-23 QT drain, the regimes where liquidity's
-relationship with BTC is supposed to be strongest:
+relationship with BTC is supposed to be strongest. 2,027 out-of-sample days:
 
-| arm | MAE hi | MAE lo | MAPE_H | MAPE_L | dir hit | clf acc |
-|---|---|---|---|---|---|---|
-| **base** | 142.8 bp | 143.1 bp | 1.384% | 1.500% | 56.2% | 55.6% |
-| base + liq | 145.5 bp | 143.1 bp | 1.411% | 1.501% | 55.7% | 53.7% |
-| base + liq core | 144.2 bp | 142.7 bp | 1.398% | 1.497% | 55.1% | 54.4% |
+| arm | MAE hi | MAE lo | dir hit | clf acc | Δloss (α-blended) | DM t | p | boot win |
+|---|---|---|---|---|---|---|---|---|
+| **base** | 142.8 bp | 143.1 bp | 56.2% | 55.6% | — | — | — | — |
+| base + liq | 145.5 bp | 143.1 bp | 55.7% | 53.7% | **+1.27 bp** | 3.51 | **0.0005** | 0.2% |
+| base + liq core | 144.2 bp | 142.7 bp | 55.1% | 54.4% | +0.49 bp | 2.03 | 0.043 | 4.7% |
+| base + **noise** | 142.6 bp | 144.1 bp | 55.9% | 54.3% | +0.29 bp | 0.90 | 0.367 | 21.6% |
+| liq only | — | — | — | — | +25.14 bp | 14.61 | 0.000 | 0.0% |
 
-Over 2,027 out-of-sample days the liquidity block still fails to help, and it
-measurably *degrades* the direction classifier (55.6% → 53.7%). Note that the
-univariate correlations on this longer sample are individually significant
-(`liq_walcl_d28` ρ = 0.208, t = 2.53) — and still do not translate into
+This is the cleanest read in the study, and it is **worse for liquidity than the
+short window**. With enough data that twelve extra random columns no longer cost
+anything measurable (`base+noise`, p = 0.37), the liquidity block still does
+significant damage (p = 0.0005). Liquidity is not merely inert here — it is
+worse than noise. It also degrades the direction classifier, 55.6% → 53.7%.
+
+Note too that the univariate correlations on this sample *are* individually
+significant (`liq_walcl_d28` ρ = 0.208, t = 2.53) and still do not translate into
 out-of-sample accuracy. That gap between "statistically detectable in-sample"
-and "useful out-of-sample" is precisely what section 2 predicts.
+and "useful out-of-sample" is exactly what section 2 predicts.
+
+### This also resolves the `liq_only` oddity
+
+On the short window `liq_only` appeared to beat `base`, which needed the
+explanation in section 3. The long sample settles it outright: here `base` beats
+its own climatology by 27.5 bp (t = −14.43) and `liq_only` is 25.1 bp **worse**
+than base. Given a sample large enough to fit on, the model built purely from
+liquidity features is close to the worst thing you can build. The short-window
+result was an artifact of that window, not a property of the features.
+
+The full-sample importance ranking is also sane on this sample — `range_ma7`,
+`atr_7`, `range_today`, `atr_14`, `range_ma30`, `vix_ret_1` take the top slots,
+rather than a random column placing 2nd as it did on 946 rows. The liquidity
+block still ranks below noise: median 53/95 vs 38/95, summed importance 0.085
+vs 0.115.
 
 ## 5. It is not a horizon mismatch either
 
