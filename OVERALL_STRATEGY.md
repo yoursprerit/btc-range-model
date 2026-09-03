@@ -182,6 +182,30 @@ has stalled:
 Both helpers live in `app/overall_core.py` and are covered by
 `tests/test_book_ticket_visibility.py`.
 
+### Two win rates, deliberately
+
+The P&L metrics row publishes both, and they answer different questions:
+
+* **Win rate** (`overall_trade_stats` → `trade_stats_since`) — each SLEEVE'S
+  OWN round-trip strategy trades since the start date, closed trades on their
+  realised return and the open one on its current unrealised P&L. It measures
+  the per-asset engines, whether or not the blend had capital in that sleeve,
+  and does not move with the performance-source toggle.
+* **Actual win rate** (`trade_log_win_stats`) — the tickets the BOOK actually
+  executed: every 🚦 exit-signal close and ⚖️ daily-tilt trim in the 🧾 daily
+  trade log, each judged on the realized return of the slice sold over its
+  average cost. This is the hit rate the **realized P&L was earned through**,
+  it runs off whichever source the toggle selects (as-published books or the
+  walk-forward replay), and open positions contribute nothing because nothing
+  has been realized on them yet.
+
+The two legitimately differ: one trade in a sleeve can produce several tickets
+(the optimizer trims into strength and adds back), and a book that re-sizes
+daily books many small trims against a handful of full exits — the metric's
+tooltip therefore also gives the 🚦/⚖️ split, the average winner and loser, and
+the net dollars realized, so a high headline built on small trims is never read
+as a run of winning round-trips.
+
 ---
 
 ## 5. How the allocation mix is determined & optimised
