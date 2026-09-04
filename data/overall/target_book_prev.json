@@ -1,28 +1,50 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-02T12:18:06+00:00",
- "as_of": "2026-09-01",
+ "generated_at_utc": "2026-09-03T12:18:31+00:00",
+ "as_of": "2026-09-02",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
   "XLE": 0.3,
   "OIH": 0.18,
-  "ERX": 0.1
+  "ERX": 0.1,
+  "GLDM": 0.3,
+  "UGL": 0.1
  },
- "cash_weight": 0.42000000000000004,
+ "cash_weight": 0.020000000000000018,
  "exec_price": {
-  "XLE": 64.77,
-  "OIH": 426.88,
-  "ERX": 111.09
+  "XLE": 65.1,
+  "OIH": 436.58,
+  "ERX": 112.1,
+  "GLDM": 86.89,
+  "UGL": 51.4
  },
  "actions": [
+  {
+   "key": "GLDM",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
+   "target": 0.3,
+   "in_pos": false,
+   "priority": 0.4333333333333333,
+   "exits_next_bar": false
+  },
+  {
+   "key": "UGL",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
+   "target": 0.1,
+   "in_pos": false,
+   "priority": 0.3615126103603114,
+   "exits_next_bar": false
+  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.8295238095238096,
+   "priority": 0.9251770349565746,
    "exits_next_bar": false
   },
   {
@@ -31,7 +53,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8254947723211664,
+   "priority": 0.92228464326279,
    "exits_next_bar": false
   },
   {
@@ -40,7 +62,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.6495238095238096,
+   "priority": 0.8057142857142857,
    "exits_next_bar": false
   },
   {
@@ -74,24 +96,6 @@
    "key": "ETH",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 NO SIGNAL",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GLDM",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 BELOW TREND",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
-   "key": "UGL",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 BELOW TREND",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -181,18 +185,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-02T12:18:05+00:00",
+  "checked_at_utc": "2026-09-03T12:18:29+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 2, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-09-01",
-  "btc_bar_close_utc": "2026-09-02T12:00:00+00:00"
+  "anchor_ct": "Sep 3, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-02",
+  "btc_bar_close_utc": "2026-09-03T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "f68b95743946",
+ "code_sha": "6e2e97251394",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "54ca2d9217e491f0369a506cd21681e53df4d584d3b2dabbe311cf47344b245e"
+  "value": "9a0d49ddf3e5e64b017c13271ac4720f4ecbc651e97b957e7e88c6d444521c5d"
  }
 }
