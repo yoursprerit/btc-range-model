@@ -3066,10 +3066,29 @@ def _quote(symbol: str) -> tuple:
             s = pd.Series(closes, index=pd.to_datetime(ts, unit="s").normalize()).dropna()
             if px is None and len(s):
                 px = float(s.iloc[-1])
-            # prev = the session-before-last close, so day-change compares the
-            # live/most-recent session against the one before it (works during
-            # market hours, after hours, and on weekends alike).
-            prev = float(s.iloc[-2]) if len(s) >= 2 else None
+            # prev = the last close strictly BEFORE the session the quote
+            # belongs to, so the day-change always compares the live/most-recent
+            # session against the one before it (during market hours, after
+            # hours and on weekends alike).  Anchoring on the quote's own
+            # timestamp rather than on ``s.iloc[-2]`` keeps that true when the
+            # daily series lags the quote — early in a session the chart can
+            # still be missing today's bar while ``regularMarketPrice`` is
+            # already live, and the positional pick then measured against the
+            # session before last, overstating the change by a whole day.
+            prev = None
+            q_ts = meta.get("regularMarketTime")
+            if q_ts:
+                try:
+                    q_day = (pd.Timestamp(int(q_ts), unit="s", tz="UTC")
+                             .tz_convert(meta.get("exchangeTimezoneName") or "UTC")
+                             .normalize().tz_localize(None))
+                    earlier = s[s.index < q_day]
+                    if len(earlier):
+                        prev = float(earlier.iloc[-1])
+                except Exception:
+                    prev = None
+            if prev is None and len(s) >= 2:
+                prev = float(s.iloc[-2])
             if px:
                 return float(px), prev
         except Exception:
@@ -3100,7 +3119,28 @@ def fetch_sata() -> dict:
     px, prev = _quote(SATA["ticker"])
     dchg = ((px / prev - 1) * 100) if (px and prev) else None
     upnl = ((px / SATA["par"] - 1) * 100) if px else None
-    return dict(price=px, dchg=dchg, upnl=upnl)
+    return dict(price=px, prev=prev, dchg=dchg, upnl=upnl)
+
+
+def live_change_pct(bar_close, live_price) -> float | None:
+    """Percent move from a completed bar's close to the live spot price.
+
+    This is the ONLY change the action plan's ``Chg %`` column may show: it is
+    printed between ``Price (Close of Last Bar)`` and ``Live Price``, so it has
+    to be the move between exactly those two numbers — anything else (notably
+    the spot feed's session day-change, which measures live vs the previous
+    *calendar* session's close) contradicts the prices either side of it and
+    the green/red tint on the live cell.
+
+    ``None`` when either side is missing or unusable — a row with no live quote
+    reports "—", never a fabricated 0.00%."""
+    try:
+        b, p = float(bar_close), float(live_price)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(b) and np.isfinite(p)) or b <= 0:
+        return None
+    return (p / b - 1) * 100
 
 
 def apply_spot(results: list[dict], spot: dict) -> None:

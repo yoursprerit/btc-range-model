@@ -570,7 +570,15 @@ try:
             # _a["last_close"] stays the close of the last completed bar (set in
             # signal_gated_allocation, before the spot overlay); expose the live
             # spot separately so the action plan shows both side by side.
-            _a["live_price"] = _r["last_close"]; _a["upnl"] = _r["pos"]["upnl"]
+            # Taken from the QUOTE, and only when one actually came back:
+            # apply_spot leaves r["last_close"] on the bar close for a key whose
+            # fetch failed, so copying that into live_price made "no quote"
+            # indistinguishable from "price unchanged" — and the Chg % column
+            # has to tell those apart (no quote → "—", never a bogus 0.00%).
+            _q = _spot.get(_a["key"]) or {}
+            if _q.get("price"):
+                _a["live_price"] = float(_q["price"])
+            _a["upnl"] = _r["pos"]["upnl"]
     _n_spot = sum(1 for v in _spot.values() if v.get("price"))
 except Exception:
     _n_spot = 0
@@ -1451,7 +1459,17 @@ with tab_live:
                    "**Price (Close of Last Bar)** "
                    "is the official close of the last completed daily bar the signals run "
                    "on; **Live Price** is the current spot quote (coloured green/red vs "
-                   "that close). **Unreal. P&L** is measured "
+                   "that close). **Chg %** is exactly the move between those two "
+                   "columns — how far the price has travelled since the bar the "
+                   "signals last read, which is what the live entry/exit flags and "
+                   "the **Target % / $ (Live)** columns react to — and reads **—** "
+                   "when no live quote came back (never a fabricated 0.00%). It is "
+                   "**not** the session day-change: that measures live vs the "
+                   "*previous calendar session's* close, a different interval, so it "
+                   "rides along as a small grey **session** sub-line whenever the two "
+                   "differ (they always do once a sleeve's app has ingested today's "
+                   "bar, or when its bar is anchored elsewhere — the BTC app's "
+                   "12:00-UTC bars). **Unreal. P&L** is measured "
                    "against each position's real cost basis — the official close on its "
                    "entry bar. **Target % / $ (Last bar)** is the committed allocation "
                    "of the **published Current Targetbook** — the same values as the "
@@ -1471,7 +1489,9 @@ with tab_live:
                "<th>Signal</th><th style='text-align:center'>Priority</th>"
                "<th style='text-align:right'>Price (Close of Last Bar)</th>"
                "<th style='text-align:right'>Live Price</th>"
-               "<th style='text-align:right'>Chg %</th>"
+               "<th style='text-align:right'>Chg %"
+               "<div style='font-size:9px;font-weight:400;color:#64748b'>"
+               "live vs last bar</div></th>"
                "<th style='text-align:right'>Unreal. P&amp;L</th>"
                "<th style='text-align:right'>Target % (Last bar)</th>"
                "<th style='text-align:right'>Target $ (Last bar)</th>"
@@ -1539,19 +1559,46 @@ with tab_live:
             _live_col = (C_EXIT if tgt_live < tgt else C_BUY) if _live_moved else "inherit"
             # live spot price (falls back to the last-bar close when no live quote);
             # coloured green/red vs the last-bar close to show the intraday move.
-            _live_px = a.get("live_price")
-            if _live_px is None:
-                _live_px = a["last_close"]
+            _bar_px = a["last_close"]
+            _live_px = a.get("live_price")          # set only when a quote arrived
+            _has_live = _live_px is not None
+            if not _has_live:
+                _live_px = _bar_px
             _live_px_s = f"${_live_px:,.2f}"
-            _live_px_col = (C_BUY if _live_px > a["last_close"]
-                            else C_EXIT if _live_px < a["last_close"] else "inherit")
-            # today's price change (%) — live day-change from the spot overlay
-            _dchg = _r.get("dchg")
-            if _dchg is None or (isinstance(_dchg, float) and np.isnan(_dchg)):
+            _live_px_col = (C_BUY if _live_px > _bar_px
+                            else C_EXIT if _live_px < _bar_px else "inherit")
+            # Chg % — the move between the two columns it sits between:
+            # Live Price vs Price (Close of Last Bar).  It used to print the
+            # spot feed's SESSION day-change (live vs the previous calendar
+            # session's close), a different interval from the one the two price
+            # cells show, so the three columns contradicted each other in
+            # nearly every row: after the 4 PM close, once a sleeve's app has
+            # ingested today's bar both price cells hold today's close while
+            # Chg % still showed the day's move (observed 2026-09-04: SOXL
+            # $117.54 → $117.54 with +10.12%, NUGT $191.94 → $191.94 with
+            # −4.30%), and a sleeve whose bar is anchored elsewhere (the BTC
+            # app's 12:00-UTC bars, a cached vintage) was compared against a
+            # close the row never displays (MSTR: +0.51% shown as −1.39%).
+            # The session change is real and still worth seeing, so it rides
+            # along as a sub-line whenever it differs from the bar-relative
+            # move.
+            _chg = ov.live_change_pct(_bar_px, _live_px if _has_live else None)
+            if _chg is None:
                 chg_s, chg_col = "—", "#94a3b8"
+            elif abs(_chg) < 0.005:      # rounds to nothing — don't tint "-0.00%" red
+                chg_s, chg_col = "0.00%", "#64748b"
             else:
-                chg_s = f"{_dchg:+.2f}%"
-                chg_col = C_BUY if _dchg >= 0 else C_EXIT
+                chg_s = f"{_chg:+.2f}%"
+                chg_col = C_BUY if _chg >= 0 else C_EXIT
+            if _chg is not None:
+                # the feed's session day-change, kept as a labelled sub-line —
+                # it is a real number, just not the one the two price columns
+                # describe.  Shown only when it differs, which is precisely the
+                # case the old column got wrong (0.00% vs a −4.30% session).
+                _sess = (_spot.get(a["key"]) or {}).get("dchg")
+                if _sess is not None and abs(_sess - _chg) > 0.05:
+                    chg_s += (f"<div style='font-size:10px;color:#94a3b8;"
+                              f"font-weight:400'>session {_sess:+.2f}%</div>")
             # cost basis = the real close on the entry bar
             _cb = _r["pos"].get("entry_px")
             cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
@@ -1696,9 +1743,18 @@ with tab_live:
                     f"background:#334155'></div></div>" if t > 0.0005 else "")
         sbar = _sata_bar(sata_pct); sbar_live = _sata_bar(sata_live)
         _sata_col = (C_BUY if sata_live > sata_pct else C_EXIT) if abs(sata_live - sata_pct) > 0.005 else "inherit"
-        # live SATA quote — price, day-change, and P&L vs the $100 par cost basis
-        _sa_px = _sata.get("price"); _sa_dc = _sata.get("dchg"); _sa_pnl = _sata.get("upnl")
+        # live SATA quote — price, previous close, and P&L vs the $100 par basis.
+        # The last-bar cell used to print the $100 par (a cost basis, not a bar
+        # close) next to a day-change Chg %, so the SATA row was inconsistent
+        # the same way the instrument rows were. It now shows the quote's
+        # previous-session close, which makes Chg % = live vs that close — the
+        # same rule (and, for SATA, the same number) as every row above it.
+        # Par is not lost: it is the P&L cell's sub-line right beside it.
+        _sa_px = _sata.get("price"); _sa_prev = _sata.get("prev")
+        _sa_pnl = _sata.get("upnl")
         sa_px_s = f"${_sa_px:,.2f}" if _sa_px else f"${si['par']:,.0f}"
+        sa_prev_s = f"${_sa_prev:,.2f}" if _sa_prev else f"${si['par']:,.2f}"
+        _sa_dc = ov.live_change_pct(_sa_prev, _sa_px)
         if _sa_dc is None:
             sa_dc_s, sa_dc_col = "—", "#94a3b8"
         else:
@@ -1716,7 +1772,7 @@ with tab_live:
             f"<td style='font-size:12px;color:#334155'>Idle cash → SATA preferred"
             f"<div style='font-size:10px;color:#94a3b8'>~{si['annual_rate']*100:.0f}% daily-dividend yield · $100 par · +{si['annual_rate']*100:.0f}%/yr coupon</div></td>"
             f"<td style='text-align:center;color:#cbd5e1'>—</td>"
-            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${si['par']:,.2f}</td>"
+            f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{sa_prev_s}</td>"
             f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums'>{sa_px_s}</td>"
             f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{sa_dc_col}'>{sa_dc_s}</td>"
             f"<td style='text-align:right;font-weight:600;color:{sa_pnl_col}'>{sa_pnl_s}{sa_pnl_sub}</td>"

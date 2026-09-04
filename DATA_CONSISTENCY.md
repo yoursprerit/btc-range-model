@@ -407,6 +407,82 @@ after the fix, matching the executed book and the vacated Target Book.
 
 Tests: `tests/test_trend_signal_alignment.py`.
 
+## The action plan's Chg % measured a different interval (2026-09-04)
+
+**Symptom.** 🎯 Today's action plan prints three price columns side by side —
+**Price (Close of Last Bar)**, **Live Price**, **Chg %** — and the middle one
+is tinted green/red against the first. The third disagreed with both. Sampled a
+few minutes after the 4 PM ET close on 2026-09-04, once every equity sleeve's
+app had ingested that day's bar:
+
+| key | Price (Close of Last Bar) | Live Price | Chg % shown | live vs last bar |
+|---|---|---|---|---|
+| SOXL | 117.54 | 117.54 | **+10.12%** | 0.00% |
+| NUGT | 191.94 | 191.94 | **−4.30%** | 0.00% |
+| GDX | 99.29 | 99.29 | **−2.17%** | 0.00% |
+| MSTR | 142.07 | 142.80 | **−1.39%** | +0.51% |
+| ETH | 2525.55 | 2455.16 | **−2.11%** | −2.79% |
+
+Fourteen rows printed the **same price twice** next to a change of up to ten
+points, and no row's Chg % was the move between the numbers beside it.
+
+**Root cause — a day-change borrowed into a bar-relative table.** The cell read
+`_r["dchg"]`, which `overall_core.apply_spot` overlays from `fetch_spot` →
+`_quote`: `regularMarketPrice` over the **previous calendar session's** close.
+The feed and that calculation are correct — it is a correct *session*
+day-change — but it measures a different interval from the one the two price
+columns show, and the two only coincide in the narrow mid-session case where a
+sleeve's last completed bar happens to be yesterday's regular close. They part
+company whenever:
+
+* **the session has closed and the bar is in** — both price cells then hold
+  today's close, so the honest bar-relative move is 0.00% while the day-change
+  is the whole session (the SOXL/NUGT/GDX rows above);
+* **the sleeve's bar is anchored elsewhere** — the BTC app's sleeves close on
+  12:00-UTC bars (and MSTR/MSTU fill at the *next session's* close off a cached
+  vintage), so the day-change compared against a price the row never displays
+  (MSTR, ETH above).
+
+A second, quieter defect fed the same cell: the overlay set
+`_a["live_price"] = _r["last_close"]` unconditionally, and `apply_spot` leaves
+`last_close` on the bar close for a key whose quote failed — so "no quote" and
+"price unchanged" rendered identically, and a dead feed showed as a real 0.00%
+move. The **SATA** row had the matching problem from the other side: its
+last-bar cell printed the **$100 par cost basis** (not a bar close at all) next
+to a day-change Chg %.
+
+**The fix.**
+
+1. **`overall_core.live_change_pct(bar_close, live_price)`** — one helper, used
+   by every row: `Chg % = (Live Price / Price (Close of Last Bar) − 1) × 100`,
+   `None` (rendered `—`) when either side is missing or unusable. This is also
+   the move the live entry/exit flags and the **Target % / $ (Live)** columns
+   react to, so the column now explains the rest of the row.
+2. **The session day-change is kept, labelled** — a small grey `session ±x.xx%`
+   sub-line under the Chg % value whenever it differs from the bar-relative
+   move (which, per the table above, is most rows). Nothing that was on the
+   page was lost; it is just no longer passed off as the other measurement.
+3. **`live_price` is set only from a real quote** (`_spot[key]["price"]`), so a
+   failed fetch reads `—` instead of a fabricated 0.00%.
+4. **The quote's previous close is picked by date, not by position**
+   (`overall_core._quote`): the last close strictly before the session the
+   quote itself belongs to, instead of `s.iloc[-2]`. Identical in the normal
+   case; correct in the one where the daily chart lags the live quote (early in
+   a session the bar can be missing while `regularMarketPrice` is already
+   ticking, and the positional pick then measured against the session *before*
+   last). This feeds the session sub-line, the SATA row and the Current
+   Positions marks.
+5. **The SATA row shows the quote's previous close** in the last-bar column
+   (`fetch_sata` now returns `prev`), so its Chg % is the same live-vs-last-bar
+   move as every row above it — the same number it printed before, now with a
+   baseline the row actually displays. Par stays on the P&L cell's sub-line.
+
+The Historical tab's Chg % is unrelated and unchanged: there the column is the
+chosen bar's close against the prior bar's, both from the same series, which is
+already self-consistent.
+
+Tests: `tests/test_action_plan_price_consistency.py`.
+
 ## What can still move intraday (by design)
 
 * The **live row** (in-progress bar), spot prices, and today's action plan —
