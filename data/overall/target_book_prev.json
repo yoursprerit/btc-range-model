@@ -1,32 +1,54 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-04T12:17:52+00:00",
- "as_of": "2026-09-03",
+ "generated_at_utc": "2026-09-05T12:17:59+00:00",
+ "as_of": "2026-09-04",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
-  "GLDM": 0.3,
+  "GLDM": 0.18116477998900302,
   "UGL": 0.1,
-  "XLE": 0.3,
+  "XLE": 0.15883522001099695,
   "OIH": 0.18,
-  "ERX": 0.1
+  "ERX": 0.1,
+  "GDX": 0.18,
+  "NUGT": 0.1
  },
- "cash_weight": 0.020000000000000018,
+ "cash_weight": 0.0,
  "exec_price": {
-  "GLDM": 88.52,
-  "UGL": 53.37,
-  "XLE": 64.62,
-  "OIH": 429.81,
-  "ERX": 110.5
+  "GLDM": 87.73,
+  "UGL": 52.41,
+  "XLE": 64.06,
+  "OIH": 427.53,
+  "ERX": 108.69,
+  "GDX": 99.26,
+  "NUGT": 191.85
  },
  "actions": [
+  {
+   "key": "GDX",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 PURE-REGIME BUY",
+   "target": 0.18,
+   "in_pos": false,
+   "priority": 0.46610572996888544,
+   "exits_next_bar": false
+  },
+  {
+   "key": "NUGT",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 PURE-REGIME BUY",
+   "target": 0.1,
+   "in_pos": false,
+   "priority": 0.4383377997268435,
+   "exits_next_bar": false
+  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
+   "target": 0.15883522001099695,
    "in_pos": true,
-   "priority": 0.9270031430161088,
+   "priority": 0.923014220062499,
    "exits_next_bar": false
   },
   {
@@ -35,7 +57,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.9242292594430319,
+   "priority": 0.9203300147025868,
    "exits_next_bar": false
   },
   {
@@ -44,16 +66,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.8085714285714286,
+   "priority": 0.8038095238095239,
    "exits_next_bar": false
   },
   {
    "key": "GLDM",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
+   "target": 0.18116477998900302,
    "in_pos": true,
-   "priority": 0.4333333333333333,
+   "priority": 0.5333333333333333,
    "exits_next_bar": false
   },
   {
@@ -62,7 +84,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.3623098125859666,
+   "priority": 0.46144757997983366,
+   "exits_next_bar": false
+  },
+  {
+   "key": "ARTY",
+   "action": "WATCH",
+   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
    "exits_next_bar": false
   },
   {
@@ -94,24 +125,6 @@
   },
   {
    "key": "ETH",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GDX",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
-   "key": "NUGT",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
@@ -167,16 +180,7 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
-   "key": "ARTY",
-   "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -185,18 +189,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-04T12:17:51+00:00",
+  "checked_at_utc": "2026-09-05T12:17:57+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 4, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-09-03",
-  "btc_bar_close_utc": "2026-09-04T12:00:00+00:00"
+  "anchor_ct": "Sep 5, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-04",
+  "btc_bar_close_utc": "2026-09-05T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "8e197053bbef",
+ "code_sha": "6ed57981a770",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "cb8b7eff25daf093fede8b12055b3529ab6b85c0397278b7521c6bc7e3ccdf54"
+  "value": "29d7b3d4499e41ae39b3d83d9c51cb5179dafb3c8277c860c6ade3ffd317593d"
  }
 }

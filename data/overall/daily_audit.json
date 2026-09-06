@@ -1,18 +1,18 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-09-05T12:17:59+00:00",
- "generated_at_ct": "Sep 5, 2026 at 7:17:59 AM CDT",
+ "generated_at_utc": "2026-09-06T12:17:51+00:00",
+ "generated_at_ct": "Sep 6, 2026 at 7:17:51 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
-  "as_of": "2026-09-04",
+  "as_of": "2026-09-05",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-09-05T12:17:59+00:00"
+  "computed_at_utc": "2026-09-06T12:17:51+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-09-05T12:17:57+00:00",
-  "checked_at_ct": "Sep 5, 2026 at 7:17:57 AM CDT",
+  "checked_at_utc": "2026-09-06T12:17:50+00:00",
+  "checked_at_ct": "Sep 6, 2026 at 7:17:50 AM CDT",
   "passed": true,
   "stale_apps": [],
   "stale_assets": [],
@@ -26,10 +26,10 @@
      "MSTU",
      "ETH"
     ],
-    "actual_asof": "2026-09-04",
-    "expected_asof": "2026-09-04",
-    "actual_close": "Sep 5, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
-    "expected_close": "Sep 5, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
+    "actual_asof": "2026-09-05",
+    "expected_asof": "2026-09-05",
+    "actual_close": "Sep 6, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
+    "expected_close": "Sep 6, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
     "fresh": true,
     "age_days": 0
    },
@@ -47,12 +47,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -69,12 +69,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -91,12 +91,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -112,12 +112,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -135,12 +135,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -156,12 +156,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -177,12 +177,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -198,12 +198,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    },
    {
@@ -219,12 +219,12 @@
     "fresh": true,
     "age_days": 0,
     "data_gate": {
-     "decision": "refreshed",
+     "decision": "pinned",
      "source": "yahoo-live",
      "served_through": "2026-09-04",
      "qc_passed": true,
      "failed_checks": [],
-     "note": ""
+     "note": "snapshot already covers the last completed session"
     }
    }
   ]
@@ -234,8 +234,8 @@
   "skip_reason": null,
   "withheld_since_ct": null,
   "consecutive_withheld_days": 0,
-  "generated_at_utc": "2026-09-05T12:17:59+00:00",
-  "as_of": "2026-09-04",
+  "generated_at_utc": "2026-09-06T12:17:51+00:00",
+  "as_of": "2026-09-05",
   "profile": "Balanced",
   "signed": true
  }
