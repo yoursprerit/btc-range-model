@@ -458,10 +458,13 @@ to a day-change Chg %.
    `None` (rendered `—`) when either side is missing or unusable. This is also
    the move the live entry/exit flags and the **Target % / $ (Live)** columns
    react to, so the column now explains the rest of the row.
-2. **The session day-change is kept, labelled** — a small grey `session ±x.xx%`
-   sub-line under the Chg % value whenever it differs from the bar-relative
-   move (which, per the table above, is most rows). Nothing that was on the
-   page was lost; it is just no longer passed off as the other measurement.
+2. **One value in the column, and only one.** The session day-change was
+   briefly kept as a small grey `session ±x.xx%` sub-line under the Chg %
+   figure. That was still two numbers in one cell measuring two intervals — it
+   relocated the ambiguity rather than removing it, and readers had to work out
+   which one the row's flags were reacting to. The column now carries the
+   bar-relative move alone; the header says `Live Price vs Close of Last Bar`
+   underneath it, so the arithmetic is stated on screen.
 3. **`live_price` is set only from a real quote** (`_spot[key]["price"]`), so a
    failed fetch reads `—` instead of a fabricated 0.00%.
 4. **The quote's previous close is picked by date, not by position**
@@ -470,8 +473,7 @@ to a day-change Chg %.
    case; correct in the one where the daily chart lags the live quote (early in
    a session the bar can be missing while `regularMarketPrice` is already
    ticking, and the positional pick then measured against the session *before*
-   last). This feeds the session sub-line, the SATA row and the Current
-   Positions marks.
+   last). This feeds the SATA row and the Current Positions marks.
 5. **The SATA row shows the quote's previous close** in the last-bar column
    (`fetch_sata` now returns `prev`), so its Chg % is the same live-vs-last-bar
    move as every row above it — the same number it printed before, now with a
@@ -480,6 +482,47 @@ to a day-change Chg %.
 The Historical tab's Chg % is unrelated and unchanged: there the column is the
 chosen bar's close against the prior bar's, both from the same series, which is
 already self-consistent.
+
+### The live price had no backup (2026-09-09)
+
+Both of those columns rest on one feed. `overall_core._quote` read
+`regularMarketPrice` from Yahoo's chart meta and, if that returned nothing,
+gave up: `apply_spot` left the sleeve on its last completed bar, Live Price
+froze, Chg % read `—`, and the live entry/exit flags and **Target % / $ (Live)**
+columns had nothing to react to. Yahoo fails this way routinely on the shared
+egress IPs this app runs from — rate-limited, 403'd, geo-blocked, or simply a
+null quote — which is the same weakness `market_fallback` was written to cover
+for *daily bars*. The live column had no such cover.
+
+**Each quote now walks a provider chain** (`overall_core.quote`), Yahoo first:
+
+| instruments | chain |
+|---|---|
+| US listed equities & ETFs (incl. SATA) | Yahoo → **Nasdaq** `/api/quote/<SYM>/info` |
+| spot crypto (BTC-USD, ETH-USD) | Yahoo → **Coinbase Exchange** → **Binance** |
+
+* **Yahoo stays primary** — it covers every symbol in the universe and is what
+  every other price on the page is reconciled against. The backups are keyless,
+  public, and independent of it.
+* **Failover is per symbol.** One name Yahoo won't quote does not move the
+  other seventeen onto a backup feed.
+* **One request per provider.** Each returns both the live price and a previous
+  close from the same response (Nasdaq: `lastSalePrice − netChange`; Coinbase:
+  `last` / 24 h `open`; Binance: `lastPrice` / `prevClosePrice`), so a failover
+  never multiplies the request count.
+* **A backup price says so.** `fetch_spot` records the feed that answered in
+  `src`; the row prints a small amber `via nasdaq` under the price, and the
+  cockpit's price banner names every instrument the primary feed could not
+  serve. A fallback quote is never passed off as Yahoo's.
+* **Live only.** These providers mark the live column; they never touch
+  signals, bars, or anything persisted — the same rule the daily fallback
+  follows.
+
+Verified 2026-09-09 with the primary feed forced to fail: all 18 instruments
+plus SATA still quoted (15 Nasdaq, 2 Coinbase, SATA Nasdaq), and against
+Yahoo's simultaneous live prices the backups agreed to within 0.18% — most of
+them exactly, the rest tick-timing during an open session (Coinbase BTC
++0.02%, SOXL +0.18%).
 
 Tests: `tests/test_action_plan_price_consistency.py`.
 

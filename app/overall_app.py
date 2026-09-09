@@ -849,7 +849,17 @@ tab_live, tab_hist, tab_bt, tab_explain = st.tabs(
 with tab_live:
     _auto = (f" · auto-refreshing every {_AUTOREFRESH_SECS}s"
              if (st_autorefresh is not None and _n_spot) else "")
-    _px_note = (f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>{_auto}"
+    # quotes the PRIMARY feed could not serve, filled by a backup provider —
+    # named here (and under the price itself) so a fallback price is never
+    # mistaken for Yahoo's, and a quietly-degraded feed stays visible
+    _bk = ov.backup_quote_keys(_spot)
+    _bk_note = (" · <span style='color:#d97706'>⚠️ "
+                + ", ".join(f"{k} via {s}" for k, s in _bk)
+                + " (primary quote feed unavailable for "
+                + ("that name" if len(_bk) == 1 else "those names") + ")</span>"
+                ) if _bk else ""
+    _px_note = ((f" · <span style='color:#16a34a'>● prices live (spot, {_n_spot}/{N_ALL})</span>"
+                 f"{_auto}{_bk_note}")
                 if _n_spot else " · <span style='color:#dc2626'>spot quote unavailable — showing last bar</span>")
     st.markdown(f"#### Signals as of **{as_of.strftime('%b %d, %Y')}** (daily close) · "
                 f"generated **{signals_updated.strftime('%b %d, %Y %I:%M %p %Z')}** · "
@@ -1459,17 +1469,21 @@ with tab_live:
                    "**Price (Close of Last Bar)** "
                    "is the official close of the last completed daily bar the signals run "
                    "on; **Live Price** is the current spot quote (coloured green/red vs "
-                   "that close). **Chg %** is exactly the move between those two "
-                   "columns — how far the price has travelled since the bar the "
-                   "signals last read, which is what the live entry/exit flags and "
-                   "the **Target % / $ (Live)** columns react to — and reads **—** "
-                   "when no live quote came back (never a fabricated 0.00%). It is "
-                   "**not** the session day-change: that measures live vs the "
-                   "*previous calendar session's* close, a different interval, so it "
-                   "rides along as a small grey **session** sub-line whenever the two "
-                   "differ (they always do once a sleeve's app has ingested today's "
-                   "bar, or when its bar is anchored elsewhere — the BTC app's "
-                   "12:00-UTC bars). **Unreal. P&L** is measured "
+                   "that close). **Chg %** is one number and one only: "
+                   "`Live Price ÷ Price (Close of Last Bar) − 1` for **that "
+                   "instrument's own bar** — how far it has moved since the bar its "
+                   "signals last read, which is exactly what the live entry/exit "
+                   "flags and the **Target % / $ (Live)** columns react to. So the "
+                   "three price columns always reconcile: the third is the move from "
+                   "the first to the second, and it reads **—** when no live quote "
+                   "came back (never a fabricated 0.00%). It is deliberately **not** "
+                   "the session day-change — that measures live against the "
+                   "*previous calendar session's* close, a different interval that "
+                   "matches neither price beside it. Live prices come from Yahoo, "
+                   "falling back per instrument to Nasdaq (listed names) or "
+                   "Coinbase/Binance (spot crypto) when Yahoo cannot quote it; a "
+                   "price from a backup feed is labelled **via …** underneath. "
+                   "**Unreal. P&L** is measured "
                    "against each position's real cost basis — the official close on its "
                    "entry bar. **Target % / $ (Last bar)** is the committed allocation "
                    "of the **published Current Targetbook** — the same values as the "
@@ -1491,7 +1505,7 @@ with tab_live:
                "<th style='text-align:right'>Live Price</th>"
                "<th style='text-align:right'>Chg %"
                "<div style='font-size:9px;font-weight:400;color:#64748b'>"
-               "live vs last bar</div></th>"
+               "Live Price vs Close of Last Bar</div></th>"
                "<th style='text-align:right'>Unreal. P&amp;L</th>"
                "<th style='text-align:right'>Target % (Last bar)</th>"
                "<th style='text-align:right'>Target $ (Last bar)</th>"
@@ -1567,21 +1581,22 @@ with tab_live:
             _live_px_s = f"${_live_px:,.2f}"
             _live_px_col = (C_BUY if _live_px > _bar_px
                             else C_EXIT if _live_px < _bar_px else "inherit")
-            # Chg % — the move between the two columns it sits between:
-            # Live Price vs Price (Close of Last Bar).  It used to print the
-            # spot feed's SESSION day-change (live vs the previous calendar
-            # session's close), a different interval from the one the two price
-            # cells show, so the three columns contradicted each other in
-            # nearly every row: after the 4 PM close, once a sleeve's app has
-            # ingested today's bar both price cells hold today's close while
-            # Chg % still showed the day's move (observed 2026-09-04: SOXL
-            # $117.54 → $117.54 with +10.12%, NUGT $191.94 → $191.94 with
-            # −4.30%), and a sleeve whose bar is anchored elsewhere (the BTC
-            # app's 12:00-UTC bars, a cached vintage) was compared against a
-            # close the row never displays (MSTR: +0.51% shown as −1.39%).
-            # The session change is real and still worth seeing, so it rides
-            # along as a sub-line whenever it differs from the bar-relative
-            # move.
+            # Chg % — ONE number, and only ever this one: the move between the
+            # two columns it sits between, Live Price vs Price (Close of Last
+            # Bar), for that instrument's own bar.  It used to print the spot
+            # feed's SESSION day-change (live vs the previous calendar session's
+            # close), a different interval from the one the two price cells
+            # show, so the three columns contradicted each other in nearly every
+            # row: after the 4 PM close, once a sleeve's app has ingested
+            # today's bar both price cells hold today's close while Chg % still
+            # showed the day's move (observed 2026-09-04: SOXL $117.54 →
+            # $117.54 with +10.12%, NUGT $191.94 → $191.94 with −4.30%), and a
+            # sleeve whose bar is anchored elsewhere (the BTC app's 12:00-UTC
+            # bars, a cached vintage) was compared against a close the row never
+            # displays (MSTR: +0.51% shown as −1.39%).  A second number in the
+            # cell — the session change carried as a sub-line — only moved the
+            # ambiguity rather than removing it, so the column now shows the
+            # bar-relative move alone.
             _chg = ov.live_change_pct(_bar_px, _live_px if _has_live else None)
             if _chg is None:
                 chg_s, chg_col = "—", "#94a3b8"
@@ -1590,15 +1605,12 @@ with tab_live:
             else:
                 chg_s = f"{_chg:+.2f}%"
                 chg_col = C_BUY if _chg >= 0 else C_EXIT
-            if _chg is not None:
-                # the feed's session day-change, kept as a labelled sub-line —
-                # it is a real number, just not the one the two price columns
-                # describe.  Shown only when it differs, which is precisely the
-                # case the old column got wrong (0.00% vs a −4.30% session).
-                _sess = (_spot.get(a["key"]) or {}).get("dchg")
-                if _sess is not None and abs(_sess - _chg) > 0.05:
-                    chg_s += (f"<div style='font-size:10px;color:#94a3b8;"
-                              f"font-weight:400'>session {_sess:+.2f}%</div>")
+            # a live price served by a BACKUP feed says so under the price it
+            # produced (Yahoo could not quote this instrument on this refresh)
+            _src = (_spot.get(a["key"]) or {}).get("src")
+            if _has_live and _src and _src != ov.PRIMARY_QUOTE_SRC:
+                _live_px_s += (f"<div style='font-size:10px;color:#d97706;"
+                               f"font-weight:400'>via {_src}</div>")
             # cost basis = the real close on the entry bar
             _cb = _r["pos"].get("entry_px")
             cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
@@ -1753,6 +1765,10 @@ with tab_live:
         _sa_px = _sata.get("price"); _sa_prev = _sata.get("prev")
         _sa_pnl = _sata.get("upnl")
         sa_px_s = f"${_sa_px:,.2f}" if _sa_px else f"${si['par']:,.0f}"
+        _sa_src = _sata.get("src")               # backup feed, labelled as above
+        if _sa_px and _sa_src and _sa_src != ov.PRIMARY_QUOTE_SRC:
+            sa_px_s += (f"<div style='font-size:10px;color:#d97706;"
+                        f"font-weight:400'>via {_sa_src}</div>")
         sa_prev_s = f"${_sa_prev:,.2f}" if _sa_prev else f"${si['par']:,.2f}"
         _sa_dc = ov.live_change_pct(_sa_prev, _sa_px)
         if _sa_dc is None:

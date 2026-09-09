@@ -18,14 +18,19 @@ today's bar:
 The equity rows printed the same price twice next to a double-digit change; the
 BTC-app sleeves (12:00-UTC bar anchor / cached vintage) were measured against a
 close the row never displays.  Both now reconcile: ``Chg %`` is
-``live_change_pct(last_close, live_price)``, and the session change — still a
-real number from the feed — rides along as a sub-line when it differs.
+``live_change_pct(last_close, live_price)`` — ONE value in the column, the move
+from the price on its left to the price on its right, for that instrument's own
+bar.  (The session day-change briefly rode along as a sub-line; a second figure
+in the same cell only relocated the ambiguity, so the column carries the
+bar-relative move alone.)
 
 Also pinned here: a row with NO live quote reads "—" rather than a fabricated
 0.00% (the overlay used to copy the bar close into ``live_price`` for a key
-whose fetch failed, making the two states indistinguishable), and the SATA row
+whose fetch failed, making the two states indistinguishable); the SATA row
 shows the quote's previous close in the last-bar column instead of its $100 par
-cost basis, so its Chg % is the same live-vs-last-bar move as every row above.
+cost basis, so its Chg % is the same live-vs-last-bar move as every row above;
+and every live price resolves through a primary→backup provider chain, so one
+feed going down empties neither the Live Price nor the Chg % column.
 """
 import sys
 from pathlib import Path
@@ -98,18 +103,26 @@ def test_chg_cell_uses_the_two_displayed_prices_not_the_session_change():
     assert 'chg_s = f"{_chg:+.2f}%"' in _PLAN_BLOCK
     # the old source of the number is gone from the cell
     assert '_dchg = _r.get("dchg")' not in _PLAN_BLOCK
-    # …and the session change survives only as the labelled sub-line
-    assert "session {_sess:+.2f}%" in _PLAN_BLOCK
 
 
-def test_session_subline_is_rendered_for_a_zero_move_too():
-    """The 0.00% rows are exactly the ones the old column got wrong, so the
-    session sub-line must not hang off the non-zero branch."""
+def test_chg_cell_shows_exactly_one_value():
+    """One number in the column, and it is the bar-relative move. A second
+    figure in the cell (the session day-change, once carried as a sub-line)
+    only relocated the ambiguity the column was fixed to remove."""
+    cell = _PLAN_BLOCK.split("_chg = ov.live_change_pct")[1].split("# cost basis")[0]
+    assert "_sess" not in cell and "session {" not in cell
+    # the only values assigned to the cell are the em-dash, 0.00%, and ±x.xx%
+    assert sorted(l.strip() for l in cell.splitlines() if "chg_s" in l) == [
+        'chg_s = f"{_chg:+.2f}%"',
+        'chg_s, chg_col = "0.00%", "#64748b"',
+        'chg_s, chg_col = "—", "#94a3b8"',
+    ]
+
+
+def test_zero_move_is_neutral_not_a_red_minus_zero():
     body = _PLAN_BLOCK.split("_chg = ov.live_change_pct")[1].split("# cost basis")[0]
-    assert "if _chg is not None:" in body
     zero_branch = body.split("elif abs(_chg) < 0.005:")[1].split("else:")[0]
-    assert 'chg_s, chg_col = "0.00%"' in zero_branch      # never a red "-0.00%"
-    assert "_sess" not in zero_branch                     # sub-line applies here too
+    assert 'chg_s, chg_col = "0.00%"' in zero_branch
 
 
 def test_missing_quote_renders_an_em_dash_not_a_zero():
@@ -126,7 +139,7 @@ def test_live_price_tint_and_chg_share_one_baseline():
     assert "else C_EXIT if _live_px < _bar_px else \"inherit\")" in _PLAN_BLOCK
 
 
-# ── the quote feed behind the session sub-line ───────────────────────────
+# ── the quote feed behind the live prices ────────────────────────────────
 def _fake_chart(bar_days, closes, quote_epoch, price, tz="America/New_York"):
     """A Yahoo v8 chart payload: daily bars at 13:30 UTC (US session start)."""
     import pandas as pd
@@ -197,5 +210,146 @@ def test_sata_row_shows_a_bar_close_not_its_par_basis():
 
 # ── the caption has to say what the column is ────────────────────────────
 def test_caption_documents_the_chg_column():
-    assert "**Chg %** is exactly the move between those two " in _PLAN_BLOCK
-    assert "live vs last bar" in _PLAN_BLOCK          # the header's sub-label
+    assert "**Chg %** is one number and one only: " in _PLAN_BLOCK
+    assert "Live Price vs Close of Last Bar" in _PLAN_BLOCK   # header sub-label
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# BACKUP LIVE-PRICE FEED
+# ════════════════════════════════════════════════════════════════════════════
+# Yahoo is the only live-quote source the cockpit had. When it fails for a
+# symbol — rate-limited or 403'd on a shared egress IP, geo-blocked, or a null
+# regularMarketPrice — that row's Live Price froze on its last completed bar and
+# Chg % read "—", exactly when the market was moving. Each quote now falls back,
+# per symbol, to an independent keyless provider: Nasdaq for US listed names,
+# Coinbase then Binance for spot crypto.
+import market_fallback as mf  # noqa: E402
+
+
+def test_backup_chain_order_is_primary_first():
+    assert oc.PRIMARY_QUOTE_SRC == "yahoo"
+    assert [n for n, _ in mf._CHAINS] == ["nasdaq", "coinbase", "binance"]
+
+
+def test_quote_prefers_yahoo_and_never_calls_a_backup_when_it_answers(monkeypatch):
+    called = []
+    monkeypatch.setattr(oc, "_quote", lambda sym: (101.0, 100.0))
+    monkeypatch.setattr(mf, "live_quote", lambda sym: called.append(sym) or (1.0, 1.0, "x"))
+    assert oc.quote("SOXL") == (101.0, 100.0, "yahoo")
+    assert called == []                       # backups are untouched while Yahoo works
+
+
+def test_quote_falls_back_when_yahoo_returns_nothing(monkeypatch):
+    monkeypatch.setattr(oc, "_quote", lambda sym: (None, None))
+    monkeypatch.setattr(mf, "live_quote", lambda sym: (124.82, 123.27, "nasdaq"))
+    assert oc.quote("SOXL") == (124.82, 123.27, "nasdaq")
+
+
+def test_quote_falls_back_when_yahoo_raises(monkeypatch):
+    def _boom(sym):
+        raise RuntimeError("403 from the shared egress IP")
+    monkeypatch.setattr(oc, "_quote", _boom)
+    monkeypatch.setattr(mf, "live_quote", lambda sym: (78421.86, 78900.0, "coinbase"))
+    assert oc.quote("BTC-USD") == (78421.86, 78900.0, "coinbase")
+
+
+def test_quote_reports_nothing_when_every_feed_is_down(monkeypatch):
+    monkeypatch.setattr(oc, "_quote", lambda sym: (None, None))
+    monkeypatch.setattr(mf, "live_quote", lambda sym: (None, None, None))
+    assert oc.quote("SOXL") == (None, None, None)
+
+
+def test_failover_is_per_symbol_not_universe_wide(monkeypatch):
+    """One name Yahoo won't quote must not push the others onto a backup."""
+    monkeypatch.setattr(oc, "_quote",
+                        lambda sym: (None, None) if sym == "SOXL" else (10.0, 9.0))
+    monkeypatch.setattr(mf, "live_quote", lambda sym: (11.0, 10.5, "nasdaq"))
+    spot = oc.fetch_spot({"SOXL": "SOXL", "XLE": "XLE"})
+    assert spot["SOXL"] == dict(price=11.0, prev=10.5,
+                                dchg=pytest.approx(4.7619, abs=1e-4), src="nasdaq")
+    assert spot["XLE"]["src"] == "yahoo" and spot["XLE"]["price"] == 10.0
+    assert oc.backup_quote_keys(spot) == [("SOXL", "nasdaq")]
+
+
+def test_backup_quote_keys_is_empty_on_the_normal_path():
+    assert oc.backup_quote_keys({"XLE": dict(price=10.0, src="yahoo"),
+                                 "SOXL": dict(price=None, src=None)}) == []
+
+
+def test_sata_quote_also_falls_back(monkeypatch):
+    monkeypatch.setattr(oc, "_quote", lambda sym: (None, None))
+    monkeypatch.setattr(mf, "live_quote", lambda sym: (99.97, 99.84, "nasdaq"))
+    q = oc.fetch_sata()
+    assert q["price"] == 99.97 and q["prev"] == 99.84 and q["src"] == "nasdaq"
+
+
+# ── the providers themselves (parsing, not the network) ──────────────────
+def _json_patch(monkeypatch, payloads):
+    """Serve canned JSON per URL substring; None → that provider fails."""
+    def _fake(url, headers=None, timeout=None):
+        for frag, payload in payloads.items():
+            if frag in url:
+                return payload
+        return None
+    monkeypatch.setattr(mf, "_get_json", _fake)
+
+
+def test_nasdaq_quote_parses_price_and_derives_the_previous_close(monkeypatch):
+    _json_patch(monkeypatch, {"MSTR": {"data": {"primaryData": {
+        "lastSalePrice": "$134.485", "netChange": "-2.035",
+        "percentageChange": "-1.49%"}}}})
+    px, prev = mf.nasdaq_quote("MSTR")
+    assert px == pytest.approx(134.485)
+    assert prev == pytest.approx(136.52)                 # last − netChange
+    assert oc.live_change_pct(prev, px) == pytest.approx(-1.49, abs=0.01)
+
+
+def test_nasdaq_quote_skips_symbols_it_cannot_serve():
+    for sym in ("^VIX", "GC=F", "DX-Y.NYB", "BTC-USD"):
+        assert mf.nasdaq_quote(sym) == (None, None)
+
+
+def test_nasdaq_quote_is_none_on_a_junk_payload(monkeypatch):
+    _json_patch(monkeypatch, {"SOXL": {"data": {"primaryData": {
+        "lastSalePrice": "N/A", "netChange": "N/A"}}}})
+    assert mf.nasdaq_quote("SOXL") == (None, None)
+
+
+def test_crypto_providers_parse_their_own_shapes(monkeypatch):
+    _json_patch(monkeypatch, {
+        "coinbase": {"open": "78900", "last": "78605.14"},
+        "binance": {"lastPrice": "78600.67", "prevClosePrice": "78549.53"}})
+    assert mf.coinbase_quote("BTC-USD") == (pytest.approx(78605.14),
+                                            pytest.approx(78900.0))
+    assert mf.binance_quote("BTC-USD") == (pytest.approx(78600.67),
+                                           pytest.approx(78549.53))
+    assert mf.coinbase_quote("SOXL") == (None, None)     # equities aren't crypto
+
+
+def test_live_quote_walks_the_chain_to_the_first_feed_that_answers(monkeypatch):
+    _json_patch(monkeypatch, {"binance": {"lastPrice": "78600.67",
+                                          "prevClosePrice": "78549.53"}})
+    # nasdaq refuses the symbol, coinbase returns nothing → binance serves it
+    px, prev, src = mf.live_quote("BTC-USD")
+    assert src == "binance" and px == pytest.approx(78600.67)
+
+
+def test_live_quote_survives_a_provider_that_raises(monkeypatch):
+    monkeypatch.setattr(mf, "nasdaq_quote", lambda s: (_ for _ in ()).throw(OSError("down")))
+    _json_patch(monkeypatch, {"coinbase": {"open": "2498.35", "last": "2490.01"}})
+    assert mf.live_quote("ETH-USD") == (pytest.approx(2490.01),
+                                        pytest.approx(2498.35), "coinbase")
+
+
+# ── the cockpit says which prices are not the primary feed's ─────────────
+def test_a_backup_price_is_labelled_in_the_table():
+    assert '_src = (_spot.get(a["key"]) or {}).get("src")' in _PLAN_BLOCK
+    assert 'if _has_live and _src and _src != ov.PRIMARY_QUOTE_SRC:' in _PLAN_BLOCK
+    assert "via {_src}" in _PLAN_BLOCK
+    assert "via {_sa_src}" in _PLAN_BLOCK                # …and on the SATA row
+
+
+def test_the_price_banner_names_backup_served_instruments():
+    banner = _APP.split("_px_note = ")[0].split("_auto = ")[1]
+    assert "_bk = ov.backup_quote_keys(_spot)" in banner
+    assert "primary quote feed unavailable for" in banner

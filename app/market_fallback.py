@@ -145,3 +145,136 @@ def merge_frame(symbol_map: dict, start: str, end: str | None = None) -> pd.Data
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1).sort_index()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LIVE QUOTES — backup for the action plan's spot prices
+# ════════════════════════════════════════════════════════════════════════════
+# ``overall_core._quote`` reads each instrument's live price from Yahoo's chart
+# meta.  That single feed is the same one this module already backstops for
+# daily bars, and it fails the same ways: rate-limited or 403'd on shared egress
+# IPs, geo-blocked, or simply returning a null ``regularMarketPrice``.  When it
+# does, every row of 🎯 Today's action plan falls back to its last completed bar
+# close — Live Price freezes, Chg % reads "—", and the live entry/exit flags and
+# the Target % / $ (Live) columns have nothing to react to.  The cockpit is then
+# blind exactly when the market is moving.
+#
+# So each quote has a provider chain, tried in order until one returns a usable
+# price.  Every provider here is keyless, public, and independent of Yahoo:
+#
+#   US listed equities & ETFs   Yahoo → Nasdaq (``/api/quote/<SYM>/info``)
+#   spot crypto (BTC-USD, …)    Yahoo → Coinbase Exchange → Binance
+#
+# Each provider costs ONE request and returns both halves of a quote (the live
+# price and the previous close) from that one response, so a failover never
+# multiplies the request count.  The caller records which source served each
+# quote (``fetch_spot`` → ``src``) and the cockpit says so on screen — a backup
+# price is never passed off as the primary feed's.
+#
+# What the fallbacks are NOT used for: signals, bars, or anything persisted.
+# They mark the live column only, exactly like the Yahoo quote they replace.
+_CRYPTO_PRODUCTS = {          # spot symbol → (Coinbase product, Binance pair)
+    "BTC-USD": ("BTC-USD", "BTCUSDT"),
+    "ETH-USD": ("ETH-USD", "ETHUSDT"),
+}
+_BINANCE_HOSTS = ("https://api.binance.us", "https://api.binance.com")
+
+
+def _get_json(url: str, headers: dict | None = None, timeout: int = _TIMEOUT):
+    """GET → parsed JSON, or ``None`` on any HTTP/JSON/network failure."""
+    try:
+        req = urllib.request.Request(url, headers=headers or {"User-Agent": _UA["User-Agent"]})
+        with urllib.request.urlopen(req, timeout=timeout) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _pair(px, prev) -> tuple:
+    """(price, previous close) with unusable values normalised to ``None``."""
+    def _ok(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f and f > 0 else None      # finite and positive
+    return _ok(px), _ok(prev)
+
+
+def nasdaq_quote(symbol: str) -> tuple:
+    """Live (price, previous close) for a US listed symbol from Nasdaq.
+
+    ``primaryData`` is the REGULAR-session quote — the same thing Yahoo's
+    ``regularMarketPrice`` is — so the two are interchangeable; the extended
+    hours print (``secondaryData``) is deliberately ignored.  The previous close
+    is derived as ``lastSalePrice − netChange``, which is what that percentage
+    change is quoted against."""
+    if not supports(symbol):
+        return None, None
+    for cls in _ASSET_CLASSES:
+        j = _get_json(f"{_HOST}/{symbol.upper()}/info?"
+                      + urllib.parse.urlencode({"assetclass": cls}))
+        d = ((j or {}).get("data") or {}).get("primaryData") or {}
+        px = _num(d.get("lastSalePrice"))
+        if px != px or px <= 0:                     # NaN / absent → try next class
+            continue
+        chg = _num(d.get("netChange"))
+        return _pair(px, (px - chg) if chg == chg else None)
+    return None, None
+
+
+def coinbase_quote(symbol: str) -> tuple:
+    """Live (price, 24 h-ago price) for spot crypto from Coinbase Exchange.
+
+    USD-denominated, so it needs no stablecoin basis adjustment.  ``open`` is
+    the rolling 24-hour open rather than the previous UTC day's close — close
+    enough for the day-change readouts a backup feed serves, and the action
+    plan's Chg % does not use it at all (it measures against the strategy's own
+    last bar close)."""
+    prod = (_CRYPTO_PRODUCTS.get(symbol.upper()) or (None, None))[0]
+    if not prod:
+        return None, None
+    j = _get_json(f"https://api.exchange.coinbase.com/products/{prod}/stats")
+    return _pair((j or {}).get("last"), (j or {}).get("open"))
+
+
+def binance_quote(symbol: str) -> tuple:
+    """Live (price, previous close) for spot crypto from Binance's 24 h ticker.
+
+    Quoted in USDT, not USD — a basis of a few basis points against the Yahoo /
+    Coinbase USD print. Last in the crypto chain for that reason, and because
+    ``api.binance.com`` answers 451 from US-hosted infrastructure (so the ``.us``
+    host is tried first, as in the BTC app)."""
+    pair = (_CRYPTO_PRODUCTS.get(symbol.upper()) or (None, None))[1]
+    if not pair:
+        return None, None
+    for host in _BINANCE_HOSTS:
+        j = _get_json(f"{host}/api/v3/ticker/24hr?symbol={pair}")
+        if j and j.get("lastPrice"):
+            return _pair(j.get("lastPrice"), j.get("prevClosePrice"))
+    return None, None
+
+
+# provider chains, in the order they are tried, per instrument type
+_CHAINS = (
+    ("nasdaq", nasdaq_quote),
+    ("coinbase", coinbase_quote),
+    ("binance", binance_quote),
+)
+
+
+def live_quote(symbol: str) -> tuple:
+    """Backup live quote: ``(price, previous close, source)`` from the first
+    provider that serves ``symbol``, or ``(None, None, None)``.
+
+    Only the price is guaranteed — a provider that gives no previous close
+    still counts as a served quote, since the action plan measures its change
+    against the strategy's last bar, not against the feed's previous session."""
+    for name, fn in _CHAINS:
+        try:
+            px, prev = fn(symbol)
+        except Exception:
+            continue
+        if px:
+            return px, prev, name
+    return None, None, None

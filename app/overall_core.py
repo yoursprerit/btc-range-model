@@ -3096,30 +3096,79 @@ def _quote(symbol: str) -> tuple:
     return None, None
 
 
+PRIMARY_QUOTE_SRC = "yahoo"
+
+
+def quote(symbol: str) -> tuple:
+    """``(price, previous close, source)`` — the live quote for ``symbol`` from
+    the first feed that serves it.
+
+    Yahoo stays primary: it covers every instrument in the universe and is the
+    feed every other price on the page is reconciled against.  When it returns
+    nothing for a symbol — rate-limited or 403'd on a shared egress IP, geo-
+    blocked, or a null ``regularMarketPrice`` — the backup chain in
+    ``market_fallback`` takes over (Nasdaq for US listed names, Coinbase then
+    Binance for spot crypto), so the action plan keeps a live price instead of
+    freezing every row on its last completed bar.  The failover is PER SYMBOL:
+    one instrument Yahoo won't quote does not push the other seventeen onto a
+    backup feed.
+
+    ``source`` names the feed that answered (``None`` when none did) so the
+    cockpit can say which prices are not the primary feed's — a backup quote is
+    never passed off as Yahoo's."""
+    try:
+        px, prev = _quote(symbol)
+        if px:
+            return float(px), prev, PRIMARY_QUOTE_SRC
+    except Exception:
+        pass
+    try:
+        import market_fallback as _mf
+        px, prev, src = _mf.live_quote(symbol)
+        if px:
+            return float(px), prev, src
+    except Exception:
+        pass
+    return None, None, None
+
+
 def fetch_spot(symbols: dict | None = None) -> dict:
     """Live spot price + day-change % for each instrument, fetched concurrently.
-    Returns {key: {"price": float|None, "dchg": float|None}}."""
+    Returns {key: {"price": float|None, "prev": float|None, "dchg": float|None,
+    "src": str|None}} — ``src`` is the feed that served the quote (see
+    ``quote``)."""
     from concurrent.futures import ThreadPoolExecutor
     symbols = symbols or SPOT_SYMBOLS
 
     def _one(item):
         k, sym = item
-        px, prev = _quote(sym)
+        px, prev, src = quote(sym)
         dchg = ((px / prev - 1) * 100) if (px and prev) else None
-        return k, dict(price=px, dchg=dchg)
+        return k, dict(price=px, prev=prev, dchg=dchg, src=src)
 
     items = list(symbols.items())
     with ThreadPoolExecutor(max_workers=min(13, len(items))) as ex:
         return {k: v for k, v in ex.map(_one, items)}
 
 
+def backup_quote_keys(spot: dict) -> list:
+    """Keys whose live price came from a BACKUP feed, ``[(key, source), …]``.
+
+    Empty in the normal case — the cockpit's price banner uses it to name the
+    instruments Yahoo could not quote this refresh."""
+    return sorted((k, v["src"]) for k, v in (spot or {}).items()
+                  if v and v.get("price") and v.get("src")
+                  and v["src"] != PRIMARY_QUOTE_SRC)
+
+
 def fetch_sata() -> dict:
-    """Live SATA quote: current price, day-change %, and unrealised P&L measured
-    against its $100 par cost basis (the price idle cash is parked at)."""
-    px, prev = _quote(SATA["ticker"])
+    """Live SATA quote: current price, previous close, day-change %, and
+    unrealised P&L measured against its $100 par cost basis (the price idle cash
+    is parked at).  Same primary→backup feed chain as every other quote."""
+    px, prev, src = quote(SATA["ticker"])
     dchg = ((px / prev - 1) * 100) if (px and prev) else None
     upnl = ((px / SATA["par"] - 1) * 100) if px else None
-    return dict(price=px, prev=prev, dchg=dchg, upnl=upnl)
+    return dict(price=px, prev=prev, dchg=dchg, upnl=upnl, src=src)
 
 
 def live_change_pct(bar_close, live_price) -> float | None:
