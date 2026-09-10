@@ -178,8 +178,21 @@ has stalled:
   separately — marked ⏳, with no P&L, because the bar they will earn has not
   happened — so an open or a close is visible in the log the day it is
   published rather than a day later.
+* **The bar that just closed posts its P&L immediately.** A row is dated at
+  the close its ticket executed at and is built by diffing the weight row
+  *after* it, so the matrix's last bar can never carry a settled row — the
+  book put on at that close is only published the next morning. The bar's
+  **P&L**, though, is decided the moment it prints: it was earned by the book
+  already in the matrix, the one put on at the *previous* close. Holding the
+  whole row back until the ticket lands is what used to leave the table a day
+  behind every evening. `pnl_only_tail_row` posts that bar straight away — a
+  ticket-less row marked 🔔, with the day's P&L and breakdown filled in and
+  the trade columns reading *awaiting tomorrow's publish* — and the row is
+  dropped as a duplicate the moment a settled or ⏳ pending ticket claims the
+  same date. If the next morning's publish repeats today's book, nothing
+  traded at that close and the row folds into the 🟰 summary instead.
 
-Both helpers live in `app/overall_core.py` and are covered by
+All three helpers live in `app/overall_core.py` and are covered by
 `tests/test_book_ticket_visibility.py`.
 
 ### Two win rates, deliberately

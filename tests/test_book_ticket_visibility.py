@@ -145,3 +145,75 @@ def test_parsed_replay_books_are_accepted_too():
         == [pd.Timestamp("2026-07-09")]
     assert oc.book_change_status(rep["books"])["last_change"] == \
         pd.Timestamp("2026-07-09")
+
+
+# ── the just-closed bar — its P&L, at its own close ────────────────────────
+# A log row is dated at the close its ticket executed at and is built by
+# diffing the NEXT weight row, so the matrix's last bar never carries one:
+# the book put on at that close only publishes the next morning.  Its P&L is
+# settled the moment the bar prints, though, so ``pnl_only_tail_row`` posts
+# the bar straight away and the ticket fills in the next day.
+def test_the_newest_bar_posts_its_pnl_before_its_ticket_exists():
+    # evening of 07-09: bars → 07-09, newest book as_of 07-08 (a quiet repeat)
+    rets = pd.DataFrame({"AAA": 0.01, "BBB": 0.02}, index=IDX[:4])
+    rep = oc.published_book_replay(rets, BOOKS[:3], sata_daily=0.0)
+    log = oc.daily_trade_log(rep["weights"], rep["sata"], IDX[0])
+    pend = oc.pending_book_tickets(BOOKS[:3], rep["weights"].index[-1])
+    # no settled row can ever be dated at the last bar (the 07-08 book here
+    # is a quiet repeat, so the newest settled ticket is older still)
+    assert max(d["date"] for d in log) <= rep["weights"].index[-2]
+    assert pend == []
+    tail = oc.pnl_only_tail_row(rep["weights"], rep["sata"], IDX[0],
+                                logged=[d["date"] for d in log + pend])
+    assert tail["date"] == pd.Timestamp("2026-07-09")
+    assert tail["pnl_only"] is True
+    # no ticket is claimed for it — that is exactly what is still unknown
+    assert tail["actions"] == [] and tail["gross"] == 0.0
+    assert tail["turnover"] == 0.0
+    assert tail["n_buys"] == tail["n_sells"] == tail["n_resize"] == 0
+    # and the P&L series the table renders from does cover that bar
+    dpl = oc.pnl_daily_replay(rets, rep["weights"], rep["sata"], IDX[0],
+                              sata_daily=0.0)
+    assert tail["date"] in dpl["total"].index
+
+
+def test_the_row_is_dropped_once_a_ticket_claims_the_same_date():
+    # next morning the 07-09 book publishes: its ticket is pending AT 07-09,
+    # so the ticket-less row would duplicate it
+    rets = pd.DataFrame({"AAA": 0.0, "BBB": 0.0}, index=IDX[:4])
+    rep = oc.published_book_replay(rets, BOOKS, sata_daily=0.0)
+    pend = oc.pending_book_tickets(BOOKS, rep["weights"].index[-1])
+    assert [p["date"] for p in pend] == [pd.Timestamp("2026-07-09")]
+    assert oc.pnl_only_tail_row(rep["weights"], rep["sata"], IDX[0],
+                                logged=[p["date"] for p in pend]) is None
+
+
+def test_a_settled_row_on_the_last_bar_also_suppresses_it():
+    rets = pd.DataFrame({"AAA": 0.0, "BBB": 0.0}, index=IDX)
+    rep = oc.published_book_replay(rets, BOOKS, sata_daily=0.0)
+    log = oc.daily_trade_log(rep["weights"], rep["sata"], IDX[0])
+    # 07-09 is settled here (a 07-10 bar exists), and the last bar is 07-10
+    tail = oc.pnl_only_tail_row(rep["weights"], rep["sata"], IDX[0],
+                                logged=[d["date"] for d in log])
+    assert tail["date"] == pd.Timestamp("2026-07-10")
+    assert oc.pnl_only_tail_row(rep["weights"], rep["sata"], IDX[0],
+                                logged=[pd.Timestamp("2026-07-10")]) is None
+
+
+def test_the_anchor_bar_alone_has_no_pnl_to_post():
+    # one bar on/after start → it IS the cost basis and earns nothing
+    rets = pd.DataFrame({"AAA": 0.0, "BBB": 0.0}, index=IDX)
+    rep = oc.published_book_replay(rets, BOOKS, sata_daily=0.0)
+    assert oc.pnl_only_tail_row(rep["weights"], rep["sata"],
+                                rep["weights"].index[-1], logged=[]) is None
+    assert oc.pnl_only_tail_row(pd.DataFrame(), pd.Series(dtype=float),
+                                IDX[0]) is None
+
+
+def test_the_row_carries_the_bars_own_cash_weight_unchanged():
+    rets = pd.DataFrame({"AAA": 0.0, "BBB": 0.0}, index=IDX[:4])
+    rep = oc.published_book_replay(rets, BOOKS[:3], sata_daily=0.0)
+    tail = oc.pnl_only_tail_row(rep["weights"], rep["sata"], IDX[0], logged=[])
+    cash = float(rep["sata"].iloc[-1])
+    # nothing traded that the record knows of, so cash cannot have moved
+    assert np.isclose(tail["cash0"], cash) and np.isclose(tail["cash1"], cash)

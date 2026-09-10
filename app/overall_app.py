@@ -2653,6 +2653,22 @@ with tab_live:
                     _bk_status = ov.book_change_status(_bookrep["books"])
                     _dtl_pending = ov.pending_book_tickets(
                         _bookrep["books"], _wf["weights"].index[-1])
+                # THE DAY'S OWN P&L, AT THE DAY'S OWN CLOSE: a row is dated at
+                # the close its ticket executed at and needs the NEXT weight
+                # row to exist, so the newest bar never carries one — the book
+                # put on at its close only publishes tomorrow morning.  Its
+                # P&L, though, is decided the moment the bar prints (the book
+                # already in the matrix earned it), so the table used to sit a
+                # day behind every evening for no reason.  Post that bar now as
+                # a ticket-less row and let the ticket fill in tomorrow, when
+                # the publish turns it into a ⏳ pending row at the same date.
+                _dtl_tail = None
+                if _end_arg is None:
+                    _dtl_tail = ov.pnl_only_tail_row(
+                        _wf["weights"], _wf["sata"], _start_sel,
+                        logged=[d["date"] for d in _dtl_pending + _dtl])
+                _dtl_rows = ([_dtl_tail] if _dtl_tail else []) \
+                    + _dtl_pending + _dtl
                 _dtl_buys = sum(d["n_buys"] for d in _dtl)
                 _dtl_sells = sum(d["n_sells"] for d in _dtl)
                 _dtl_resz = sum(d["n_resize"] for d in _dtl)
@@ -2706,7 +2722,18 @@ with tab_live:
                            "reaches the newest archived book instead of "
                            "simply ending, and a book already published but "
                            "not yet earning (its first bar has not printed) "
-                           "leads the table marked ⏳. "
+                           "leads the table marked ⏳. **The day that just "
+                           "closed posts its P&L immediately**, marked 🔔: "
+                           "the bar's P&L is settled the moment it prints "
+                           "(the book that earned it was put on at the "
+                           "previous close), while the ticket executed at "
+                           "*this* close is only known once tomorrow "
+                           "morning's book publishes — so the row appears "
+                           "at the close with its P&L and fills in its "
+                           "trades the next morning, instead of the whole "
+                           "row waiting a day. If tomorrow's publish repeats "
+                           "today's book, nothing traded at this close and "
+                           "the row folds into the 🟰 summary. "
                            "**≈ $ traded** scales the day's gross weight "
                            "movement (Σ|Δweight|) by the 💼 portfolio value; "
                            "turnover is one-way (½·Σ|Δweight|, cash leg "
@@ -2736,7 +2763,7 @@ with tab_live:
                            "book is the cost basis, so the log starts with "
                            "the changes after it. (The 📆 Daily P&L toggle "
                            "below charts every day, quiet ones included.)")
-                if not _dtl and not _dtl_pending:
+                if not _dtl_rows:
                     st.info("The book never changed in this window — no daily "
                             "trades to list.")
                 else:
@@ -2813,16 +2840,27 @@ with tab_live:
                             f"positions simply ran. The record is current "
                             f"through <b>{_bk_status['latest']:%b %d, %Y}</b>."
                             f"</td></tr>")
-                    # a published-but-not-yet-earning book leads the table:
-                    # same ticket shape, no Day P&L (its first bar has not
-                    # printed), flagged so it is never read as settled record
-                    for _d in _dtl_pending + _dtl:
+                    # the newest bar leads the table even before its ticket
+                    # exists (🔔 — P&L settled at this close, trades due with
+                    # tomorrow's publish), then any published-but-not-yet-
+                    # earning book (⏳ — same ticket shape, its own first bar
+                    # has not printed); both flagged so neither is ever read
+                    # as settled record
+                    for _d in _dtl_rows:
                         _sig = " · ".join(_dtl_chip(a) for a in _d["actions"]
                                           if a["signal_change"])
                         _tilt = " · ".join(_dtl_chip(a) for a in _d["actions"]
                                            if not a["signal_change"])
                         _none = "<span style='color:#94a3b8'>—</span>"
                         _pl_s = _bd_s = _none
+                        # the just-closed bar: its P&L is settled, its ticket
+                        # is not (tomorrow's publish carries it), so say so in
+                        # the trade columns rather than leaving a bare dash
+                        # that reads as "the book did nothing today"
+                        if _d.get("pnl_only"):
+                            _sig = _tilt = (
+                                "<span style='color:#94a3b8;font-size:11px'>"
+                                "awaiting tomorrow's publish</span>")
                         if _dpl is not None and _d["date"] in _dpl["total"].index:
                             _pl_v = float(_dpl["total"].loc[_d["date"]]) \
                                 * portfolio_value
@@ -2874,22 +2912,29 @@ with tab_live:
                             + ("<div style='font-size:9.5px;font-weight:600;"
                                "color:#b45309'>⏳ published — earns from the "
                                "next bar</div>" if _d.get("pending") else "")
+                            + ("<div style='font-size:9.5px;font-weight:600;"
+                               "color:#0369a1'>🔔 P&amp;L posted at this "
+                               "close — ticket lands tomorrow</div>"
+                               if _d.get("pnl_only") else "")
                             + f"</td>"
                             f"<td style='padding:6px 10px;font-size:11.5px'>"
                             f"{_sig or _none}</td>"
                             f"<td style='padding:6px 10px;font-size:11.5px'>"
                             f"{_tilt or _none}</td>"
-                            f"<td style='text-align:right;font-weight:600'>"
-                            f"{_d['turnover']*100:.1f}%</td>"
-                            f"<td style='text-align:right;"
-                            f"font-variant-numeric:tabular-nums'>"
-                            f"${_d['gross']*portfolio_value:,.0f}</td>"
-                            f"<td style='text-align:right;padding:6px 0 6px "
-                            f"10px;font-size:10.5px;"
-                            f"font-variant-numeric:tabular-nums'>{_bd_s}</td>"
-                            f"<td style='text-align:right;"
-                            f"font-variant-numeric:tabular-nums'>{_pl_s}</td>"
-                            f"</tr>")
+                            + (f"<td style='text-align:right'>{_none}</td>"
+                               f"<td style='text-align:right'>{_none}</td>"
+                               if _d.get("pnl_only") else
+                               f"<td style='text-align:right;font-weight:600'>"
+                               f"{_d['turnover']*100:.1f}%</td>"
+                               f"<td style='text-align:right;"
+                               f"font-variant-numeric:tabular-nums'>"
+                               f"${_d['gross']*portfolio_value:,.0f}</td>")
+                            + f"<td style='text-align:right;padding:6px 0 6px "
+                              f"10px;font-size:10.5px;"
+                              f"font-variant-numeric:tabular-nums'>{_bd_s}</td>"
+                              f"<td style='text-align:right;"
+                              f"font-variant-numeric:tabular-nums'>{_pl_s}</td>"
+                              f"</tr>")
                     st.markdown(
                         f"<div style='overflow-x:auto;max-height:440px;"
                         f"overflow-y:auto;margin:8px 0;'>"
@@ -2916,6 +2961,9 @@ with tab_live:
                            f"{'s' if len(_dtl_pending) != 1 else ''} "
                            "published but not yet earning (⏳ above)"
                            if _dtl_pending else "")
+                        + (f" · {_dtl_tail['date']:%b %d, %Y} posted at its "
+                           "own close, ticket due with tomorrow's publish "
+                           "(🔔 above)" if _dtl_tail else "")
                         + ". A book that repeats the previous one is not a "
                           "missing row — it is a day the strategy chose to "
                           "hold.")

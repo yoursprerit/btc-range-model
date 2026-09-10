@@ -2878,6 +2878,47 @@ def pending_book_tickets(books: list[dict], covered_through,
     return out
 
 
+def pnl_only_tail_row(weights: pd.DataFrame, sata: pd.Series, start,
+                      logged=None) -> dict | None:
+    """The newest bar as a TICKET-LESS trade-log row, so a day's P&L reaches
+    the log at that day's own close instead of the next morning.
+
+    ``daily_trade_log`` dates each row at the close its ticket was executed
+    at and builds that ticket by diffing the weight row AFTER it, so the
+    matrix's last bar can never carry a row: the book put on at its close is
+    only published the next morning, and ``pending_book_tickets`` can only
+    list it once it exists.  The bar's own **P&L**, though, is fully known
+    the moment the bar prints — it was earned by the book already in the
+    matrix, the one put on at the *previous* close.  Withholding the whole
+    row until the ticket lands is what makes the table look a day behind
+    every evening: the market closes, the day's P&L is decided, and the log
+    still ends yesterday.
+
+    This returns that bar in ``daily_trade_log``'s per-day shape with an
+    empty ``actions`` list and ``pnl_only=True`` (``gross``/``turnover`` 0 —
+    nothing traded that the record knows of yet), for the caller to render
+    ahead of the settled rows and fill from the same daily-P&L series every
+    other row uses.  ``logged`` is the dates already listed (settled rows
+    plus pending tickets); when one of them already covers the last bar —
+    the state from the next morning's publish onwards — the row would be a
+    duplicate and ``None`` comes back instead.  ``None`` too when the window
+    holds fewer than two bars (the anchor bar is the cost basis and earns
+    nothing, so it has no P&L to post)."""
+    if weights is None or not len(weights.index):
+        return None
+    idx = weights.index[weights.index >= pd.Timestamp(start)]
+    if len(idx) < 2:
+        return None
+    last = idx[-1]
+    if any(pd.Timestamp(d) == last for d in (logged or [])):
+        return None
+    cash = float(pd.Series(sata).reindex([last]).fillna(0.0).iloc[0]) \
+        if sata is not None else 0.0
+    return dict(date=last, actions=[], gross=0.0, turnover=0.0,
+                cash0=cash, cash1=cash, n_buys=0, n_sells=0, n_resize=0,
+                pnl_only=True)
+
+
 def book_change_status(books: list[dict],
                        min_delta: float = 0.0005) -> dict | None:
     """Why the as-published trade log ends where it does: ``n_books``,
