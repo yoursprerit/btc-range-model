@@ -389,10 +389,13 @@ whole session.
 
 It also leaves alone any signal bar that already has an execution report — the
 same archive ledger the duplicate-run lock uses — so an on-time run followed by
-a late one is a no-op, not a second round of orders. That is what makes the flag
-safe to leave switched on permanently in the wrapper (`IBKR_CATCH_UP=1`), where
-it pairs with Task Scheduler's *"Run task as soon as possible after a scheduled
-start is missed"*.
+a late one is a no-op, not a second round of orders.
+
+That is why **both wrappers pass it by default**: the whole reason the scheduled
+task carries Task Scheduler's *"Run task as soon as possible after a scheduled
+start is missed"* is to rescue a fire the host slept through, and without the
+flag that late fire aborts on the session-hours guard anyway. Set
+`IBKR_CATCH_UP=0` to opt out and keep the older refuse-after-16:00 behaviour.
 
 ```bash
 # rescue today's book after the close (paper):
@@ -592,9 +595,9 @@ python scripts/backfill_executed_archive.py
   not a stale trade — and its weekend/holiday guard means no orders are ever
   placed while the US market is closed, even though a fresh book is published
   on those days.
-- **A missed slot** (host off at 2:30 PM CT): add `--catch-up` (env
-  `IBKR_CATCH_UP=1` in either wrapper) so a run firing late still places the
-  day's book in extended hours — see
+- **A missed slot** (host off at 2:30 PM CT): `--catch-up` — which both
+  wrappers pass by default (`IBKR_CATCH_UP=0` opts out) — lets a run firing
+  late still place the day's book in extended hours; see
   [When the slot was missed](#when-the-slot-was-missed----catch-up).
 
 ## Pre-flight guards (what the executor refuses to do)

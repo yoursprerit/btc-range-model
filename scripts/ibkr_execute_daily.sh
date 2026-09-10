@@ -30,10 +30,11 @@
 #   IBKR_ORDER_TYPE    marketable-limit (default) | moc | market
 #   IBKR_SLIPPAGE_CAP  how far through the touch a marketable limit prices
 #                      (default 0.005 = 0.5%)
-#   IBKR_CATCH_UP      1 lets a run that fires AFTER the 2:30 PM CT slot still
-#                      place the day's book, in extended hours out to 20:00 ET
-#                      (for a host that was down at the slot). No-op while the
-#                      market is open; skips a bar already executed.
+#   IBKR_CATCH_UP      ON by default: a run firing AFTER the 2:30 PM CT slot
+#                      still places the day's book, in extended hours out to
+#                      20:00 ET (for a host that was down at the slot). No-op
+#                      while the market is open; skips a bar already executed.
+#                      Set to 0 to opt out.
 #
 # OVERALL_BOOK_SECRET must be exported (same value used to publish) so the book's
 # signature verifies before any order is placed.
@@ -81,10 +82,13 @@ ARGS=(--file "${BOOK}" --execute --band "${BAND}" --host "${HOST}" --port "${POR
       --account-mode "${ACCOUNT_MODE}")
 [ -n "${IBKR_ORDER_TYPE:-}" ]   && ARGS+=(--order-type "${IBKR_ORDER_TYPE}")
 [ -n "${IBKR_SLIPPAGE_CAP:-}" ] && ARGS+=(--slippage-cap "${IBKR_SLIPPAGE_CAP}")
-# Missed-slot catch-up: a host that was down at 2:30 PM CT never ran the job, and
-# tomorrow the book is refused as stale — the session is lost unless it is traded
-# late the same day. The executor decides whether that is still possible.
-[ "${IBKR_CATCH_UP:-0}" = "1" ] && ARGS+=(--catch-up)
+# Missed-slot catch-up, ON unless IBKR_CATCH_UP=0. A host that was down at
+# 2:30 PM CT never ran the job, and tomorrow the book is refused as stale — the
+# session is lost unless it is traded late the same day. Default-on because a
+# flag nobody set rescues nothing; the executor still decides whether a catch-up
+# is possible: inert during the session, silent on a bar already executed,
+# refused once nothing would fill.
+[ "${IBKR_CATCH_UP:-1}" != "0" ] && ARGS+=(--catch-up)
 if [ "${ACCOUNT_MODE}" = "live" ]; then
   ARGS+=(--confirm-live)
   [ -n "${IBKR_EXPECTED_ACCOUNT:-}" ]   && ARGS+=(--expected-account "${IBKR_EXPECTED_ACCOUNT}")

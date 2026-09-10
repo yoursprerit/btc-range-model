@@ -35,14 +35,16 @@
       IBKR_SLIPPAGE_CAP  how far through the touch a marketable limit prices
                          (default 0.005 = 0.5%). Widen it on a laptop with
                          delayed-only market data.
-      IBKR_CATCH_UP      set to 1 to let a run that fires AFTER the 2:30 PM CT
-                         slot still place the day's book, in extended hours out
-                         to 20:00 ET. For a laptop that was switched off at the
-                         slot: pair it with Task Scheduler's "Run task as soon
-                         as possible after a scheduled start is missed". It is a
-                         no-op while the market is open and skips a bar that
-                         already has an execution report, so leaving it on
-                         changes nothing about an on-time run.
+      IBKR_CATCH_UP      ON by default: a run that fires AFTER the 2:30 PM CT
+                         slot still places the day's book, in extended hours out
+                         to 20:00 ET. That is the point of Task Scheduler's "Run
+                         task as soon as possible after a scheduled start is
+                         missed" on a laptop that was switched off - without it
+                         the late fire aborts on the session-hours guard and the
+                         day goes untraded. It is a no-op while the market is
+                         open and skips a bar that already has an execution
+                         report, so an on-time run is unchanged. Set it to 0 to
+                         opt out and keep the old refuse-after-16:00 behaviour.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File C:\btc-range-model\scripts\ibkr_execute_daily.ps1
@@ -139,10 +141,14 @@ if ($env:IBKR_KILL_SWITCH_FILE) { $ExecArgs += @('--kill-switch-file', $env:IBKR
 # Order routing: marketable-limit (default) | moc | market - see IBKR_PAPER_TRADING.md.
 if ($env:IBKR_ORDER_TYPE)   { $ExecArgs += @('--order-type', $env:IBKR_ORDER_TYPE) }
 if ($env:IBKR_SLIPPAGE_CAP) { $ExecArgs += @('--slippage-cap', $env:IBKR_SLIPPAGE_CAP) }
-# Missed-slot catch-up: a laptop that was off at 2:30 PM CT never ran the task,
-# and tomorrow the book is refused as stale - the session is lost unless it is
-# traded late the same day. The executor decides whether that is still possible.
-if ($env:IBKR_CATCH_UP -eq '1') { $ExecArgs += '--catch-up' }
+# Missed-slot catch-up, ON unless IBKR_CATCH_UP=0. A laptop that was off at
+# 2:30 PM CT never ran the task, and tomorrow the book is refused as stale - the
+# session is lost unless it is traded late the same day. Default-on because the
+# whole reason this wrapper runs under -StartWhenAvailable is to rescue that
+# fire, and a flag nobody set rescues nothing. The executor still decides
+# whether a catch-up is possible at all: inert during the session, silent on a
+# bar that already has an execution report, refused once nothing would fill.
+if ($env:IBKR_CATCH_UP -ne '0') { $ExecArgs += '--catch-up' }
 # Extra flags passed straight through, the way ibkr_execute_daily.sh does. The
 # rehearsal uses it to reach the order stage on a day whose book is stale or
 # already executed (IBKR_EXTRA='--allow-stale-bar --force-rerun'), which the
