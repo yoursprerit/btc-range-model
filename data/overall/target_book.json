@@ -1,81 +1,43 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-09T12:17:51+00:00",
- "as_of": "2026-09-08",
+ "generated_at_utc": "2026-09-10T12:18:20+00:00",
+ "as_of": "2026-09-09",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
-  "GLDM": 0.07669980752381439,
-  "XLE": 0.06927031012102774,
-  "OIH": 0.10997240141224157,
-  "ERX": 0.1,
+  "GLDM": 0.1713119121648447,
   "UGL": 0.1,
-  "GRID": 0.24405748094291624,
-  "ARTY": 0.3
+  "GRID": 0.3,
+  "XLE": 0.14868808783515525,
+  "OIH": 0.18,
+  "ERX": 0.1
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GLDM": 86.23,
-  "XLE": 64.77,
-  "OIH": 428.57,
-  "ERX": 111.27,
-  "UGL": 50.61,
-  "GRID": 181.97,
-  "ARTY": 76.73
+  "GLDM": 87.03,
+  "UGL": 51.54,
+  "GRID": 180.13,
+  "XLE": 65.31,
+  "OIH": 429.35,
+  "ERX": 112.82
  },
  "actions": [
   {
-   "key": "GDX",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 D2 momentum fade",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
-  },
-  {
-   "key": "NUGT",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 D2 momentum fade",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
-  },
-  {
    "key": "ARTY",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 PURE-REGIME BUY",
-   "target": 0.3,
-   "in_pos": false,
-   "priority": 0.6803921148047438,
-   "exits_next_bar": false
-  },
-  {
-   "key": "UGL",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
-   "target": 0.1,
-   "in_pos": false,
-   "priority": 0.40193303820918336,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GRID",
-   "action": "OPEN",
-   "decision": "ENTER \u2014 ABOVE TREND",
-   "target": 0.24405748094291624,
-   "in_pos": false,
-   "priority": 0.3392775041050903,
-   "exits_next_bar": false
+   "action": "CLOSE",
+   "decision": "EXIT NEXT BAR \u2014 D3 exhaustion",
+   "target": 0.0,
+   "in_pos": true,
+   "priority": null,
+   "exits_next_bar": true
   },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.06927031012102774,
+   "target": 0.14868808783515525,
    "in_pos": true,
-   "priority": 0.881330368222669,
+   "priority": 0.8792463492264708,
    "exits_next_bar": false
   },
   {
@@ -84,34 +46,43 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.8793256468586546,
+   "priority": 0.876934315704307,
    "exits_next_bar": false
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.10997240141224157,
+   "target": 0.18,
    "in_pos": true,
-   "priority": 0.7828571428571429,
+   "priority": 0.7790476190476191,
    "exits_next_bar": false
   },
   {
    "key": "GLDM",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.07669980752381439,
+   "target": 0.1713119121648447,
    "in_pos": true,
-   "priority": 0.4737532923259477,
+   "priority": 0.5117133169069359,
    "exits_next_bar": false
   },
   {
-   "key": "PBW",
-   "action": "WATCH",
-   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
+   "key": "UGL",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.1,
+   "in_pos": true,
+   "priority": 0.43638392678283977,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GRID",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.3,
+   "in_pos": true,
+   "priority": 0.3297536945812808,
    "exits_next_bar": false
   },
   {
@@ -145,6 +116,24 @@
    "key": "ETH",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GDX",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "NUGT",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -185,22 +174,31 @@
    "in_pos": false,
    "priority": null,
    "exits_next_bar": false
+  },
+  {
+   "key": "PBW",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D3 exhaustion)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
   }
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-09T12:17:50+00:00",
+  "checked_at_utc": "2026-09-10T12:18:19+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 9, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-09-08",
-  "btc_bar_close_utc": "2026-09-09T12:00:00+00:00"
+  "anchor_ct": "Sep 10, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-09",
+  "btc_bar_close_utc": "2026-09-10T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "3575297fbc14",
+ "code_sha": "35b4eefa6544",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "9b0d5ea4b5e90c691f5100d10602f690bf236f368a34dc9131ff0ac7be94ac8c"
+  "value": "4716a5e838418f6f97d68371dfad156db7f5fb228885035465a985a406ae534a"
  }
 }
