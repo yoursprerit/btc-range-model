@@ -408,7 +408,9 @@ cosmetic: a DAY order sent after 16:00 ET is already past its own expiry and
 IBKR cancels it on arrival (error 10349, *"Order TIF was set to DAY based on
 order preset"* — the Gateway preset filling in a TIF the order didn't carry).
 GTD rather than GTC because a stray GTC would still be resting at the next
-day's 2:30 PM CT slot, which sizes from positions and cannot see it.
+day's 2:30 PM CT slot, which sizes from positions and cannot see it. The stamp
+is IBKR's UTC form (`yyyymmdd-hh:mm:ss`, dash-separated) — the zoned form takes
+only legacy names like `US/Eastern`, and an IANA name is refused with error 343.
 
 Two more things to expect from an extended-hours fill. The book is thinner, so
 widen `--slippage-cap` (default 0.5% through the touch) if legs come back unfilled;

@@ -619,11 +619,16 @@ def extended_hours_tif(now=None) -> tuple[str, str]:
     from an after-hours run would still be live at the next day's 2:30 PM CT
     slot, which sizes its orders from POSITIONS and cannot see it — the exact
     shape of a double execution.
+
+    The stamp is IBKR's UTC form, ``yyyymmdd-hh:mm:ss`` with a DASH between the
+    date and the time.  Its zoned form takes only legacy names (``US/Eastern``);
+    an IANA name is rejected with error 343 and the order is cancelled on
+    arrival, so the instant is expressed in UTC and no name is involved at all.
     """
     et = _et_now(now)
     end = et.replace(hour=EXT_CLOSE_ET[0], minute=EXT_CLOSE_ET[1],
                      second=0, microsecond=0)
-    return "GTD", end.strftime("%Y%m%d %H:%M:%S America/New_York")
+    return "GTD", end.tz_convert("UTC").strftime("%Y%m%d-%H:%M:%S")
 
 
 def price_drift(book_price: float, live_price: float) -> float:
@@ -1287,7 +1292,8 @@ class Broker:
                     # which is already expired after 16:00 ET — the order is
                     # cancelled on arrival (error 10349).
                     order.tif, order.goodTillDate = extended_hours_tif()
-                    tif_note = f", {order.tif} to {order.goodTillDate[9:14]} ET"
+                    tif_note = (f", {order.tif} to {EXT_CLOSE_ET[0]:02d}:"
+                                f"{EXT_CLOSE_ET[1]:02d} ET")
                 print(f"    limit {o.symbol}: {o.action} ≤ ${lmt:,.4f} "
                       f"({basis} {slippage_cap*100:.2f}% through)"
                       + (f" [outside RTH{tif_note}]" if outside_rth else ""))

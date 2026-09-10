@@ -617,9 +617,22 @@ def test_an_after_hours_limit_expires_with_the_extended_session():
     slot, which sizes from positions and cannot see it."""
     tif, gtd = ic.extended_hours_tif(_et("2026-09-10 18:18"))
     assert tif == "GTD"
-    assert gtd == "20260910 20:00:00 America/New_York"
+    # IBKR's UTC form: yyyymmdd-hh:mm:ss, DASH-separated. Its zoned form takes
+    # only legacy names ("US/Eastern"); an IANA name is refused with error 343
+    # and the order is cancelled on arrival (2026-09-10), so no name is used.
+    assert gtd == "20260911-00:00:00"          # 20:00 EDT
+    assert "-" in gtd and " " not in gtd
 
 
 def test_the_expiry_tracks_the_day_the_order_is_sent():
     _, gtd = ic.extended_hours_tif(_et("2026-09-11 16:05"))
-    assert gtd.startswith("20260911 20:00:00")
+    assert gtd == "20260912-00:00:00"
+
+
+def test_the_expiry_follows_the_eastern_clock_through_the_dst_switch():
+    """20:00 ET is a wall-clock edge, so its UTC stamp moves with the offset —
+    00:00 UTC next day on EDT, 01:00 UTC next day on EST."""
+    _, edt = ic.extended_hours_tif(_et("2026-10-30 17:00"))
+    _, est = ic.extended_hours_tif(_et("2026-12-10 17:00"))
+    assert edt == "20261031-00:00:00"
+    assert est == "20261211-01:00:00"
