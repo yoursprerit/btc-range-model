@@ -591,3 +591,19 @@ def test_real_pnl_values_survive_including_zero():
 def test_missing_and_unparsable_pnl_reads_as_unknown():
     for bad in (None, "", "n/a", float("nan"), object()):
         assert ic._pnl_value(bad) is None
+
+
+# ── a leg that cannot be priced outside RTH ─────────────────────────────────
+def test_an_unpriceable_leg_is_reported_not_silently_dropped():
+    """A full close of a name the book has dropped carries no exec_price. With
+    no market data either (IBKR error 10197 — a competing live session), there
+    is nothing to price a limit off and MARKET is rejected outside RTH, so the
+    leg cannot be sent. It must still appear in the execution report: a leg that
+    vanishes leaves the position open with nothing anywhere saying why."""
+    quote, book_price = {}, 0.0
+    assert ic.marketable_limit_price("SELL", quote)[0] is None
+    assert ic.marketable_limit_price("SELL", {"last": book_price})[0] is None
+    # …which is what drives Broker._run_leg to record SKIPPED-UNPRICEABLE.
+    src = (Path(__file__).resolve().parent.parent
+           / "scripts" / "ibkr_common.py").read_text()
+    assert "SKIPPED-UNPRICEABLE" in src

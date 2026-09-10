@@ -1468,7 +1468,20 @@ class Broker:
             order, used, lmt = self._build_order(o, qty, order_type,
                                                  slippage_cap, contract,
                                                  outside_rth)
-            if order is None:            # unsendable outside RTH — skipped
+            if order is None:
+                # Unsendable outside RTH: no quote AND no usable book price, so
+                # there is nothing to price a limit off and MARKET is rejected.
+                # Record it the way an unfunded buy is recorded — a leg that
+                # silently vanishes from the report leaves the position open
+                # with nothing anywhere saying why (a full close of a name the
+                # book has dropped carries no exec_price, so it is exactly the
+                # leg most likely to land here).
+                results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
+                                    qty=float(qty), price=float(o.price),
+                                    status="SKIPPED-UNPRICEABLE", filled=0.0,
+                                    avg_fill_price=0.0, order_type="",
+                                    limit_price=0.0,
+                                    reason=f"{o.reason} [no price outside RTH]"))
                 continue
             trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
             print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}]"
