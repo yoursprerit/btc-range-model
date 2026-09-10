@@ -80,6 +80,11 @@ DEFAULT_SLIPPAGE_CAP = 0.005
 # at the old 8:45-AM-CT slot).
 MOC_CUTOFF_ET = (15, 50)
 US_CLOSE_ET = (16, 0)
+# US equities keep trading past the 4:00 PM ET close: IBKR works an ``outsideRth``
+# order through the extended session, which ends at 20:00 ET.  That window is the
+# only reason a MISSED run can still be caught up — past it nothing works the
+# order, and by the next session the book is stale by construction.
+EXT_CLOSE_ET = (20, 0)
 ET_TZ = "America/New_York"
 # After the auction prints, give IBKR a moment to report the fills back.
 MOC_CLOSE_BUFFER_S = 120.0
@@ -535,6 +540,68 @@ def market_session_open(now=None, allow_outside: bool = False) -> tuple[bool, st
         return True, f"outside regular hours ({et:%H:%M} ET) — allowed explicitly"
     return False, (f"outside regular trading hours ({et:%H:%M} ET; session is "
                    "09:30–16:00 ET) — use --outside-rth to trade anyway")
+
+
+# ── missed-slot catch-up ────────────────────────────────────────────────────
+# What ``catch_up_state`` can report.  Three values because the caller must do
+# three different things, and collapsing any two of them into a bool is what
+# would turn "the market is open" into an after-hours order.
+CATCH_UP_OPEN = "open"     # regular hours — the ordinary run works, do nothing
+CATCH_UP_LATE = "late"     # past the close, still inside the extended session
+CATCH_UP_SHUT = "shut"     # nothing would fill; the day is simply missed
+
+
+def catch_up_state(now=None) -> tuple[str, str]:
+    """(state, reason) — can a run that MISSED its scheduled slot still trade?
+
+    The scheduled executor sits at 2:30 PM CT (3:30 PM ET), and a host that is
+    switched off at that moment simply never places the day's book.  By the next
+    morning that book is stale BY CONSTRUCTION — ``bar_is_current`` refuses it,
+    and rightly so: the publisher has since built a newer one off a newer close,
+    and re-trading the old one would act on a decision the engine has already
+    replaced.  So the missed decision is still THIS session's decision only for
+    the remainder of the same trading day, in the extended session out to
+    20:00 ET, where an ``outsideRth`` limit can still fill.
+
+    The three outcomes:
+
+    ``CATCH_UP_OPEN``  regular hours — there is nothing to catch up; the normal
+                       run places the book the normal way.
+    ``CATCH_UP_LATE``  past the 16:00 close, inside the extended session — the
+                       book is still tradeable, as ``outsideRth`` limits (IBKR
+                       rejects MARKET and MOC there, so routing must switch).
+    ``CATCH_UP_SHUT``  before the open, past 20:00 ET, or not a trading day —
+                       no order placed now would fill, so the session is missed
+                       and tomorrow's book supersedes this one.
+
+    Pre-market (04:00–09:30 ET) reports SHUT rather than LATE on purpose: the
+    day's 2:30 PM CT slot has not been missed yet, it simply has not arrived,
+    and the book on disk at that hour belongs to the session that is about to
+    open.
+    """
+    et = _et_now(now)
+    ok_day, day_why = is_trading_day(et.tz_localize(None))
+    if not ok_day:
+        return CATCH_UP_SHUT, f"{day_why} — there is no session to catch up"
+    if market_session_open(et)[0]:
+        return CATCH_UP_OPEN, (f"regular session is open ({et:%H:%M} ET) — "
+                               "nothing to catch up")
+    # Wall-clock edges, the way market_session_open() builds its own: a session
+    # boundary is a local time, not an offset from midnight.
+    close_t = et.replace(hour=US_CLOSE_ET[0], minute=US_CLOSE_ET[1],
+                         second=0, microsecond=0)
+    ext_t = et.replace(hour=EXT_CLOSE_ET[0], minute=EXT_CLOSE_ET[1],
+                       second=0, microsecond=0)
+    ext_stamp = f"{EXT_CLOSE_ET[0]:02d}:{EXT_CLOSE_ET[1]:02d} ET"
+    if et <= close_t:
+        return CATCH_UP_SHUT, (f"{et:%H:%M} ET is before the 09:30 open — the "
+                               "day's slot has not been missed, only not "
+                               "reached yet")
+    if et <= ext_t:
+        return CATCH_UP_LATE, (f"{et:%H:%M} ET is past the 16:00 close but "
+                               f"inside the extended session (to {ext_stamp})")
+    return CATCH_UP_SHUT, (f"{et:%H:%M} ET is past the {ext_stamp} end of the "
+                           "extended session — no order placed now would fill")
 
 
 def price_drift(book_price: float, live_price: float) -> float:

@@ -203,6 +203,63 @@ def test_outside_rth_is_still_possible_when_asked_for():
     assert ok and "allowed explicitly" in why
 
 
+# ── the missed slot ─────────────────────────────────────────────────────────
+# A host asleep at the 2:30 PM CT slot never places the day's book, and by the
+# next morning bar_is_current refuses it as stale — the whole session is lost.
+# catch_up_state says whether the rest of that same day can still rescue it.
+def test_an_on_time_run_has_nothing_to_catch_up():
+    state, why = ic.catch_up_state(_et("2026-09-10 15:30"))       # 2:30 PM CT
+    assert state == ic.CATCH_UP_OPEN and "nothing to catch up" in why
+
+
+def test_the_evening_after_a_missed_slot_can_still_trade():
+    state, why = ic.catch_up_state(_et("2026-09-10 17:45"))
+    assert state == ic.CATCH_UP_LATE and "extended session" in why
+
+
+def test_the_last_minute_of_the_extended_session_still_counts():
+    assert ic.catch_up_state(_et("2026-09-10 20:00"))[0] == ic.CATCH_UP_LATE
+    assert ic.catch_up_state(_et("2026-09-10 20:01"))[0] == ic.CATCH_UP_SHUT
+
+
+def test_past_the_extended_session_nothing_is_caught_up():
+    """The book is not re-tradeable tomorrow either — a newer one supersedes
+    it — so late enough IS the missed day, and saying so beats sending an order
+    nothing will fill."""
+    state, why = ic.catch_up_state(_et("2026-09-10 22:30"))
+    assert state == ic.CATCH_UP_SHUT and "would fill" in why
+
+
+def test_premarket_is_not_a_missed_slot():
+    """08:00 ET is BEFORE the day's slot, not after it: the book on disk belongs
+    to the session about to open, and the scheduled run is still coming."""
+    state, why = ic.catch_up_state(_et("2026-09-10 08:00"))
+    assert state == ic.CATCH_UP_SHUT and "not been missed" in why
+
+
+def test_a_weekend_evening_has_no_session_to_catch_up():
+    state, why = ic.catch_up_state(_et("2026-09-12 18:00"))        # Saturday
+    assert state == ic.CATCH_UP_SHUT and "weekend" in why
+
+
+def test_a_holiday_evening_has_no_session_to_catch_up():
+    state, why = ic.catch_up_state(_et("2026-11-26 18:00"))        # Thanksgiving
+    assert state == ic.CATCH_UP_SHUT and "holiday" in why
+
+
+def test_the_book_missed_this_evening_is_still_this_sessions_book():
+    """The reason a same-day catch-up is sound at all: after the 16:00 close the
+    bar guard still reads today's book as current, so the late run trades the
+    decision that was actually missed — not a superseded one."""
+    ok, _ = ic.bar_is_current("2026-09-09", pd.Timestamp("2026-09-10 18:30"),
+                              equity_close="2026-09-09")
+    assert ok
+    # …and the next morning it is stale, which is why the window closes.
+    ok, why = ic.bar_is_current("2026-09-09", pd.Timestamp("2026-09-11 08:00"),
+                                equity_close="2026-09-09")
+    assert not ok and "STALE" in why
+
+
 # ── price drift (corporate actions) ─────────────────────────────────────────
 def test_price_drift_spots_a_split():
     assert ic.price_drift(560.0, 140.0) == pytest.approx(0.75)

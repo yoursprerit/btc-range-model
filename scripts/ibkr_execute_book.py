@@ -24,6 +24,10 @@ Safety rails (same posture as the all-in-one rebalancer)
   can never trade the account.
 * Freshness guards: rejects a stale signal bar or a book generated too long ago,
   and skips weekends / US holidays.
+* ``--catch-up`` rescues a MISSED slot (the host was off at 2:30 PM CT) by
+  trading the same day's book in extended hours, and only then: it is inert
+  while the market is open, leaves an already-executed bar alone, and refuses
+  once no order could fill.
 * Sizing uses the book's publish-time execution prices, so the executor makes no
   market-data calls; market orders still fill at the live price.
 """
@@ -265,6 +269,15 @@ def main() -> int:
                     help="git commit + push the execution report after writing "
                          "it, the way the scheduled wrapper does (a manual run "
                          "otherwise leaves the cloud app showing a stale report)")
+    ap.add_argument("--catch-up", action="store_true",
+                    help="trade the day's book LATE when the scheduled 2:30 PM "
+                         "CT slot was missed (the host was off). A no-op while "
+                         "the regular session is open; past the close it routes "
+                         "the book as outsideRth limits; once nothing could fill "
+                         "(past 20:00 ET, or a non-trading day) it aborts rather "
+                         "than sending orders into a shut market. Only ever acts "
+                         "on a book that has no execution report yet, so the "
+                         "scheduled wrapper can carry it permanently")
     ap.add_argument("--outside-rth", action="store_true",
                     help="allow fills outside regular trading hours: stamps "
                          "outsideRth on the orders and forces marketable-limit "
@@ -350,14 +363,43 @@ def main() -> int:
     # was traded. Running it again reads a book whose targets are already held
     # and, if anything goes wrong with the positions read, buys the whole thing
     # a second time. The archive is the ledger, so it is also the lock.
-    prior = eb.completed_run(report_out, payload.get("as_of")) if trades_now else None
-    if prior and not args.force_rerun:
+    prior = eb.completed_run(report_out, payload.get("as_of"))
+    if prior and trades_now and not args.force_rerun:
         print(f"ABORT: signal bar {payload.get('as_of')} was already executed at "
               f"{prior.get('generated_at_utc')} "
               f"({eb.archive_path(report_out, payload['as_of']).name}). "
               "Use --refresh-report to re-state the account without trading, or "
               "--force-rerun if that run genuinely placed no orders.")
         return 0
+
+    # ── missed-slot catch-up ─────────────────────────────────────────────────
+    # A scheduled run cannot fire on a host that is switched off, and the book
+    # it would have traded is refused as stale by tomorrow morning — so a missed
+    # 2:30 PM CT slot costs the whole session unless it is caught up the same
+    # day. --catch-up buys back the rest of that session and nothing more: it
+    # stays out of the way while the market is open, leaves an already-executed
+    # bar alone (the archive is the ledger for that, exactly as above), and once
+    # no order could fill it says so instead of sending one.
+    if args.catch_up:
+        state, why = ic.catch_up_state()
+        print(f"Catch-up: {why}")
+        if prior and not args.force_rerun:
+            print("  this signal bar already has an execution report — nothing "
+                  "was missed, so nothing is caught up.")
+        elif state == ic.CATCH_UP_LATE:
+            args.outside_rth = True
+            print("  the scheduled slot was missed and this book is unexecuted: "
+                  "routing it as outsideRth limits (IBKR rejects MARKET and MOC "
+                  "after the close, so a leg that cannot be priced is SKIPPED "
+                  "rather than sent).")
+            print("  extended-hours fills often print past --fill-timeout — "
+                  "re-run with --refresh-report afterwards to restate them.")
+        elif state == ic.CATCH_UP_SHUT and trades_now:
+            print("ABORT: the slot was missed and no order placed now would "
+                  "fill. This book is not tradeable tomorrow either — the "
+                  "publisher's next book supersedes it — so the session is "
+                  "skipped.")
+            return 0
 
     weights = dict(payload.get("weights", {}))
     exec_price = payload.get("exec_price", {})

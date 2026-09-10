@@ -414,6 +414,7 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--require-signature` | refuse an unsigned book |
 | `--force` | override the weekend/holiday & freshness guards |
 | `--outside-rth` | **manual after-hours trading.** Stamps `outsideRth` on the orders and forces marketable-limit, because IBKR *rejects* MARKET and MOC orders outside regular hours. With no live quote it prices off the book's own `exec_price`; a leg it still cannot price is skipped rather than sent blind. Unfilled limits stay working — the market-order escalation does not exist outside RTH. **The scheduled 2:30 PM CT wrapper never passes this**, so automation is unaffected. |
+| `--catch-up` | **rescue a missed slot.** For the run that fires late because the laptop was off at 2:30 PM CT: inert while the session is open, and past the close it places the day's book as `outsideRth` limits out to 20:00 ET; past that (or on a weekend/holiday) it aborts, because no order placed then would fill and tomorrow the book is stale by construction. It skips any signal bar that already has an execution report, so it is safe to leave on permanently — `setx IBKR_CATCH_UP 1` makes the scheduled task carry it. See IBKR_PAPER_TRADING.md § When the slot was missed. |
 | `--refresh-report` | **place no orders** — connect, read the account's real positions and today's fills from IBKR, and rewrite a **signed** report. Use it when late or partial fills print after the sending run's `--fill-timeout` expired (routine outside RTH), or to re-sign a report written from a shell that had no `OVERALL_BOOK_SECRET`. |
 | `--push-report` | commit + push the report the way the scheduled wrapper does. A manual run otherwise leaves the cloud app showing whatever the last *scheduled* run published. |
 | `--market-data-type 3` | request **delayed** quotes. Delayed data is free and needs no subscription, but IBKR only serves it when asked — use this if every leg logs error 10089 / `falling back to MARKET`. Pair with a wider `--slippage-cap` since the reference is 15 minutes stale. |
@@ -496,6 +497,13 @@ Notes:
 - **Registering the task needs an elevated PowerShell** (`-RunLevel Highest`).
   If your `-All` run died before phase 7, the task does not exist; re-run
   `... setup_windows_option_c.ps1 -Task` as Administrator.
+- **`-StartWhenAvailable` re-fires a missed run, but by itself it cannot trade.**
+  A laptop that was off at 2:30 PM CT runs the task when it comes back — and if
+  that is after the 4:00 PM ET close, the session-hours guard aborts it and the
+  day goes untraded. `setx IBKR_CATCH_UP 1` makes the wrapper pass `--catch-up`,
+  so that late fire still places the day's book in extended hours (to 20:00 ET).
+  It changes nothing about an on-time fire, and it never re-trades a bar that
+  already has an execution report.
 - **The weekday-only + holiday logic lives in the executor**, so a Saturday fire
   is a safe no-op — you don't need a weekday-only trigger, though you can add
   `-DaysOfWeek` to the trigger if you prefer.

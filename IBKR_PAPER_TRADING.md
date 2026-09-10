@@ -366,9 +366,48 @@ get the latest committed book) before running with `--file`.
 
 Executor-specific flags: `--file` / `--url` / stdin (source), `--max-age-hours`
 (reject a book generated too long ago, default 36 — spans the 7:15-AM-CT publish
-anchor to the next day's 2:30-PM-CT executor slot), `--require-signature`. The
-`--execute`, `--band`, `--fractional`, `--port`, `--allow-nonpaper`, `--force`
-flags behave exactly as in the all-in-one rebalancer.
+anchor to the next day's 2:30-PM-CT executor slot), `--require-signature`,
+`--catch-up` (below). The `--execute`, `--band`, `--fractional`, `--port`,
+`--allow-nonpaper`, `--force` flags behave exactly as in the all-in-one
+rebalancer.
+
+### When the slot was missed — `--catch-up`
+
+A scheduled run cannot fire on a host that is switched off, and the book it
+would have traded is refused as **stale** by the next morning: the publisher has
+since built a newer one off a newer close, so `bar_is_current` rejects the old
+one — correctly, but the effect is that a laptop asleep at 2:30 PM CT costs the
+whole session.
+
+`--catch-up` buys back the rest of *that same day*, and nothing more:
+
+| When the run actually fires | What `--catch-up` does |
+|---|---|
+| Inside 09:30–16:00 ET | **nothing** — the ordinary run places the book the ordinary way |
+| 16:00 → 20:00 ET, same trading day | trades the book as `outsideRth` limits (IBKR rejects MARKET and MOC after the close, so the routing switches itself and an unpriceable leg is SKIPPED, never sent blind) |
+| Past 20:00 ET, before the open, or a weekend/holiday | **aborts** — no order placed then would fill, and tomorrow's book supersedes this one |
+
+It also leaves alone any signal bar that already has an execution report — the
+same archive ledger the duplicate-run lock uses — so an on-time run followed by
+a late one is a no-op, not a second round of orders. That is what makes the flag
+safe to leave switched on permanently in the wrapper (`IBKR_CATCH_UP=1`), where
+it pairs with Task Scheduler's *"Run task as soon as possible after a scheduled
+start is missed"*.
+
+```bash
+# rescue today's book after the close (paper):
+OVERALL_BOOK_SECRET=… python scripts/ibkr_execute_book.py \
+    --file data/overall/target_book.json --execute --catch-up
+```
+
+Two things to expect from an extended-hours fill. The book is thinner, so widen
+`--slippage-cap` (default 0.5% through the touch) if legs come back unfilled;
+and fills often print **after** the run's `--fill-timeout` expires — re-run with
+`--refresh-report` later to restate the account and rewrite a signed report from
+what actually filled.
+
+Nothing about an on-time run changes: the flag is inert during the session, and
+the 2:30 PM CT wrapper without `IBKR_CATCH_UP=1` never passes it.
 
 ---
 
@@ -553,6 +592,10 @@ python scripts/backfill_executed_archive.py
   not a stale trade — and its weekend/holiday guard means no orders are ever
   placed while the US market is closed, even though a fresh book is published
   on those days.
+- **A missed slot** (host off at 2:30 PM CT): add `--catch-up` (env
+  `IBKR_CATCH_UP=1` in either wrapper) so a run firing late still places the
+  day's book in extended hours — see
+  [When the slot was missed](#when-the-slot-was-missed----catch-up).
 
 ## Pre-flight guards (what the executor refuses to do)
 
@@ -573,7 +616,7 @@ and the paper account ended at 3.4× net liquidation on a $2.17M margin loan
 | **Projected exposure** | A plan that would leave gross exposure above `--max-gross-frac` (default 1.02×) of net liquidation. The book is unlevered by construction, so anything above ~1× means a bad read or a duplicate run. | raise `--max-gross-frac` |
 | **Turnover** | A plan trading more than `--max-turnover-frac` (default 1.5×) of NAV — implausible for a daily rebalance. | raise the flag |
 | **Price drift** | A name quoting further than `--max-price-drift` (default 25%) from the book's sizing price — a split between publish and execution would size every order wrong. | `--max-price-drift 0` |
-| **Session hours** | Placing orders outside 09:30–16:00 ET (MOC excepted, which is priced into the close). | `--outside-rth` |
+| **Session hours** | Placing orders outside 09:30–16:00 ET (MOC excepted, which is priced into the close). | `--outside-rth`, or `--catch-up` for a missed slot (same day, to 20:00 ET only) |
 | **Funded buys** | Buys beyond settled cash **plus the proceeds the sells actually realised**, budgeted at the price each order can really pay — the live ask plus the slippage cap for a buy, the live bid minus it for a sell. Sells go first and are awaited; whatever they fail to realise shrinks the buys proportionally instead of being financed on margin. Names trimmed away appear in the report as `SKIPPED-FUNDING`. | `--allow-margin` |
 
 After trading, the run re-reads the account and prints realised gross leverage
