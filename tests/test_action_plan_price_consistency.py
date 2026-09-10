@@ -111,12 +111,17 @@ def test_chg_cell_shows_exactly_one_value():
     only relocated the ambiguity the column was fixed to remove."""
     cell = _PLAN_BLOCK.split("_chg = ov.live_change_pct")[1].split("# cost basis")[0]
     assert "_sess" not in cell and "session {" not in cell
-    # the only values assigned to the cell are the em-dash, 0.00%, and ±x.xx%
-    assert sorted(l.strip() for l in cell.splitlines() if "chg_s" in l) == [
+    # exactly one figure can reach the cell: the em-dash, 0.00%, or ±x.xx%
+    assert sorted(l.strip() for l in cell.splitlines()
+                  if "chg_s = " in l or "chg_s, chg_col = " in l) == [
         'chg_s = f"{_chg:+.2f}%"',
         'chg_s, chg_col = "0.00%", "#64748b"',
         'chg_s, chg_col = "—", "#94a3b8"',
     ]
+    # the only other thing appended is a WORD — the verification label, which
+    # carries no number and so cannot be mistaken for a second measurement
+    appended = [l for l in cell.splitlines() if "chg_s +=" in l]
+    assert appended and not any("%" in l and "{" in l for l in appended)
 
 
 def test_zero_move_is_neutral_not_a_red_minus_zero():
@@ -134,7 +139,7 @@ def test_missing_quote_renders_an_em_dash_not_a_zero():
 def test_live_price_tint_and_chg_share_one_baseline():
     """The green/red tint on Live Price and Chg % must compare to the SAME
     number — the last bar's close — or the colour can contradict the sign."""
-    assert "_bar_px = a[\"last_close\"]" in _PLAN_BLOCK
+    assert '_bar_px = a.get("bar_close")' in _PLAN_BLOCK
     assert "_live_px_col = (C_BUY if _live_px > _bar_px" in _PLAN_BLOCK
     assert "else C_EXIT if _live_px < _bar_px else \"inherit\")" in _PLAN_BLOCK
 
@@ -171,10 +176,13 @@ def test_quote_prev_is_the_close_before_the_quotes_own_session(monkeypatch):
         oc.requests, "get",
         lambda *a, **k: _fake_chart(["2026-09-02", "2026-09-03"], [100.0, 102.0],
                                     quote_epoch, 105.0))
-    px, prev = oc._quote("TEST")
-    assert px == 105.0
-    assert prev == 102.0                       # yesterday's close, not 100.0
-    assert oc.live_change_pct(prev, px) == pytest.approx(2.9412, abs=1e-4)
+    q = oc._quote("TEST")
+    assert q["price"] == 105.0
+    assert q["prev"] == 102.0                  # yesterday's close, not 100.0
+    assert oc.live_change_pct(q["prev"], q["price"]) == pytest.approx(2.9412, abs=1e-4)
+    # …and the same one request carries what the basis check needs
+    assert q["bars"]["2026-09-03"] == 102.0
+    assert q["quote_time"] == pd.Timestamp(quote_epoch, unit="s", tz="UTC")
 
 
 def test_quote_prev_skips_the_in_progress_bar(monkeypatch):
@@ -187,13 +195,14 @@ def test_quote_prev_skips_the_in_progress_bar(monkeypatch):
         oc.requests, "get",
         lambda *a, **k: _fake_chart(["2026-09-02", "2026-09-03", "2026-09-04"],
                                     [100.0, 102.0, 105.0], quote_epoch, 105.0))
-    px, prev = oc._quote("TEST")
-    assert (px, prev) == (105.0, 102.0)
+    q = oc._quote("TEST")
+    assert (q["price"], q["prev"]) == (105.0, 102.0)
+    assert set(q["bars"]) == {"2026-09-02", "2026-09-03", "2026-09-04"}
 
 
 # ── the SATA row follows the same rule ───────────────────────────────────
 def test_fetch_sata_reports_the_previous_close(monkeypatch):
-    monkeypatch.setattr(oc, "_quote", lambda sym: (101.0, 100.5))
+    monkeypatch.setattr(oc, "_quote", lambda sym: dict(price=101.0, prev=100.5))
     q = oc.fetch_sata()
     assert q["price"] == 101.0 and q["prev"] == 100.5
     assert oc.live_change_pct(q["prev"], q["price"]) == pytest.approx(q["dchg"])
@@ -233,16 +242,18 @@ def test_backup_chain_order_is_primary_first():
 
 def test_quote_prefers_yahoo_and_never_calls_a_backup_when_it_answers(monkeypatch):
     called = []
-    monkeypatch.setattr(oc, "_quote", lambda sym: (101.0, 100.0))
+    monkeypatch.setattr(oc, "_quote", lambda sym: dict(price=101.0, prev=100.0))
     monkeypatch.setattr(mf, "live_quote", lambda sym: called.append(sym) or (1.0, 1.0, "x"))
-    assert oc.quote("SOXL") == (101.0, 100.0, "yahoo")
+    assert oc.quote("SOXL") == dict(price=101.0, prev=100.0, src="yahoo")
     assert called == []                       # backups are untouched while Yahoo works
 
 
 def test_quote_falls_back_when_yahoo_returns_nothing(monkeypatch):
-    monkeypatch.setattr(oc, "_quote", lambda sym: (None, None))
+    monkeypatch.setattr(oc, "_quote", lambda sym: {})
     monkeypatch.setattr(mf, "live_quote", lambda sym: (124.82, 123.27, "nasdaq"))
-    assert oc.quote("SOXL") == (124.82, 123.27, "nasdaq")
+    q = oc.quote("SOXL")
+    assert (q["price"], q["prev"], q["src"]) == (124.82, 123.27, "nasdaq")
+    assert q["bars"] == {} and q["quote_time"] is None
 
 
 def test_quote_falls_back_when_yahoo_raises(monkeypatch):
@@ -250,23 +261,25 @@ def test_quote_falls_back_when_yahoo_raises(monkeypatch):
         raise RuntimeError("403 from the shared egress IP")
     monkeypatch.setattr(oc, "_quote", _boom)
     monkeypatch.setattr(mf, "live_quote", lambda sym: (78421.86, 78900.0, "coinbase"))
-    assert oc.quote("BTC-USD") == (78421.86, 78900.0, "coinbase")
+    q = oc.quote("BTC-USD")
+    assert (q["price"], q["prev"], q["src"]) == (78421.86, 78900.0, "coinbase")
 
 
 def test_quote_reports_nothing_when_every_feed_is_down(monkeypatch):
-    monkeypatch.setattr(oc, "_quote", lambda sym: (None, None))
+    monkeypatch.setattr(oc, "_quote", lambda sym: {})
     monkeypatch.setattr(mf, "live_quote", lambda sym: (None, None, None))
-    assert oc.quote("SOXL") == (None, None, None)
+    assert oc.quote("SOXL") == {}
 
 
 def test_failover_is_per_symbol_not_universe_wide(monkeypatch):
     """One name Yahoo won't quote must not push the others onto a backup."""
     monkeypatch.setattr(oc, "_quote",
-                        lambda sym: (None, None) if sym == "SOXL" else (10.0, 9.0))
+                        lambda sym: {} if sym == "SOXL" else dict(price=10.0, prev=9.0))
     monkeypatch.setattr(mf, "live_quote", lambda sym: (11.0, 10.5, "nasdaq"))
     spot = oc.fetch_spot({"SOXL": "SOXL", "XLE": "XLE"})
-    assert spot["SOXL"] == dict(price=11.0, prev=10.5,
-                                dchg=pytest.approx(4.7619, abs=1e-4), src="nasdaq")
+    assert (spot["SOXL"]["price"], spot["SOXL"]["prev"], spot["SOXL"]["src"]) == \
+        (11.0, 10.5, "nasdaq")
+    assert spot["SOXL"]["dchg"] == pytest.approx(4.7619, abs=1e-4)
     assert spot["XLE"]["src"] == "yahoo" and spot["XLE"]["price"] == 10.0
     assert oc.backup_quote_keys(spot) == [("SOXL", "nasdaq")]
 
@@ -277,7 +290,7 @@ def test_backup_quote_keys_is_empty_on_the_normal_path():
 
 
 def test_sata_quote_also_falls_back(monkeypatch):
-    monkeypatch.setattr(oc, "_quote", lambda sym: (None, None))
+    monkeypatch.setattr(oc, "_quote", lambda sym: {})
     monkeypatch.setattr(mf, "live_quote", lambda sym: (99.97, 99.84, "nasdaq"))
     q = oc.fetch_sata()
     assert q["price"] == 99.97 and q["prev"] == 99.84 and q["src"] == "nasdaq"
@@ -343,7 +356,8 @@ def test_live_quote_survives_a_provider_that_raises(monkeypatch):
 
 # ── the cockpit says which prices are not the primary feed's ─────────────
 def test_a_backup_price_is_labelled_in_the_table():
-    assert '_src = (_spot.get(a["key"]) or {}).get("src")' in _PLAN_BLOCK
+    assert '_q = _spot.get(a["key"]) or {}' in _PLAN_BLOCK
+    assert '_src = _q.get("src")' in _PLAN_BLOCK
     assert 'if _has_live and _src and _src != ov.PRIMARY_QUOTE_SRC:' in _PLAN_BLOCK
     assert "via {_src}" in _PLAN_BLOCK
     assert "via {_sa_src}" in _PLAN_BLOCK                # …and on the SATA row
@@ -353,3 +367,214 @@ def test_the_price_banner_names_backup_served_instruments():
     banner = _APP.split("_px_note = ")[0].split("_auto = ")[1]
     assert "_bk = ov.backup_quote_keys(_spot)" in banner
     assert "primary quote feed unavailable for" in banner
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# BOTH INPUTS ARE CHECKED BEFORE Chg % IS COMPUTED
+# ════════════════════════════════════════════════════════════════════════════
+# The column was differencing two prices nobody had validated. The basis came
+# from ``last_close``, which is the DISPLAY price — and ``daily`` deliberately
+# keeps the in-progress US bar, so during market hours it is today's running
+# price, not a close. Measured live on 2026-09-10 at 14:13 ET with the session
+# open, every equity sleeve showed today's live price in the "Close of Last Bar"
+# column and Chg % therefore read 0.00% all session:
+#
+#     key    shown as "last bar"   real Sep 9 close   error
+#     SOXL          117.14              125.87        -6.9%
+#     NUGT          180.07              192.46        -6.4%
+#     REMX           72.31               76.34        -5.3%
+#     GDX            96.29               99.47        -3.2%
+#     SOXX          519.50              532.00        -2.4%
+#
+# The basis is now each engine's ``bar_close`` — the traded instrument's own
+# last COMPLETED session close, carrying ``bar_date`` — and both it and the live
+# quote go through ``verify_price_pair`` first.
+import freshness as frs  # noqa: E402
+
+
+def _bars(**closes):
+    return {"price": 100.0, "bars": dict(closes),
+            "quote_time": pd.Timestamp.utcnow(), "session_closed": False}
+
+
+import pandas as pd  # noqa: E402
+
+
+# ── the completed-bar basis ──────────────────────────────────────────────
+def test_completed_bar_takes_the_last_finite_close_and_its_date():
+    df = pd.DataFrame({"px_close": [10.0, 11.0, None, 12.0]},
+                      index=pd.to_datetime(["2026-09-04", "2026-09-08",
+                                            "2026-09-09", "2026-09-10"]))
+    assert frs.completed_bar(df, "px_close") == (12.0, pd.Timestamp("2026-09-10"))
+
+
+def test_completed_bar_reports_nothing_rather_than_guessing():
+    empty = pd.DataFrame({"px_close": []})
+    assert frs.completed_bar(empty, "px_close")[1] is None
+    assert frs.completed_bar(pd.DataFrame({"a": [1.0]}), "px_close")[1] is None
+    zeros = pd.DataFrame({"px_close": [0.0, -1.0]},
+                         index=pd.to_datetime(["2026-09-09", "2026-09-10"]))
+    assert zeros.pipe(frs.completed_bar, "px_close")[1] is None
+
+
+def test_the_in_progress_bar_is_what_completed_bar_excludes():
+    """The Sep 10 defect in one assertion: the frame the display price comes
+    from carries today's running price; the frame the basis comes from does
+    not."""
+    idx = pd.to_datetime(["2026-09-08", "2026-09-09", "2026-09-10"])
+    daily = pd.DataFrame({"px_close": [123.27, 125.87, 117.14]}, index=idx)   # SOXL
+    hist = frs.drop_in_progress_us_bar(
+        daily, now=pd.Timestamp("2026-09-10 18:13", tz="UTC"))
+    assert frs.completed_bar(daily, "px_close")[0] == 117.14      # in-progress
+    assert frs.completed_bar(hist, "px_close") == (125.87, pd.Timestamp("2026-09-09"))
+
+
+# ── the verifier ─────────────────────────────────────────────────────────
+def test_a_reconciled_pair_passes_clean():
+    v = oc.verify_price_pair(125.87, "2026-09-09", _bars(**{"2026-09-09": 125.87}))
+    assert v["ok"] and v["basis_ok"] and v["quote_ok"] and v["flags"] == []
+    assert v["official"] == pytest.approx(125.87)
+
+
+def test_a_basis_the_tape_disagrees_with_is_flagged_not_silently_differenced():
+    """The in-progress print, caught: 117.14 is not what Sep 9 closed at."""
+    v = oc.verify_price_pair(117.14, "2026-09-09", _bars(**{"2026-09-09": 125.87}))
+    assert not v["basis_ok"] and not v["ok"]
+    assert "basis_mismatch" in v["flags"]
+    assert "125.87" in v["notes"][0]
+
+
+def test_basis_tolerance_admits_a_rounding_gap_only():
+    on_edge = 125.87 * (1 + oc.BASIS_TOL_PCT / 100 * 0.9)
+    over = 125.87 * (1 + oc.BASIS_TOL_PCT / 100 * 1.5)
+    assert oc.verify_price_pair(on_edge, "2026-09-09",
+                                _bars(**{"2026-09-09": 125.87}))["basis_ok"]
+    assert not oc.verify_price_pair(over, "2026-09-09",
+                                    _bars(**{"2026-09-09": 125.87}))["basis_ok"]
+
+
+def test_a_bar_behind_the_latest_close_says_which_bar_it_is():
+    v = oc.verify_price_pair(125.87, "2026-09-03",
+                             _bars(**{"2026-09-09": 130.0}),
+                             expected_bar="2026-09-09")
+    assert "bar_behind" in v["flags"]
+    assert "Sep 3" in v["notes"][-1] and "Sep 9" in v["notes"][-1]
+
+
+def test_a_12utc_bar_is_dated_but_not_cross_checked():
+    """The CT engine's bar and the daily feed's close for the same date are
+    different bars, so comparing them would manufacture a mismatch daily."""
+    q = _bars(**{"2026-09-09": 79500.0})            # UTC-midnight close
+    v = oc.verify_price_pair(77882.31, "2026-09-09", q, cross_check=False)
+    assert v["ok"] and v["basis_ok"] and v["flags"] == []
+    assert oc.verify_price_pair(77882.31, "2026-09-09", q)["flags"] == ["basis_mismatch"]
+
+
+def test_an_absent_basis_fails_closed():
+    for bad in (None, float("nan"), 0.0, "n/a"):
+        v = oc.verify_price_pair(bad, "2026-09-09", _bars())
+        assert not v["ok"] and v["flags"] == ["no_basis"]
+
+
+def test_an_undated_basis_cannot_be_verified():
+    v = oc.verify_price_pair(125.87, None, _bars(**{"2026-09-09": 125.87}))
+    assert not v["basis_ok"] and "undated_basis" in v["flags"]
+
+
+# ── the live half ────────────────────────────────────────────────────────
+def test_a_quote_that_stopped_ticking_mid_session_is_not_live():
+    now = pd.Timestamp("2026-09-10 18:13", tz="UTC")
+    q = {"price": 117.30, "bars": {"2026-09-09": 125.87},
+         "quote_time": now - pd.Timedelta(hours=3), "session_closed": False}
+    v = oc.verify_price_pair(125.87, "2026-09-09", q, now=now)
+    assert not v["quote_ok"] and "stale_quote" in v["flags"]
+    assert v["age_mins"] == pytest.approx(180.0)
+
+
+def test_the_last_print_after_the_close_is_not_stale():
+    """Outside the session the newest regular print is hours old by design —
+    that is the close, not a frozen tick."""
+    now = pd.Timestamp("2026-09-10 23:00", tz="UTC")
+    q = {"price": 117.30, "bars": {"2026-09-09": 125.87},
+         "quote_time": now - pd.Timedelta(hours=3), "session_closed": True}
+    assert oc.verify_price_pair(125.87, "2026-09-09", q, now=now)["ok"]
+
+
+def test_a_missing_quote_fails_the_live_half():
+    v = oc.verify_price_pair(125.87, "2026-09-09",
+                             {"price": None, "bars": {"2026-09-09": 125.87}})
+    assert not v["quote_ok"] and "no_quote" in v["flags"]
+
+
+def test_a_backup_feed_quote_is_checked_for_freshness_not_reconciled():
+    """Backups carry no bar history or session clock, so the basis is reported
+    unverified rather than assumed good — and never called wrong."""
+    q = {"price": 117.30, "bars": {}, "quote_time": None,
+         "session_closed": None, "src": "nasdaq"}
+    v = oc.verify_price_pair(125.87, "2026-09-09", q)
+    assert v["quote_ok"] and "basis_unverified" in v["flags"]
+    assert "basis_mismatch" not in v["flags"]
+
+
+# ── the engines report a real completed close ────────────────────────────
+_CORE = (Path(__file__).resolve().parent.parent / "app" / "overall_core.py").read_text()
+_GLDM = (Path(__file__).resolve().parent.parent / "app" / "gldm_engine.py").read_text()
+_CT = (Path(__file__).resolve().parent.parent / "app" / "btc_ct_engine.py").read_text()
+
+
+def test_every_engine_reports_bar_close_off_the_completed_frame():
+    # ticker + gold: the in-progress-dropped frame, never `daily`
+    assert "bar_close, bar_date = _frs.completed_bar(\n        (hist if hist is not None else daily), col)" in _CORE
+    assert "bar_close, bar_date = _frs.completed_bar(hist, col)" in _GLDM
+    # CT: equity sleeves off their own series with the partial bar dropped
+    assert "_frs.drop_in_progress_us_bar(s.to_frame(\"close\"))" in _CT
+    assert 'if key in ("MSTR", "MSTU"):' in _CT
+    for src in (_CORE, _GLDM, _CT):
+        assert "bar_close=bar_close, bar_date=bar_date," in src
+
+
+def test_the_gate_carries_the_verified_basis_to_the_action_rows():
+    assert 'bar_close=res.get("bar_close"),' in _CORE
+    assert 'bar_date=res.get("bar_date"),' in _CORE
+    assert 'bar_anchor=res.get("bar_anchor", "session"),' in _CORE
+
+
+def test_the_published_payload_is_unaffected_by_the_new_fields():
+    """bar_date is a Timestamp; the book trims actions to a fixed field set, so
+    it can never reach the JSON artifact."""
+    import target_book as tb
+    payload = tb.build_payload(
+        as_of="2026-09-09", profile="balanced", weights={"XLE": 1.0},
+        cash_weight=0.0, exec_price={"XLE": 65.31},
+        actions=[dict(key="XLE", action="HOLD", decision="LONG", target=1.0,
+                      in_pos=True, priority=0.7, exits_next_bar=False,
+                      bar_close=65.31, bar_date=pd.Timestamp("2026-09-09"),
+                      bar_anchor="session")])
+    import json
+    json.dumps(payload)                      # would raise on a Timestamp
+    assert set(payload["actions"][0]) == {"key", "action", "decision", "target",
+                                          "in_pos", "priority", "exits_next_bar"}
+
+
+# ── the row renders the verified pair ────────────────────────────────────
+def test_the_row_measures_from_bar_close_not_the_display_price():
+    assert '_bar_px = a.get("bar_close")' in _PLAN_BLOCK
+    assert '_bar_dt = a.get("bar_date")' in _PLAN_BLOCK
+    assert "_vfy = ov.verify_price_pair(" in _PLAN_BLOCK
+    # the display price survives only as the last-resort fallback
+    assert '_bar_px, _bar_dt = a["last_close"], None' in _PLAN_BLOCK
+
+
+def test_a_failed_quote_check_suppresses_the_number():
+    assert '_has_live = _live_px is not None and _vfy["quote_ok"]' in _PLAN_BLOCK
+
+
+def test_the_basis_cell_shows_the_session_it_closed_and_any_complaint():
+    assert "{pd.Timestamp(_bar_dt):%b %-d} close" in _PLAN_BLOCK
+    assert "⚠️ {_basis_note}" in _PLAN_BLOCK
+    assert 'unverified basis' in _PLAN_BLOCK
+
+
+def test_the_12utc_sleeves_are_not_cross_checked_in_the_row():
+    assert 'cross_check=(_anchor == "session")' in _PLAN_BLOCK
+    assert '_expected_bar(_anchor)' in _PLAN_BLOCK

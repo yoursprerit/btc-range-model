@@ -483,6 +483,81 @@ The Historical tab's Chg % is unrelated and unchanged: there the column is the
 chosen bar's close against the prior bar's, both from the same series, which is
 already self-consistent.
 
+### The basis was never a close (2026-09-10)
+
+Both fixes above assume the two prices being differenced are what the column
+says they are. Neither was checked, and the first one was wrong.
+
+**Symptom.** With the Sep 10 session open (14:13 ET), every equity sleeve
+showed **today's live price** in the *Price (Close of Last Bar)* column, so it
+equalled the Live Price cell beside it and Chg % read `0.00%` — all session,
+every session:
+
+| key | shown as "Close of Last Bar" | Sep 9's actual close (the signal bar) | error |
+|---|---|---|---|
+| SOXL | 117.14 | 125.87 | **−6.9%** |
+| NUGT | 180.07 | 192.46 | −6.4% |
+| REMX | 72.31 | 76.34 | −5.3% |
+| GDX | 96.29 | 99.47 | −3.2% |
+| SOXX | 519.50 | 532.00 | −2.4% |
+| MSTR | 130.30 | 132.70 | −1.8% |
+
+A column that cannot show a move while the market is moving is worse than no
+column at all.
+
+**Root cause — the display price is not a close.** The gated loader
+deliberately overlays Yahoo's **in-progress** *today* row so the cockpit can
+show live prices (`data_gate`, "Live vs history split"); the engines then take
+`last_close` off that frame (`daily`), while the signals run on `hist`, the
+same frame with the partial bar dropped. So `last_close` is the running price
+of a session still trading, and the action plan was differencing it against the
+live quote — two names for the same number. The BTC app's equity sleeves had
+their own version: a fill is the close of the session *after* the signal bar,
+which mid-session is an intraday snapshot (MSTR's 130.30 above was neither a
+close nor the current price — it was where MSTR traded when the CT data was
+pulled).
+
+**The fix — one definition, verified before use.**
+
+1. **`freshness.completed_bar(frame, col)`** — the single definition of a bar
+   close: the last finite print on a frame whose in-progress bar has been
+   dropped, returned *with the date of the session that closed*. Every engine
+   now reports `bar_close` / `bar_date` from it (`overall_core._asset_result`
+   and `gldm_engine` off `hist`; `btc_ct_engine`'s equity sleeves off their own
+   series with the partial bar dropped), plus `bar_anchor` saying what the date
+   means — a regular session close, or the CT engine's 12:00-UTC bar. These are
+   *additional* fields: `last_close` still feeds momentum, unrealised P&L and
+   the priority tilt, so no published weight moves.
+2. **The action plan measures from `bar_close`, never `last_close`**, and
+   prints the bar's date under the price. A row can no longer be read as "now"
+   when it means "Tuesday".
+3. **`overall_core.verify_price_pair`** checks both halves before Chg % is
+   computed, at no extra request — the quote call already returns the week's
+   daily closes, the quote's print time, and the session's trading window:
+   * **basis** — reconciled against the official close for the session it
+     claims (0.25% tolerance: for the newest bar an adjusted close and a raw
+     one agree, so a wider gap means it is not that bar); flagged if it is
+     undated, if the tape disagrees, or if it is behind the latest close.
+   * **live price** — flagged when it has not printed in 45 minutes *while its
+     market is open* (after the close the last regular print is legitimately
+     old — that is the close).
+   * A 12:00-UTC CT bar is **dated but not cross-checked**: the feed's close
+     for that calendar date is a different bar, so comparing them would
+     manufacture a mismatch daily.
+4. **A failed check is visible, and a failed quote is not differenced.** The
+   offending price carries an amber ⚠️ naming the problem; a stale quote drops
+   out entirely so Chg % reads `—` rather than reporting a move nobody made.
+   An unverified basis still shows its number — the arithmetic on the two
+   displayed prices is honest — but labelled, so it is never read with the
+   confidence of a reconciled one.
+
+Verified live on 2026-09-10 with the session open: all 18 sleeves reconciled
+against the tape (`flags: OK`), every basis equal to Sep 9's official close to
+the cent, and Chg % showing real intraday moves (SOXL −6.81%, NUGT −6.31%,
+GDX −3.14%) where it had been printing 0.00%.
+
+Tests: `tests/test_action_plan_price_consistency.py`.
+
 ### The live price had no backup (2026-09-09)
 
 Both of those columns rest on one feed. `overall_core._quote` read

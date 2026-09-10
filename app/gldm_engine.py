@@ -277,6 +277,13 @@ def run_gldm() -> list[dict]:
         prev_px = float(daily[col].dropna().iloc[-2])
         dchg = (last_px / prev_px - 1) * 100 if prev_px else 0.0
         as_of = pd.Timestamp(dates.iloc[-1])
+        # ``last_px`` is the DISPLAY price and ``daily`` keeps the in-progress
+        # US bar, so during market hours it is today's running price rather
+        # than a close.  ``bar_close``/``bar_date`` are the real last COMPLETED
+        # session close (off ``hist``, the frame the signals run on) — the only
+        # basis the action plan's "Price (Close of Last Bar)" column and its
+        # Chg % may use.  See freshness.completed_bar.
+        bar_close, bar_date = _frs.completed_bar(hist, col)
         if gc.engine_for(key) == "dual_ma":
             dec = _trend_decision(dual_long_now, bool(r.get("in_pos_now")))
         else:
@@ -299,7 +306,8 @@ def run_gldm() -> list[dict]:
             key=key, parent=meta["parent"], name=meta["name"], kind=meta["kind"],
             emoji=meta["emoji"], kemoji=KIND_EMOJI[meta["kind"]], accent=ACCENT,
             cap=CAP_BY_KIND[meta["kind"]],
-            last_close=last_px, dchg=dchg, ma_val=None,
+            last_close=last_px, bar_close=bar_close, bar_date=bar_date,
+            bar_anchor="session", dchg=dchg, ma_val=None,
             sentiment=sent, decision=dec, alert=(sigs or {}).get("alert_level", "NEUTRAL"),
             bull_regime=bull_now, pos=pos, last_trade=last_trade, mom=mom,
             metrics=m, bh_metrics=bhm, win_rate=wr, n_trades=int(len(r["trades"])),

@@ -497,6 +497,16 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     pos_series = pd.Series(np.asarray(r["pos"], float), index=dates).rename(label)
     last_px = float(daily[col].dropna().iloc[-1]) if col in daily else np.nan
     as_of = pd.Timestamp(dates.iloc[-1])
+    # ``last_px`` is the DISPLAY price: ``daily`` deliberately keeps the
+    # in-progress US bar, so during market hours it is today's running price,
+    # not a close.  The action plan's "Price (Close of Last Bar)" column needs
+    # the real thing — the last COMPLETED session close of the traded
+    # instrument, with the date it belongs to — so take it off ``hist``, the
+    # same in-progress-dropped frame the signals are computed on.  Kept as a
+    # separate field: ``last_close`` also feeds momentum, unrealised P&L and the
+    # priority tilt, and re-pointing those would move published weights.
+    bar_close, bar_date = _frs.completed_bar(
+        (hist if hist is not None else daily), col)
 
     # per-asset stop (e.g. SOXL trades no stop) read from the data field, not the
     # stop_for method, so a hot-reloaded/stale config instance can't AttributeError.
@@ -520,7 +530,8 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         key=label, parent=cfg.key, name=meta["name"], kind=meta["kind"],
         emoji=cfg.emoji, kemoji=KIND_EMOJI[meta["kind"]], accent=cfg.accent,
         cap=CAP_BY_KEY.get(label, 0.30),
-        last_close=last_px, dchg=dchg, ma_val=ma_val,
+        last_close=last_px, bar_close=bar_close, bar_date=bar_date,
+        bar_anchor="session", dchg=dchg, ma_val=ma_val,
         sentiment=sent, decision=dec, alert=alert, bull_regime=bull,
         pos=pos, last_trade=last_trade, mom=mom,
         metrics=m, bh_metrics=bh, win_rate=wr, n_trades=int(len(r["trades"])),
@@ -1705,6 +1716,19 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             target=target.get(k, 0.0), in_pos=res["pos"]["in_pos"],
                             upnl=res["pos"]["upnl"], alert=res["alert"],
                             last_close=res["last_close"],
+                            # the VERIFIED basis for the action plan's price
+                            # column and its Chg %: the traded instrument's own
+                            # last completed session close, and the date of the
+                            # session that closed (``last_close`` is the display
+                            # price, which during market hours is an in-progress
+                            # print — see freshness.completed_bar).
+                            bar_close=res.get("bar_close"),
+                            bar_date=res.get("bar_date"),
+                            # what that date means — a regular session close
+                            # ("session", reconcilable against the tape) or the
+                            # CT engine's 12:00-UTC bar, which no daily feed
+                            # prints and so can only be dated, not cross-checked
+                            bar_anchor=res.get("bar_anchor", "session"),
                             exits_next_bar=bool(dec.get("exits_next_bar")),
                             live_entry=(k in live_open),
                             priority=(p["score"] if p else None),
@@ -3085,13 +3109,26 @@ _SPOT_OVERRIDE = {"BTC": "BTC-USD", "ETH": "ETH-USD"}
 SPOT_SYMBOLS = {k: _SPOT_OVERRIDE.get(k, k) for k in ASSET_META}
 
 
-def _quote(symbol: str) -> tuple:
-    """(spot price, previous-session close) for a symbol.
+def _quote(symbol: str) -> dict:
+    """Everything one chart request can tell us about a symbol's price RIGHT NOW.
 
-    Spot = the chart meta's ``regularMarketPrice`` (true live quote); the
-    previous close is the last *completed* daily bar strictly before today
+    ``{price, prev, bars, quote_time, session_closed}`` — empty ``{}`` when no
+    host answered.  Spot = the chart meta's ``regularMarketPrice`` (true live
+    quote); ``prev`` is the last *completed* daily bar strictly before today
     (Yahoo's ``previousClose`` is often null and ``chartPreviousClose`` is the
-    close before the whole range, so neither gives a correct 1-day change)."""
+    close before the whole range, so neither gives a correct 1-day change).
+
+    The last three fields exist so BOTH inputs to Chg % can be checked before it
+    is computed, at no extra request:
+
+    * ``bars`` — ``{"YYYY-MM-DD": close}`` for the week the request already
+      returns, so an engine's claimed bar close can be reconciled against the
+      official close for that same date;
+    * ``quote_time`` — when the live price actually printed, so a quote that
+      has stopped ticking is caught instead of being differenced as if current;
+    * ``session_closed`` — whether the symbol's regular session has ended, which
+      is what separates "today's close" from "today's price so far".
+    """
     params = {"interval": "1d", "range": "7d"}
     for host in tc._YH_HOSTS:
         try:
@@ -3130,19 +3167,31 @@ def _quote(symbol: str) -> tuple:
                     prev = None
             if prev is None and len(s) >= 2:
                 prev = float(s.iloc[-2])
+            # has the regular session this quote belongs to already ended? The
+            # trading-period window is in the meta, so no clock guessing and no
+            # holiday calendar: after ``regular.end`` the newest daily bar is a
+            # real close, before it that bar is still being written.
+            _tp = ((meta.get("currentTradingPeriod") or {}).get("regular") or {})
+            _end = _tp.get("end")
+            session_closed = bool(q_ts and _end and int(q_ts) >= int(_end))
             if px:
-                return float(px), prev
+                return dict(
+                    price=float(px), prev=prev,
+                    bars={d.strftime("%Y-%m-%d"): float(v) for d, v in s.items()},
+                    quote_time=(pd.Timestamp(int(q_ts), unit="s", tz="UTC")
+                                if q_ts else None),
+                    session_closed=session_closed)
         except Exception:
             continue
-    return None, None
+    return {}
 
 
 PRIMARY_QUOTE_SRC = "yahoo"
 
 
-def quote(symbol: str) -> tuple:
-    """``(price, previous close, source)`` — the live quote for ``symbol`` from
-    the first feed that serves it.
+def quote(symbol: str) -> dict:
+    """The live quote for ``symbol`` from the first feed that serves it —
+    ``_quote``'s dict plus ``src``, or ``{}`` when no feed answered.
 
     Yahoo stays primary: it covers every instrument in the universe and is the
     feed every other price on the page is reconciled against.  When it returns
@@ -3158,19 +3207,23 @@ def quote(symbol: str) -> tuple:
     cockpit can say which prices are not the primary feed's — a backup quote is
     never passed off as Yahoo's."""
     try:
-        px, prev = _quote(symbol)
-        if px:
-            return float(px), prev, PRIMARY_QUOTE_SRC
+        q = _quote(symbol) or {}
+        if q.get("price"):
+            return dict(q, src=PRIMARY_QUOTE_SRC)
     except Exception:
         pass
     try:
         import market_fallback as _mf
         px, prev, src = _mf.live_quote(symbol)
         if px:
-            return float(px), prev, src
+            # a backup feed serves the price (and a previous close); it carries
+            # no bar history or session clock, so the basis it is differenced
+            # against is reported UNVERIFIED rather than assumed good.
+            return dict(price=float(px), prev=prev, bars={}, quote_time=None,
+                        session_closed=None, src=src)
     except Exception:
         pass
-    return None, None, None
+    return {}
 
 
 def fetch_spot(symbols: dict | None = None) -> dict:
@@ -3183,9 +3236,10 @@ def fetch_spot(symbols: dict | None = None) -> dict:
 
     def _one(item):
         k, sym = item
-        px, prev, src = quote(sym)
+        q = quote(sym)
+        px, prev = q.get("price"), q.get("prev")
         dchg = ((px / prev - 1) * 100) if (px and prev) else None
-        return k, dict(price=px, prev=prev, dchg=dchg, src=src)
+        return k, dict(q, price=px, prev=prev, dchg=dchg, src=q.get("src"))
 
     items = list(symbols.items())
     with ThreadPoolExecutor(max_workers=min(13, len(items))) as ex:
@@ -3206,10 +3260,121 @@ def fetch_sata() -> dict:
     """Live SATA quote: current price, previous close, day-change %, and
     unrealised P&L measured against its $100 par cost basis (the price idle cash
     is parked at).  Same primary→backup feed chain as every other quote."""
-    px, prev, src = quote(SATA["ticker"])
+    q = quote(SATA["ticker"])
+    px, prev = q.get("price"), q.get("prev")
     dchg = ((px / prev - 1) * 100) if (px and prev) else None
     upnl = ((px / SATA["par"] - 1) * 100) if px else None
-    return dict(price=px, prev=prev, dchg=dchg, upnl=upnl, src=src)
+    return dict(q, price=px, prev=prev, dchg=dchg, upnl=upnl, src=q.get("src"))
+
+
+# How far an engine's claimed bar close may sit from the feed's official close
+# for that same session before the basis is called into question.  Tight on
+# purpose: for the newest completed bar an auto-adjusted close and a raw one
+# agree (dividend/split adjustment rewrites older bars, not the last one), so a
+# gap this size means the two are not the same bar — a different vintage, or a
+# price that was never a close.
+BASIS_TOL_PCT = 0.25
+# A quote that hasn't printed in this long, while its market is still open, has
+# stopped being "live" — it is a cached or frozen tick, and differencing it
+# against a bar close reports a move that is not happening.
+QUOTE_STALE_MINS = 45
+
+
+def verify_price_pair(bar_close, bar_date, quote: dict, expected_bar=None,
+                      cross_check: bool = True, now=None) -> dict:
+    """Check BOTH inputs to Chg % before it is computed, and say what is wrong.
+
+    ``Chg %`` is only as good as the two prices it differences, and each can be
+    wrong in a way that still looks like a number:
+
+    * the **basis** can be an in-progress print rather than a session close (the
+      engines' display price during market hours), a bar from an older session
+      than the signals claim, or a value the official tape has no record of;
+    * the **live price** can be a quote that stopped ticking hours ago, which
+      differences to a move nobody made.
+
+    Returns ``{ok, basis_ok, quote_ok, flags, notes, official, age_mins}`` —
+    ``ok`` is the gate the caller uses to decide whether Chg % may be shown as a
+    plain number, ``notes`` are short human-readable reasons for the ones that
+    failed.  Nothing here alters a price: it reports, the caller renders.
+
+    ``cross_check=False`` for a bar no daily feed prints — the CT engine's
+    12:00-UTC bars — where the official close for that calendar date is a
+    DIFFERENT bar, so comparing them would manufacture a mismatch every day.
+    Such a basis is dated and reported as-is: not confirmed, but not impugned
+    either (the date check and the quote checks still apply)."""
+    now = pd.Timestamp(now or pd.Timestamp.utcnow())
+    if now.tz is None:
+        now = now.tz_localize("UTC")
+    flags, notes = [], []
+    official = None
+
+    # ── the basis ────────────────────────────────────────────────────────
+    basis_ok = True
+    try:
+        b = float(bar_close)
+        if not np.isfinite(b) or b <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return dict(ok=False, basis_ok=False, quote_ok=False, official=None,
+                    age_mins=None, flags=["no_basis"],
+                    notes=["no completed bar close for this instrument"])
+    if bar_date is None:
+        flags.append("undated_basis")
+        notes.append("bar close carries no date")
+        basis_ok = False
+    else:
+        bar_date = pd.Timestamp(bar_date).normalize()
+        bars = ((quote or {}).get("bars") or {}) if cross_check else {}
+        official = bars.get(bar_date.strftime("%Y-%m-%d"))
+        if official:
+            # the official close for that very session — the strongest check
+            # available, and free (the quote request already returned it)
+            if abs(b / float(official) - 1) * 100 > BASIS_TOL_PCT:
+                flags.append("basis_mismatch")
+                notes.append(f"differs from the official {bar_date:%b %-d} close "
+                             f"(${float(official):,.2f})")
+                basis_ok = False
+        elif cross_check:
+            # the feed answered but has no bar for that session — the sleeve's
+            # bar predates the window, or no reference series came back at all
+            flags.append("basis_unverified")
+            notes.append(f"no official close on {bar_date:%b %-d} to check against"
+                         if bars is not None and ((quote or {}).get("bars"))
+                         else "no reference series from this feed")
+        if expected_bar is not None:
+            expected_bar = pd.Timestamp(expected_bar).normalize()
+            if bar_date < expected_bar:
+                # dates, not a session count: the count would need each
+                # instrument's own calendar (crypto trades the weekend), and the
+                # two dates say it without ambiguity
+                flags.append("bar_behind")
+                notes.append(f"basis is the {bar_date:%b %-d} bar — the latest "
+                             f"close is {expected_bar:%b %-d}")
+
+    # ── the live price ───────────────────────────────────────────────────
+    quote_ok, age_mins = True, None
+    px = (quote or {}).get("price")
+    if not px:
+        flags.append("no_quote")
+        notes.append("no live quote")
+        quote_ok = False
+    else:
+        qt = (quote or {}).get("quote_time")
+        if qt is not None:
+            qt = pd.Timestamp(qt)
+            if qt.tz is None:
+                qt = qt.tz_localize("UTC")
+            age_mins = max((now - qt).total_seconds() / 60.0, 0.0)
+            # only while the market is open: after the close the last regular
+            # print is legitimately hours old and is exactly what we want
+            if not (quote or {}).get("session_closed") and age_mins > QUOTE_STALE_MINS:
+                flags.append("stale_quote")
+                notes.append(f"quote last printed {age_mins/60:.1f}h ago")
+                quote_ok = False
+    return dict(ok=(basis_ok and quote_ok), basis_ok=basis_ok, quote_ok=quote_ok,
+                official=(float(official) if official else None),
+                age_mins=age_mins, flags=flags, notes=notes)
 
 
 def live_change_pct(bar_close, live_price) -> float | None:

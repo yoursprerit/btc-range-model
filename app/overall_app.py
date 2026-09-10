@@ -1468,8 +1468,17 @@ with tab_live:
                    "pre-fund a signal before it commits at the close). "
                    "**Price (Close of Last Bar)** "
                    "is the official close of the last completed daily bar the signals run "
-                   "on; **Live Price** is the current spot quote (coloured green/red vs "
-                   "that close). **Chg %** is one number and one only: "
+                   "on — the **date of that session is printed under it**, and the price "
+                   "is reconciled against the official close for that same date before "
+                   "anything is measured from it (it is never the in-progress bar's "
+                   "running price, which is what the column used to show during market "
+                   "hours). **Live Price** is the current spot quote (coloured green/red "
+                   "vs that close), checked for staleness by its own print time. "
+                   "Anything that fails a check is called out on the row — an amber "
+                   "⚠️ on the price that failed — and a live quote that has stopped "
+                   "ticking mid-session is dropped rather than differenced, so **Chg %** "
+                   "reads **—** instead of reporting a move nobody made. "
+                   "**Chg %** is one number and one only: "
                    "`Live Price ÷ Price (Close of Last Bar) − 1` for **that "
                    "instrument's own bar** — how far it has moved since the bar its "
                    "signals last read, which is exactly what the live entry/exit "
@@ -1498,6 +1507,19 @@ with tab_live:
                 "💼 Portfolio value ($)", min_value=0.0, value=100000.0, step=1000.0,
                 format="%.0f", key="overall_portfolio_value",
                 help="Target $ per instrument = target % × this value.")
+        def _expected_bar(anchor):
+            """The newest bar this INSTRUMENT's own market can have closed — the
+            same expectation the freshness audit judges signals against, reused
+            here to date-check the price basis itself.  Keyed on the bar's
+            anchor rather than the parent app, so the BTC app's equity siblings
+            (MSTR/MSTU, which close with the NYSE) are judged against the equity
+            calendar and not against Bitcoin's weekend bars."""
+            try:
+                return (fr.expected_crypto_asof() if anchor == "ct-12utc"
+                        else fr.expected_equity_asof())
+            except Exception:
+                return None
+
         hdr = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
                "<th style='padding:7px 10px'>Action</th><th>Instrument</th>"
                "<th>Signal</th><th style='text-align:center'>Priority</th>"
@@ -1571,16 +1593,51 @@ with tab_live:
             # highlight a live target that has diverged from the last-bar target
             _live_moved = abs(tgt_live - tgt) > 0.005
             _live_col = (C_EXIT if tgt_live < tgt else C_BUY) if _live_moved else "inherit"
-            # live spot price (falls back to the last-bar close when no live quote);
-            # coloured green/red vs the last-bar close to show the intraday move.
-            _bar_px = a["last_close"]
+            # ── the two prices Chg % is measured from, CHECKED before it is
+            # computed ────────────────────────────────────────────────────
+            # The basis is the instrument's own last COMPLETED session close
+            # (``bar_close``, dated ``bar_date``) — never ``last_close``, which
+            # is the display price and, during market hours, the in-progress
+            # bar's running price.  That was the defect this block was rebuilt
+            # for: with the Sep 10 session open, every equity sleeve showed
+            # today's live price in the "Close of Last Bar" column (SOXL
+            # $117.14 where Sep 9 actually closed at $125.87 — 6.9% out), so
+            # the column equalled the live quote and Chg % read 0.00% all
+            # session. A column that cannot show a move is worse than no
+            # column.  ``verify_price_pair`` then checks both halves against
+            # the feed — is the basis the official close for the session it
+            # claims, and is the quote still ticking — and anything it cannot
+            # confirm is said out loud rather than silently differenced.
+            _q = _spot.get(a["key"]) or {}
+            _bar_px = a.get("bar_close")
+            _bar_dt = a.get("bar_date")
+            if _bar_px is None or not np.isfinite(_bar_px or np.nan):
+                _bar_px, _bar_dt = a["last_close"], None   # pre-basis fallback
+            _anchor = a.get("bar_anchor", "session")
+            _vfy = ov.verify_price_pair(
+                _bar_px, _bar_dt, _q, expected_bar=_expected_bar(_anchor),
+                # a 12:00-UTC CT bar is a different bar from the daily feed's
+                # close for the same date, so it is dated, not cross-checked
+                cross_check=(_anchor == "session"))
             _live_px = a.get("live_price")          # set only when a quote arrived
-            _has_live = _live_px is not None
+            _has_live = _live_px is not None and _vfy["quote_ok"]
             if not _has_live:
                 _live_px = _bar_px
             _live_px_s = f"${_live_px:,.2f}"
             _live_px_col = (C_BUY if _live_px > _bar_px
                             else C_EXIT if _live_px < _bar_px else "inherit")
+            # the basis cell says WHICH session it closed, so a price can never
+            # be read as "now" — and carries the verifier's complaint when the
+            # session, the tape and the engine disagree
+            _bar_px_s = f"${_bar_px:,.2f}"
+            if _bar_dt is not None:
+                _bar_px_s += (f"<div style='font-size:10px;color:#94a3b8'>"
+                              f"{pd.Timestamp(_bar_dt):%b %-d} close</div>")
+            _basis_note = "; ".join(n for n, f in zip(_vfy["notes"], _vfy["flags"])
+                                    if f not in ("no_quote", "stale_quote"))
+            if _basis_note:
+                _bar_px_s += (f"<div style='font-size:10px;color:#d97706;"
+                              f"font-weight:600'>⚠️ {_basis_note}</div>")
             # Chg % — ONE number, and only ever this one: the move between the
             # two columns it sits between, Live Price vs Price (Close of Last
             # Bar), for that instrument's own bar.  It used to print the spot
@@ -1605,12 +1662,25 @@ with tab_live:
             else:
                 chg_s = f"{_chg:+.2f}%"
                 chg_col = C_BUY if _chg >= 0 else C_EXIT
-            # a live price served by a BACKUP feed says so under the price it
-            # produced (Yahoo could not quote this instrument on this refresh)
-            _src = (_spot.get(a["key"]) or {}).get("src")
+            # an unverified basis still gets its number — the move is real
+            # arithmetic on the prices shown — but it is marked, so it is never
+            # read with the same confidence as a reconciled one
+            if _chg is not None and not _vfy["basis_ok"]:
+                chg_s += ("<div style='font-size:10px;color:#d97706;"
+                          "font-weight:400'>unverified basis</div>")
+            # the live cell says where its price came from and whether it is
+            # still moving: a backup feed (Yahoo could not quote this name) and
+            # a quote that has stopped printing are both worth knowing before
+            # trusting the change measured off it
+            _src = _q.get("src")
             if _has_live and _src and _src != ov.PRIMARY_QUOTE_SRC:
                 _live_px_s += (f"<div style='font-size:10px;color:#d97706;"
                                f"font-weight:400'>via {_src}</div>")
+            if not _vfy["quote_ok"]:
+                _stale = next((n for n, f in zip(_vfy["notes"], _vfy["flags"])
+                               if f in ("stale_quote", "no_quote")), "no live quote")
+                _live_px_s += (f"<div style='font-size:10px;color:#d97706;"
+                               f"font-weight:600'>⚠️ {_stale}</div>")
             # cost basis = the real close on the entry bar
             _cb = _r["pos"].get("entry_px")
             cb_sub = (f"<div style='font-size:10px;color:#94a3b8'>@ ${_cb:,.2f} cost</div>"
@@ -1734,7 +1804,7 @@ with tab_live:
                 f"<td style='font-size:12px;color:{_dec_col}'>{_dec}"
                 f"<div style='font-size:10px;color:#94a3b8'>{sub}</div></td>"
                 f"<td style='text-align:center;font-size:12px;min-width:56px'>{prio_cell}</td>"
-                f"<td style='text-align:right;font-variant-numeric:tabular-nums'>${a['last_close']:,.2f}</td>"
+                f"<td style='text-align:right;font-variant-numeric:tabular-nums'>{_bar_px_s}</td>"
                 f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{_live_px_col}'>{_live_px_s}</td>"
                 f"<td style='text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:{chg_col}'>{chg_s}</td>"
                 f"<td style='text-align:right;color:{pnl_col};font-weight:600'>{pnl}{cb_sub}</td>"

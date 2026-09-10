@@ -328,6 +328,28 @@ def drop_in_progress_us_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
     return df.loc[idx <= cutoff]
 
 
+def completed_bar(frame, col) -> tuple:
+    """``(close, date)`` of the last COMPLETED daily bar in ``frame[col]``.
+
+    The one definition every engine reports its ``bar_close`` / ``bar_date``
+    from, and the only basis the Overall action plan's "Price (Close of Last
+    Bar)" column — and the Chg % measured from it — is allowed to use: a price
+    that is genuinely a session's close, carrying the date of the session that
+    closed.  ``frame`` must already have the in-progress bar dropped (see
+    ``drop_in_progress_us_bar``); this only picks the last finite print off it.
+
+    ``(nan, None)`` when the column holds nothing usable, so the caller can
+    render an unverified basis rather than guess one."""
+    try:
+        s = pd.to_numeric(frame[col], errors="coerce").dropna()
+        s = s[(s > 0) & (s < float("inf"))]
+        if not len(s):
+            return float("nan"), None
+        return float(s.iloc[-1]), pd.Timestamp(s.index[-1]).normalize()
+    except Exception:
+        return float("nan"), None
+
+
 # ── intraday backstop: rebuild a daily bar Yahoo's daily feed is missing ─────
 # Yahoo serves the daily (`interval=1d`) and intraday (`interval=1h`) series from
 # different pipelines, and the daily one lags: the newest session is routinely

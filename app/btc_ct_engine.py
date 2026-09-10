@@ -384,6 +384,22 @@ def _px_defect(arr: np.ndarray, dates: pd.DatetimeIndex,
             "corrupted splice or garbage print")
 
 
+def _completed_equity_bar(key: str) -> tuple:
+    """``(close, date)`` of the last COMPLETED US session for an equity sleeve.
+
+    Read from the instrument's own daily series with the in-progress bar
+    dropped, so it is a real close on a real date — never the running price of
+    a session still trading.  ``(nan, None)`` if the series is unavailable, and
+    the caller renders that as an unverified basis rather than a guess."""
+    try:
+        import freshness as _frs
+        s = T.load_asset(key)
+        return _frs.completed_bar(_frs.drop_in_progress_us_bar(s.to_frame("close")),
+                                  "close")
+    except Exception:
+        return float("nan"), None
+
+
 def _load_prices(dates: pd.DatetimeIndex, comp: pd.DataFrame) -> dict:
     btc = comp["actual_close"].values.astype(float)
     mstr = _next_session_close(T.load_asset("MSTR"), dates)
@@ -567,6 +583,23 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
         last_px = float(px[key][_last_fin])
         prev_px = float(px[key][_last_fin - 1]) if _last_fin >= 1 else last_px
         dchg = (last_px / prev_px - 1) * 100 if prev_px else 0.0
+        # ``last_px`` is the sleeve's FILL basis, and for the equity siblings a
+        # fill is the close of the session AFTER the signal bar — which during
+        # market hours is today's in-progress print, not a close (observed
+        # 2026-09-10 14:13 ET: MSTR carried 130.30, an intraday snapshot, while
+        # Sep 9's real close was 132.70).  The Overall action plan's "Price
+        # (Close of Last Bar)" column and the Chg % measured off it need a
+        # genuine completed close, so the equity sleeves report their own
+        # series with the in-progress US bar dropped.  The crypto sleeves run
+        # on 12:00-UTC bars that are completed by construction, so there the
+        # fill IS the bar close.
+        if key in ("MSTR", "MSTU"):
+            bar_close, bar_date = _completed_equity_bar(key)
+            bar_anchor = "session"
+        else:
+            bar_close = last_px
+            bar_date = pd.Timestamp(dates[_last_fin]).normalize()
+            bar_anchor = "ct-12utc"
         dec = _decision(sigs_k, last, bt["open_pos"])
         m = _curve_metrics(nav); bhm = _curve_metrics(bh)
         wr = 100.0 * np.mean([t["ret"] > 0 for t in bt["trades"]]) if bt["trades"] else 0.0
@@ -590,7 +623,8 @@ def run_btc_ct(start: str = "2024-01-01") -> list[dict]:
             key=key, parent="BTC", name=meta["name"], kind=meta["kind"],
             emoji=EMOJI, kemoji=KIND_EMOJI[meta["kind"]], accent=ACCENT,
             cap=CAP_BY_KIND[meta["kind"]],
-            last_close=last_px, dchg=dchg, ma_val=None,
+            last_close=last_px, bar_close=bar_close, bar_date=bar_date,
+            bar_anchor=bar_anchor, dchg=dchg, ma_val=None,
             sentiment=np.nan, decision=dec, alert=_alert(sigs_k, last, bt["open_pos"]),
             bull_regime=bull_now, pos=pos, last_trade=last_trade, mom=mom,
             metrics=m, bh_metrics=bhm, win_rate=wr, n_trades=len(bt["trades"]),
