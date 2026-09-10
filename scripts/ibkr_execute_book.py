@@ -388,10 +388,20 @@ def main() -> int:
                   "was missed, so nothing is caught up.")
         elif state == ic.CATCH_UP_LATE:
             args.outside_rth = True
-            print("  the scheduled slot was missed and this book is unexecuted: "
-                  "routing it as outsideRth limits (IBKR rejects MARKET and MOC "
-                  "after the close, so a leg that cannot be priced is SKIPPED "
-                  "rather than sent).")
+            # Say which of the two it is. --force-rerun reaches here with a bar
+            # that DOES carry an execution report — a top-up after a partial
+            # after-hours run — and calling that "unexecuted" in the log is
+            # exactly the sort of thing read back later as proof of a
+            # double-execution.
+            missed = ("re-running a bar that already has an execution report "
+                      "(--force-rerun): the plan is re-diffed against the "
+                      "account's current positions, so this tops up what the "
+                      "earlier run left undone" if prior else
+                      "the scheduled slot was missed and this book is "
+                      "unexecuted")
+            print(f"  {missed} — routing as outsideRth limits (IBKR rejects "
+                  "MARKET and MOC after the close, so a leg that cannot be "
+                  "priced is SKIPPED rather than sent).")
             print("  extended-hours fills often print past --fill-timeout — "
                   "re-run with --refresh-report afterwards to restate them.")
         elif state == ic.CATCH_UP_SHUT and trades_now:
