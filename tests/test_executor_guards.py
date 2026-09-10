@@ -607,3 +607,19 @@ def test_an_unpriceable_leg_is_reported_not_silently_dropped():
     src = (Path(__file__).resolve().parent.parent
            / "scripts" / "ibkr_common.py").read_text()
     assert "SKIPPED-UNPRICEABLE" in src
+
+
+# ── the TIF an extended-hours limit needs ───────────────────────────────────
+def test_an_after_hours_limit_expires_with_the_extended_session():
+    """A DAY order sent after 16:00 ET is already past its own expiry, so IBKR
+    cancels it on arrival (error 10349, 2026-09-10). GTD to 20:00 ET works the
+    rest of the evening; GTC would still be resting at tomorrow's 2:30 PM CT
+    slot, which sizes from positions and cannot see it."""
+    tif, gtd = ic.extended_hours_tif(_et("2026-09-10 18:18"))
+    assert tif == "GTD"
+    assert gtd == "20260910 20:00:00 America/New_York"
+
+
+def test_the_expiry_tracks_the_day_the_order_is_sent():
+    _, gtd = ic.extended_hours_tif(_et("2026-09-11 16:05"))
+    assert gtd.startswith("20260911 20:00:00")

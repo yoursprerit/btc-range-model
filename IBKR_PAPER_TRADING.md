@@ -403,8 +403,15 @@ OVERALL_BOOK_SECRET=… python scripts/ibkr_execute_book.py \
     --file data/overall/target_book.json --execute --catch-up
 ```
 
-Two things to expect from an extended-hours fill. The book is thinner, so widen
-`--slippage-cap` (default 0.5% through the touch) if legs come back unfilled;
+Extended-hours limits are sent **GTD, expiring at 20:00 ET**. That is not
+cosmetic: a DAY order sent after 16:00 ET is already past its own expiry and
+IBKR cancels it on arrival (error 10349, *"Order TIF was set to DAY based on
+order preset"* — the Gateway preset filling in a TIF the order didn't carry).
+GTD rather than GTC because a stray GTC would still be resting at the next
+day's 2:30 PM CT slot, which sizes from positions and cannot see it.
+
+Two more things to expect from an extended-hours fill. The book is thinner, so
+widen `--slippage-cap` (default 0.5% through the touch) if legs come back unfilled;
 and fills often print **after** the run's `--fill-timeout` expires — re-run with
 `--refresh-report` later to restate the account and rewrite a signed report from
 what actually filled.

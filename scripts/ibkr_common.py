@@ -604,6 +604,28 @@ def catch_up_state(now=None) -> tuple[str, str]:
                            "extended session — no order placed now would fill")
 
 
+def extended_hours_tif(now=None) -> tuple[str, str]:
+    """(tif, goodTillDate) for a limit that has to work the extended session.
+
+    A DAY order is good until the end of the REGULAR session, so one sent after
+    16:00 ET arrives already expired and IBKR cancels it on the spot — which is
+    what error 10349 ("Order TIF was set to DAY based on order preset") is: the
+    Gateway's own order preset supplying DAY to an order that carried no TIF of
+    its own.  Setting the TIF explicitly on the order overrides that preset.
+
+    GTD pinned to the 20:00 ET end of the extended session is the right TIF
+    rather than GTC: it works for the rest of tonight and then expires by
+    itself, so nothing is left resting against tomorrow's plan.  A stray GTC
+    from an after-hours run would still be live at the next day's 2:30 PM CT
+    slot, which sizes its orders from POSITIONS and cannot see it — the exact
+    shape of a double execution.
+    """
+    et = _et_now(now)
+    end = et.replace(hour=EXT_CLOSE_ET[0], minute=EXT_CLOSE_ET[1],
+                     second=0, microsecond=0)
+    return "GTD", end.strftime("%Y%m%d %H:%M:%S America/New_York")
+
+
 def price_drift(book_price: float, live_price: float) -> float:
     """|live − book| / book, or 0.0 when either side is unusable."""
     try:
@@ -1258,11 +1280,17 @@ class Broker:
                     basis = "book exec_price"
             if lmt is not None:
                 order = LimitOrder(o.action, qty, lmt)
+                tif_note = ""
                 if outside_rth:
                     order.outsideRth = True
+                    # Without an explicit TIF the Gateway preset supplies DAY,
+                    # which is already expired after 16:00 ET — the order is
+                    # cancelled on arrival (error 10349).
+                    order.tif, order.goodTillDate = extended_hours_tif()
+                    tif_note = f", {order.tif} to {order.goodTillDate[9:14]} ET"
                 print(f"    limit {o.symbol}: {o.action} ≤ ${lmt:,.4f} "
                       f"({basis} {slippage_cap*100:.2f}% through)"
-                      + (" [outside RTH]" if outside_rth else ""))
+                      + (f" [outside RTH{tif_note}]" if outside_rth else ""))
                 return order, ORDER_MARKETABLE_LIMIT, float(lmt)
             if outside_rth:
                 print(f"    SKIP {o.symbol}: {basis}, and a MARKET order is "
@@ -1324,7 +1352,9 @@ class Broker:
             if stuck:
                 print(f"    outside RTH: leaving {len(stuck)} unfilled "
                       f"limit(s) working ({', '.join(stuck)}) — no MARKET "
-                      f"escalation is possible")
+                      f"escalation is possible; they expire at the "
+                      f"{EXT_CLOSE_ET[0]:02d}:{EXT_CLOSE_ET[1]:02d} ET end of "
+                      f"the extended session")
             return []
         extra = []
         for o, qty, used, _lmt, t in trades:
