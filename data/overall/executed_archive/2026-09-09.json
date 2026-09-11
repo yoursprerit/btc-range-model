@@ -1,70 +1,70 @@
 {
  "schema": "executed-book/v1",
- "generated_at_utc": "2026-09-10T22:00:39+00:00",
+ "generated_at_utc": "2026-09-10T22:28:08+00:00",
  "as_of": "2026-09-09",
  "profile": "Balanced",
  "mode": "execute",
  "account_mode": "paper",
  "account": "DUR917452",
- "net_liq": 100437.1,
- "cash": 476.0,
- "realized_pnl": 0.0,
+ "net_liq": 100309.96,
+ "cash": 674.31,
+ "realized_pnl": -235.62,
  "trades": [
   {
-   "key": "ERX",
-   "symbol": "ERX",
+   "key": "ARTY",
+   "symbol": "ARTY",
    "action": "SELL",
-   "qty": 10.0,
-   "price": 112.82,
-   "value": 1128.1999999999998,
-   "status": "Submitted",
+   "qty": 264.0,
+   "price": 0.0,
+   "value": 0.0,
+   "status": "PendingSubmit",
    "filled": 0.0,
    "avg_fill_price": 0.0,
    "order_type": "marketable-limit",
-   "limit_price": 112.25,
-   "reason": "\u2192 10.0% (hold 99\u219289)"
+   "limit_price": 73.25,
+   "reason": "close (no longer in book)"
   },
   {
    "key": "OIH",
    "symbol": "OIH",
    "action": "BUY",
-   "qty": 16.0,
+   "qty": 11.0,
    "price": 429.35,
-   "value": 6869.6,
+   "value": 4722.85,
    "status": "SKIPPED-FUNDING",
    "filled": 0.0,
    "avg_fill_price": 0.0,
    "order_type": "",
    "limit_price": 0.0,
-   "reason": "\u2192 18.0% (hold 26\u219242) [not funded]"
+   "reason": "\u2192 18.0% (hold 31\u219242) [not funded]"
   },
   {
    "key": "GRID",
    "symbol": "GRID",
    "action": "BUY",
-   "qty": 34.0,
+   "qty": 22.0,
    "price": 180.13,
-   "value": 6124.42,
+   "value": 3962.8599999999997,
    "status": "SKIPPED-FUNDING",
    "filled": 0.0,
    "avg_fill_price": 0.0,
    "order_type": "",
    "limit_price": 0.0,
-   "reason": "\u2192 30.0% (hold 133\u2192167) [not funded]"
+   "reason": "\u2192 30.0% (hold 145\u2192167) [not funded]"
   },
   {
    "key": "GLDM",
    "symbol": "GLDM",
    "action": "BUY",
-   "qty": 1.0,
+   "qty": 2.0,
    "price": 87.03,
-   "value": 87.03,
-   "status": "Filled",
-   "filled": 1.0,
-   "avg_fill_price": 85.46,
+   "value": 174.06,
+   "status": "PendingSubmit",
+   "filled": 0.0,
+   "avg_fill_price": 0.0,
    "order_type": "marketable-limit",
-   "limit_price": 87.47,
-   "reason": "\u2192 17.1% (hold 91\u2192198) [trimmed to funding: 1 of 107]"
+   "limit_price": 86.74,
+   "reason": "\u2192 17.1% (hold 132\u2192197) [trimmed to funding: 2 of 65]"
   },
   {
    "key": "XLE",
@@ -73,63 +73,63 @@
    "qty": 2.0,
    "price": 65.31,
    "value": 130.62,
-   "status": "Filled",
-   "filled": 2.0,
-   "avg_fill_price": 64.83,
+   "status": "PendingSubmit",
+   "filled": 0.0,
+   "avg_fill_price": 0.0,
    "order_type": "marketable-limit",
-   "limit_price": 65.64,
-   "reason": "\u2192 14.9% (hold 113\u2192229) [trimmed to funding: 2 of 116]"
+   "limit_price": 65.94,
+   "reason": "\u2192 14.9% (hold 156\u2192228) [trimmed to funding: 2 of 72]"
   }
  ],
  "positions": [
   {
    "key": "ARTY",
    "symbol": "ARTY",
-   "shares": 390.0,
+   "shares": 264.0,
    "avg_cost": 76.5303877,
-   "market_price": 74.5445633,
-   "market_value": 29072.38,
-   "unrealized_pnl": -774.47,
-   "realized_pnl": 0.0
+   "market_price": 74.496727,
+   "market_value": 19667.14,
+   "unrealized_pnl": -536.89,
+   "realized_pnl": -273.43
   },
   {
    "key": "ERX",
    "symbol": "ERX",
-   "shares": 99.0,
+   "shares": 89.0,
    "avg_cost": 107.11707375,
-   "market_price": 111.4685364,
-   "market_value": 11035.39,
-   "unrealized_pnl": 430.79,
-   "realized_pnl": 0.0
+   "market_price": 111.48316195,
+   "market_value": 9922.0,
+   "unrealized_pnl": 388.58,
+   "realized_pnl": 37.8
   },
   {
    "key": "GLDM",
    "symbol": "GLDM",
-   "shares": 95.0,
-   "avg_cost": 88.42539905,
-   "market_price": 85.41301725,
-   "market_value": 8114.24,
-   "unrealized_pnl": -286.18,
+   "shares": 132.0,
+   "avg_cost": 87.60176535,
+   "market_price": 85.4107895,
+   "market_value": 11274.22,
+   "unrealized_pnl": -289.21,
    "realized_pnl": 0.0
   },
   {
    "key": "GRID",
    "symbol": "GRID",
-   "shares": 133.0,
-   "avg_cost": 180.2575218,
+   "shares": 145.0,
+   "avg_cost": 180.53276165,
    "market_price": 177.2489624,
-   "market_value": 23574.11,
-   "unrealized_pnl": -400.14,
+   "market_value": 25701.1,
+   "unrealized_pnl": -476.15,
    "realized_pnl": 0.0
   },
   {
    "key": "OIH",
    "symbol": "OIH",
-   "shares": 26.0,
-   "avg_cost": 417.6335269,
-   "market_price": 420.06604005,
-   "market_value": 10921.72,
-   "unrealized_pnl": 63.25,
+   "shares": 31.0,
+   "avg_cost": 418.58941015,
+   "market_price": 420.152771,
+   "market_value": 13024.74,
+   "unrealized_pnl": 48.46,
    "realized_pnl": 0.0
   },
   {
@@ -137,24 +137,24 @@
    "symbol": "UGL",
    "shares": 200.0,
    "avg_cost": 53.400003,
-   "market_price": 49.5525818,
-   "market_value": 9910.52,
-   "unrealized_pnl": -769.48,
+   "market_price": 49.5815277,
+   "market_value": 9916.31,
+   "unrealized_pnl": -763.7,
    "realized_pnl": 0.0
   },
   {
    "key": "XLE",
    "symbol": "XLE",
-   "shares": 115.0,
-   "avg_cost": 62.5953071,
-   "market_price": 64.8206177,
-   "market_value": 7454.37,
-   "unrealized_pnl": 255.91,
+   "shares": 156.0,
+   "avg_cost": 63.23109255,
+   "market_price": 64.8851547,
+   "market_value": 10122.08,
+   "unrealized_pnl": 258.03,
    "realized_pnl": 0.0
   }
  ],
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "7a3819a1a25cd40b55759d3e88400fbe9f5a9802445530ec7e2f55c21c8e2c33"
+  "value": "7b86cb26c8841b1bf51156e30353d91928723169eda537ada731d02dca1b28b0"
  }
 }
