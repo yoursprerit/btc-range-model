@@ -1,43 +1,52 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-10T12:18:20+00:00",
- "as_of": "2026-09-09",
+ "generated_at_utc": "2026-09-11T12:17:57+00:00",
+ "as_of": "2026-09-10",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
-  "GLDM": 0.1713119121648447,
-  "UGL": 0.1,
   "GRID": 0.3,
-  "XLE": 0.14868808783515525,
+  "XLE": 0.1509071453326445,
   "OIH": 0.18,
-  "ERX": 0.1
+  "ERX": 0.1,
+  "GLDM": 0.16909285466735552,
+  "UGL": 0.1
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GLDM": 87.03,
-  "UGL": 51.54,
-  "GRID": 180.13,
-  "XLE": 65.31,
-  "OIH": 429.35,
-  "ERX": 112.82
+  "GRID": 177.24,
+  "XLE": 64.93,
+  "OIH": 420.22,
+  "ERX": 111.44,
+  "GLDM": 85.51,
+  "UGL": 49.72
  },
  "actions": [
   {
-   "key": "ARTY",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 D3 exhaustion",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
+   "key": "GLDM",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
+   "target": 0.16909285466735552,
+   "in_pos": false,
+   "priority": 0.480292035843105,
+   "exits_next_bar": false
+  },
+  {
+   "key": "UGL",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
+   "target": 0.1,
+   "in_pos": false,
+   "priority": 0.40964520387915093,
+   "exits_next_bar": false
   },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.14868808783515525,
+   "target": 0.1509071453326445,
    "in_pos": true,
-   "priority": 0.8792463492264708,
+   "priority": 0.8741551975932877,
    "exits_next_bar": false
   },
   {
@@ -46,7 +55,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.876934315704307,
+   "priority": 0.8717227714261435,
    "exits_next_bar": false
   },
   {
@@ -55,25 +64,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.18,
    "in_pos": true,
-   "priority": 0.7790476190476191,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GLDM",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.1713119121648447,
-   "in_pos": true,
-   "priority": 0.5117133169069359,
-   "exits_next_bar": false
-  },
-  {
-   "key": "UGL",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.1,
-   "in_pos": true,
-   "priority": 0.43638392678283977,
+   "priority": 0.7695238095238095,
    "exits_next_bar": false
   },
   {
@@ -82,7 +73,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.3297536945812808,
+   "priority": 0.2954679802955665,
    "exits_next_bar": false
   },
   {
@@ -178,7 +169,16 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D3 exhaustion)",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "ARTY",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -187,18 +187,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-10T12:18:19+00:00",
+  "checked_at_utc": "2026-09-11T12:17:56+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 10, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-09-09",
-  "btc_bar_close_utc": "2026-09-10T12:00:00+00:00"
+  "anchor_ct": "Sep 11, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-10",
+  "btc_bar_close_utc": "2026-09-11T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "35b4eefa6544",
+ "code_sha": "9e1c344e56be",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "9125950776be47f197100ca1a00b5b79790cacdf93cc0c320b0e403eef702eed"
+  "value": "0af3b14149daaf3f6a7320317852b5106347ef4d72d8b9d87f346a12f1d5cf36"
  }
 }
