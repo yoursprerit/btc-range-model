@@ -3,7 +3,9 @@
 **How the combined cross-asset portfolio is built, sized, prioritised and
 rebalanced each day.** This is the *how it works* doc; for out-of-sample
 performance see
-[`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md).
+[`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md), and for
+what the published curve implies about FORWARD returns see
+[`FORWARD_CAGR_DISTRIBUTION_EVAL.md`](FORWARD_CAGR_DISTRIBUTION_EVAL.md).
 
 **Source of truth:** `app/overall_core.py` (all the maths) and
 `app/overall_app.py` (the thin Streamlit layer + Methodology tab). Every number
