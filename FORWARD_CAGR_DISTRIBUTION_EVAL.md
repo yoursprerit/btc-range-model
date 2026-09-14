@@ -14,6 +14,19 @@ Each simulated 5-year path is a **stationary block bootstrap** (geometric blocks
 | W2 documented haircut | N(0.80, 0.08) | 40% | matches this repo's own OOS residual (0.77–0.86 log retention, `OVERALL_OOS_WALKFORWARD_EVAL.md` §2) |
 | W3 selection-dominated | N(0.45, 0.12) | 45% | sleeve parameters were tuned on this history and the 2021–26 bull does not repeat; closer to the honest-OOS core |
 
+## Strategy vs passive — the comparison in one table
+
+Same 18 instruments, same simulation machinery, same three worlds. For the passive baskets `phi` means something different — there is no fitted signal to decay, so it stands for **universe-selection hindsight** (these 18 tickers were assembled in 2026, knowing which ones ripped) plus the same regime question. The passive rows also carry **no tracking drag** (nothing to publish or mis-execute), which if anything flatters them.
+
+| Book | Historical CAGR | Blended median | P(≥40%) | P(≥20%) | P(≥0%) | Median worst DD | Turnover |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **Balanced** | 59.6% | **29%** | 35% | 65% | 90% | -30% | 28.7x/yr |
+| **Growth** | 65.5% | **32%** | 40% | 66% | 88% | -37% | 22.4x/yr |
+| **Aggressive** | 55.6% | **25%** | 33% | 56% | 79% | -50% | 20.9x/yr |
+| EW B&H (carried) | 23.5% | **12%** | 11% | 35% | 73% | -43% | 2.6x/yr |
+| EW B&H (drift) | 17.0% | **8%** | 8% | 29% | 66% | -46% | 0.0x/yr |
+| EW B&H (repo benchmark) | 25.9% | **10%** | 11% | 33% | 69% | -47% | 38.8x/yr |
+
 ## Balanced
 
 Back-test (published replay): **59.6% CAGR**, max drawdown -24.6%, annualised vol 27.7%. Standard error of that drift: **±11.6%/yr** — before any question of edge decay. Measured turnover 9.5%/bar one-way (28.7x/yr).
@@ -56,16 +69,58 @@ Back-test (published replay): **55.6% CAGR**, max drawdown -41.8%, annualised vo
 
 Drawdown along the way (blended): median worst drawdown **-50%**, 5% of paths worse than **-81%**, and **49%** of paths see a drawdown past −50%.
 
+## EW B&H (carried)
+
+Historical (2021 → now): **23.5% CAGR**, max drawdown -35.4%, annualised vol 30.0%. Standard error of that drift: **±12.6%/yr** — before any question of edge decay. Measured turnover 0.9%/bar one-way (2.6x/yr).
+
+| Distribution | p5 | p10 | p25 | **median** | p75 | p90 | p95 | **P(≥40%)** | P(≥20%) | P(≥0%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| *path risk only (back-test as truth)* | 1% | 5% | 14% | **24%** | 34% | 44% | 51% | **15%** | 59% | 96% |
+| W1 edge holds | -11% | -5% | 6% | **20%** | 35% | 50% | 60% | **19%** | 49% | 84% |
+| W2 documented haircut | -15% | -9% | 2% | **15%** | 29% | 44% | 54% | **13%** | 40% | 78% |
+| W3 selection-dominated | -21% | -15% | -6% | **7%** | 20% | 34% | 43% | **6%** | 26% | 64% |
+| **BLENDED** | -18% | -12% | -1% | **12%** | 27% | 42% | 51% | **11%** | 35% | 73% |
+
+Drawdown along the way (blended): median worst drawdown **-43%**, 5% of paths worse than **-74%**, and **34%** of paths see a drawdown past −50%.
+
+## EW B&H (drift)
+
+Historical (2021 → now): **17.0% CAGR**, max drawdown -40.3%, annualised vol 32.6%. Standard error of that drift: **±13.7%/yr** — before any question of edge decay. Measured turnover 0.0%/bar one-way (0.0x/yr).
+
+| Distribution | p5 | p10 | p25 | **median** | p75 | p90 | p95 | **P(≥40%)** | P(≥20%) | P(≥0%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| *path risk only (back-test as truth)* | -4% | -0% | 8% | **17%** | 27% | 37% | 43% | **7%** | 42% | 90% |
+| W1 edge holds | -16% | -10% | 0% | **14%** | 29% | 44% | 54% | **13%** | 38% | 75% |
+| W2 documented haircut | -19% | -13% | -3% | **10%** | 25% | 40% | 49% | **10%** | 32% | 70% |
+| W3 selection-dominated | -23% | -18% | -8% | **4%** | 18% | 32% | 42% | **6%** | 23% | 59% |
+| **BLENDED** | -21% | -15% | -5% | **8%** | 23% | 38% | 47% | **8%** | 29% | 66% |
+
+Drawdown along the way (blended): median worst drawdown **-46%**, 5% of paths worse than **-78%**, and **42%** of paths see a drawdown past −50%.
+
+## EW B&H (repo benchmark)
+
+Historical (2021 → now): **25.9% CAGR**, max drawdown -35.8%, annualised vol 31.3%. Standard error of that drift: **±13.1%/yr** — before any question of edge decay. Measured turnover 12.8%/bar one-way (38.8x/yr).
+
+| Distribution | p5 | p10 | p25 | **median** | p75 | p90 | p95 | **P(≥40%)** | P(≥20%) | P(≥0%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| *path risk only (back-test as truth)* | 1% | 6% | 15% | **26%** | 38% | 49% | 56% | **21%** | 64% | 96% |
+| W1 edge holds | -13% | -7% | 5% | **19%** | 35% | 51% | 62% | **19%** | 48% | 82% |
+| W2 documented haircut | -17% | -11% | -0% | **13%** | 29% | 44% | 55% | **13%** | 38% | 75% |
+| W3 selection-dominated | -24% | -18% | -8% | **5%** | 19% | 34% | 43% | **6%** | 24% | 60% |
+| **BLENDED** | -20% | -14% | -3% | **10%** | 26% | 42% | 52% | **11%** | 33% | 69% |
+
+Drawdown along the way (blended): median worst drawdown **-47%**, 5% of paths worse than **-78%**, and **42%** of paths see a drawdown past −50%.
+
 ## Sensitivity — P(5-yr CAGR ≥ 40%) under the arguable assumptions
 
-| Variant | Balanced | Growth | Aggressive |
-|---|---:|---:|---:|
-| baseline (as published above) | 35% | 40% | 33% |
-| longer bootstrap blocks (63) | 35% | 40% | 32% |
-| longer bootstrap blocks (126) | 35% | 40% | 32% |
-| no leveraged gap shock | 37% | 44% | 38% |
-| optimistic prior 40/40/20 | 48% | 53% | 42% |
-| sceptical prior 5/30/65 | 26% | 32% | 27% |
+| Variant | Balanced | Growth | Aggressive | EW B&H (carried) | EW B&H (drift) | EW B&H (repo benchmark) |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline (as published above) | 35% | 40% | 33% | 11% | 8% | 11% |
+| longer bootstrap blocks (63) | 35% | 40% | 32% | 9% | 7% | 9% |
+| longer bootstrap blocks (126) | 35% | 40% | 32% | 8% | 6% | 8% |
+| no leveraged gap shock | 37% | 44% | 38% | 14% | 11% | 14% |
+| optimistic prior 40/40/20 | 48% | 53% | 42% | 14% | 10% | 14% |
+| sceptical prior 5/30/65 | 26% | 32% | 27% | 9% | 7% | 9% |
 
 Block length barely moves the answer — path shape is not what drives it. The **prior on edge retention is the whole ball game**, which is the honest shape of this question: it is not a statistics problem, it is a judgment about how much of a back-test survives.
 
