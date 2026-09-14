@@ -82,6 +82,11 @@ JSON_OUT = ROOT / "data" / "overall" / "forward_cagr_mc.json"
 
 PROFILES = ("Balanced", "Growth", "Aggressive")
 
+BH_REPO = "EW B&H (repo benchmark)"
+BH_CARRY = "EW B&H (carried)"
+BH_DRIFT = "EW B&H (drift)"
+BENCHMARKS = (BH_CARRY, BH_DRIFT, BH_REPO)
+
 # phi = fraction of the back-tested log drift that survives forward.
 WORLDS = {
     "W1 edge holds": dict(mu=1.00, sd=0.05, weight=0.15),
@@ -95,13 +100,82 @@ PCTLS = (5, 10, 25, 50, 75, 90, 95)
 # ════════════════════════════════════════════════════════════════════════
 # INPUTS — the replay stream, its turnover, and the live tracking gap
 # ════════════════════════════════════════════════════════════════════════
-def load_replay(cache: Path | None) -> tuple[pd.DataFrame, dict, dict]:
-    """Daily replay returns per profile, plus per-profile turnover and metrics."""
-    if cache and (cache / "replay_daily_returns.csv").exists():
-        rets = pd.read_csv(cache / "replay_daily_returns.csv",
-                           index_col=0, parse_dates=True)
-        meta = json.loads((cache / "replay_meta.json").read_text())
-        return rets, meta["turnover"], meta["metrics"]
+def buy_and_hold_streams(res: list[dict], index: pd.Index) -> tuple[dict, dict, dict]:
+    """Three equal-weight buy-&-hold variants of the SAME 18 instruments.
+
+    ``EW B&H (repo benchmark)`` is `equal_weight_bh_replay` exactly as the app
+    publishes it: an equal target weight renormalised each day over the sleeves
+    that PRINTED A BAR. On a weekend only the crypto sleeves print, so that
+    construction spends every weekend 100% in crypto — a calendar artifact, not
+    a portfolio decision, and the reason the other two variants exist.
+
+    ``EW B&H (carried)`` fixes exactly that: an equal target weight over every
+    instrument that has STARTED, held across non-trading days (a closed market
+    contributes 0 return and keeps its weight) — the same carry convention
+    `walkforward_gated_replay` uses, so it is the apples-to-apples passive twin
+    of the strategy.
+
+    ``EW B&H (drift)`` is buy-and-hold in the literal sense: 1/n of the book
+    into each instrument at its first bar, never rebalanced again. Winners
+    grow, losers shrink to nothing. With 2x/3x sleeves in the basket this is a
+    very different animal from the daily-rebalanced versions.
+    """
+    import overall_core as oc
+    bh = oc.bh_returns_matrix(res).reindex(index)
+    cols, turn, mets = {}, {}, {}
+
+    rb = oc.equal_weight_bh_replay(res, index=index)
+    cols[BH_REPO] = pd.Series(rb["ret"])
+    W = rb["weights"]
+    turn[BH_REPO] = float((0.5 * W.diff().abs().sum(axis=1)).iloc[1:].mean())
+    mets[BH_REPO] = {k: float(v) for k, v in rb["metrics"].items()}
+
+    r = bh.to_numpy(float)
+    started = np.maximum.accumulate(~np.isnan(r), axis=0)     # inception onward
+    r0 = np.nan_to_num(r)                                     # closed market: 0%
+    n_live = started.sum(axis=1, keepdims=True).clip(min=1)
+    tgt = started / n_live                                    # equal, carried
+    ret_carry = (tgt * r0).sum(axis=1)
+    # real rebalancing turnover: the drift back to target, each bar
+    drift_w = tgt * (1.0 + r0) / (1.0 + ret_carry)[:, None]
+    turn[BH_CARRY] = float(0.5 * np.abs(tgt[1:] - drift_w[:-1]).sum(axis=1).mean())
+    cols[BH_CARRY] = pd.Series(ret_carry, index=index)
+    mets[BH_CARRY] = {k: float(v) for k, v in
+                      oc.curve_metrics(oc._equity(cols[BH_CARRY])).items()}
+
+    # literal buy & hold: fund each name at its own first bar, never rebalance
+    vals = np.zeros(r.shape[1])
+    out = np.zeros(len(index))
+    live = np.zeros(r.shape[1], dtype=bool)
+    for t in range(len(index)):
+        new = started[t] & ~live
+        if new.any():
+            tot = vals.sum()
+            for k in np.flatnonzero(new):
+                add = (tot if tot > 0 else 1.0) / int(started[t].sum())
+                if tot > 0:
+                    vals *= (tot - add) / tot     # fund pro-rata from holdings
+                vals[k] = add
+            live |= new
+        prev = vals.sum()
+        vals = vals * (1.0 + r0[t])
+        out[t] = vals.sum() / prev - 1.0 if prev > 0 else 0.0
+    cols[BH_DRIFT] = pd.Series(out, index=index)
+    turn[BH_DRIFT] = 0.0
+    mets[BH_DRIFT] = {k: float(v) for k, v in
+                      oc.curve_metrics(oc._equity(cols[BH_DRIFT])).items()}
+
+    lev = [c for c in bh.columns if oc.ASSET_META[c]["kind"] == "lev"]
+    return cols, turn, dict(metrics=mets, lev_share=len(lev) / bh.shape[1],
+                            lev_names=lev)
+
+
+def load_streams(cache: Path | None) -> tuple[pd.DataFrame, dict, dict, dict]:
+    """Daily return streams (strategy profiles + buy & hold), turnover, metrics."""
+    if cache and (cache / "streams.csv").exists():
+        rets = pd.read_csv(cache / "streams.csv", index_col=0, parse_dates=True)
+        meta = json.loads((cache / "streams_meta.json").read_text())
+        return rets, meta["turnover"], meta["metrics"], meta["bh"]
 
     import overall_core as oc
     print("run_universe() …", flush=True)
@@ -122,12 +196,21 @@ def load_replay(cache: Path | None) -> tuple[pd.DataFrame, dict, dict]:
         mets[name] = {k: float(v) for k, v in rep["metrics"].items()}
     rets = pd.DataFrame(cols).sort_index()
 
+    print("equal-weight buy & hold (3 variants) …", flush=True)
+    bh_cols, bh_turn, bh_extra = buy_and_hold_streams(res, rets.index)
+    for k, v in bh_cols.items():
+        rets[k] = v
+    turn |= bh_turn
+    mets |= bh_extra["metrics"]
+
     if cache:
         cache.mkdir(parents=True, exist_ok=True)
-        rets.to_csv(cache / "replay_daily_returns.csv")
-        (cache / "replay_meta.json").write_text(
-            json.dumps({"turnover": turn, "metrics": mets}, indent=1))
-    return rets, turn, mets
+        rets.to_csv(cache / "streams.csv")
+        (cache / "streams_meta.json").write_text(json.dumps(
+            {"turnover": turn, "metrics": mets,
+             "bh": {k: v for k, v in bh_extra.items() if k != "metrics"}},
+            indent=1))
+    return rets, turn, mets, {k: v for k, v in bh_extra.items() if k != "metrics"}
 
 
 def tracking_gap() -> tuple[float, float, int]:
@@ -307,6 +390,9 @@ def main() -> int:
                     help="override the world blend weights")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--cache", type=Path, default=None)
+    ap.add_argument("--benchmark", action="store_true",
+                    help="also project equal-weight buy & hold of the same 18 "
+                         "instruments (3 variants)")
     ap.add_argument("--sensitivity", action="store_true",
                     help="also re-run the blend under the arguable assumptions")
     ap.add_argument("--no-doc", action="store_true")
@@ -320,16 +406,21 @@ def main() -> int:
         w["weight"] /= wsum
 
     import overall_core as oc
-    rets, turnover, metrics = load_replay(args.cache)
+    rets, turnover, metrics, bh_extra = load_streams(args.cache)
     years_hist = (rets.index.max() - rets.index.min()).days / 365.25
     bars_yr = len(rets) / years_hist
     gap_mu, gap_se, gap_n = tracking_gap()
     shock = 0.0 if args.no_shock else args.shock_lambda
 
+    streams = list(PROFILES) + (list(BENCHMARKS) if args.benchmark else [])
     inputs = {}
-    for prof in PROFILES:
+    for prof in streams:
         logret = np.log1p(rets[prof].dropna().to_numpy())
         sigma_yr = float(logret.std(ddof=1) * np.sqrt(bars_yr))
+        # a passive basket has no publish pipeline, so no measured tracking
+        # drag; its permanent 2x/3x holding is the whole leveraged share of
+        # the universe, not a profile cap
+        is_bh = prof in BENCHMARKS
         inputs[prof] = dict(
             logret=logret,
             # anchor the drift on the PUBLISHED metric (curve_metrics bases the
@@ -340,9 +431,11 @@ def main() -> int:
             se_log=sigma_yr / np.sqrt(years_hist),      # SE of the annual mean
             turn_yr=turnover[prof] * bars_yr,
             turnover_daily=turnover[prof],
-            lev_cap=oc.RISK_PROFILES[prof]["caps"]["lev"],
+            lev_cap=(bh_extra["lev_share"] if is_bh
+                     else oc.RISK_PROFILES[prof]["caps"]["lev"]),
             backtest_mdd=metrics[prof]["mdd"],
-            gap_mu=gap_mu, gap_se=gap_se, bars_yr=bars_yr)
+            gap_mu=0.0 if is_bh else gap_mu,
+            gap_se=0.0 if is_bh else gap_se, bars_yr=bars_yr)
 
     print(f"\nreplay: {len(rets)} bars · {rets.index.min().date()} → "
           f"{rets.index.max().date()} · {years_hist:.2f}y · {bars_yr:.1f} bars/yr")
@@ -433,9 +526,33 @@ def write_doc(out: dict, args) -> None:
                  f"{w['weight']:.0%} | {rat[k]} |")
     L.append("")
 
+    bh_rows = [p for p in out["profiles"] if p in BENCHMARKS]
+    if bh_rows:
+        L.append("## Strategy vs passive — the comparison in one table\n")
+        L.append("Same 18 instruments, same simulation machinery, same three "
+                 "worlds. For the passive baskets `phi` means something "
+                 "different — there is no fitted signal to decay, so it stands "
+                 "for **universe-selection hindsight** (these 18 tickers were "
+                 "assembled in 2026, knowing which ones ripped) plus the same "
+                 "regime question. The passive rows also carry **no tracking "
+                 "drag** (nothing to publish or mis-execute), which if anything "
+                 "flatters them.\n")
+        L.append(f"| Book | Historical CAGR | Blended median | P(≥{t:.0%}) | "
+                 "P(≥20%) | P(≥0%) | Median worst DD | Turnover |")
+        L.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+        for p, rec in out["profiles"].items():
+            b = rec["blended"]
+            L.append(f"| {'**' + p + '**' if p not in BENCHMARKS else p} | "
+                     f"{rec['backtest_cagr']:.1%} | **{b['p50']:.0%}** | "
+                     f"{b['p_target']:.0%} | {b['p_20']:.0%} | {b['p_0']:.0%} | "
+                     f"{b['mdd_p50']:.0%} | {rec['turn_yr']:.1f}x/yr |")
+        L.append("")
+
     for prof, rec in out["profiles"].items():
         L.append(f"## {prof}\n")
-        L.append(f"Back-test (published replay): **{rec['backtest_cagr']:.1%} "
+        lbl = ("Historical (2021 → now)" if prof in BENCHMARKS
+               else "Back-test (published replay)")
+        L.append(f"{lbl}: **{rec['backtest_cagr']:.1%} "
                  f"CAGR**, max drawdown {rec['backtest_mdd']:.1%}, annualised "
                  f"vol {rec['sigma_yr']:.1%}. Standard error of that drift: "
                  f"**±{rec['se_log']:.1%}/yr** — before any question of edge "
@@ -508,8 +625,14 @@ def write_png(out: dict, args) -> None:
 
     t = out["generated_for_target"]
     profs = list(out["profiles"])
-    fig, axes = plt.subplots(1, len(profs), figsize=(15, 4.6), sharey=True)
-    for ax, prof in zip(np.atleast_1d(axes), profs):
+    ncol = min(3, len(profs))
+    nrow = int(np.ceil(len(profs) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(5 * ncol, 4.6 * nrow),
+                             sharey=True, squeeze=False)
+    axes = axes.ravel()
+    for ax in axes[len(profs):]:
+        ax.axis("off")
+    for ax, prof in zip(axes, profs):
         rec = out["profiles"][prof]
         v = rec["_blend_sample"]
         s = v[(v >= -0.6) & (v <= 1.6)]          # trim, never clip: a clipped
@@ -521,14 +644,18 @@ def write_png(out: dict, args) -> None:
         ax.axvline(b["p50"], color="#dd8452", lw=2,
                    label=f"median {b['p50']:.0%}")
         ax.axvline(rec["backtest_cagr"], color="#55a868", lw=2, ls=":",
-                   label=f"back-test {rec['backtest_cagr']:.0%}")
+                   label=("historical " if prof in BENCHMARKS else "back-test ")
+                         + f"{rec['backtest_cagr']:.0%}")
         ax.axvline(0, color="0.4", lw=1)
         ax.set_title(f"{prof}", fontsize=12, weight="bold")
         ax.set_xlabel("5-year CAGR")
         ax.legend(fontsize=8, loc="upper right")
         ax.grid(alpha=0.25)
-    np.atleast_1d(axes)[0].set_ylabel("density")
+    axes[0].set_ylabel("density")
     fig.suptitle("Forward 5-year CAGR — blended distribution "
+                 "(same 18 instruments: strategy profiles vs equal-weight B&H)"
+                 if any(p in BENCHMARKS for p in profs) else
+                 "Forward 5-year CAGR — blended distribution "
                  "(walk-forward gated replay, all sleeves incl. leverage)",
                  fontsize=13, weight="bold")
     fig.tight_layout()
