@@ -16,16 +16,17 @@ Each simulated 5-year path is a **stationary block bootstrap** (geometric blocks
 
 ## Strategy vs passive — the comparison in one table
 
-Same 18 instruments, same simulation machinery, same three worlds. For the passive baskets `phi` means something different — there is no fitted signal to decay, so it stands for **universe-selection hindsight** (these 18 tickers were assembled in 2026, knowing which ones ripped) plus the same regime question. The passive rows also carry **no tracking drag** (nothing to publish or mis-execute), which if anything flatters them.
+Same instruments, same simulation machinery, same three worlds. **Buy & hold is literal here: bought once, never rebalanced, and never credited the SATA idle-cash yield** — a passive basket is always fully invested, so it has no cash leg to pay a coupon on. For the passive rows `phi` means something different from the strategy's: there is no fitted signal to decay, so it stands for **universe-selection hindsight** (these tickers were assembled in 2026, knowing which ones ripped) plus the same regime question. The passive rows also carry **no tracking drag** (nothing to publish or mis-execute), which if anything flatters them.
 
 | Book | Historical CAGR | Blended median | P(≥40%) | P(≥20%) | P(≥0%) | Median worst DD | Turnover |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | **Balanced** | 59.6% | **29%** | 35% | 65% | 90% | -30% | 28.7x/yr |
 | **Growth** | 65.5% | **32%** | 40% | 66% | 88% | -37% | 22.4x/yr |
 | **Aggressive** | 55.6% | **25%** | 33% | 56% | 79% | -50% | 20.9x/yr |
-| EW B&H (carried) | 23.5% | **12%** | 11% | 35% | 73% | -43% | 2.6x/yr |
-| EW B&H (drift) | 17.0% | **8%** | 8% | 29% | 66% | -46% | 0.0x/yr |
-| EW B&H (repo benchmark) | 25.9% | **10%** | 11% | 33% | 69% | -47% | 38.8x/yr |
+| B&H (all 18, held) | 17.0% | **8%** | 8% | 29% | 66% | -46% | 0.0x/yr |
+| B&H (day-1 basket) | 19.7% | **10%** | 8% | 31% | 70% | -41% | 0.0x/yr |
+| EW rebalanced daily (carried) | 23.5% | **12%** | 11% | 35% | 73% | -43% | 2.6x/yr |
+| EW rebalanced daily (repo benchmark) | 25.9% | **10%** | 11% | 33% | 69% | -47% | 38.8x/yr |
 
 ## Balanced
 
@@ -69,21 +70,7 @@ Back-test (published replay): **55.6% CAGR**, max drawdown -41.8%, annualised vo
 
 Drawdown along the way (blended): median worst drawdown **-50%**, 5% of paths worse than **-81%**, and **49%** of paths see a drawdown past −50%.
 
-## EW B&H (carried)
-
-Historical (2021 → now): **23.5% CAGR**, max drawdown -35.4%, annualised vol 30.0%. Standard error of that drift: **±12.6%/yr** — before any question of edge decay. Measured turnover 0.9%/bar one-way (2.6x/yr).
-
-| Distribution | p5 | p10 | p25 | **median** | p75 | p90 | p95 | **P(≥40%)** | P(≥20%) | P(≥0%) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| *path risk only (back-test as truth)* | 1% | 5% | 14% | **24%** | 34% | 44% | 51% | **15%** | 59% | 96% |
-| W1 edge holds | -11% | -5% | 6% | **20%** | 35% | 50% | 60% | **19%** | 49% | 84% |
-| W2 documented haircut | -15% | -9% | 2% | **15%** | 29% | 44% | 54% | **13%** | 40% | 78% |
-| W3 selection-dominated | -21% | -15% | -6% | **7%** | 20% | 34% | 43% | **6%** | 26% | 64% |
-| **BLENDED** | -18% | -12% | -1% | **12%** | 27% | 42% | 51% | **11%** | 35% | 73% |
-
-Drawdown along the way (blended): median worst drawdown **-43%**, 5% of paths worse than **-74%**, and **34%** of paths see a drawdown past −50%.
-
-## EW B&H (drift)
+## B&H (all 18, held)
 
 Historical (2021 → now): **17.0% CAGR**, max drawdown -40.3%, annualised vol 32.6%. Standard error of that drift: **±13.7%/yr** — before any question of edge decay. Measured turnover 0.0%/bar one-way (0.0x/yr).
 
@@ -97,7 +84,35 @@ Historical (2021 → now): **17.0% CAGR**, max drawdown -40.3%, annualised vol 3
 
 Drawdown along the way (blended): median worst drawdown **-46%**, 5% of paths worse than **-78%**, and **42%** of paths see a drawdown past −50%.
 
-## EW B&H (repo benchmark)
+## B&H (day-1 basket)
+
+Historical (2021 → now): **19.7% CAGR**, max drawdown -32.6%, annualised vol 31.4%. Standard error of that drift: **±13.2%/yr** — before any question of edge decay. Measured turnover 0.0%/bar one-way (0.0x/yr).
+
+| Distribution | p5 | p10 | p25 | **median** | p75 | p90 | p95 | **P(≥40%)** | P(≥20%) | P(≥0%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| *path risk only (back-test as truth)* | -0% | 4% | 11% | **20%** | 29% | 37% | 43% | **7%** | 49% | 95% |
+| W1 edge holds | -13% | -7% | 3% | **16%** | 31% | 45% | 54% | **14%** | 43% | 81% |
+| W2 documented haircut | -16% | -10% | -0% | **12%** | 26% | 40% | 49% | **10%** | 35% | 75% |
+| W3 selection-dominated | -21% | -16% | -6% | **5%** | 19% | 32% | 40% | **5%** | 23% | 62% |
+| **BLENDED** | -18% | -13% | -3% | **10%** | 24% | 38% | 47% | **8%** | 31% | 70% |
+
+Drawdown along the way (blended): median worst drawdown **-41%**, 5% of paths worse than **-73%**, and **31%** of paths see a drawdown past −50%.
+
+## EW rebalanced daily (carried)
+
+Historical (2021 → now): **23.5% CAGR**, max drawdown -35.4%, annualised vol 30.0%. Standard error of that drift: **±12.6%/yr** — before any question of edge decay. Measured turnover 0.9%/bar one-way (2.6x/yr).
+
+| Distribution | p5 | p10 | p25 | **median** | p75 | p90 | p95 | **P(≥40%)** | P(≥20%) | P(≥0%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| *path risk only (back-test as truth)* | 1% | 5% | 14% | **24%** | 34% | 44% | 51% | **15%** | 59% | 96% |
+| W1 edge holds | -11% | -5% | 6% | **20%** | 35% | 50% | 60% | **19%** | 49% | 84% |
+| W2 documented haircut | -15% | -9% | 2% | **15%** | 29% | 44% | 54% | **13%** | 40% | 78% |
+| W3 selection-dominated | -21% | -15% | -6% | **7%** | 20% | 34% | 43% | **6%** | 26% | 64% |
+| **BLENDED** | -18% | -12% | -1% | **12%** | 27% | 42% | 51% | **11%** | 35% | 73% |
+
+Drawdown along the way (blended): median worst drawdown **-43%**, 5% of paths worse than **-74%**, and **34%** of paths see a drawdown past −50%.
+
+## EW rebalanced daily (repo benchmark)
 
 Historical (2021 → now): **25.9% CAGR**, max drawdown -35.8%, annualised vol 31.3%. Standard error of that drift: **±13.1%/yr** — before any question of edge decay. Measured turnover 12.8%/bar one-way (38.8x/yr).
 
@@ -113,14 +128,14 @@ Drawdown along the way (blended): median worst drawdown **-47%**, 5% of paths wo
 
 ## Sensitivity — P(5-yr CAGR ≥ 40%) under the arguable assumptions
 
-| Variant | Balanced | Growth | Aggressive | EW B&H (carried) | EW B&H (drift) | EW B&H (repo benchmark) |
-|---|---:|---:|---:|---:|---:|---:|
-| baseline (as published above) | 35% | 40% | 33% | 11% | 8% | 11% |
-| longer bootstrap blocks (63) | 35% | 40% | 32% | 9% | 7% | 9% |
-| longer bootstrap blocks (126) | 35% | 40% | 32% | 8% | 6% | 8% |
-| no leveraged gap shock | 37% | 44% | 38% | 14% | 11% | 14% |
-| optimistic prior 40/40/20 | 48% | 53% | 42% | 14% | 10% | 14% |
-| sceptical prior 5/30/65 | 26% | 32% | 27% | 9% | 7% | 9% |
+| Variant | Balanced | Growth | Aggressive | B&H (all 18, held) | B&H (day-1 basket) | EW rebalanced daily (carried) | EW rebalanced daily (repo benchmark) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline (as published above) | 35% | 40% | 33% | 8% | 8% | 11% | 11% |
+| longer bootstrap blocks (63) | 35% | 40% | 32% | 7% | 7% | 9% | 9% |
+| longer bootstrap blocks (126) | 35% | 40% | 32% | 6% | 7% | 8% | 8% |
+| no leveraged gap shock | 37% | 44% | 38% | 11% | 11% | 14% | 14% |
+| optimistic prior 40/40/20 | 48% | 53% | 42% | 10% | 11% | 14% | 14% |
+| sceptical prior 5/30/65 | 26% | 32% | 27% | 7% | 7% | 9% | 9% |
 
 Block length barely moves the answer — path shape is not what drives it. The **prior on edge retention is the whole ball game**, which is the honest shape of this question: it is not a statistics problem, it is a judgment about how much of a back-test survives.
 
