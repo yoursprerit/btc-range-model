@@ -57,6 +57,7 @@ Two layers of uncertainty, kept deliberately separate:
     python scripts/eval_forward_cagr_mc.py                 # writes the eval doc
     python scripts/eval_forward_cagr_mc.py --target 0.25   # different hurdle
     python scripts/eval_forward_cagr_mc.py --cache CACHE   # reuse replay streams
+    python scripts/eval_forward_cagr_mc.py --benchmark     # + passive baskets
 """
 from __future__ import annotations
 
@@ -82,10 +83,17 @@ JSON_OUT = ROOT / "data" / "overall" / "forward_cagr_mc.json"
 
 PROFILES = ("Balanced", "Growth", "Aggressive")
 
-BH_REPO = "EW B&H (repo benchmark)"
-BH_CARRY = "EW B&H (carried)"
-BH_DRIFT = "EW B&H (drift)"
-BENCHMARKS = (BH_CARRY, BH_DRIFT, BH_REPO)
+# Buy & hold means BUY, then HOLD: no rebalancing, and no idle-cash yield —
+# a passive basket is always fully invested, so there is no SATA leg anywhere
+# in any of these (the two rebalanced variants are kept only to show what the
+# rebalancing itself was worth).
+BH_DAY1 = "B&H (day-1 basket)"
+BH_DRIFT = "B&H (all 18, held)"
+BH_CARRY = "EW rebalanced daily (carried)"
+BH_REPO = "EW rebalanced daily (repo benchmark)"
+BENCHMARKS = (BH_DRIFT, BH_DAY1)
+BENCHMARKS_REBAL = (BH_CARRY, BH_REPO)
+ALL_BENCHMARKS = BENCHMARKS + BENCHMARKS_REBAL
 
 # phi = fraction of the back-tested log drift that survives forward.
 WORLDS = {
@@ -101,24 +109,37 @@ PCTLS = (5, 10, 25, 50, 75, 90, 95)
 # INPUTS — the replay stream, its turnover, and the live tracking gap
 # ════════════════════════════════════════════════════════════════════════
 def buy_and_hold_streams(res: list[dict], index: pd.Index) -> tuple[dict, dict, dict]:
-    """Three equal-weight buy-&-hold variants of the SAME 18 instruments.
+    """Passive comparison baskets built from the SAME instruments.
 
-    ``EW B&H (repo benchmark)`` is `equal_weight_bh_replay` exactly as the app
-    publishes it: an equal target weight renormalised each day over the sleeves
-    that PRINTED A BAR. On a weekend only the crypto sleeves print, so that
-    construction spends every weekend 100% in crypto — a calendar artifact, not
-    a portfolio decision, and the reason the other two variants exist.
+    Buy & hold is taken literally in the two default variants: bought once,
+    held, NEVER rebalanced, and never credited an idle-cash yield (a passive
+    basket is always fully invested, so there is no SATA leg — the strategy's
+    cash park has no analogue here and none is invented).
 
-    ``EW B&H (carried)`` fixes exactly that: an equal target weight over every
-    instrument that has STARTED, held across non-trading days (a closed market
-    contributes 0 return and keeps its weight) — the same carry convention
-    `walkforward_gated_replay` uses, so it is the apples-to-apples passive twin
-    of the strategy.
+    ``B&H (all 18, held)``   1/n into each instrument at its first bar, then
+                             left alone. Later listings are funded pro-rata
+                             from the existing holdings, which is the only
+                             trade the basket ever makes. Winners compound,
+                             losers shrink toward irrelevance.
+    ``B&H (day-1 basket)``   what could actually have been bought on the first
+                             bar: equal weight across the instruments already
+                             trading then, never touched again. No cash is
+                             reserved for later listings, so this basket simply
+                             never owns them.
 
-    ``EW B&H (drift)`` is buy-and-hold in the literal sense: 1/n of the book
-    into each instrument at its first bar, never rebalanced again. Winners
-    grow, losers shrink to nothing. With 2x/3x sleeves in the basket this is a
-    very different animal from the daily-rebalanced versions.
+    Two daily-rebalanced variants are computed for reference (--benchmark-
+    rebalanced), purely to show what the rebalancing itself was worth:
+
+    ``EW rebalanced daily (carried)``  equal target weight over every started
+                             instrument, held across non-trading days (a closed
+                             market contributes 0 and keeps its weight) — the
+                             same carry convention the strategy replay uses.
+    ``EW rebalanced daily (repo benchmark)``  `equal_weight_bh_replay` exactly
+                             as the app publishes it. It renormalises over the
+                             sleeves that PRINTED A BAR, and on a weekend only
+                             the crypto sleeves print — so it spends every
+                             weekend 100% in crypto. A calendar artifact, not a
+                             portfolio decision.
     """
     import overall_core as oc
     bh = oc.bh_returns_matrix(res).reindex(index)
@@ -165,9 +186,30 @@ def buy_and_hold_streams(res: list[dict], index: pd.Index) -> tuple[dict, dict, 
     mets[BH_DRIFT] = {k: float(v) for k, v in
                       oc.curve_metrics(oc._equity(cols[BH_DRIFT])).items()}
 
+    # what you could actually have bought on day one: the names that already
+    # traded at the first bar, equal weight, then never touched again. No cash
+    # reserved for later listings (that would be an unpaid drag nobody runs),
+    # so this basket simply never owns the sleeves that listed later.
+    day1 = ~np.isnan(r[0])
+    v1 = day1 / day1.sum()
+    out1 = np.zeros(len(index))
+    for t in range(len(index)):
+        prev = v1.sum()
+        v1 = v1 * (1.0 + r0[t])
+        out1[t] = v1.sum() / prev - 1.0
+    cols[BH_DAY1] = pd.Series(out1, index=index)
+    turn[BH_DAY1] = 0.0
+    mets[BH_DAY1] = {k: float(v) for k, v in
+                     oc.curve_metrics(oc._equity(cols[BH_DAY1])).items()}
+
     lev = [c for c in bh.columns if oc.ASSET_META[c]["kind"] == "lev"]
-    return cols, turn, dict(metrics=mets, lev_share=len(lev) / bh.shape[1],
-                            lev_names=lev)
+    day1_names = [c for c, ok in zip(bh.columns, day1) if ok]
+    return cols, turn, dict(
+        metrics=mets, lev_share=len(lev) / bh.shape[1], lev_names=lev,
+        day1_names=day1_names,
+        day1_lev_share=len([c for c in day1_names
+                            if oc.ASSET_META[c]["kind"] == "lev"]) / len(day1_names),
+        late_names=[c for c in bh.columns if c not in day1_names])
 
 
 def load_streams(cache: Path | None) -> tuple[pd.DataFrame, dict, dict, dict]:
@@ -391,8 +433,11 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--cache", type=Path, default=None)
     ap.add_argument("--benchmark", action="store_true",
-                    help="also project equal-weight buy & hold of the same 18 "
-                         "instruments (3 variants)")
+                    help="also project buy & hold of the same instruments — "
+                         "bought once, never rebalanced, no idle-cash yield")
+    ap.add_argument("--benchmark-rebalanced", action="store_true",
+                    help="additionally show the daily-rebalanced equal-weight "
+                         "variants, to isolate what rebalancing was worth")
     ap.add_argument("--sensitivity", action="store_true",
                     help="also re-run the blend under the arguable assumptions")
     ap.add_argument("--no-doc", action="store_true")
@@ -412,7 +457,10 @@ def main() -> int:
     gap_mu, gap_se, gap_n = tracking_gap()
     shock = 0.0 if args.no_shock else args.shock_lambda
 
-    streams = list(PROFILES) + (list(BENCHMARKS) if args.benchmark else [])
+    bench = list(BENCHMARKS) if (args.benchmark or args.benchmark_rebalanced) else []
+    if args.benchmark_rebalanced:
+        bench += list(BENCHMARKS_REBAL)
+    streams = list(PROFILES) + bench
     inputs = {}
     for prof in streams:
         logret = np.log1p(rets[prof].dropna().to_numpy())
@@ -420,7 +468,7 @@ def main() -> int:
         # a passive basket has no publish pipeline, so no measured tracking
         # drag; its permanent 2x/3x holding is the whole leveraged share of
         # the universe, not a profile cap
-        is_bh = prof in BENCHMARKS
+        is_bh = prof in ALL_BENCHMARKS
         inputs[prof] = dict(
             logret=logret,
             # anchor the drift on the PUBLISHED metric (curve_metrics bases the
@@ -526,23 +574,26 @@ def write_doc(out: dict, args) -> None:
                  f"{w['weight']:.0%} | {rat[k]} |")
     L.append("")
 
-    bh_rows = [p for p in out["profiles"] if p in BENCHMARKS]
+    bh_rows = [p for p in out["profiles"] if p in ALL_BENCHMARKS]
     if bh_rows:
         L.append("## Strategy vs passive — the comparison in one table\n")
-        L.append("Same 18 instruments, same simulation machinery, same three "
-                 "worlds. For the passive baskets `phi` means something "
-                 "different — there is no fitted signal to decay, so it stands "
-                 "for **universe-selection hindsight** (these 18 tickers were "
-                 "assembled in 2026, knowing which ones ripped) plus the same "
-                 "regime question. The passive rows also carry **no tracking "
-                 "drag** (nothing to publish or mis-execute), which if anything "
-                 "flatters them.\n")
+        L.append("Same instruments, same simulation machinery, same three "
+                 "worlds. **Buy & hold is literal here: bought once, never "
+                 "rebalanced, and never credited the SATA idle-cash yield** — "
+                 "a passive basket is always fully invested, so it has no cash "
+                 "leg to pay a coupon on. For the passive rows `phi` means "
+                 "something different from the strategy's: there is no fitted "
+                 "signal to decay, so it stands for **universe-selection "
+                 "hindsight** (these tickers were assembled in 2026, knowing "
+                 "which ones ripped) plus the same regime question. The passive "
+                 "rows also carry **no tracking drag** (nothing to publish or "
+                 "mis-execute), which if anything flatters them.\n")
         L.append(f"| Book | Historical CAGR | Blended median | P(≥{t:.0%}) | "
                  "P(≥20%) | P(≥0%) | Median worst DD | Turnover |")
         L.append("|---|---:|---:|---:|---:|---:|---:|---:|")
         for p, rec in out["profiles"].items():
             b = rec["blended"]
-            L.append(f"| {'**' + p + '**' if p not in BENCHMARKS else p} | "
+            L.append(f"| {'**' + p + '**' if p not in ALL_BENCHMARKS else p} | "
                      f"{rec['backtest_cagr']:.1%} | **{b['p50']:.0%}** | "
                      f"{b['p_target']:.0%} | {b['p_20']:.0%} | {b['p_0']:.0%} | "
                      f"{b['mdd_p50']:.0%} | {rec['turn_yr']:.1f}x/yr |")
@@ -550,7 +601,7 @@ def write_doc(out: dict, args) -> None:
 
     for prof, rec in out["profiles"].items():
         L.append(f"## {prof}\n")
-        lbl = ("Historical (2021 → now)" if prof in BENCHMARKS
+        lbl = ("Historical (2021 → now)" if prof in ALL_BENCHMARKS
                else "Back-test (published replay)")
         L.append(f"{lbl}: **{rec['backtest_cagr']:.1%} "
                  f"CAGR**, max drawdown {rec['backtest_mdd']:.1%}, annualised "
@@ -644,7 +695,7 @@ def write_png(out: dict, args) -> None:
         ax.axvline(b["p50"], color="#dd8452", lw=2,
                    label=f"median {b['p50']:.0%}")
         ax.axvline(rec["backtest_cagr"], color="#55a868", lw=2, ls=":",
-                   label=("historical " if prof in BENCHMARKS else "back-test ")
+                   label=("historical " if prof in ALL_BENCHMARKS else "back-test ")
                          + f"{rec['backtest_cagr']:.0%}")
         ax.axvline(0, color="0.4", lw=1)
         ax.set_title(f"{prof}", fontsize=12, weight="bold")
@@ -654,7 +705,7 @@ def write_png(out: dict, args) -> None:
     axes[0].set_ylabel("density")
     fig.suptitle("Forward 5-year CAGR — blended distribution "
                  "(same 18 instruments: strategy profiles vs equal-weight B&H)"
-                 if any(p in BENCHMARKS for p in profs) else
+                 if any(p in ALL_BENCHMARKS for p in profs) else
                  "Forward 5-year CAGR — blended distribution "
                  "(walk-forward gated replay, all sleeves incl. leverage)",
                  fontsize=13, weight="bold")
