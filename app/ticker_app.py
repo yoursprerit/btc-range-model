@@ -119,7 +119,7 @@ st.caption(cfg.blurb + f"  Models: ridge on log-returns (hourly close), ridge "
 # ════════════════════════════════════════════════════════════════════════
 # Loaders (per-ticker cache keys so the five apps never collide)
 # ════════════════════════════════════════════════════════════════════════
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=32)
 def load_model(path_str: str):
     p = Path(path_str)
     if not p.exists():
@@ -130,7 +130,7 @@ def load_model(path_str: str):
         return None
 
 
-@st.cache_data(ttl=300, show_spinner="Fetching daily data…")
+@st.cache_data(ttl=300, show_spinner="Fetching daily data…", max_entries=4)
 def get_daily(key: str):
     c = ticker_config.get_config(key)
     # Quality-gated, snapshot-pinned load (app/data_gate.py): the completed
@@ -154,7 +154,7 @@ def get_daily(key: str):
     return d
 
 
-@st.cache_data(ttl=300, show_spinner="Fetching hourly data…")
+@st.cache_data(ttl=300, show_spinner="Fetching hourly data…", max_entries=4)
 def get_hourly(key: str):
     c = ticker_config.get_config(key)
     h = tc.fetch_hourly(c)
@@ -165,7 +165,7 @@ def get_hourly(key: str):
     return h
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=4)
 def get_predictions(key: str, _daily_key: str):
     # Signals are generated ONLY from closed sessions: strip Yahoo's
     # in-progress *today* row before building the prediction table, so the
@@ -1447,7 +1447,7 @@ def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
     return fig
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=16)
 def rolling_cone_series(key, as_of_iso, horizon, lookback):
     art = M_7D if horizon == 7 else M_14D
     if art is None:

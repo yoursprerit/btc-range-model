@@ -138,7 +138,7 @@ _sv.render_badge()                             # visible above every tab
 # ════════════════════════════════════════════════════════════════════════
 # Loaders
 # ════════════════════════════════════════════════════════════════════════
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=32)
 def load_model(path_str: str):
     p = Path(path_str)
     if not p.exists():
@@ -149,7 +149,7 @@ def load_model(path_str: str):
         return None
 
 
-@st.cache_data(ttl=300, show_spinner="Fetching GLDM daily data…")
+@st.cache_data(ttl=300, show_spinner="Fetching GLDM daily data…", max_entries=4)
 def get_daily():
     d = gc.fetch_daily(start="2015-01-01")
     if d is None or d.empty:
@@ -158,7 +158,7 @@ def get_daily():
     return d
 
 
-@st.cache_data(ttl=300, show_spinner="Fetching GLDM hourly data…")
+@st.cache_data(ttl=300, show_spinner="Fetching GLDM hourly data…", max_entries=4)
 def get_hourly():
     h = gc.fetch_hourly(range_="730d")
     if h is None or h.empty:
@@ -167,7 +167,7 @@ def get_hourly():
     return h
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=2)
 def get_predictions(_daily_key: str):
     # Signals are generated ONLY from closed sessions: strip Yahoo's
     # in-progress *today* row before building the prediction table, so the
@@ -1266,7 +1266,7 @@ def _hl_forecast_fig(d_df, sigs=None, n_bars=None):
     return fig
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=16)
 def rolling_cone_series(as_of_iso, horizon, lookback):
     """Rolling H-day close prediction vs realized, for the cone charts.
 

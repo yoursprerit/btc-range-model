@@ -443,7 +443,7 @@ def _downloads(payload: dict, adj_weights: dict, adj_cash: float,
                    "`--require-signature`. Configure `OVERALL_BOOK_SECRET` to sign it.")
 
 
-@st.cache_data(ttl=900, show_spinner="Running the engine for a live preview (~30–90s)…")
+@st.cache_data(ttl=900, show_spinner="Running the engine for a live preview (~30–90s)…", max_entries=8)
 def _live_payload(profile: str, bucket: str) -> dict:
     """Compute a fresh book via the exact publisher path (reused, no drift):
     completed bars only + committed signals (live_adjust=False), run the

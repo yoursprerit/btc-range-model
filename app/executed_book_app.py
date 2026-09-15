@@ -398,7 +398,7 @@ def _download(payload: dict, secret, *, historical: bool = False) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # HISTORICAL TAB — browse the dated as-of records the executor archives
 # ══════════════════════════════════════════════════════════════════════════
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=8)
 def _records(report_path_str: str, sig: tuple) -> list[dict]:
     """Archived runs for this account mode, newest first.
 

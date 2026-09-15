@@ -8,9 +8,27 @@ headless = true
 enableCORS = false
 enableXsrfProtection = true
 
+# ── memory (Community Cloud gives the whole app ~1 GB, shared by all viewers) ──
+# A deployed container never edits its own source, so the watchdog observer
+# threads and inotify handles it keeps over app/ buy nothing.  (default: "auto")
+fileWatcherType = "none"
+# Reclaim a closed tab's session state — and its references into the
+# ForwardMsg cache — after 30s instead of 120s, so a viewer who opens the app,
+# looks, and closes it stops holding memory for two minutes.  (default: 120)
+disconnectedSessionTTL = 30
+
 [browser]
 # Opt out of anonymous usage telemetry
 gatherUsageStats = false
+
+[global]
+# Streamlit keeps every delta message larger than minCachedMessageSize (10 KB)
+# for this many script runs, per session.  The Plotly payloads on the heavy
+# tabs are several MB each, and the Overall page re-runs every 45s, so holding
+# two generations of them is the single largest avoidable buffer in the
+# process.  One generation still de-duplicates the common repeat-send case.
+# (default: 2)
+maxCachedMessageAge = 1
 
 [theme]
 base = "light"

@@ -229,7 +229,7 @@ st.caption(
 )
 
 # ──────────────────────────── load model ──────────────────────────────
-@st.cache_resource
+@st.cache_resource(max_entries=2)
 def load_assets():
     if not os.path.exists(ASSETS_PATH):
         st.error(f"Model artefacts not found at {ASSETS_PATH}.\n"
@@ -248,7 +248,7 @@ feat_cols = A["feat_cols"]
 best_name = A.get("best_name","ridge")
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=4)
 def _training_cutoffs(model_mtime: float = 0.0):
     """Return {model_label: train_end_date_or_None} for the 4 artefacts.
 
@@ -371,7 +371,7 @@ def _flat(df, name):
     df.index = idx
     return df[~df.index.duplicated(keep="last")].sort_index()
 
-@st.cache_data(ttl=3600*6, show_spinner=False)
+@st.cache_data(ttl=3600*6, show_spinner=False, max_entries=2)
 def _fetch_coinbase_hourly():
     """Fetch up to 365 days of hourly Coinbase BTC-USD close prices (paginated).
     Cached 6 h so the 30-request pagination doesn't run on every data refresh."""
@@ -402,7 +402,7 @@ def _fetch_coinbase_hourly():
     return cb["close"].astype(float).rename("coinbase_close")
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False, max_entries=2)
 def fetch_data():
     SYMS = {"btc":"BTC-USD","eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
             "vix":"^VIX","gold":"GC=F","dxy":"DX-Y.NYB","tnx":"^TNX"}
@@ -580,7 +580,7 @@ def _binance_get(path: str, params: dict, timeout: int = 30):
     return None
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False, max_entries=2)
 def fetch_live_spot():
     """Binance public ticker — true real-time BTC/USDT price (no API key)."""
     try:
@@ -592,7 +592,7 @@ def fetch_live_spot():
         return None, None
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=2)
 def fetch_equity_prices():
     """Fetch live MSTR, MSTU, ETH, STRC and SATA prices via Yahoo Finance.
 
@@ -619,7 +619,7 @@ def fetch_equity_prices():
             prices.get("SATA"), changes.get("SATA"))
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=32)
 def _fetch_equity_hourly_series(ticker: str, date_str: str) -> "pd.Series | None":
     """Fetch a UTC-tz-naive 1h Close series for `ticker` covering `date_str` ± 2 days.
 
@@ -684,7 +684,7 @@ def _fetch_equity_price_at_datetime(ticker: str, dt_str: str) -> "float | None":
     return _equity_price_at(_fetch_equity_hourly_series(ticker, date_str), dt)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=8)
 def fetch_mstr_atm_call(mstr_spot: float | None):
     """Price a 743-day ATM MSTR call via Black-Scholes with 60-day trailing HV.
 
@@ -713,7 +713,7 @@ def fetch_mstr_atm_call(mstr_spot: float | None):
         return None, None, None
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=2)
 def fetch_btc_1m():
     """Fetch the last ~25 hours of 1-minute BTC/USDT klines from Binance.
 
@@ -903,7 +903,7 @@ def _binance_hourly_from_host(host: str, start_ms: int, end_ms: int,
     return _klines_to_frame(rows)
 
 
-@st.cache_data(ttl=600, show_spinner="Fetching BTC hourly from Binance …")
+@st.cache_data(ttl=600, show_spinner="Fetching BTC hourly from Binance …", max_entries=4)
 def _fetch_binance_hourly(days_back=None):
     """Return BTC hourly OHLCV with full history.
 
@@ -989,7 +989,7 @@ def _fetch_binance_hourly(days_back=None):
     return df
 
 
-@st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …")
+@st.cache_data(ttl=3600*6, show_spinner="Fetching daily macro + on-chain …", max_entries=2)
 def _fetch_daily_raw_inner(bar_start_iso: str, hourly_end_iso: str = "", utc_hour: str = ""):
     """Implementation of the daily-bar fetch.  None of `bar_start_iso`,
     `hourly_end_iso`, or `utc_hour` is used inside the function body —
@@ -1134,7 +1134,7 @@ def _fetch_daily_raw_inner(bar_start_iso: str, hourly_end_iso: str = "", utc_hou
 # gap-healed) daily bars NEVER reached the live frame — which is how the page
 # came to show "Daily signal bar is 2 bar(s) behind" while
 # data/backtest/raw_features_daily.csv held both of the missing bars.
-@st.cache_data(ttl=86_400)
+@st.cache_data(ttl=86_400, max_entries=2)
 def _load_raw_features() -> pd.DataFrame | None:
     """Full merged raw_features dataframe (BTC OHLCV + 7 macro + 11 on-chain + Coinbase premium)."""
     try:
@@ -1218,7 +1218,7 @@ def _fetch_daily_raw():
     return _fetch_daily_raw_inner(_bar_start_iso, _hourly_end_iso, _utc_hour)
 
 
-@st.cache_data(ttl=3600*6, show_spinner="Computing daily H/L forecast …")
+@st.cache_data(ttl=3600*6, show_spinner="Computing daily H/L forecast …", max_entries=1024)
 def compute_daily_forecast(target_date_iso, data_end=None):
     """Apply the 12:00-UTC (7am-CT) daily model as it was trained.
 
@@ -1449,7 +1449,7 @@ def compute_daily_forecast(target_date_iso, data_end=None):
     )
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner=False)
+@st.cache_data(ttl=3600 * 6, show_spinner=False, max_entries=64)
 def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
     """Build a series of (pred_high, pred_low, actual_high, actual_low) for the
     last `days_back`+1 target days ending at `end_target_date`. Each prediction
@@ -1504,7 +1504,7 @@ def compute_daily_series(end_target_date_iso, days_back=7, data_end=None):
     return pd.DataFrame(rows)
 
 
-@st.cache_resource
+@st.cache_resource(max_entries=2)
 def _load_cone_7d():
     """Load the 7-day close-price regime-cone artefact (or None if absent)."""
     p = str(CONE_7D_MODEL)
@@ -1517,7 +1517,7 @@ def _load_cone_7d():
         return None
 
 
-@st.cache_resource
+@st.cache_resource(max_entries=2)
 def _load_cone_14d():
     """Load the 14-day close-price GBM+cone artefact (or None if absent)."""
     p = str(CONE_14D_MODEL)
@@ -1530,7 +1530,7 @@ def _load_cone_14d():
         return None
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner=False)
+@st.cache_data(ttl=3600 * 6, show_spinner=False, max_entries=2)
 def _build_cone_feature_matrix(data_end=None):
     """Build the shared daily feature matrix for the 7-day and 14-day GBM cone models.
 
@@ -1733,7 +1733,7 @@ def _cone_predict_batch(art, feat_df, anchor_dates):
         return {}
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=256)
 def compute_7d_close_cone_forecast(asof_date_iso, data_end=None):
     """Forecast BTC close 7 days after `asof_date_iso` using the regime cone.
 
@@ -1869,7 +1869,7 @@ def compute_7d_close_cone_forecast(asof_date_iso, data_end=None):
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=16)
 def compute_rolling_7d_series(end_date_iso, days_back=21, data_end=None):
     """Generate rolling daily 7-day forward close predictions.
 
@@ -1962,7 +1962,7 @@ def compute_rolling_7d_series(end_date_iso, days_back=21, data_end=None):
 # 14-day close-price cone (GBM point prediction + empirical ±band)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=256)
 def compute_14d_close_cone_forecast(asof_date_iso, data_end=None):
     """Forecast BTC close 14 days after ``asof_date_iso`` using the GBM+cone model.
 
@@ -2046,7 +2046,7 @@ def compute_14d_close_cone_forecast(asof_date_iso, data_end=None):
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=16)
 def compute_rolling_14d_series(end_date_iso, days_back=30, data_end=None):
     """Generate rolling daily 14-day forward close predictions.
 
@@ -2122,7 +2122,7 @@ def compute_rolling_14d_series(end_date_iso, days_back=30, data_end=None):
     return pd.DataFrame(rows)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
 def compute_30d_cone_14d_metrics(end_date_iso, data_end=None):
     """30-day look-back metrics for the 14-day close-cone model.
 
@@ -2149,7 +2149,7 @@ def compute_30d_cone_14d_metrics(end_date_iso, data_end=None):
                 within_pct=float(within), band_pct=band_pct, dir_acc=dir_acc)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
 def compute_alltime_cone_14d_metrics(end_date_iso, data_end=None):
     """MAPE + band coverage over the full held-out test period for the 14-day cone.
 
@@ -2190,7 +2190,7 @@ def compute_alltime_cone_14d_metrics(end_date_iso, data_end=None):
     )
 
 
-@st.cache_resource
+@st.cache_resource(max_entries=2)
 def _load_daily_hl():
     """Load and cache the daily H/L ensemble artefact (or {} if absent)."""
     p = str(DAILY_MODEL_CT)
@@ -2203,7 +2203,7 @@ def _load_daily_hl():
         return {}
 
 
-@st.cache_resource
+@st.cache_resource(max_entries=2)
 def _load_day_type():
     """Load the 3-class day-type GBM artefact (or None if missing)."""
     p = str(DAY_TYPE_MODEL)
@@ -2216,7 +2216,7 @@ def _load_day_type():
         return None
 
 
-@st.cache_data(ttl=86400, show_spinner="Classifying day-type …")
+@st.cache_data(ttl=86400, show_spinner="Classifying day-type …", max_entries=1024)
 def compute_day_type_forecast(target_date_iso, data_end=None):
     """Classify the next 12:00-UTC bar as BigUpper / BigLower / Quiet.
 
@@ -2367,7 +2367,7 @@ def build_features(df):
 
 # ═══════════════════ 30-day look-back metric helpers ════════════════════
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
 def compute_30d_daily_hl_metrics(end_date_iso, data_end=None):
     """30-day look-back MAPE, hit-rate and direction accuracy for the daily H/L model.
 
@@ -2399,7 +2399,7 @@ def compute_30d_daily_hl_metrics(end_date_iso, data_end=None):
                 dir_h=float(dir_h), dir_l=float(dir_l))
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
 def compute_30d_cone_metrics(end_date_iso, data_end=None):
     """30-day look-back metrics for the 7-day close-cone model.
 
@@ -2427,7 +2427,7 @@ def compute_30d_cone_metrics(end_date_iso, data_end=None):
                 within_pct=float(within), band_pct=band_pct, dir_acc=dir_acc)
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner="Computing 30-day day-type metrics …")
+@st.cache_data(ttl=3600 * 6, show_spinner="Computing 30-day day-type metrics …", max_entries=8)
 def compute_30d_daytype_metrics(end_date_iso, data_end=None):
     """30-day accuracy for the 3-class day-type (BigUpper / BigLower / Quiet) model.
 
@@ -2494,7 +2494,7 @@ def compute_30d_daytype_metrics(end_date_iso, data_end=None):
     return dict(n=len(df_r), accuracy=acc, by_class=by_class)
 
 
-@st.cache_data(ttl=3600 * 4, show_spinner=False)
+@st.cache_data(ttl=3600 * 4, show_spinner=False, max_entries=8)
 def compute_alltime_cone_metrics(end_date_iso, data_end=None):
     """MAPE + band coverage over the full held-out test period for the 7-day cone.
 
@@ -2535,7 +2535,7 @@ def compute_alltime_cone_metrics(end_date_iso, data_end=None):
     )
 
 
-@st.cache_data(ttl=3600 * 12, show_spinner=False)
+@st.cache_data(ttl=3600 * 12, show_spinner=False, max_entries=8)
 def compute_alltime_daytype_metrics(end_date_iso, data_end=None):
     """Per-class precision / recall over the full test period for the day-type model.
 
@@ -2822,7 +2822,7 @@ def _compute_intraday_signal(intraday: dict, daily_fc: dict) -> dict:
     )
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner=False)
+@st.cache_data(ttl=3600 * 6, show_spinner=False, max_entries=32)
 def compute_trend_signatures(target_date_iso: str, data_end=None,
                               logic_version: str = _BT_LOGIC_VERSION):
     """Compute trend signature signals for the dashboard alert card.
@@ -3117,7 +3117,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
 # TF1 Trading Strategy — Batch Backtest Engine
 # ════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600 * 6, show_spinner=False)
+@st.cache_data(ttl=3600 * 6, show_spinner=False, max_entries=4)
 def _build_ct_batch_predictions(data_end=None):
     """Build CT daily H/L predictions for ALL available bars in one pass.
 
@@ -3302,7 +3302,7 @@ def _build_ct_batch_predictions(data_end=None):
     return result[~result.index.duplicated(keep="last")]
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner="Building extended 2-year predictions …")
+@st.cache_data(ttl=3600 * 6, show_spinner="Building extended 2-year predictions …", max_entries=4)
 def _build_ct_predictions_extended(model_mtime: float = 0.0, data_end: str = ""):
     """Build CT predictions using the same Binance 12:00-UTC data as compute_daily_forecast().
 
@@ -3873,7 +3873,7 @@ def run_full_period_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Loading fixed-period backtest …", max_entries=8)
 def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                 model_mtime: float = 0.0,
                                 data_end: str = "",
@@ -3881,10 +3881,17 @@ def _run_fixed_period_backtest(end_date_iso: str, backtest_start_iso: str,
                                 data_mtime: float = 0.0):
     """Cached wrapper for fixed-period backtests (Bear / Bull / Full Market).
 
-    No TTL — results persist until the model file changes (model_mtime),
-    new daily BTC price data arrives (data_end), or backtest logic changes
-    (logic_version).  data_mtime busts the cache when the versioned CSV dataset
-    is updated.  The OOS period calls run_full_period_backtest directly.
+    Results are keyed so they persist until the model file changes
+    (model_mtime), new daily BTC price data arrives (data_end), or backtest
+    logic changes (logic_version).  data_mtime busts the cache when the
+    versioned CSV dataset is updated.  The OOS period calls
+    run_full_period_backtest directly.
+
+    Unlike the per-asset ``_run_fixed_period_*`` forwarders, this one KEEPS its
+    decorator: ``run_full_period_backtest`` is not itself cached, so this is the
+    only cache layer rather than a duplicate of one.  The day-long TTL and
+    ``max_entries`` bound how long and how many of these payloads stay resident
+    once every key above has already stopped changing.
     """
     return run_full_period_backtest(end_date_iso, backtest_start_iso,
                                     model_mtime=model_mtime, data_end=data_end,
@@ -3906,7 +3913,7 @@ def _btc_daily_12utc_bars() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
 def _eth_daily_12utc_bars() -> pd.DataFrame:
     """ETH 12:00-UTC (7am-CT) daily OHLCV bars — the SAME anchor as the versioned
     data/backtest/eth_usd_daily.csv and as the BTC signal bar.
@@ -4087,7 +4094,7 @@ def _yf_extend_series(s: "pd.Series", ticker: str, end_iso: str) -> "pd.Series":
         return s
 
 
-@st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …")
+@st.cache_data(ttl=3600, show_spinner="Fetching data for backtest …", max_entries=24)
 def _build_backtest_preds(fetch_start_iso: str, fetch_end_iso: str,
                           model_mtime: float = 0.0,
                           data_mtime: float = 0.0) -> "tuple | None":
@@ -4383,38 +4390,38 @@ def _read_price_csv(filename: str) -> pd.DataFrame | None:
         return None
 
 
-@st.cache_data(ttl=86_400)
+@st.cache_data(ttl=86_400, max_entries=2)
 def _load_btc_prices() -> pd.DataFrame | None:
     """BTC-USD daily OHLCV from versioned CSV."""
     return _read_price_csv("btc_usd_daily.csv")
 
 
-@st.cache_data(ttl=86_400)
+@st.cache_data(ttl=86_400, max_entries=2)
 def _load_mstr_prices() -> pd.DataFrame | None:
     """MSTR daily OHLCV from versioned CSV."""
     return _read_price_csv("mstr_daily.csv")
 
 
-@st.cache_data(ttl=86_400)
+@st.cache_data(ttl=86_400, max_entries=2)
 def _load_mstu_prices() -> pd.DataFrame | None:
     """MSTU daily OHLCV (post-inception) from versioned CSV."""
     return _read_price_csv("mstu_daily.csv")
 
 
-@st.cache_data(ttl=86_400)
+@st.cache_data(ttl=86_400, max_entries=2)
 def _load_eth_prices() -> pd.DataFrame | None:
     """ETH-USD daily OHLCV on BTC's 12:00-UTC bars, from versioned CSV."""
     return _read_price_csv("eth_usd_daily.csv")
 
 
-@st.cache_data(ttl=86_400)
+@st.cache_data(ttl=86_400, max_entries=2)
 def _load_mstu_synthetic() -> pd.Series | None:
     """MSTU synthetic close series (OLS back-fill) from versioned CSV."""
     df = _read_price_csv("mstu_synthetic_daily.csv")
     return df["close"] if df is not None and "close" in df.columns else None
 
 
-@st.cache_data
+@st.cache_data(max_entries=2)
 def _backtest_dataset_version() -> str:
     """Return a short version string for the versioned dataset, e.g. 'v1 · 2026-06-15'."""
     m = _load_backtest_manifest()
@@ -4423,7 +4430,7 @@ def _backtest_dataset_version() -> str:
     return f"{m.get('version','?')} · {m.get('pull_date','?')}"
 
 
-@st.cache_data
+@st.cache_data(max_entries=2)
 def _backtest_dataset_mtime() -> float:
     """Return manifest mtime (seconds since epoch) for cache-key purposes."""
     try:
@@ -4452,7 +4459,7 @@ def _fill_after_signal(s: "pd.Series", dates) -> "np.ndarray":
     return out.ffill().values.astype(float)
 
 
-@st.cache_data(show_spinner="Running MSTR backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Running MSTR backtest …", max_entries=8)
 def run_mstr_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-05-26",
                       initial_capital: float = 100_000.0,
@@ -4793,14 +4800,17 @@ def run_mstr_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period MSTR backtest …")
+# NOTE: deliberately NOT @st.cache_data — run_mstr_backtest() below is itself
+# cached on these exact arguments, so decorating this forwarder too stored a
+# second pickled copy of every payload (st.cache_data caches by value, as
+# pickled bytes).  The cache hit still happens one call deeper.
 def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
                                     logic_version: str = _BT_LOGIC_VERSION,
                                     data_mtime: float = 0.0,
                                     entry_gate: str = "above_ma30"):
-    """Cached wrapper for fixed-period MSTR backtests."""
+    """Fixed-period MSTR backtest — forwards to the cached run_mstr_backtest()."""
     return run_mstr_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, data_mtime=data_mtime,
@@ -4810,7 +4820,7 @@ def _run_fixed_period_mstr_backtest(end_date_iso: str, backtest_start_iso: str,
 # ═══════════════════════════════════════════════════════════════════
 # ETH Backtesting  (iShares Ethereum Trust — BTC signals · ETH execution; 2026-07f)
 # ═══════════════════════════════════════════════════════════════════
-@st.cache_data(show_spinner="Running ETH backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Running ETH backtest …", max_entries=8)
 def run_eth_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2024-06-01",
                       initial_capital: float = 100_000.0,
@@ -5158,14 +5168,17 @@ def run_eth_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period ETH backtest …")
+# NOTE: deliberately NOT @st.cache_data — run_eth_backtest() below is itself
+# cached on these exact arguments, so decorating this forwarder too stored a
+# second pickled copy of every payload (st.cache_data caches by value, as
+# pickled bytes).  The cache hit still happens one call deeper.
 def _run_fixed_period_eth_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
                                     logic_version: str = _BT_LOGIC_VERSION,
                                     data_mtime: float = 0.0,
                                     entry_gate: str = "above_ma30"):
-    """Cached wrapper for fixed-period ETH backtests."""
+    """Fixed-period ETH backtest — forwards to the cached run_eth_backtest()."""
     return run_eth_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, data_mtime=data_mtime,
@@ -5177,7 +5190,7 @@ def _run_fixed_period_eth_backtest(end_date_iso: str, backtest_start_iso: str,
 # BTC Backtesting  (BTC spot — same signals, BTC execution)
 # ═══════════════════════════════════════════════════════════════════
 
-@st.cache_data(show_spinner="Running BTC backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Running BTC backtest …", max_entries=8)
 def run_btc_backtest(end_date_iso: str,
                      backtest_start_iso: str = "2024-05-26",
                      initial_capital: float = 100_000.0,
@@ -5443,14 +5456,17 @@ def run_btc_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period BTC backtest …")
+# NOTE: deliberately NOT @st.cache_data — run_btc_backtest() below is itself
+# cached on these exact arguments, so decorating this forwarder too stored a
+# second pickled copy of every payload (st.cache_data caches by value, as
+# pickled bytes).  The cache hit still happens one call deeper.
 def _run_fixed_period_btc_backtest(end_date_iso: str, backtest_start_iso: str,
                                    model_mtime: float = 0.0,
                                    data_end: str = "",
                                    logic_version: str = _BT_LOGIC_VERSION,
                                    data_mtime: float = 0.0,
                                    entry_gate: str = "above_ma30"):
-    """Cached wrapper for fixed-period BTC backtests."""
+    """Fixed-period BTC backtest — forwards to the cached run_btc_backtest()."""
     return run_btc_backtest(end_date_iso, backtest_start_iso,
                             model_mtime=model_mtime, data_end=data_end,
                             logic_version=logic_version, data_mtime=data_mtime,
@@ -5461,7 +5477,7 @@ def _run_fixed_period_btc_backtest(end_date_iso: str, backtest_start_iso: str,
 # MSTU Backtesting  (T-Rex 2× Long MSTR Daily Target ETF)
 # ═══════════════════════════════════════════════════════════════════
 
-@st.cache_data(show_spinner="Running MSTU backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Running MSTU backtest …", max_entries=8)
 def run_mstu_backtest(end_date_iso: str,
                       backtest_start_iso: str = "2025-06-04",
                       initial_capital: float = 100_000.0,
@@ -5817,14 +5833,17 @@ def run_mstu_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period MSTU backtest …")
+# NOTE: deliberately NOT @st.cache_data — run_mstu_backtest() below is itself
+# cached on these exact arguments, so decorating this forwarder too stored a
+# second pickled copy of every payload (st.cache_data caches by value, as
+# pickled bytes).  The cache hit still happens one call deeper.
 def _run_fixed_period_mstu_backtest(end_date_iso: str, backtest_start_iso: str,
                                     model_mtime: float = 0.0,
                                     data_end: str = "",
                                     logic_version: str = _BT_LOGIC_VERSION,
                                     data_mtime: float = 0.0,
                                     entry_gate: str = "above_ma30"):
-    """Cached wrapper for fixed-period MSTU backtests."""
+    """Fixed-period MSTU backtest — forwards to the cached run_mstu_backtest()."""
     return run_mstu_backtest(end_date_iso, backtest_start_iso,
                              model_mtime=model_mtime, data_end=data_end,
                              logic_version=logic_version, data_mtime=data_mtime,
@@ -5846,7 +5865,7 @@ def _bs_call(S: float, K: float, T: float, r: float, sigma: float) -> float:
     return S * nc(d1) - K * exp(-r * T) * nc(d2)
 
 
-@st.cache_data(show_spinner="Running MSTR Options backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Running MSTR Options backtest …", max_entries=8)
 def run_mstr_options_backtest(end_date_iso: str,
                                backtest_start_iso: str = "2024-05-26",
                                initial_capital: float = 100_000.0,
@@ -6179,14 +6198,18 @@ def run_mstr_options_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period MSTR Options backtest …")
+# NOTE: deliberately NOT @st.cache_data — run_mstr_options_backtest() below is itself
+# cached on these exact arguments, so decorating this forwarder too stored a
+# second pickled copy of every payload (st.cache_data caches by value, as
+# pickled bytes).  The cache hit still happens one call deeper.
 def _run_fixed_period_mstr_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
                                              data_end: str = "",
                                              data_mtime: float = 0.0,
                                              logic_version: str = _BT_LOGIC_VERSION,
                                              entry_gate: str = "bull_regime"):
-    """Cached wrapper for fixed-period MSTR Options backtests."""
+    """Fixed-period MSTR Options backtest — forwards to the cached
+    run_mstr_options_backtest()."""
     return run_mstr_options_backtest(end_date_iso, backtest_start_iso,
                                      model_mtime=model_mtime, data_end=data_end,
                                      data_mtime=data_mtime, entry_gate=entry_gate)
@@ -6196,7 +6219,7 @@ def _run_fixed_period_mstr_options_backtest(end_date_iso: str, backtest_start_is
 # MSTU Options Backtesting  (ATM Call, 596 days to expiry)
 # ═══════════════════════════════════════════════════════════════════
 
-@st.cache_data(show_spinner="Running MSTU Options backtest …")
+@st.cache_data(ttl=86_400, show_spinner="Running MSTU Options backtest …", max_entries=8)
 def run_mstu_options_backtest(end_date_iso: str,
                                backtest_start_iso: str = "2025-06-04",
                                initial_capital: float = 100_000.0,
@@ -6547,14 +6570,18 @@ def run_mstu_options_backtest(end_date_iso: str,
     ))
 
 
-@st.cache_data(show_spinner="Loading fixed-period MSTU Options backtest …")
+# NOTE: deliberately NOT @st.cache_data — run_mstu_options_backtest() below is itself
+# cached on these exact arguments, so decorating this forwarder too stored a
+# second pickled copy of every payload (st.cache_data caches by value, as
+# pickled bytes).  The cache hit still happens one call deeper.
 def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_iso: str,
                                              model_mtime: float = 0.0,
                                              data_end: str = "",
                                              data_mtime: float = 0.0,
                                              logic_version: str = _BT_LOGIC_VERSION,
                                              entry_gate: str = "bull_regime"):
-    """Cached wrapper for fixed-period MSTU Options backtests.
+    """Fixed-period MSTU Options backtest — forwards to the cached
+    run_mstu_options_backtest().
 
     Supports synthetic pre-inception MSTU prices (pre Jun 4 2025).
     """
@@ -6563,7 +6590,7 @@ def _run_fixed_period_mstu_options_backtest(end_date_iso: str, backtest_start_is
                                      data_mtime=data_mtime, entry_gate=entry_gate)
 
 
-@st.cache_data(ttl=3600 * 24, show_spinner="Building synthetic MSTU price history …")
+@st.cache_data(ttl=3600 * 24, show_spinner="Building synthetic MSTU price history …", max_entries=4)
 def _build_synthetic_mstu_prices(pre_dt_iso: str, end_dt_iso: str) -> pd.Series:
     """Return calendar-day MSTU prices: synthetic (pre-Sep 18 2024) + actual (post-inception).
 
@@ -6658,7 +6685,7 @@ def _build_synthetic_mstu_prices(pre_dt_iso: str, end_dt_iso: str) -> pd.Series:
     return mstu_full.reindex(cal_idx).ffill().bfill()
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …")
+@st.cache_data(ttl=3600 * 6, show_spinner="Running strategy backtest …", max_entries=8)
 def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
                      strategy: str = "TF2", start_date_iso: str = None):
     """Run a trading strategy backtest on a configurable window.
@@ -16282,7 +16309,7 @@ _EXPL_FEAT_TIMEFRAME: "dict[str, str]" = {
 }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=8)
 def _compute_expl_data(latest_t_iso: str) -> "dict | None":
     """Compute signed feature contributions for the current bar.
 
