@@ -73,7 +73,7 @@ _HEALTH_JSON = _REPO_ROOT / "data" / "overall" / "strategy_health.json"
 _HEALTH_CSV = _REPO_ROOT / "data" / "overall" / "health_history.csv"
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=4)
 def _load(mtime: float, hist_mtime: float):
     snap = json.loads(_HEALTH_JSON.read_text())
     hist = pd.read_csv(_HEALTH_CSV) if _HEALTH_CSV.exists() else pd.DataFrame()

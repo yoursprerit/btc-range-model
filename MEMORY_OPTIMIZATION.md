@@ -164,9 +164,65 @@ A display screen is ~1 000 px wide, so those points are not visible anyway.
 | 2 | Drop `@st.cache_data` from the six `_run_fixed_period_*` wrappers — the inner `run_*_backtest` is already cached on the same arguments. | `btc_hourly_app.py` 3876, 4796, 5161, 5446, 5820, 6182, 6550 | Halves ~36 backtest payloads to ~18. |
 | 3 | Give the 17 no-TTL caches an explicit `ttl` (e.g. `ttl=6*3600` for backtests, which only change when the model or dataset does — both already in the key). | as listed in §2.2 | Lets long-idle payloads expire instead of living forever. |
 | 4 | Cap the fan-out: `ThreadPoolExecutor(max_workers=4)`. These tasks are network-bound; 4 concurrent Yahoo fetches still saturate the link. | `overall_core.py:661` | Cuts the `run_universe` **peak**, which is what trips the limit. |
-| 5 | Downsample **display-only** series before handing them to Plotly (e.g. `series.iloc[::n]` targeting ~2 000 points, or `.resample()` for time series). Computation is untouched — only the chart payload shrinks. | the 37 `st.plotly_chart` calls | Smaller ForwardMsg cache, smaller browser heap; visually identical. |
+| 5 | ~~Downsample display-only series before handing them to Plotly.~~ **Withdrawn — the premise was wrong, see §3.1.** | — | — |
 | 6 | Deployment config — see §4. | `.streamlit/config.toml` | Frees disconnected sessions in 30 s instead of 120 s; halves big-delta retention; drops the file-watcher threads. |
 | 7 | Remove `nbformat` from `requirements.txt` — nothing under `app/` imports it. | `requirements.txt` | Smaller install; no runtime effect. |
+
+### 3.1 Correction: the charts are not the problem
+
+The original item 5 assumed the Plotly figures were built on the full 17 455-point
+hourly history.  They are not, and it was withdrawn rather than implemented:
+
+* the live hourly chart plots `LOOKBACK_HOURS = 24` — twenty-four points;
+* the backtest equity curves are **daily**, ~840 points over the 2024-05-26 →
+  today window;
+* measured, a representative backtest figure (840 points × 4 traces) serialises
+  to **150 KB** of JSON, and even a hypothetical full-hourly trace is only 189 KB.
+
+Downsampling to "~2 000 points" would therefore have been a no-op on every chart
+in the app, and anything more aggressive would have visibly degraded the equity
+curves for no gain.  The real lever on chart payloads is how many *generations*
+of them Streamlit retains, which is `global.maxCachedMessageAge` in §4 — that
+one did ship.
+
+---
+
+## 3.2 What was actually implemented (Tier 1)
+
+Verified: **655 tests pass, identical to the pre-change baseline.**
+
+* **82 cache decorators given `max_entries`**, sized per function to its measured
+  per-rerun argument cardinality rather than by a blanket rule.  This matters:
+  `compute_day_type_forecast` is called once per calendar day in
+  `compute_alltime_daytype_metrics`' loop — ~400 distinct keys and growing.  A
+  blanket cap of 32 there was measured to cause **400 recomputes on every
+  rerun**; at 1024 the second rerun recomputes **zero**.  Bulk data loaders and
+  bucket-keyed functions get 2, backtests 8, per-date functions 256–1024.
+* **6 duplicate cache layers removed** — the `_run_fixed_period_*` forwarders.
+  The seventh (`_run_fixed_period_backtest`, line 3876) **kept** its decorator:
+  it forwards to `run_full_period_backtest`, which is *not* cached, so it is the
+  only cache layer there rather than a duplicate.
+* **A 24-hour TTL added to the 12 backtest caches.**  Deviation from item 3 as
+  written: the other no-TTL caches (`_training_cutoffs`,
+  `_backtest_dataset_version`, `_backtest_dataset_mtime`,
+  `executed_book_app._records`) are tiny values keyed on file mtimes that already
+  self-invalidate, so a TTL there would buy no memory and only force needless
+  recomputes.  They got `max_entries` alone.
+* **`run_universe` fan-out capped** at 4 workers.
+* **Router compiled-code cache** lowered from 32 entries to 12 (there are ten
+  sub-apps).
+* **`.streamlit/config.toml`** — the three settings in §4.
+* **`nbformat` dropped** from `requirements.txt`, with a pointer comment: it is
+  unused by the app and by CI, but `notebooks/builders/` still needs it.
+
+### Still open — noticed while implementing
+
+`run_full_period_backtest` is called **uncached** at `btc_hourly_app.py:13845`,
+so a full backtest is recomputed on *every* rerun of the BTC app.  That is a
+latency and peak-memory cost on every refresh.  It was left alone because adding
+a cache there is a behaviour change, not a bound — but it is worth a look.
+
+---
 
 ### Tier 2 — the real fix for §2.1, small UX change
 
@@ -248,10 +304,11 @@ every script run is in place.
 
 ## 5. Suggested order of work
 
-1. **Tier 1 items 1–4 and 6–7.** Mechanical, reviewable, no numeric change.
-   Redeploy and watch the memory graph in *Manage app*.
-2. **Tier 1 item 5** (chart downsampling) if still tight.
-3. **Tier 2** — lazy sections in `btc_hourly_app.py`. Largest single win.
+1. ~~**Tier 1 items 1–4 and 6–7.**~~ **Done** — see §3.2. Redeploy and watch the
+   memory graph in *Manage app*.
+2. ~~**Tier 1 item 5**~~ — withdrawn, see §3.1.
+3. **Tier 2** — lazy sections in `btc_hourly_app.py`. Largest single win, and
+   now the largest remaining one.
 4. **Tier 3** — split the deployment if the app keeps growing.
 
 Reboot the app after deploying so the ratcheted RSS from §2.5 starts clean.

@@ -658,7 +658,15 @@ def run_universe() -> list[dict]:
     cfgs = all_configs()
     # Each app is network-bound (independent Yahoo fetches) — run them
     # concurrently.  ex.map preserves order, so the universe stays in app order.
-    with ThreadPoolExecutor(max_workers=len(cfgs)) as ex:
+    #
+    # The pool is capped rather than sized to len(cfgs): one worker per config
+    # meant all ten instruments built their full daily datasets at the same
+    # instant, so ten macro frames (plus data_gate's validation copies) were
+    # resident simultaneously.  That PEAK is what trips Streamlit Community
+    # Cloud's ~1 GB ceiling — the steady state was never the problem.  These
+    # tasks are network-bound, so four in flight still keeps the link busy;
+    # the work is identical and ex.map still returns in app order.
+    with ThreadPoolExecutor(max_workers=min(4, len(cfgs))) as ex:
         rows = list(ex.map(_one, cfgs))
     _LAST_ERRORS.clear()
     out = []

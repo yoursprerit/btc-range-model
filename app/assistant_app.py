@@ -74,7 +74,7 @@ _HISTORY_KEY = "assistant_history"      # what the API sees (content blocks)
 _TRANSCRIPT_KEY = "assistant_transcript"  # what the user sees (rendered turns)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=4)
 def _discover(api_key_fingerprint: str, _key: str):
     """Entitled models for this key.  Cached on a fingerprint rather than the
     key itself so the secret never becomes part of a cache key that might be
@@ -83,7 +83,7 @@ def _discover(api_key_fingerprint: str, _key: str):
     return [(s.model_id, s.label, s.blurb) for s in specs], err
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=4)
 def _system_prompt(artifact_mtimes: tuple):
     """The grounded system prompt, rebuilt when any artifact changes on disk.
 

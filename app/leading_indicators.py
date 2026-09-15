@@ -183,7 +183,7 @@ def _bs_gamma(S: float, K: float, T: float, sigma: float, r: float = 0.0) -> flo
         return 0.0
 
 
-@st.cache_data(ttl=3600 * 2, show_spinner=False)
+@st.cache_data(ttl=3600 * 2, show_spinner=False, max_entries=2)
 def _fetch_deribit_gex() -> tuple[float | None, float | None]:
     """Fetch BTC option book summary from Deribit and compute net GEX.
 
@@ -251,7 +251,7 @@ def _fetch_deribit_gex() -> tuple[float | None, float | None]:
         return None, None
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner=False)
+@st.cache_data(ttl=3600 * 6, show_spinner=False, max_entries=2)
 def _fetch_stablecoin_mcap() -> pd.Series:
     """Fetch combined USDT + USDC daily market cap from CoinGecko (free API).
 
@@ -282,7 +282,7 @@ def _fetch_stablecoin_mcap() -> pd.Series:
     return s[~s.index.duplicated(keep="last")]
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner=False)
+@st.cache_data(ttl=3600 * 6, show_spinner=False, max_entries=2)
 def _fetch_blockchain_tx_volume() -> pd.Series:
     """Fetch estimated-transaction-volume-usd from blockchain.info."""
     try:
@@ -299,7 +299,7 @@ def _fetch_blockchain_tx_volume() -> pd.Series:
         return pd.Series(dtype=float, name="btc_tx_vol_usd")
 
 
-@st.cache_data(ttl=3600 * 24, show_spinner=False)
+@st.cache_data(ttl=3600 * 24, show_spinner=False, max_entries=2)
 def _fetch_btc_long_history() -> pd.Series:
     """Daily BTC-USD close prices from 2010 onwards (Yahoo Finance daily feed).
 
@@ -384,7 +384,7 @@ def compute_price_indicators(daily_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600 * 6, show_spinner="Building leading indicator dataset …")
+@st.cache_data(ttl=3600 * 6, show_spinner="Building leading indicator dataset …", max_entries=2)
 def fetch_all_leading_indicators(daily_df_json: str) -> pd.DataFrame:
     """Assemble the full leading-indicators DataFrame.
 

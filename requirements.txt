@@ -54,5 +54,9 @@ streamlit-autorefresh>=1.0.1
 # key is absent and every OTHER page runs fine even if this import fails.
 anthropic>=0.69,<2
 
-# Notebook generation
-nbformat>=5.9
+# NOTE: nbformat was removed from this file — nothing the deployed app imports
+# uses it (it is a *runtime* requirements list, and every byte installed here
+# also has to fit Streamlit Community Cloud's ~1 GB container).  The notebook
+# builders under notebooks/builders/ still need it; install it directly
+# (`pip install nbformat`) when regenerating those notebooks.
+

@@ -54,7 +54,7 @@ for _k, _c in ticker_config.CONFIGS.items():
 
 
 # ── sub-app execution (compile once, exec on every rerun) ────────────────────
-@st.cache_resource(show_spinner=False, max_entries=32)
+@st.cache_resource(show_spinner=False, max_entries=12)
 def _compiled_app(path_str: str, mtime: float):
     """Compile a sub-app's source once and reuse the code object across reruns.
 

@@ -203,27 +203,27 @@ def _bucket() -> str:
     return f"{now.date()}-{now.hour}-{now.minute // 30}"
 
 
-@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…")
+@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…", max_entries=2)
 def get_results(bucket: str):
     # computed_at is cached alongside the results, so it records when the
     # signals were actually (re)generated — not when the page last rendered.
     return dict(results=ov.run_universe(), computed_at=pd.Timestamp.utcnow())
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=2)
 def get_spot(minute_bucket: str):
     """Live spot prices, refreshed ~every minute (separate from the 15-min
     strategy cache) so the action plan shows current prices, not stale bars."""
     return ov.fetch_spot()
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False, max_entries=2)
 def get_sata_spot(minute_bucket: str):
     """Live SATA quote (price, day-change, P&L vs $100 par), refreshed ~1/min."""
     return ov.fetch_sata()
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=8)
 def get_entry_closes(positions: tuple):
     """Real official close on each open position's entry date — the cost basis.
     Cached on the (key, symbol, entry-date) tuple so it only re-fetches when a
@@ -253,20 +253,20 @@ STRAT_CURVE_ACTUAL = "Overall strategy (as published)"
 BH_CURVE = "Equal-weight Buy & Hold"
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=2)
 def get_published_books(bucket: str):
     """The archived as-published target books (one per signal day), re-read on
     the shared refresh bucket so a fresh publish shows up without a restart."""
     return ov.load_published_books()
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=2)
 def get_book_version_map(bucket: str):
     """Backfilled strategy-version provenance for pre-stamp archived books."""
     return ov.load_book_version_map()
 
 
-@st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…")
+@st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…", max_entries=2)
 def get_all_profiles(bucket: str):
     """Compute the full portfolio for every UI risk profile once, so switching
     profiles (and rendering the comparison table) is instant — no recompute.
@@ -309,7 +309,7 @@ def get_all_profiles(bucket: str):
                 profiles=profiles)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
 def get_bh_replay(bucket: str):
     """Equal-weight buy & hold of the whole universe, in the same shape the
     strategy replays return (weights / SATA / returns matrices), so the P&L
@@ -619,7 +619,7 @@ _EB_DIR = _REPO_ROOT / "data" / "overall"
 _EB_PATHS = (_EB_DIR / "executed_book_live.json", _EB_DIR / "executed_book.json")
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=2)
 def get_executed_report(bucket: str) -> dict | None:
     """The execution report the IBKR executor commits back after a rebalance —
     the LIVE account's when one exists, else the paper account's (the same
@@ -642,7 +642,7 @@ def get_executed_report(bucket: str) -> dict | None:
     return None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=2)
 def get_executed_archive(bucket: str) -> list[dict]:
     """Every archived execution run (live account first, else paper), newest
     first — the 🕰️ Historical tab picks the one standing on the chosen bar."""
