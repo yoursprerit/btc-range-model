@@ -191,9 +191,14 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help=f"IB Gateway API port (default {DEFAULT_PORT} = paper)")
     ap.add_argument("--client-id", type=int, default=18)
-    ap.add_argument("--fill-timeout", type=float, default=60.0,
-                    help="seconds to wait for each order leg to fill (MOC ignores "
-                         "this and waits for the 4:00 PM ET auction)")
+    ap.add_argument("--fill-timeout", type=float, default=None,
+                    help="seconds to wait for each order leg to fill. Default "
+                         "follows the session: 60 inside regular hours, 300 "
+                         "outside (where there is no MARKET escalation and the "
+                         "buy leg is funded by what the sells realise, so a slow "
+                         "sell would otherwise drop every buy for lack of "
+                         "funding). MOC ignores this and waits for the 4:00 PM "
+                         "ET auction")
     ap.add_argument("--order-type", choices=list(ORDER_TYPES),
                     default=ORDER_MARKETABLE_LIMIT,
                     help="marketable-limit (default): a limit priced through the "
@@ -410,6 +415,10 @@ def main() -> int:
                   "publisher's next book supersedes it — so the session is "
                   "skipped.")
             return 0
+
+    args.fill_timeout, timeout_why = ic.fill_timeout(args.fill_timeout,
+                                                    args.outside_rth)
+    print(f"Fill timeout: {timeout_why}")
 
     weights = dict(payload.get("weights", {}))
     exec_price = payload.get("exec_price", {})

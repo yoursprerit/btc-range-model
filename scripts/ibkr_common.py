@@ -74,6 +74,18 @@ ORDER_TYPES = (ORDER_MARKETABLE_LIMIT, ORDER_MOC, ORDER_MARKET)
 # quote that has blown out far past it.
 DEFAULT_SLIPPAGE_CAP = 0.005
 
+# How long each order leg is given to fill before the run moves on.
+DEFAULT_FILL_TIMEOUT_S = 60.0
+# Outside regular hours that is far too short, and not because fills are merely
+# slower: the BUY leg is budgeted from what the SELL leg actually realised, so a
+# sell still working when the wait expires funds nothing and every buy comes
+# back SKIPPED-FUNDING — which is exactly how the 2026-09-10 after-hours run
+# ended up placing two-share buys against a $19k sell that had not printed yet.
+# Inside RTH a stuck limit is rescued by the MARKET escalation; out here there
+# is no such escalation, so the wait IS the mechanism. Waiting longer is close
+# to free: the loop ends as soon as every leg is done.
+AFTER_HOURS_FILL_TIMEOUT_S = 300.0
+
 # NYSE/Nasdaq stop accepting MOC entries at 15:50 ET; the auction prints at
 # 16:00 ET.  The executor's 2:30-PM-CT (3:30 PM ET) slot sits 20 minutes ahead
 # of the cutoff — which is precisely what makes MOC usable at all (it was not,
@@ -602,6 +614,27 @@ def catch_up_state(now=None) -> tuple[str, str]:
                                f"inside the extended session (to {ext_stamp})")
     return CATCH_UP_SHUT, (f"{et:%H:%M} ET is past the {ext_stamp} end of the "
                            "extended session — no order placed now would fill")
+
+
+def fill_timeout(explicit: float | None,
+                 outside_rth: bool) -> tuple[float, str]:
+    """(seconds, reason) — how long to give each order leg to fill.
+
+    An explicit ``--fill-timeout`` always wins; otherwise the default follows
+    the session, because the two cases are not the same problem.  Inside regular
+    hours the wait only decides how soon an unfilled limit is escalated to a
+    MARKET order, so 60s is plenty.  Outside them there is no escalation, and
+    the sell leg's fills are what funds the buy leg — so the wait is the only
+    thing standing between a slow sell and a run whose every buy is dropped for
+    lack of funding.
+    """
+    if explicit is not None:
+        return float(explicit), f"{float(explicit):.0f}s (--fill-timeout)"
+    if outside_rth:
+        return AFTER_HOURS_FILL_TIMEOUT_S, (
+            f"{AFTER_HOURS_FILL_TIMEOUT_S:.0f}s (outside RTH — the buy leg is "
+            "funded by what the sells realise, so they are given time to fill)")
+    return DEFAULT_FILL_TIMEOUT_S, f"{DEFAULT_FILL_TIMEOUT_S:.0f}s"
 
 
 def extended_hours_tif(now=None) -> tuple[str, str]:

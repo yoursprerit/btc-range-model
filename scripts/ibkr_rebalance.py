@@ -61,8 +61,8 @@ from ibkr_common import (                        # noqa: E402  shared broker/ord
     DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
     ORDER_MARKETABLE_LIMIT, ORDER_TYPES,
     Broker, Guards, PositionReadError, bar_is_current, build_order_plan,
-    is_trading_day, post_trade_check, preflight, print_plan, signal_is_fresh,
-    validate_book_math,
+    fill_timeout, is_trading_day, post_trade_check, preflight, print_plan,
+    signal_is_fresh, validate_book_math,
 )
 
 
@@ -175,9 +175,12 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help=f"IB Gateway API port (default {DEFAULT_PORT} = paper)")
     ap.add_argument("--client-id", type=int, default=17)
-    ap.add_argument("--fill-timeout", type=float, default=60.0,
-                    help="seconds to wait for each order leg to fill (MOC ignores "
-                         "this and waits for the 4:00 PM ET auction)")
+    ap.add_argument("--fill-timeout", type=float, default=None,
+                    help="seconds to wait for each order leg to fill. Default "
+                         "follows the session: 60 inside regular hours, 300 "
+                         "outside (where there is no MARKET escalation and the "
+                         "buy leg is funded by what the sells realise). MOC "
+                         "ignores this and waits for the 4:00 PM ET auction")
     ap.add_argument("--order-type", choices=list(ORDER_TYPES),
                     default=ORDER_MARKETABLE_LIMIT,
                     help="marketable-limit (default): a limit priced through the "
@@ -293,8 +296,10 @@ def main() -> int:
             print(f"ABORT: {why_pre} No orders placed.")
             return 1
         if orders:
-            print(f"\nTransmitting orders ({args.order_type})…")
-            broker.place(orders, args.fractional, args.fill_timeout,
+            wait, wait_why = fill_timeout(args.fill_timeout, args.outside_rth)
+            print(f"\nTransmitting orders ({args.order_type}); "
+                  f"fill timeout {wait_why}…")
+            broker.place(orders, args.fractional, wait,
                          order_type=args.order_type,
                          slippage_cap=args.slippage_cap,
                          outside_rth=args.outside_rth,

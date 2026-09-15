@@ -209,7 +209,7 @@ Useful flags:
 | `--band` | `0.01` | no-trade band as a fraction of net-liq |
 | `--fractional` | off | allow fractional shares (default: whole shares) |
 | `--port` | `4002` | IB Gateway API port (paper) |
-| `--fill-timeout` | `60` | seconds to wait for each order leg to fill |
+| `--fill-timeout` | `60` inside RTH, `300` outside | seconds to wait for each order leg to fill |
 | `--force` | off | ignore the weekend/holiday & stale-signal guards |
 | `--allow-stale-bar` | off | trade a book whose equity basis is not the last completed session |
 | `--allow-margin` | off | **danger** — permit buys beyond cash + realised sell proceeds |
@@ -412,9 +412,17 @@ day's 2:30 PM CT slot, which sizes from positions and cannot see it. The stamp
 is IBKR's UTC form (`yyyymmdd-hh:mm:ss`, dash-separated) — the zoned form takes
 only legacy names like `US/Eastern`, and an IANA name is refused with error 343.
 
+Each leg is also given **300 seconds** to fill instead of the regular session's
+60 (`--fill-timeout` still overrides). That is not patience for its own sake:
+buys are funded from what the **sells actually realised**, and outside RTH there
+is no MARKET escalation to rescue a limit that is merely resting — so a sell
+still working when the wait expires funds nothing and every buy is dropped as
+`SKIPPED-FUNDING`. Waiting costs nothing when fills are quick; the wait ends as
+soon as each leg is done.
+
 Two more things to expect from an extended-hours fill. The book is thinner, so
-widen `--slippage-cap` (default 0.5% through the touch) if legs come back unfilled;
-and fills often print **after** the run's `--fill-timeout` expires — re-run with
+widen `--slippage-cap` (default 0.5% through the touch) if legs come back
+unfilled; and fills can still print **after** the wait expires — re-run with
 `--refresh-report` later to restate the account and rewrite a signed report from
 what actually filled.
 

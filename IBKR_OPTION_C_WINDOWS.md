@@ -402,6 +402,7 @@ Useful flags (same as the all-in-one rebalancer, plus book-source options):
 | `--band 0.02` | widen the no-trade band (fraction of net-liq) |
 | `--fractional` | allow fractional shares (default: whole shares) |
 | `--port 4002` | IB Gateway API port (paper) |
+| `--fill-timeout 300` | seconds to wait for each order leg to fill. The default follows the session — 60 inside regular hours, **300 outside**, because out there a limit merely rests (no MARKET escalation) and the buy leg is budgeted from what the sells actually realised, so a slow sell would drop every buy as `SKIPPED-FUNDING` |
 | `--max-age-hours 36` | reject a book generated longer ago than this (default 36). Note this is no longer the binding guard: the bar check below refuses any book whose equity basis is not the last completed session, so a withheld publish is a **no-trade**, not a re-trade of yesterday's book |
 | `--allow-stale-bar` | trade a book whose equity basis is not the last completed session. Off by default — deliberate catch-up only |
 | `--force-rerun` | execute a signal bar that already has an execution report. Only when you have confirmed the first run placed nothing |

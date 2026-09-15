@@ -636,3 +636,31 @@ def test_the_expiry_follows_the_eastern_clock_through_the_dst_switch():
     _, est = ic.extended_hours_tif(_et("2026-12-10 17:00"))
     assert edt == "20261031-00:00:00"
     assert est == "20261211-01:00:00"
+
+
+# ── how long a leg is given to fill ─────────────────────────────────────────
+def test_the_regular_session_keeps_the_sixty_second_wait():
+    secs, why = ic.fill_timeout(None, outside_rth=False)
+    assert secs == 60.0 and why == "60s"
+
+
+def test_an_after_hours_run_waits_long_enough_to_fund_its_buys():
+    """The 2026-09-10 failure: outside RTH the buy leg is budgeted from what the
+    SELL leg actually realised, and a 60s wait expired with a $19k sell still
+    working — so every buy came back SKIPPED-FUNDING and the run placed
+    two-share stubs. There is no MARKET escalation out here, so the wait IS the
+    mechanism."""
+    secs, why = ic.fill_timeout(None, outside_rth=True)
+    assert secs == 300.0 and "funded by what the sells realise" in why
+
+
+def test_an_explicit_flag_still_wins_in_both_sessions():
+    for outside in (False, True):
+        secs, why = ic.fill_timeout(45.0, outside_rth=outside)
+        assert secs == 45.0 and "--fill-timeout" in why
+
+
+def test_an_explicit_zero_is_honoured_not_treated_as_unset():
+    """0 means "place and don't wait" — a falsy value that must not fall back
+    to the default."""
+    assert ic.fill_timeout(0.0, outside_rth=True)[0] == 0.0
