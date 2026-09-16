@@ -270,10 +270,17 @@ def main() -> int:
                          "rewrite a SIGNED execution report. Use after late or "
                          "partial fills print past the sending run's timeout, "
                          "or to re-sign a report written without the secret")
-    ap.add_argument("--push-report", action="store_true",
+    ap.add_argument("--push-report", dest="push_report", action="store_true",
+                    default=None,
                     help="git commit + push the execution report after writing "
-                         "it, the way the scheduled wrapper does (a manual run "
-                         "otherwise leaves the cloud app showing a stale report)")
+                         "it, the way the scheduled wrapper does. ON by default "
+                         "for a run that trades or refreshes: a report that "
+                         "never leaves the laptop leaves the cloud app showing "
+                         "a stale one, with nothing to say a trade happened")
+    ap.add_argument("--no-push-report", dest="push_report", action="store_false",
+                    help="write the report but do not publish it (env "
+                         "IBKR_NO_PUSH_REPORT=1 does the same). Use on a host "
+                         "with no git write credentials")
     ap.add_argument("--catch-up", action="store_true",
                     help="trade the day's book LATE when the scheduled 2:30 PM "
                          "CT slot was missed (the host was off). A no-op while "
@@ -304,6 +311,13 @@ def main() -> int:
     ap.add_argument("--no-report", action="store_true",
                     help="do not write the execution report")
     args = ap.parse_args()
+
+    # Publishing is the default because the failure it prevents is silent: the
+    # trade happens, the report is written, and the cloud app goes on showing
+    # the last SCHEDULED run's book. A push that cannot authenticate is
+    # best-effort and rolls itself back, so defaulting it on costs nothing.
+    if args.push_report is None:
+        args.push_report = not os.environ.get("IBKR_NO_PUSH_REPORT")
 
     live = args.account_mode == "live"
     report_out = args.report_out or str(
@@ -481,6 +495,22 @@ def main() -> int:
         try:
             fills = broker.day_fills_by_symbol()
             print(f"  {len(fills)} symbol(s) with executions today")
+            # IBKR reports fills for the CURRENT session only. Run a day late —
+            # which is exactly when someone reaches for this, to republish a
+            # report that never got pushed — and it finds nothing, then writes
+            # a trade-less report over the one that holds the real record.
+            if not fills and prior and prior.get("trades") and not args.force:
+                print(f"ABORT: the broker reports no executions today, but the "
+                      f"archived report for {payload.get('as_of')} holds "
+                      f"{len(prior['trades'])} trade(s). Refreshing now would "
+                      "replace a real record with an empty one — IBKR only "
+                      "serves the current session's fills, so a refresh has to "
+                      "run the same day as the trade.")
+                print("  To publish the report already on disk, commit "
+                      "data/overall/executed_book.json and "
+                      "data/overall/executed_archive/ by hand. Use --force to "
+                      "overwrite anyway.")
+                return 1
             # mode stays 'execute': orders really were sent for this book, and
             # the app's badge should reflect that rather than reading 'dry-run'.
             _write_report(broker, payload, "execute", fills, report_out, secret,
