@@ -588,9 +588,16 @@ pick any past date and it replays that run in full: the trades placed, the
 positions it ended with, and the drift against the target book *of that same
 signal bar* (`data/overall/book_archive/<as_of>.json`), not today's. A re-run
 for the same bar (a late `--refresh-report`, a manual after-hours top-up)
-replaces that bar's record: last run wins, matching the account's end state.
+replaces that bar's record: last run wins, matching the account's end state —
+but only while the broker can still see the fills. IBKR serves the current
+session's executions only, so a `--refresh-report` run the NEXT day finds none
+and is refused rather than blanking the record it was meant to repair; to
+publish a report that was never pushed, commit `executed_book.json` and
+`executed_archive/` by hand.
 The daily wrapper commits the archive alongside the report, so the cloud app
-gets it on the same push.
+gets it on the same push — and since a trading run now publishes by default, a
+manual run does too unless `--no-push-report` / `IBKR_NO_PUSH_REPORT=1` says
+otherwise.
 
 To seed the archive from runs that happened before it existed, run it once from
 an unshallowed clone — it rebuilds the records verbatim (signatures intact) from
