@@ -664,3 +664,30 @@ def test_an_explicit_zero_is_honoured_not_treated_as_unset():
     """0 means "place and don't wait" — a falsy value that must not fall back
     to the default."""
     assert ic.fill_timeout(0.0, outside_rth=True)[0] == 0.0
+
+
+# ── publishing the record of a run ──────────────────────────────────────────
+def _executor_src():
+    return (Path(__file__).resolve().parent.parent
+            / "scripts" / "ibkr_execute_book.py").read_text()
+
+
+def test_a_trading_run_publishes_its_report_unless_told_not_to():
+    """A report that never leaves the laptop is a silent failure: the trade
+    happened and the cloud app goes on showing the last scheduled run's book.
+    Publishing is therefore the default, with an explicit opt-out for a host
+    that has no git write credentials."""
+    src = _executor_src()
+    assert 'dest="push_report", action="store_true",\n                    default=None' in src
+    assert '"--no-push-report"' in src
+    assert 'args.push_report = not os.environ.get("IBKR_NO_PUSH_REPORT")' in src
+
+
+def test_a_late_refresh_cannot_blank_out_a_real_record():
+    """IBKR serves only the CURRENT session's fills, so --refresh-report run a
+    day late finds nothing — and that is precisely when someone reaches for it,
+    to republish a report that never got pushed. Writing then would replace the
+    trades with an empty list."""
+    src = _executor_src()
+    assert "if not fills and prior and prior.get(\"trades\") and not args.force:" in src
+    assert "replace a real record with an empty one" in src
