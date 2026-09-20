@@ -17098,8 +17098,9 @@ def render_mstr_mstu_plot() -> None:
     _mm_plotly_chart(fig, key="mstr_mstu_overlay_chart")
     if show_spread:
         st.caption(
-            "Lower panel — the gap is shaded **blue where MSTR is ahead** and "
-            "**magenta where MSTU is ahead**, against the dashed parity line. "
+            "Lower panel — every gap is **MSTU minus MSTR**, shaded **magenta "
+            "above the dashed parity line, where MSTU is ahead**, and **blue below "
+            "it, where MSTR is ahead**. "
             f"{_mm.SPREAD_MODES[spread_mode]['help']} Drag to pan, scroll to zoom, "
             "double-click to reset; both panels share the time axis."
         )

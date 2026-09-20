@@ -70,9 +70,9 @@ SCALE_MODES: dict[str, tuple[str, str]] = {
 #: Spread definitions for the lower panel.  ``key → spec``.
 SPREAD_MODES: dict[str, dict[str, str]] = {
     "usd": {
-        "label": "➖ Price difference (MSTR − MSTU), $",
+        "label": "➖ Price difference (MSTU − MSTR), $",
         "column": "spread_usd",
-        "axis": "MSTR − MSTU ($)",
+        "axis": "MSTU − MSTR ($)",
         "unit": "$",
         "hover": "$%{y:,.2f}",
         "tickformat": "$,.0f",
@@ -83,9 +83,9 @@ SPREAD_MODES: dict[str, dict[str, str]] = {
         ),
     },
     "pp": {
-        "label": "📊 Performance gap (MSTR − MSTU), pp",
+        "label": "📊 Performance gap (MSTU − MSTR), pp",
         "column": "spread_pp",
-        "axis": "MSTR − MSTU (pp)",
+        "axis": "MSTU − MSTR (pp)",
         "unit": "pp",
         "hover": "%{y:+,.1f} pp",
         "tickformat": "+,.0f",
@@ -96,15 +96,15 @@ SPREAD_MODES: dict[str, dict[str, str]] = {
         ),
     },
     "ratio": {
-        "label": "➗ Price ratio (MSTR ÷ MSTU), ×",
+        "label": "➗ Price ratio (MSTU ÷ MSTR), ×",
         "column": "ratio",
-        "axis": "MSTR ÷ MSTU (×)",
+        "axis": "MSTU ÷ MSTR (×)",
         "unit": "×",
         "hover": "%{y:,.3f}×",
         "tickformat": ",.2f",
         "help": (
-            "How many MSTU shares one MSTR share buys. A flat line means the two "
-            "moved in step; a rising line means MSTR gained on MSTU *per share*. "
+            "How many MSTR shares one MSTU share buys. A flat line means the two "
+            "moved in step; a rising line means MSTU gained on MSTR *per share*. "
             "Like the dollar difference this is a share-price ratio, so a split or "
             "reverse split rescales it — read the performance gap for the clean "
             "comparison."
@@ -197,9 +197,11 @@ def add_derived(win: pd.DataFrame) -> pd.DataFrame:
     base_mstu = float(out["MSTU"].iloc[0])
     out["MSTR_idx"] = out["MSTR"] / base_mstr * 100.0
     out["MSTU_idx"] = out["MSTU"] / base_mstu * 100.0
-    out["spread_usd"] = out["MSTR"] - out["MSTU"]
-    out["spread_pp"] = out["MSTR_idx"] - out["MSTU_idx"]
-    out["ratio"] = out["MSTR"] / out["MSTU"]
+    # MSTU first in every gap, so a positive number always reads "the leveraged
+    # fund is ahead" — the direction a viewer of this tab is asking about.
+    out["spread_usd"] = out["MSTU"] - out["MSTR"]
+    out["spread_pp"] = out["MSTU_idx"] - out["MSTR_idx"]
+    out["ratio"] = out["MSTU"] / out["MSTR"]
     return out
 
 
@@ -313,9 +315,9 @@ def export_frame(win: pd.DataFrame) -> pd.DataFrame:
         "MSTU": "MSTU close ($)",
         "MSTR_idx": "MSTR indexed (=100)",
         "MSTU_idx": "MSTU indexed (=100)",
-        "spread_usd": "MSTR − MSTU ($)",
-        "spread_pp": "MSTR − MSTU (pp)",
-        "ratio": "MSTR ÷ MSTU (×)",
+        "spread_usd": "MSTU − MSTR ($)",
+        "spread_pp": "MSTU − MSTR (pp)",
+        "ratio": "MSTU ÷ MSTR (×)",
     }
     present = [c for c in cols if c in win.columns]
     out = win[present].rename(columns=cols).copy()
@@ -416,17 +418,18 @@ def make_figure(win: pd.DataFrame, scale_mode: str = _DEFAULT_SCALE,
     if show_spread and not win.empty and spec["column"] in win:
         spread = win[spec["column"]]
         # A ratio has no meaningful zero, so it is shaded around 1.0 (parity)
-        # instead — the level at which one MSTR share buys one MSTU share.
+        # instead — the level at which one MSTU share buys one MSTR share.
         baseline = 1.0 if spread_mode == "ratio" else 0.0
         rel = spread - baseline
         # Two clipped fills rather than one: the sign of the gap is the point, so
-        # "MSTR ahead" and "MSTU ahead" get the colour of whichever name is ahead.
+        # "MSTU ahead" and "MSTR ahead" get the colour of whichever name is ahead.
+        # Every gap is MSTU-minus-MSTR, so ABOVE parity is MSTU's magenta.
         # Each half is filled with ``tonexty`` against an invisible constant trace
         # at the baseline — ``tozeroy`` would fill to y=0, which is the wrong
         # reference for the ratio (parity is 1.0, not 0).
         flat = pd.Series(baseline, index=win.index)
-        for clipped, color in ((rel.clip(lower=0), COLOR_MSTR),
-                               (rel.clip(upper=0), COLOR_MSTU)):
+        for clipped, color in ((rel.clip(lower=0), COLOR_MSTU),
+                               (rel.clip(upper=0), COLOR_MSTR)):
             fig.add_trace(go.Scatter(
                 x=win.index, y=flat, mode="lines", line=dict(width=0),
                 hoverinfo="skip", showlegend=False,

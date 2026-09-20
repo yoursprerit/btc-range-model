@@ -150,15 +150,25 @@ def test_rebasing_anchors_on_the_window_not_the_full_history(sample):
     assert win["MSTR_idx"].iloc[-1] == pytest.approx(119.79 / 99.0 * 100.0)
 
 
-def test_spread_columns(sample):
+def test_every_gap_is_mstu_minus_mstr(sample):
+    """Orientation is MSTU-first throughout, so positive always means MSTU ahead.
+
+    The fixture ends with MSTR at 119.79 and MSTU at 69.12 — MSTR is ahead on
+    price, so the dollar gap and the ratio must both come out below parity, while
+    the rebased paths put MSTU ahead and the pp gap positive.
+    """
     win = mm.add_derived(sample)
 
-    assert win["spread_usd"].iloc[-1] == pytest.approx(119.79 - 69.12)
-    assert win["ratio"].iloc[-1] == pytest.approx(119.79 / 69.12)
+    assert win["spread_usd"].iloc[-1] == pytest.approx(69.12 - 119.79)
+    assert win["spread_usd"].iloc[-1] < 0
+    assert win["ratio"].iloc[-1] == pytest.approx(69.12 / 119.79)
+    assert win["ratio"].iloc[-1] < 1.0
     # Both rebased to 100 at the start, so the pp gap starts at exactly zero.
     assert win["spread_pp"].iloc[0] == pytest.approx(0.0)
     assert win["spread_pp"].iloc[-1] == pytest.approx(
-        win["MSTR_idx"].iloc[-1] - win["MSTU_idx"].iloc[-1])
+        win["MSTU_idx"].iloc[-1] - win["MSTR_idx"].iloc[-1])
+    # MSTU compounded 2x daily to +38.24% against MSTR's +19.79%.
+    assert win["spread_pp"].iloc[-1] > 0
 
 
 def test_add_derived_on_empty_frame_still_has_every_column():
@@ -225,12 +235,12 @@ def test_stats_on_empty_window_are_all_nan():
 def test_widest_gap_is_measured_from_the_modes_own_neutral_point():
     """For the ratio, "furthest apart" means furthest from 1.0, not the largest ×.
 
-    Ratios of 1.5, 0.4 and 1.2: the biggest NUMBER is 1.5, but 0.4 is the day the
-    two were furthest apart. Measuring from zero would pick the wrong one.
+    MSTU ÷ MSTR of 1.5, 0.4 and 1.2: the biggest NUMBER is 1.5, but 0.4 is the day
+    the two were furthest apart. Measuring from zero would pick the wrong one.
     """
     idx = pd.DatetimeIndex(["2024-09-18", "2024-09-19", "2024-09-20"])
-    a = pd.DataFrame({"close": [150.0, 40.0, 120.0]}, index=idx)
-    b = pd.DataFrame({"close": [100.0, 100.0, 100.0]}, index=idx)
+    a = pd.DataFrame({"close": [100.0, 100.0, 100.0]}, index=idx)
+    b = pd.DataFrame({"close": [150.0, 40.0, 120.0]}, index=idx)
     win = mm.add_derived(mm.build_comparison_frame(a, b))
 
     value, day = mm.extreme_spread(win, "ratio")
@@ -240,10 +250,15 @@ def test_widest_gap_is_measured_from_the_modes_own_neutral_point():
 
 
 def test_widest_gap_for_differences_is_the_largest_magnitude(sample):
+    """Largest distance from zero — returned SIGNED, so it says who was ahead."""
     win = mm.add_derived(sample)
+
     value, day = mm.extreme_spread(win, "usd")
-    assert value == pytest.approx(float(win["spread_usd"].abs().max()))
-    assert day is not None
+
+    assert abs(value) == pytest.approx(float(win["spread_usd"].abs().max()))
+    assert value == pytest.approx(float(win["spread_usd"].loc[day]))
+    # MSTU trades below MSTR all through the fixture, so the widest gap is negative.
+    assert value < 0
 
 
 def test_widest_gap_on_empty_window_is_nan():
@@ -314,6 +329,29 @@ def test_ratio_panel_shades_around_parity_not_zero(sample):
     assert all(set(np.asarray(t.y)) == {1.0} for t in baselines)
 
 
+def test_gap_fill_above_parity_wears_mstus_colour(sample):
+    """Colour follows whoever is ahead, and the gap is MSTU-minus-MSTR.
+
+    So the ABOVE-parity half is MSTU's magenta and the below-parity half MSTR's
+    blue. Inverting the subtraction without swapping these would silently colour
+    each half with the wrong name.
+    """
+    fig = mm.make_figure(mm.add_derived(sample), "price", "usd")
+    fills = [t for t in fig.data if t.fill == "tonexty"]
+
+    assert len(fills) == 2
+    assert mm.COLOR_MSTU.lstrip("#") in _rgba_hexish(fills[0].fillcolor)
+    assert mm.COLOR_MSTR.lstrip("#") in _rgba_hexish(fills[1].fillcolor)
+    # The first fill is the one clipped to the positive side.
+    assert min(fills[0].y) >= 0 and max(fills[1].y) <= 0
+
+
+def _rgba_hexish(rgba: str) -> str:
+    """``rgba(r,g,b,a)`` → the equivalent ``rrggbb``, for comparing to a token."""
+    nums = rgba[rgba.index("(") + 1:rgba.index(")")].split(",")
+    return "".join(f"{int(float(n)):02x}" for n in nums[:3])
+
+
 def test_hiding_the_gap_panel_leaves_a_single_row(sample):
     fig = mm.make_figure(mm.add_derived(sample), "price", "usd", show_spread=False)
     axes = {k for k in fig.layout.to_plotly_json() if k.startswith("yaxis")}
@@ -340,5 +378,5 @@ def test_export_frame_is_human_readable(sample):
 
     assert table.index.name == "Date"
     assert "MSTR close ($)" in table.columns
-    assert "MSTR − MSTU (pp)" in table.columns
+    assert "MSTU − MSTR (pp)" in table.columns
     assert len(table) == len(sample)
