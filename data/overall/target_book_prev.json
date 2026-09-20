@@ -1,32 +1,54 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-18T12:17:47+00:00",
- "as_of": "2026-09-17",
+ "generated_at_utc": "2026-09-19T12:17:37+00:00",
+ "as_of": "2026-09-18",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
-  "GLDM": 0.3,
+  "GLDM": 0.10348542971970369,
   "UGL": 0.1,
-  "XLE": 0.3,
-  "OIH": 0.18,
-  "ERX": 0.1
+  "XLE": 0.08518592900096791,
+  "OIH": 0.13969622206687565,
+  "ERX": 0.1,
+  "GRID": 0.29163241921245275,
+  "WGMI": 0.18
  },
- "cash_weight": 0.020000000000000018,
+ "cash_weight": 0.0,
  "exec_price": {
-  "GLDM": 85.95,
-  "UGL": 50.17,
-  "XLE": 64.48,
-  "OIH": 400.6,
-  "ERX": 109.66
+  "GLDM": 86.59,
+  "UGL": 50.87,
+  "XLE": 64.31,
+  "OIH": 398.71,
+  "ERX": 109.0,
+  "GRID": 178.25,
+  "WGMI": 49.5
  },
  "actions": [
+  {
+   "key": "WGMI",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 ABOVE TREND",
+   "target": 0.18,
+   "in_pos": false,
+   "priority": 0.6429945431963776,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GRID",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 ABOVE TREND",
+   "target": 0.29163241921245275,
+   "in_pos": false,
+   "priority": 0.2308818274698096,
+   "exits_next_bar": false
+  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
+   "target": 0.08518592900096791,
    "in_pos": true,
-   "priority": 0.7265928766105473,
+   "priority": 0.7379873213333754,
    "exits_next_bar": false
   },
   {
@@ -35,25 +57,25 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.7235630702891528,
+   "priority": 0.7368128764292583,
    "exits_next_bar": false
   },
   {
    "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.18,
+   "target": 0.13969622206687565,
    "in_pos": true,
-   "priority": 0.5923809523809525,
+   "priority": 0.6876190476190477,
    "exits_next_bar": false
   },
   {
    "key": "GLDM",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
+   "target": 0.10348542971970369,
    "in_pos": true,
-   "priority": 0.42,
+   "priority": 0.45748455570810553,
    "exits_next_bar": false
   },
   {
@@ -62,7 +84,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.3319633233666159,
+   "priority": 0.4029732072887023,
    "exits_next_bar": false
   },
   {
@@ -156,25 +178,7 @@
    "exits_next_bar": false
   },
   {
-   "key": "GRID",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 BELOW TREND",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
    "key": "REMX",
-   "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 BELOW TREND",
-   "target": 0.0,
-   "in_pos": false,
-   "priority": null,
-   "exits_next_bar": false
-  },
-  {
-   "key": "WGMI",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 BELOW TREND",
    "target": 0.0,
@@ -185,18 +189,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-18T12:17:46+00:00",
+  "checked_at_utc": "2026-09-19T12:17:37+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 18, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-09-17",
-  "btc_bar_close_utc": "2026-09-18T12:00:00+00:00"
+  "anchor_ct": "Sep 19, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-18",
+  "btc_bar_close_utc": "2026-09-19T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "7cbde75266c3",
+ "code_sha": "ee51fc89c41e",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "fbc5761a34998d657769d1082836ed0f401c4c1f5fc6a7e6cb652604e30e2b98"
+  "value": "aeb38f37bb159ebce40e396513f4b4632004ddd07f35e84266ee6f1f6a1ea5d4"
  }
 }
