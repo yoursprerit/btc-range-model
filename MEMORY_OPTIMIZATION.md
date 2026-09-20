@@ -49,13 +49,18 @@ problem:
 
 ### 2.1 `st.tabs` renders every tab body on every rerun ← **the dominant cost**
 
-`app/btc_hourly_app.py:16878` opens an **11-tab** top-level group:
+`app/btc_hourly_app.py` opens a **12-tab** top-level group (search for
+`tab_live, tab_hist,`):
 
 ```
 Live · Historical replay · BTC Backtesting · MSTR Backtesting · MSTU Backtesting
-· ETH Backtesting · MSTR Options · MSTU Options · Explainability
+· MSTR-MSTU Plot · ETH Backtesting · MSTR Options · MSTU Options · Explainability
 · Leading Indicators · Retrain Status
 ```
+
+(**MSTR-MSTU Plot** is the cheapest of the twelve — one bounded
+`st.cache_data(ttl=3600, max_entries=4)` frame of two daily close series and one
+Plotly figure. It still pays the always-render tax below, like every other tab.)
 
 Streamlit's `st.tabs` is **not lazy**: it is a layout container, and the `with
 tab_x:` body of *every* tab executes on *every* script run.  Tab selection only
