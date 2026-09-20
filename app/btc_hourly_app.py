@@ -27,6 +27,9 @@ except ImportError:
 # Interior-gap repair for the 12:00-UTC bar builder (same app/ directory).
 import hourly_gaps as _hg
 
+# Data + figure helpers for the "MSTR-MSTU Plot" tab (same app/ directory).
+import mstr_mstu_compare as _mm
+
 # Make the repo root importable so `from paths import …` works regardless
 # of the cwd from which Streamlit is launched.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16900,14 +16903,237 @@ def render_explainability_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# Tabs: Live | Historical | MSTR | MSTU | MSTR Options | MSTU Options | Explainability | Leading Indicators | Retrain Status
+# MSTR-MSTU Plot — the two closes overlaid, plus the gap between them
 # ════════════════════════════════════════════════════════════════════════
-tab_live, tab_hist, tab_btc, tab_mstr, tab_mstu, tab_eth, tab_mstr_opts, tab_mstu_opts, tab_explain, tab_leading, tab_retrain = st.tabs([
+# Read-only: no model, no signals, no backtest — just the two price series a
+# viewer wants to eyeball side by side. The arithmetic and the figure live in
+# ``app/mstr_mstu_compare.py`` (imported as ``_mm``); what follows is widgets.
+_MM_START_KEY = "mstr_mstu_start"
+_MM_END_KEY   = "mstr_mstu_end"
+#: Quick-range presets, in button order. ``MAX`` is the default window.
+_MM_PRESETS = (("1M", "1 month back"), ("3M", "3 months back"),
+               ("6M", "6 months back"), ("YTD", "January 1 to today"),
+               ("1Y", "1 year back"), ("MAX", "Everything since MSTU's inception"))
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading MSTR / MSTU closes …", max_entries=4)
+def _mstr_mstu_closes(end_iso: str, data_mtime: float) -> pd.DataFrame:
+    """MSTR and MSTU daily closes, aligned on the days both actually traded.
+
+    Same provenance as every other price series here: the versioned
+    ``data/backtest`` CSVs (refreshed by ``scripts/pull_backtest_data.py``), topped
+    up from yfinance for whatever the snapshot has not caught up to yet — so the
+    chart reaches the latest close instead of waiting on the nightly data job.
+    ``data_mtime`` exists only as a cache key: it invalidates the cached frame
+    when the snapshot on disk changes.
+    """
+    mstr = _load_mstr_prices()
+    mstu = _load_mstu_prices()
+    if mstr is not None:
+        mstr = _yf_extend_price_df(mstr, "MSTR", end_iso)
+    if mstu is not None:
+        mstu = _yf_extend_price_df(mstu, "MSTU", end_iso)
+    return _mm.build_comparison_frame(mstr, mstu)
+
+
+def _mm_set_range(preset: str, floor, ceil) -> None:
+    """Quick-range button callback — rewrites both pickers before the rerun.
+
+    Runs as an ``on_click`` callback, i.e. *before* the date widgets are
+    instantiated on the next run, which is the only point at which their
+    session-state values may still be assigned.
+    """
+    start = _mm.quick_range_start(pd.Timestamp(ceil), preset, pd.Timestamp(floor))
+    st.session_state[_MM_START_KEY] = start.date()
+    st.session_state[_MM_END_KEY] = ceil
+
+
+def _mm_plotly_chart(fig, key: str) -> None:
+    """``st.plotly_chart`` with scroll-zoom, degrading on older Streamlit.
+
+    The explicit ``config=`` parameter landed in Streamlit 1.36; requirements.txt
+    only floors at 1.30, so fall back to the default config rather than blanking
+    the tab on an older deployment.
+    """
+    cfg = {"scrollZoom": True, "displaylogo": False,
+           "modeBarButtonsToRemove": ["select2d", "lasso2d"]}
+    try:
+        st.plotly_chart(fig, use_container_width=True, key=key, config=cfg)
+    except TypeError:
+        st.plotly_chart(fig, use_container_width=True, key=key)
+
+
+def render_mstr_mstu_plot() -> None:
+    """The **MSTR-MSTU Plot** tab: price overlay + gap panel over a picked window."""
+    st.markdown("## 📉 MSTR vs MSTU — Price Overlay")
+    st.markdown(
+        "**MSTR** (MicroStrategy) and **MSTU** (T-Rex 2× Long MSTR Daily Target ETF) "
+        "closes on one time axis, from **MSTU's inception (Sep 18 2024)** to today — "
+        "pick any window with the dates below. MSTU targets **2× MSTR's *daily* move**, "
+        "which is not the same promise as 2× MSTR's return over a period: each day's "
+        "doubling compounds off the previous day's result, so a choppy stretch bleeds "
+        "the fund even when MSTR ends flat. The lower panel plots the gap between the "
+        "two so that drift is visible rather than inferred."
+    )
+
+    today_ct = pd.Timestamp.now(tz="America/Chicago").normalize().tz_localize(None)
+    df = _mstr_mstu_closes(today_ct.strftime("%Y-%m-%d"), _backtest_dataset_mtime())
+    if df.empty:
+        st.error(
+            "No overlapping MSTR / MSTU price history available. Expected "
+            "`data/backtest/mstr_daily.csv` and `data/backtest/mstu_daily.csv` "
+            "(refresh them with `scripts/pull_backtest_data.py`)."
+        )
+        return
+
+    lo_ts, hi_ts = _mm.window_bounds(df, today_ct)
+    lo, hi = lo_ts.date(), hi_ts.date()
+
+    # Defaults — full history on first view; the viewer's own picks persist across
+    # the app's 60s auto-refresh because they live in session state. Stored values
+    # are clamped in case the bounds moved (a new trading day, a re-pulled CSV).
+    st.session_state.setdefault(_MM_START_KEY, lo)
+    st.session_state.setdefault(_MM_END_KEY, hi)
+    st.session_state[_MM_START_KEY] = min(max(st.session_state[_MM_START_KEY], lo), hi)
+    st.session_state[_MM_END_KEY] = min(max(st.session_state[_MM_END_KEY], lo), hi)
+
+    # ── controls: the window, then the quick ranges that rewrite it ───────────
+    c_start, c_end, c_quick = st.columns([1.1, 1.1, 2.8])
+    with c_start:
+        st.date_input("📅 Start date", min_value=lo, max_value=hi,
+                      key=_MM_START_KEY, format="YYYY-MM-DD",
+                      help=f"Earliest available is {lo:%b %d, %Y} — MSTU's first trading day.")
+    with c_end:
+        st.date_input("📅 End date", min_value=lo, max_value=hi,
+                      key=_MM_END_KEY, format="YYYY-MM-DD",
+                      help="Defaults to today; the chart ends at the last close on or before it.")
+    with c_quick:
+        st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+        btn_cols = st.columns(len(_MM_PRESETS))
+        for (preset, tip), col in zip(_MM_PRESETS, btn_cols):
+            col.button(preset, key=f"mm_preset_{preset}", help=tip,
+                       use_container_width=True,
+                       on_click=_mm_set_range, args=(preset, lo, hi))
+
+    start_d, end_d = st.session_state[_MM_START_KEY], st.session_state[_MM_END_KEY]
+    if start_d > end_d:
+        st.warning("⚠️ Start date is after the end date — showing the window reversed.")
+    win = _mm.add_derived(_mm.slice_window(df, start_d, end_d))
+    if win.empty:
+        st.warning(
+            f"No MSTR/MSTU closes between **{start_d:%b %d, %Y}** and "
+            f"**{end_d:%b %d, %Y}** — both tickers are US-listed, so a window "
+            "landing entirely on a weekend or market holiday comes back empty. "
+            "Widen it, or press **MAX**."
+        )
+        return
+
+    # ── view controls, directly above the chart they steer ───────────────────
+    v_scale, v_spread, v_toggle = st.columns([1.5, 1.5, 0.8])
+    with v_scale:
+        scale_mode = st.radio(
+            "Price axis", options=list(_mm.SCALE_MODES),
+            format_func=lambda k: _mm.SCALE_MODES[k][0],
+            index=0, key="mstr_mstu_scale",
+            help="MSTR and MSTU trade at very different levels. Rather than give "
+                 "each its own y-axis — which makes every crossing point a "
+                 "coincidence of scaling — pick how to put them on one.",
+        )
+    with v_spread:
+        spread_mode = st.radio(
+            "Gap measured as", options=list(_mm.SPREAD_MODES),
+            format_func=lambda k: _mm.SPREAD_MODES[k]["label"],
+            index=0, key="mstr_mstu_spread",
+        )
+    with v_toggle:
+        st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+        show_spread = st.checkbox("Show gap panel", value=True, key="mstr_mstu_showgap",
+                                  help="Hide it to give the price overlay the full height.")
+
+    st.caption(f"ℹ️ {_mm.SCALE_MODES[scale_mode][1]}")
+
+    # ── headline numbers ─────────────────────────────────────────────────────
+    s = _mm.summary_stats(win)
+    gap_now = float(win[_mm.SPREAD_MODES[spread_mode]["column"]].iloc[-1])
+    gap_ext, gap_ext_day = _mm.extreme_spread(win, spread_mode)
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("MSTR close", f"${s['mstr_end']:,.2f}",
+              f"{s['mstr_ret']:+.1f}% in window")
+    k2.metric("MSTU close", f"${s['mstu_end']:,.2f}",
+              f"{s['mstu_ret']:+.1f}% in window")
+    k3.metric("Gap now", _mm.format_spread(gap_now, spread_mode),
+              help=_mm.SPREAD_MODES[spread_mode]["help"])
+    k4.metric("Widest gap" if gap_ext_day is None
+              else f"Widest gap · {pd.Timestamp(gap_ext_day):%b %d, %Y}",
+              _mm.format_spread(gap_ext, spread_mode),
+              help="The furthest apart the two got inside this window — measured "
+                   "from parity, so for the ratio it is the day furthest from 1.00×, "
+                   "not the largest multiple.")
+    k5.metric("MSTU β vs MSTR",
+              "—" if not np.isfinite(s["beta"]) else f"{s['beta']:.2f}×",
+              help="Slope of MSTU's daily return on MSTR's, inside this window — "
+                   "the leverage the fund actually delivered against the 2.00× it "
+                   "targets. Measured on simple returns, the basis that target is "
+                   "stated on.")
+
+    _corr = "—" if not np.isfinite(s["corr"]) else f"{s['corr']:.4f}"
+    if np.isfinite(s["lev_ideal_ret"]) and np.isfinite(s["lev_gap_pp"]):
+        _decay = (
+            f" · A frictionless fund doubling MSTR's move **every day** would have "
+            f"returned **{s['lev_ideal_ret']:+.1f}%** over this window; MSTU returned "
+            f"**{s['mstu_ret']:+.1f}%**, a **{s['lev_gap_pp']:+.1f} pp** shortfall to "
+            f"fees, financing and daily rebalancing."
+        )
+    else:
+        _decay = ""
+    st.caption(
+        f"📊 **{s['n_days']} trading days** · {pd.Timestamp(s['start']):%b %d, %Y} → "
+        f"{pd.Timestamp(s['end']):%b %d, %Y} · daily-return correlation **{_corr}**"
+        f"{_decay}"
+    )
+
+    # ── the chart ────────────────────────────────────────────────────────────
+    fig = _mm.make_figure(win, scale_mode=scale_mode, spread_mode=spread_mode,
+                          show_spread=show_spread, height=620 if show_spread else 460)
+    _mm_plotly_chart(fig, key="mstr_mstu_overlay_chart")
+    if show_spread:
+        st.caption(
+            "Lower panel — the gap is shaded **blue where MSTR is ahead** and "
+            "**magenta where MSTU is ahead**, against the dashed parity line. "
+            f"{_mm.SPREAD_MODES[spread_mode]['help']} Drag to pan, scroll to zoom, "
+            "double-click to reset; both panels share the time axis."
+        )
+
+    st.caption(
+        f"📦 Price dataset {_backtest_dataset_version()} · MSTR & MSTU daily closes "
+        f"(split- and dividend-adjusted, via yfinance) · aligned on days both traded"
+    )
+
+    # ── the numbers behind the picture ───────────────────────────────────────
+    with st.expander("📄 Data table & CSV download", expanded=False):
+        table = _mm.export_frame(win)
+        st.dataframe(table.iloc[::-1], use_container_width=True, height=320)
+        st.download_button(
+            "⬇️ Download this window as CSV",
+            data=table.to_csv().encode("utf-8"),
+            file_name=(f"mstr_mstu_{pd.Timestamp(s['start']):%Y%m%d}_"
+                       f"{pd.Timestamp(s['end']):%Y%m%d}.csv"),
+            mime="text/csv",
+            key="mstr_mstu_csv",
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tabs: Live | Historical | MSTR | MSTU | MSTR-MSTU Plot | MSTR Options | MSTU Options | Explainability | Leading Indicators | Retrain Status
+# ════════════════════════════════════════════════════════════════════════
+(tab_live, tab_hist, tab_btc, tab_mstr, tab_mstu, tab_mstr_mstu, tab_eth,
+ tab_mstr_opts, tab_mstu_opts, tab_explain, tab_leading, tab_retrain) = st.tabs([
     "🔴 Live (rolling now+1h)",
     "🕒 Historical replay",
     "₿ BTC Backtesting",
     "📊 MSTR Backtesting",
     "📈 MSTU Backtesting",
+    "📉 MSTR-MSTU Plot",
     "🔹 ETH Backtesting",
     "📋 MSTR Options",
     "🔷 MSTU Options",
@@ -17345,6 +17571,9 @@ with tab_mstu:
         key_suffix="mstu_tab",
         strategy_variant=_mstu_variant,
     )
+
+with tab_mstr_mstu:
+    render_mstr_mstu_plot()
 
 with tab_eth:
     st.markdown("## 🔹 ETH — BTC Signal-Driven Backtesting")
