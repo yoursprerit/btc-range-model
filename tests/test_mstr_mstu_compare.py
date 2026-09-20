@@ -380,3 +380,267 @@ def test_export_frame_is_human_readable(sample):
     assert "MSTR close ($)" in table.columns
     assert "MSTU − MSTR (pp)" in table.columns
     assert len(table) == len(sample)
+
+
+# ── vehicle analytics ───────────────────────────────────────────────────────
+# The rating is a COST grade, not a forecast, and these tests pin that down:
+# the leverage identity it rests on, the hurdle rearrangement, and the fact
+# that `calibration` scores it causally and can report that it does not predict.
+def _synthetic_pair(n=400, mu=0.0, sigma=0.02, carry=0.0, seed=7):
+    """MSTR as a random walk, MSTU as an EXACT 2×-daily tracker minus a carry.
+
+    Building MSTU from MSTR's own returns rather than from data means the true
+    beta (2.00) and the true carry are known, so the estimators can be checked
+    against a right answer instead of against themselves.
+    """
+    rng = np.random.default_rng(seed)
+    r = rng.normal(mu, sigma, n)
+    idx = pd.bdate_range("2024-09-18", periods=n)
+    mstr = 100.0 * np.cumprod(1.0 + r)
+    mstu = 50.0 * np.cumprod(1.0 + 2.0 * r - carry)
+    return pd.DataFrame({"MSTR": mstr, "MSTU": mstu}, index=idx)
+
+
+def test_tracking_fit_recovers_known_leverage_and_carry():
+    df = _synthetic_pair(carry=0.001)
+
+    fit = mm.tracking_fit(df)
+
+    assert fit["beta"] == pytest.approx(2.0, abs=0.02)
+    assert fit["alpha_daily"] == pytest.approx(-0.001, abs=2e-4)
+    assert fit["alpha_ann"] == pytest.approx(fit["alpha_daily"] * mm.TRADING_DAYS)
+    assert fit["r2"] > 0.99
+
+
+def test_tracking_slippage_is_zero_for_a_perfect_tracker():
+    """A frictionless 2×-daily fund has no slippage against its own mandate."""
+    slip = mm.tracking_slippage(_synthetic_pair(carry=0.0))
+    assert abs(float(slip.mean())) < 1e-9
+
+
+def test_slippage_picks_up_the_carry():
+    slip = mm.tracking_slippage(_synthetic_pair(carry=0.002, sigma=0.01))
+    # log(1 + 2r − c) − log(1 + 2r) ≈ −c for small moves.
+    assert float(slip.mean()) == pytest.approx(-0.002, abs=3e-4)
+
+
+def test_leverage_identity_matches_a_simulated_path():
+    """`2L − H·σ² − H·carry` must reproduce what the fund actually did.
+
+    This is the identity the whole verdict rests on; if it drifts, the hurdle,
+    the breakeven and the projection are all wrong together.
+    """
+    n, sigma, carry = 300, 0.02, 0.0005
+    df = _synthetic_pair(n=n, sigma=sigma, carry=carry)
+    H = 21
+    logret = np.log(df).diff()
+    actual = float(logret["MSTU"].iloc[-H:].sum())
+
+    realised_sigma = float(df["MSTR"].pct_change().iloc[-H:].std())
+    realised_carry = float(-mm.tracking_slippage(df).iloc[-H:].mean())
+    predicted = (2 * float(logret["MSTR"].iloc[-H:].sum())
+                 - H * realised_sigma ** 2 - H * realised_carry)
+
+    assert actual == pytest.approx(predicted, abs=0.02)
+
+
+def test_projected_mstu_is_below_twice_mstr_because_of_decay():
+    """The decay term is what `2 × MSTR` leaves out — it must bite."""
+    got = mm.projected_mstu(0.10, sigma_daily=0.05, drag_daily=0.0015, horizon=21)
+    naive = (1.10 ** 2) - 1
+
+    assert got < naive
+    assert mm.projected_mstu(0.0, 0.05, 0.0015, 21) < 0      # flat MSTR still bleeds
+
+
+def test_projected_mstu_accepts_arrays_and_scalars():
+    arr = mm.projected_mstu(np.array([-0.1, 0.0, 0.1]), 0.05, 0.0015, 21)
+    assert arr.shape == (3,) and np.all(np.diff(arr) > 0)
+    assert isinstance(mm.projected_mstu(0.1, 0.05, 0.0015, 21), float)
+
+
+def test_projected_mstu_is_nan_when_inputs_are_unknown():
+    assert np.isnan(mm.projected_mstu(0.1, np.nan, 0.0015))
+
+
+def test_breakeven_move_is_where_mstu_exactly_matches_mstr():
+    """The definition, checked by substitution rather than restated."""
+    sigma, drag, H = 0.05, 0.0015, 21
+    be = mm.breakeven_move(sigma, drag, H)
+
+    assert mm.projected_mstu(be, sigma, drag, H) == pytest.approx(be, abs=1e-9)
+    # And it is the ONLY crossing: below loses, above wins.
+    assert mm.projected_mstu(be - 0.02, sigma, drag, H) < be - 0.02
+    assert mm.projected_mstu(be + 0.02, sigma, drag, H) > be + 0.02
+
+
+def test_breakeven_rises_with_volatility_and_with_holding_period():
+    """Both terms scale the decay, so both raise the bar MSTR has to clear."""
+    base = mm.breakeven_move(0.04, 0.0015, 21)
+    assert mm.breakeven_move(0.06, 0.0015, 21) > base     # more vol
+    assert mm.breakeven_move(0.04, 0.0015, 63) > base     # longer hold
+    assert mm.breakeven_move(0.04, 0.0030, 21) > base     # costlier fund
+
+
+def test_breakeven_curve_crosses_zero_edge_exactly_once():
+    curve = mm.breakeven_curve(0.05, 0.0015, 21)
+    signs = np.sign(curve["edge"].to_numpy())
+    assert (np.diff(signs) != 0).sum() == 1
+
+
+# ── the rating ──────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("margin,expected", [
+    (-0.30, "STRONG SELL"), (-0.050001, "STRONG SELL"),
+    (-0.05, "SELL"), (-0.02, "SELL"),
+    (-0.01, "NEUTRAL"), (0.0, "NEUTRAL"), (0.009, "NEUTRAL"),
+    (0.01, "BUY"), (0.04, "BUY"),
+    (0.05, "STRONG BUY"), (0.50, "STRONG BUY"),
+])
+def test_rating_thresholds(margin, expected):
+    assert mm.rate(margin)["label"] == expected
+
+
+def test_rating_of_an_unknown_margin_says_nothing_rather_than_something():
+    assert mm.rate(float("nan"))["label"] == "NEUTRAL"
+    assert mm.rate(None)["label"] == "NEUTRAL"
+
+
+def test_every_rating_level_carries_an_icon_and_a_word():
+    """Status must never rest on colour alone."""
+    assert len(mm.RATING_LEVELS) == 5
+    for lvl in mm.RATING_LEVELS:
+        assert lvl["icon"] and lvl["label"] and lvl["gloss"]
+        assert lvl["color"].startswith("#")
+    floors = [l["floor"] for l in mm.RATING_LEVELS[1:]]
+    assert floors == sorted(floors)          # ordered worst → best
+    assert mm.RATING_LEVELS[0]["floor"] is None
+
+
+def test_vehicle_read_rates_a_calm_uptrend_above_a_violent_one():
+    """Same drift, more volatility → higher hurdle → worse vehicle rating.
+
+    This is the whole mechanism in one assertion: decay scales with σ², so the
+    identical drift stops covering the carry once the path gets rough.
+    """
+    calm = mm.vehicle_read(_synthetic_pair(mu=0.004, sigma=0.01, carry=0.0005))
+    wild = mm.vehicle_read(_synthetic_pair(mu=0.004, sigma=0.05, carry=0.0005))
+
+    assert calm["ready"] and wild["ready"]
+    assert wild["hurdle_month"] > calm["hurdle_month"]
+    assert wild["margin_month"] < calm["margin_month"]
+    assert calm["rating"]["label"] == "STRONG BUY"
+    assert wild["rating"]["label"] == "STRONG SELL"
+
+
+def test_vehicle_read_reports_not_ready_rather_than_guessing():
+    """Six observations must not produce a confident-looking verdict."""
+    read = mm.vehicle_read(_synthetic_pair(n=30))
+    assert read["ready"] is False and read["n_obs"] == 30
+    assert np.isnan(read["margin_month"])
+
+
+def test_vehicle_read_on_empty_frame():
+    read = mm.vehicle_read(pd.DataFrame(columns=["MSTR", "MSTU"], dtype="float64"))
+    assert read["ready"] is False and read["asof"] is None
+
+
+def test_vehicle_read_respects_asof_and_ignores_later_rows():
+    """Dragging the end date back must replay the past, not peek at the future."""
+    df = _synthetic_pair(n=400)
+    cut = df.index[300]
+
+    a = mm.vehicle_read(df, asof=cut)
+    b = mm.vehicle_read(df.loc[:cut])
+
+    assert a["asof"] == cut
+    assert a["margin_month"] == pytest.approx(b["margin_month"])
+
+
+# ── the audit tables ────────────────────────────────────────────────────────
+def test_forward_relative_looks_forward_not_backward():
+    """Row t must sum the H sessions AFTER t, and the tail must be NaN."""
+    df = _synthetic_pair(n=60)
+    H = 5
+    fwd = mm.forward_relative(df, H)
+    logret = np.log(df).diff()
+    rel = logret["MSTU"] - logret["MSTR"]
+
+    t = 20
+    expected = float(rel.iloc[t + 1:t + 1 + H].sum())
+    assert float(fwd.iloc[t]) == pytest.approx(expected)
+    assert fwd.iloc[-1] != fwd.iloc[-1]          # NaN: no future to score
+
+
+def test_rating_history_is_causal():
+    """Appending future rows must not change any earlier day's rating."""
+    full = _synthetic_pair(n=400)
+    early = full.iloc[:300]
+
+    h_full = mm.rating_history(full).iloc[:300].dropna()
+    h_early = mm.rating_history(early).dropna()
+
+    common = h_full.index.intersection(h_early.index)
+    assert len(common) > 100
+    assert (h_full.loc[common] == h_early.loc[common]).all()
+
+
+def test_calibration_reports_every_level_and_the_base_rate():
+    df = _synthetic_pair(n=400, mu=0.001, sigma=0.02, carry=0.0005)
+
+    cal = mm.calibration(df, horizon=21)
+
+    assert list(cal["label"]) == [l["label"] for l in mm.RATING_LEVELS]
+    assert cal["n"].sum() == cal.attrs["n_total"]
+    assert 0.0 <= cal.attrs["base_rate"] <= 1.0
+    assert cal.attrs["horizon"] == 21
+
+
+def test_calibration_on_too_little_history_is_empty_not_wrong():
+    cal = mm.calibration(_synthetic_pair(n=40))
+    assert cal.empty and list(cal.columns)[:3] == ["label", "icon", "n"]
+
+
+def test_vol_regime_table_bands_are_ordered_and_flag_exactly_one_as_current():
+    df = _synthetic_pair(n=400)
+
+    reg = mm.vol_regime_table(df, horizon=21, n_bins=5)
+
+    assert len(reg) == 5
+    assert list(reg["lo_ann"]) == sorted(reg["lo_ann"])
+    assert int(reg["current"].sum()) == 1
+    assert reg["n"].sum() > 100
+
+
+def test_vol_regime_table_on_too_little_history_is_empty():
+    assert mm.vol_regime_table(_synthetic_pair(n=25)).empty
+
+
+def test_breakeven_figure_uses_one_axis_and_shows_both_choices():
+    sigma, drag = 0.05, 0.0015
+    fig = mm.make_breakeven_figure(mm.breakeven_curve(sigma, drag),
+                                   mm.breakeven_move(sigma, drag))
+
+    assert [t.name for t in fig.data] == ["Hold MSTR", "Hold MSTU (projected)"]
+    axes = {k for k in fig.layout.to_plotly_json() if k.startswith("yaxis")}
+    assert axes == {"yaxis"}
+
+
+def test_breakeven_figure_on_empty_curve_returns_a_figure():
+    fig = mm.make_breakeven_figure(pd.DataFrame(columns=["mstr", "mstu", "edge"]),
+                                   float("nan"))
+    assert fig is not None and len(fig.data) == 0
+
+
+@pytest.mark.parametrize("horizon", [5, 21, 63, 126])
+def test_breakeven_curve_always_contains_its_own_crossing(horizon):
+    """The marker must stay inside the plotted range at every holding period.
+
+    At long holds the breakeven runs past +100%; a fixed ±40% grid stranded the
+    annotation off the end of the curve, hiding the one point worth showing.
+    """
+    sigma, drag = 0.056, 0.0014
+    be = mm.breakeven_move(sigma, drag, horizon)
+    curve = mm.breakeven_curve(sigma, drag, horizon)
+
+    assert curve["mstr"].min() <= be <= curve["mstr"].max()
+    assert (np.diff(np.sign(curve["edge"].to_numpy())) != 0).sum() == 1

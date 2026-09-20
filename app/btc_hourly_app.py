@@ -16963,6 +16963,157 @@ def _mm_plotly_chart(fig, key: str) -> None:
         st.plotly_chart(fig, use_container_width=True, key=key)
 
 
+def _mm_pct(x, digits=1, signed=True):
+    """Percent with a typographic minus, or an em dash when undefined."""
+    if x is None or not np.isfinite(x):
+        return "—"
+    s = f"{x * 100:+.{digits}f}%" if signed else f"{x * 100:.{digits}f}%"
+    return s.replace("-", "−")
+
+
+def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
+    """The vehicle verdict: is MSTU an efficient way to hold MSTR right now?
+
+    Three things, in the order a reader needs them: the rating, the arithmetic
+    that produced it, and the evidence for how much that rating has been worth.
+    The third is not optional decoration — the rating is a *cost* grade, and
+    without the calibration beside it a five-level BUY/SELL chip reads as a
+    price forecast, which it explicitly is not.
+    """
+    read = _mm.vehicle_read(df, asof=asof)
+    if not read["ready"]:
+        st.info(
+            f"📐 Vehicle verdict needs about {max(read['vol_win'], read['drag_win'], read['drift_win']) + 1} "
+            f"sessions of history to compute; only {read['n_obs']} are available up to this date."
+        )
+        return
+
+    lvl = read["rating"]
+    fit = _mm.tracking_fit(df.loc[df.index <= pd.Timestamp(asof)] if asof is not None else df)
+
+    st.markdown(
+        f"""
+<div style="border-left:6px solid {lvl['color']};background:#f8fafc;
+            border-radius:6px;padding:0.85rem 1.1rem;margin:0.4rem 0 0.2rem 0;">
+  <div style="font-size:1.45rem;font-weight:700;color:{lvl['color']};
+              letter-spacing:0.02em;">{lvl['icon']} {lvl['label']}</div>
+  <div style="font-size:0.94rem;color:#334155;margin-top:0.25rem;">
+    MSTU as a vehicle for MSTR exposure — {lvl['gloss']}.
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("MSTU's hurdle", _mm_pct(read["hurdle_month"]).lstrip("+"),
+              help=f"What MSTR must gain over {_mm.HORIZON_DAYS} sessions just for MSTU to "
+                   "match it. It is σ² + carry: volatility drag plus the fund's own cost. "
+                   "Arithmetic, not a forecast.")
+    g2.metric("MSTR's drift", _mm_pct(read["drift_month"]),
+              help=f"MSTR's trailing {read['drift_win']}-session log drift, scaled to "
+                   f"{_mm.HORIZON_DAYS} sessions. What it has been doing, not what it will do.")
+    g3.metric("Margin", _mm_pct(read["margin_month"]),
+              help="Drift minus hurdle. Positive means the leverage is currently paying "
+                   "for its own decay. This is what the rating grades.")
+    g4.metric("MSTR volatility", _mm_pct(read["sigma_ann"], 0, signed=False),
+              help=f"Annualised, from the trailing {read['vol_win']} sessions. Drag rises "
+                   "with the SQUARE of this, which is why a 2× fund suffers so much here.")
+
+    st.caption(
+        f"⚠️ **This grades the vehicle, not the direction.** It says how expensive MSTU is "
+        f"as a way to hold MSTR right now — it makes no claim about where MSTR goes next, "
+        f"and it is not a trade signal. Over the whole sample MSTU tracked MSTR at "
+        f"**β {fit['beta']:.2f}** (target 2.00) with **{_mm_pct(fit['alpha_ann'], 1)}/yr** of "
+        f"carry over the *full* sample, R² {fit['r2']:.3f}. As of "
+        f"**{pd.Timestamp(read['asof']):%b %d, %Y}**."
+    )
+
+    with st.expander("🔬 How this is computed — and how well it has actually worked", expanded=False):
+        st.markdown(
+            "##### The arithmetic\n"
+            "For a **k× daily** fund over **H** sessions, "
+            "`log(fund) ≈ k·log(underlying) − (k(k−1)/2)·H·σ² − H·carry`. With k = 2 that is "
+            "`2L − H·σ² − H·carry`. Checked against every 21-session window in this sample it "
+            "lands at **R² = 0.9999** (residual sd 0.80%), against 4.48% for the naive "
+            "*MSTU = 2 × MSTR* most people carry in their head. Rearranged, MSTU beats simply "
+            "holding MSTR only when **MSTR's log return clears H·(σ² + carry)** — the hurdle above."
+        )
+
+        hz = st.select_slider(
+            "Holding period (trading sessions)",
+            options=[5, 10, 21, 42, 63, 126], value=_mm.HORIZON_DAYS,
+            key="mstr_mstu_hz",
+            help="The decay term scales with the holding period, so a longer hold needs a "
+                 "bigger MSTR move to break even.",
+        )
+        be = _mm.breakeven_move(read["sigma_daily"], read["drag_daily"], hz)
+        flat = _mm.projected_mstu(0.0, read["sigma_daily"], read["drag_daily"], hz)
+        curve = _mm.breakeven_curve(read["sigma_daily"], read["drag_daily"], hz)
+        b1, b2 = st.columns(2)
+        b1.metric(f"MSTR must gain, over {hz} sessions",
+                  _mm_pct(be), help="Below this the plain shares win; above it the leverage does.")
+        b2.metric(f"If MSTR is flat for {hz} sessions, MSTU returns",
+                  _mm_pct(flat), help="Pure decay: the cost of holding the wrapper through a "
+                                      "sideways stretch.")
+        _mm_plotly_chart(_mm.make_breakeven_figure(curve, be, hz),
+                         key="mstr_mstu_breakeven_chart")
+        st.caption(
+            "The dotted blue line is holding MSTR; the magenta curve is MSTU's projection at "
+            f"today's volatility ({_mm_pct(read['sigma_ann'], 0, signed=False)} annualised) and "
+            f"its *recent* carry ({_mm_pct(read['drag_daily'] * -_mm.TRADING_DAYS)}/yr, from the "
+            f"trailing {read['drag_win']} sessions — the caption above quotes the full-sample "
+            f"figure, which differs). They cross once, at "
+            "breakeven. Volatility is held fixed across the curve, so treat it as the shape of "
+            "the trade-off rather than a price target."
+        )
+
+        st.markdown("##### Has the rating predicted anything? (audit)")
+        cal = _mm.calibration(df, horizon=hz if hz in (10, 21, 42, 63) else _mm.HORIZON_DAYS)
+        if cal.empty:
+            st.caption("Not enough history to score the rating on this sample.")
+        else:
+            show = pd.DataFrame({
+                "Rating": cal["icon"] + " " + cal["label"],
+                "Days at this rating": cal["n"],
+                "Share of sample": (cal["share"] * 100).round(0).astype("Int64").astype(str) + "%",
+                f"MSTU then beat MSTR": (cal["beat_rate"] * 100).round(0).astype("Int64").astype(str) + "%",
+                "Mean relative result": (cal["mean_rel"] * 100).round(1).map(lambda v: f"{v:+.1f}%".replace("-", "−")),
+            })
+            st.dataframe(show, hide_index=True, use_container_width=True)
+            st.caption(
+                f"🔍 **Read this honestly.** Over the next **{cal.attrs['horizon']} sessions**, "
+                f"MSTU beat MSTR **{cal.attrs['base_rate']*100:.0f}%** of the time regardless of "
+                f"rating (mean {_mm_pct(cal.attrs['base_mean'])}). No level clears that base rate "
+                "by a meaningful margin and **every level has a negative mean** — including the "
+                "bullish ones. A predictive version of this score was built first and backtested "
+                "across six weightings and three horizons: none was monotonic, and beyond about a "
+                "month the ordering inverts. That is why the chip above grades **cost**, which is "
+                "knowable, rather than direction, which on this evidence is not. Rows are "
+                "overlapping windows, so the effective sample is far smaller than the counts suggest."
+            )
+
+        st.markdown("##### What has actually happened, by volatility regime")
+        reg = _mm.vol_regime_table(df, horizon=hz if hz in (10, 21, 42, 63) else _mm.HORIZON_DAYS)
+        if reg.empty:
+            st.caption("Not enough history to bucket by volatility regime.")
+        else:
+            regshow = pd.DataFrame({
+                "MSTR volatility (annualised)": reg["band"] + reg["current"].map({True: "  ← now", False: ""}),
+                "Sessions": reg["n"],
+                "MSTU then beat MSTR": (reg["beat_rate"] * 100).round(0).astype("Int64").astype(str) + "%",
+                "Median relative result": (reg["median_rel"] * 100).round(1).map(lambda v: f"{v:+.1f}%".replace("-", "−")),
+            })
+            st.dataframe(regshow, hide_index=True, use_container_width=True)
+            st.caption(
+                "Purely descriptive of this sample — band edges are full-sample quantiles, so this "
+                "is a lookup of the record, not a tradable signal. Note it runs *against* the "
+                "theory: the highest-volatility bands were not the worst for MSTU, because "
+                "volatility spikes clustered at selloff bottoms that MSTR then rebounded from, and "
+                "2× amplifies a rebound. Two years, one crypto cycle — thin evidence either way."
+            )
+
+
 def render_mstr_mstu_plot() -> None:
     """The **MSTR-MSTU Plot** tab: price overlay + gap panel over a picked window."""
     st.markdown("## 📉 MSTR vs MSTU — Price Overlay")
@@ -17091,6 +17242,14 @@ def render_mstr_mstu_plot() -> None:
         f"{pd.Timestamp(s['end']):%b %d, %Y} · daily-return correlation **{_corr}**"
         f"{_decay}"
     )
+
+    # ── vehicle verdict (rating + breakeven + regime audit) ──────────────────
+    # Placed above the chart because it is the question a viewer arrives with;
+    # `asof` is the window's end date, so dragging that back replays the verdict
+    # as it stood then rather than always quoting today.
+    st.markdown("#### 🧭 Vehicle verdict — MSTU vs MSTR")
+    _render_mstr_mstu_verdict(df, s["end"])
+    st.divider()
 
     # ── the chart ────────────────────────────────────────────────────────────
     fig = _mm.make_figure(win, scale_mode=scale_mode, spread_mode=spread_mode,
