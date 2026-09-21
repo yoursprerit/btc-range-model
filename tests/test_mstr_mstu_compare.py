@@ -850,7 +850,7 @@ def test_drift_ladder_on_empty_frame_returns_every_row_unready():
 def test_ladder_windows_are_ordered_shortest_first():
     sessions = [n for n, _ in mm.DRIFT_LADDER_WINDOWS]
     assert sessions == sorted(sessions)
-    assert sessions == [1, 5, 30, 60]
+    assert sessions == [1, 5, 21, 30, 60]
     # Labels are counted in sessions, never calendar periods — the unit the
     # holding-period slider and the decay identity both use.
     assert all(lbl.endswith("session") or lbl.endswith("sessions")
@@ -892,3 +892,9 @@ def test_last_ladder_rung_is_the_verdicts_own_drift_window():
 
     assert last_rung["ready"]
     assert last_rung["per_session_log"] == pytest.approx(read["drift_daily"])
+
+
+def test_ladder_carries_a_rung_at_the_default_holding_period():
+    """21 is HORIZON_DAYS — the ladder should read the verdict's own horizon."""
+    sessions = [n for n, _ in mm.DRIFT_LADDER_WINDOWS]
+    assert mm.HORIZON_DAYS in sessions

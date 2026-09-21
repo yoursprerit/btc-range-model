@@ -571,11 +571,14 @@ VOL_STEP_ANN = 0.01
 #: drift estimate and the choice of window moves that estimate a great deal —
 #: the ladder makes the sensitivity visible instead of leaving it buried in a
 #: parameter.  Counted in SESSIONS rather than calendar periods, matching the
-#: holding-period slider and the identity's own unit; the last rung is the
-#: verdict's default ``drift_win``, so the ladder ends on the number the
-#: verdict actually uses rather than near it.
+#: holding-period slider and the identity's own unit.  Two rungs are anchors
+#: rather than round numbers: 21 is ``HORIZON_DAYS``, the holding period the
+#: verdict defaults to, and 60 is ``vehicle_read``'s default ``drift_win``, so
+#: the ladder ends on the number the verdict actually extrapolates rather than
+#: near it.
 DRIFT_LADDER_WINDOWS: tuple[tuple[int, str], ...] = (
-    (1, "1 session"), (5, "5 sessions"), (30, "30 sessions"), (60, "60 sessions"),
+    (1, "1 session"), (5, "5 sessions"), (21, "21 sessions"),
+    (30, "30 sessions"), (60, "60 sessions"),
 )
 #: Sessions per year, for annualising volatility.
 TRADING_DAYS = 252
