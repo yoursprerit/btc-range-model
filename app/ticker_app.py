@@ -39,6 +39,23 @@ import joblib
 import streamlit as st
 import plotly.graph_objects as go
 
+
+# ── shared leveraged-pair tab (GLDM/UGL here, GDX/NUGT in miners mode) ──────
+import lev_pair_compare as _lpc            # noqa: E402
+import lev_pair_tab as _lev_pair_tab       # noqa: E402
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=4)
+def _lp_frame(pair_key: str) -> pd.DataFrame:
+    """Both legs of the pair, from this app's own committed macro CSV.
+
+    Unlike the BTC pair there is no yfinance top-up to do: the leveraged
+    sibling already sits beside the underlying in the same daily file this app
+    loads for everything else, so the tab rides the same refresh.
+    """
+    return _lpc.load_pair_csv(_lpc.PAIRS[pair_key], _REPO_ROOT / "data")
+
+
 import ticker_core
 import backtest_ticker
 import ticker_config
@@ -1929,9 +1946,16 @@ def render_backtest_dashboard(label, col):
 # Tabs
 # ════════════════════════════════════════════════════════════════════════
 _bt_tab_labels = [f"📊 {lbl} Backtesting" for lbl, _ in TRADED]
-_tabs = st.tabs(["🔴 Live (rolling now+1h)", "🕒 Historical replay", *_bt_tab_labels, "🧠 Explain"])
+# Only the configs with a registered leveraged sibling get the pair plot —
+# SOXX/SOXL and XLE/ERX today. The rest (GRID, REMX, WGMI, PBW, ARTY) have no
+# leveraged proxy, so the tab would have nothing to compare and is left off.
+_LP_PAIR = _lpc.PAIRS.get(cfg.key)
+_lp_labels = ([f"📉 {_LP_PAIR.base}-{_LP_PAIR.lev} Plot"] if _LP_PAIR else [])
+_tabs = st.tabs(["🔴 Live (rolling now+1h)", "🕒 Historical replay",
+                 *_bt_tab_labels, *_lp_labels, "🧠 Explain"])
 tab_live, tab_hist = _tabs[0], _tabs[1]
 tab_bt = _tabs[2:2 + len(TRADED)]
+tab_pair = _tabs[2 + len(TRADED)] if _LP_PAIR else None
 tab_explain = _tabs[-1]
 
 
@@ -2093,6 +2117,15 @@ with tab_hist:
 for (lbl, col), tb in zip(TRADED, tab_bt):
     with tb:
         render_backtest_dashboard(lbl, col)
+
+
+if tab_pair is not None:
+    with tab_pair:
+        _lev_pair_tab.render_lev_pair_tab(
+            _LP_PAIR,
+            _lp_frame(_LP_PAIR.key),
+            pd.Timestamp.now(tz="America/Chicago").normalize().tz_localize(None),
+            dataset_note=f"Source `data/{_LP_PAIR.source}`")
 
 
 with tab_explain:

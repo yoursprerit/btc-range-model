@@ -27,8 +27,10 @@ except ImportError:
 # Interior-gap repair for the 12:00-UTC bar builder (same app/ directory).
 import hourly_gaps as _hg
 
-# Data + figure helpers for the "MSTR-MSTU Plot" tab (same app/ directory).
-import mstr_mstu_compare as _mm
+# Data + figure helpers and the shared tab for the leveraged-pair plots
+# (same app/ directory; the GLDM and ticker apps import the same two).
+import lev_pair_compare as _mm
+import lev_pair_tab as _lev_pair_tab
 
 # Make the repo root importable so `from paths import …` works regardless
 # of the cwd from which Streamlit is launched.
@@ -16906,14 +16908,11 @@ def render_explainability_dashboard():
 # MSTR-MSTU Plot — the two closes overlaid, plus the gap between them
 # ════════════════════════════════════════════════════════════════════════
 # Read-only: no model, no signals, no backtest — just the two price series a
-# viewer wants to eyeball side by side. The arithmetic and the figure live in
-# ``app/mstr_mstu_compare.py`` (imported as ``_mm``); what follows is widgets.
-_MM_START_KEY = "mstr_mstu_start"
-_MM_END_KEY   = "mstr_mstu_end"
-#: Quick-range presets, in button order. ``MAX`` is the default window.
-_MM_PRESETS = (("1M", "1 month back"), ("3M", "3 months back"),
-               ("6M", "6 months back"), ("YTD", "January 1 to today"),
-               ("1Y", "1 year back"), ("MAX", "Everything since MSTU's inception"))
+# viewer wants to eyeball side by side. The arithmetic lives in
+# ``app/lev_pair_compare.py`` and the whole tab in ``app/lev_pair_tab.py``,
+# shared with the GLDM/UGL, GDX/NUGT, SOXX/SOXL and XLE/ERX tabs; all this app
+# supplies is its own price loading, which is the one thing that differs.
+_MM_PAIR = _mm.PAIRS["BTC"]
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading MSTR / MSTU closes …", max_entries=4)
@@ -16924,6 +16923,8 @@ def _mstr_mstu_closes(end_iso: str, data_mtime: float) -> pd.DataFrame:
     ``data/backtest`` CSVs (refreshed by ``scripts/pull_backtest_data.py``), topped
     up from yfinance for whatever the snapshot has not caught up to yet — so the
     chart reaches the latest close instead of waiting on the nightly data job.
+    This top-up is why the BTC pair loads here rather than through
+    ``lev_pair_compare.load_pair_csv``, which the other four pairs use.
     ``data_mtime`` exists only as a cache key: it invalidates the cached frame
     when the snapshot on disk changes.
     """
@@ -16933,428 +16934,16 @@ def _mstr_mstu_closes(end_iso: str, data_mtime: float) -> pd.DataFrame:
         mstr = _yf_extend_price_df(mstr, "MSTR", end_iso)
     if mstu is not None:
         mstu = _yf_extend_price_df(mstu, "MSTU", end_iso)
-    return _mm.build_comparison_frame(mstr, mstu)
-
-
-def _mm_set_range(preset: str, floor, ceil) -> None:
-    """Quick-range button callback — rewrites both pickers before the rerun.
-
-    Runs as an ``on_click`` callback, i.e. *before* the date widgets are
-    instantiated on the next run, which is the only point at which their
-    session-state values may still be assigned.
-    """
-    start = _mm.quick_range_start(pd.Timestamp(ceil), preset, pd.Timestamp(floor))
-    st.session_state[_MM_START_KEY] = start.date()
-    st.session_state[_MM_END_KEY] = ceil
-
-
-def _mm_plotly_chart(fig, key: str) -> None:
-    """``st.plotly_chart`` with scroll-zoom, degrading on older Streamlit.
-
-    The explicit ``config=`` parameter landed in Streamlit 1.36; requirements.txt
-    only floors at 1.30, so fall back to the default config rather than blanking
-    the tab on an older deployment.
-    """
-    cfg = {"scrollZoom": True, "displaylogo": False,
-           "modeBarButtonsToRemove": ["select2d", "lasso2d"]}
-    try:
-        st.plotly_chart(fig, use_container_width=True, key=key, config=cfg)
-    except TypeError:
-        st.plotly_chart(fig, use_container_width=True, key=key)
-
-
-def _mm_pct(x, digits=1, signed=True):
-    """Percent with a typographic minus, or an em dash when undefined."""
-    if x is None or not np.isfinite(x):
-        return "—"
-    s = f"{x * 100:+.{digits}f}%" if signed else f"{x * 100:.{digits}f}%"
-    return s.replace("-", "−")
-
-
-_MM_VOL_KEY = "mstr_mstu_vol"
-
-
-def _mm_reset_vol(live_pct: int) -> None:
-    """Snap the volatility slider back onto MSTR's measured reading.
-
-    ASSIGNING the widget's key is the supported way to move a slider from code.
-    Deleting it instead resets the value Python sees but leaves the thumb where
-    the user dragged it — the figures snapped back to the live reading while the
-    control still read 163%, which is worse than not offering the button.
-    """
-    st.session_state[_MM_VOL_KEY] = int(live_pct)
-
-
-def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
-    """The vehicle verdict: is MSTU an efficient way to hold MSTR right now?
-
-    Two controls drive everything beneath them, and both come first.
-
-    The holding period matters because the decay compounds with it, so the same
-    conditions grade further from neutral the longer you intend to hold.
-
-    The volatility matters more than anything else on the panel: decay scales
-    with σ², so it is the single input the verdict is most sensitive to — at
-    MSTR's own historical range the same drift swings the rating from STRONG BUY
-    to STRONG SELL. It defaults to the live trailing reading and is dialable
-    from there, because "what if the next month is calmer than the last" is the
-    question a 20-session estimate invites and cannot answer.
-    """
-    # Measured first, with no override, so the volatility slider can default to
-    # the live reading and the caption can always name it.
-    live = _mm.vehicle_read(df, asof=asof, horizon=_mm.HORIZON_DAYS)
-    if not live["ready"]:
-        st.info(
-            f"📐 Vehicle verdict needs about {max(live['vol_win'], live['drag_win'], live['drift_win']) + 1} "
-            f"sessions of history to compute; only {live['n_obs']} are available up to this date."
-        )
-        return
-
-    c_hz, c_vol = st.columns(2)
-    with c_hz:
-        # A continuous slider, not a handful of presets: the decay is smooth in
-        # the holding period, so any session count is a legitimate question.
-        horizon = st.slider(
-            "⏳ Holding period (trading sessions)",
-            min_value=1, max_value=_mm.MAX_HORIZON_DAYS, value=_mm.HORIZON_DAYS,
-            step=1, key="mstr_mstu_hz",
-            help="Trading sessions, not calendar days: 21 ≈ one month, 63 ≈ a quarter, "
-                 "126 ≈ six months, 252 ≈ a year. The leverage decay compounds with the "
-                 "holding period, so a longer hold needs a proportionally bigger MSTR "
-                 "move to break even.",
-        )
-    with c_vol:
-        vol_pct = st.slider(
-            "📈 MSTR volatility, annualised",
-            min_value=int(round(_mm.MIN_VOL_ANN * 100)),
-            max_value=int(round(_mm.MAX_VOL_ANN * 100)),
-            value=int(np.clip(round(live["sigma_ann_measured"] * 100),
-                              round(_mm.MIN_VOL_ANN * 100), round(_mm.MAX_VOL_ANN * 100))),
-            step=1, key=_MM_VOL_KEY, format="%d%%",
-            help="Defaults to MSTR's live trailing-20-session reading. Decay scales with "
-                 "the SQUARE of this, so it is the input the verdict is most sensitive to "
-                 "— worth stress-testing. Since MSTU launched, MSTR's trailing-20 vol has "
-                 "spanned 33–156%. Moving this changes every figure below EXCEPT *MSTR at "
-                 "recent pace*, which comes from the drift and is independent of volatility.",
-        )
-
-    read = _mm.vehicle_read(df, asof=asof, horizon=horizon,
-                            sigma_ann_override=vol_pct / 100.0)
-    lvl = read["rating"]
-    fit = _mm.tracking_fit(df.loc[df.index <= pd.Timestamp(asof)] if asof is not None else df)
-
-    st.caption(
-        f"≈ **{horizon / _mm.TRADING_DAYS * 12:.1f} months** of market time "
-        f"({horizon} trading sessions) · volatility "
-        f"**{_mm_pct(read['sigma_ann'], 0, signed=False)}** annualised."
-    )
-    if read["sigma_is_override"]:
-        w, b = st.columns([5, 1])
-        w.warning(
-            f"🧪 **What-if volatility.** You are pricing the decay off "
-            f"**{_mm_pct(read['sigma_ann'], 0, signed=False)}** rather than MSTR's live "
-            f"trailing-{read['vol_win']} reading of "
-            f"**{_mm_pct(read['sigma_ann_measured'], 0, signed=False)}**. Every figure below "
-            "moves with it except *MSTR at recent pace*."
-        )
-        b.button("↺ Live vol", key="mstr_mstu_vol_reset", on_click=_mm_reset_vol,
-                 args=(int(round(read["sigma_ann_measured"] * 100)),),
-                 use_container_width=True,
-                 help="Snap the slider back to MSTR's measured trailing volatility.")
-
-    st.markdown(
-        f"""
-<div style="border-left:6px solid {lvl['color']};background:#f8fafc;
-            border-radius:6px;padding:0.85rem 1.1rem;margin:0.4rem 0 0.2rem 0;">
-  <div style="font-size:1.45rem;font-weight:700;color:{lvl['color']};
-              letter-spacing:0.02em;">{lvl['icon']} {lvl['label']}</div>
-  <div style="font-size:0.94rem;color:#334155;margin-top:0.25rem;">
-    MSTU as a vehicle for MSTR exposure over <b>{horizon} sessions</b> at
-    <b>{_mm_pct(read['sigma_ann'], 0, signed=False)}</b> volatility —
-    {lvl['gloss']}.
-  </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-    g1, g2, g3, g4 = st.columns(4)
-    g1.metric("MSTR must gain", _mm_pct(read["breakeven"]),
-              help=f"The breakeven: what MSTR has to return over {horizon} sessions "
-                   "just for MSTU to match it. It is the volatility drag plus the "
-                   "fund's carry, compounded over the period — arithmetic, not a forecast.")
-    g2.metric("MSTR at recent pace", _mm_pct(read["mstr_pace"]),
-              help=f"Where MSTR lands in {horizon} sessions if it keeps its trailing "
-                   f"{read['drift_win']}-session drift. An extrapolation, and a heroic "
-                   "one over the longer periods — not a prediction. The volatility "
-                   "slider does not move this.")
-    g3.metric("MSTU at that pace", _mm_pct(read["mstu_at_pace"]),
-              help="The same path run through the 2×-daily identity, decay included. "
-                   "Note it is NOT double the figure to its left: doubling each DAY's "
-                   "move squares over the period — (1+m)² − 1, an m² bonus — and the "
-                   "decay term then multiplies the whole thing down by e^(−H(σ²+carry)).")
-    g4.metric("Edge (MSTU − MSTR)", _mm_pct(read["edge"]),
-              help="The difference of the two figures to the left, in points. This is "
-                   "what the rating grades: positive means the leverage is paying for "
-                   "its own decay at the current pace.")
-
-    # ── how far MSTR has actually moved, by lookback ─────────────────────────
-    # The verdict extrapolates ONE drift estimate; the window it uses moves that
-    # estimate a lot, so show the ladder rather than leave the choice implicit.
-    ladder = _mm.drift_ladder(df, asof=asof)
-    if any(row["ready"] for row in ladder):
-        st.markdown("###### MSTR's realised drift, by lookback")
-        d_cols = st.columns(len(ladder))
-        for col, row in zip(d_cols, ladder):
-            if not row["ready"]:
-                col.metric(row["label"], "—",
-                           help="Not enough history up to this date for this lookback.")
-                continue
-            # Plain period labels: an abbreviated session count ("21s") reads as
-            # seconds. The help below names the sessions explicitly.
-            col.metric(
-                row["label"],
-                _mm_pct(row["total_ret"]),
-                help=(f"MSTR's total move from the "
-                      f"{pd.Timestamp(row['start']):%b %d, %Y} close to the "
-                      f"{pd.Timestamp(row['end']):%b %d, %Y} close — "
-                      f"{_mm_pct(row['per_session_log'], 2)} per session on average, "
-                      "in log terms."),
-            )
-        _per = " · ".join(
-            f"**{r['label']}** {_mm_pct(r['per_session_log'], 2)}"
-            for r in ladder if r["ready"])
-        _last = ladder[-1]
-        _tail = (
-            f" The verdict above extrapolates the **{read['drift_win']}-session** drift, "
-            f"so the last rung is the figure it actually uses"
-            + (f" ({_mm_pct(_last['per_session_log'], 2)} per session)"
-               if _last["ready"] and _last["sessions"] == read["drift_win"] else "")
-            + " — read the rest as the spread of answers a different window would have given."
-        )
-        st.caption(
-            f"📐 Realised moves, not forecasts. Per session: {_per}.{_tail} Deliberately not "
-            "annualised: scaling one session to a year is legal arithmetic and meaningless "
-            "(MSTR's last session annualises to about 4×10¹⁸%)."
-        )
-
-    if horizon > 126:
-        st.warning(
-            f"📏 **{horizon} sessions is a long extrapolation.** The breakeven is still exact "
-            "arithmetic — it only needs the volatility set above and the measured carry. "
-            f"*MSTR at recent pace* is not: it compounds a trailing {read['drift_win']}-session "
-            f"drift out {horizon / _mm.TRADING_DAYS:.1f} years, which no drift estimate "
-            "survives. Read the breakeven at these lengths and treat the pace, the projection "
-            "and the rating as illustration."
-        )
-
-    st.caption(
-        f"⚠️ **This grades the vehicle, not the direction.** It says how expensive MSTU is "
-        f"as a way to hold MSTR, assuming MSTR keeps its recent pace — it makes no claim "
-        f"about where MSTR actually goes, and it is not a trade signal. A predictive "
-        f"version was built and backtested first across six weightings and three horizons: "
-        f"none was monotonic, beyond about a month the ordering inverted, and every bucket "
-        f"had a negative mean, so this grades **cost**, which is knowable, instead. Over the "
-        f"whole sample MSTU tracked MSTR at **β {fit['beta']:.2f}** (target 2.00) with "
-        f"**{_mm_pct(fit['alpha_ann'], 1)}/yr** of carry, R² {fit['r2']:.3f}. As of "
-        f"**{pd.Timestamp(read['asof']):%b %d, %Y}**."
-    )
-
-    with st.expander("🔬 The arithmetic behind it", expanded=False):
-        st.markdown(
-            "For a **k× daily** fund over **H** sessions, "
-            "`log(fund) ≈ k·log(underlying) − (k(k−1)/2)·H·σ² − H·carry`. With k = 2 that is "
-            "`2L − H·σ² − H·carry`. Checked against every 21-session window in this sample it "
-            "lands at **R² = 0.9999** (residual sd 0.80%), against 4.48% for the naive "
-            "*MSTU = 2 × MSTR* most people carry in their head. Rearranged, MSTU beats simply "
-            "holding MSTR only when **MSTR's log return clears H·(σ² + carry)** — the breakeven above."
-        )
-        st.metric(f"If MSTR is flat for {horizon} sessions, MSTU returns",
-                  _mm_pct(read["flat_outcome"]),
-                  help="Pure decay: the cost of holding the wrapper through a sideways stretch.")
-        _mm_plotly_chart(
-            _mm.make_breakeven_figure(
-                _mm.breakeven_curve(read["sigma_daily"], read["drag_daily"], horizon),
-                read["breakeven"], horizon),
-            key="mstr_mstu_breakeven_chart")
-        st.caption(
-            "The dotted blue line is holding MSTR; the magenta curve is MSTU's projection at "
-            f"the volatility set above ({_mm_pct(read['sigma_ann'], 0, signed=False)} annualised"
-            f"{', a what-if' if read['sigma_is_override'] else ', MSTR&apos;s live reading'}) and "
-            f"its recent carry ({_mm_pct(read['drag_daily'] * -_mm.TRADING_DAYS)}/yr, from the "
-            f"trailing {read['drag_win']} sessions — the caption above quotes the full-sample "
-            "figure, which differs). They cross once, at breakeven. Volatility is held fixed "
-            "across the curve, so treat it as the shape of the trade-off rather than a price target."
-        )
+    return _mm.build_comparison_frame(mstr, mstu, _MM_PAIR.start)
 
 
 def render_mstr_mstu_plot() -> None:
-    """The **MSTR-MSTU Plot** tab: price overlay + gap panel over a picked window."""
-    st.markdown("## 📉 MSTR vs MSTU — Price Overlay")
-    st.markdown(
-        "**MSTR** (MicroStrategy) and **MSTU** (T-Rex 2× Long MSTR Daily Target ETF) "
-        "closes on one time axis, from **MSTU's inception (Sep 18 2024)** to today — "
-        "pick any window with the dates below. MSTU targets **2× MSTR's *daily* move**, "
-        "which is not the same promise as 2× MSTR's return over a period: each day's "
-        "doubling compounds off the previous day's result, so a choppy stretch bleeds "
-        "the fund even when MSTR ends flat. The lower panel plots the gap between the "
-        "two so that drift is visible rather than inferred."
-    )
-
+    """The MSTR-MSTU Plot tab — the shared leveraged-pair tab, BTC's pair."""
     today_ct = pd.Timestamp.now(tz="America/Chicago").normalize().tz_localize(None)
     df = _mstr_mstu_closes(today_ct.strftime("%Y-%m-%d"), _backtest_dataset_mtime())
-    if df.empty:
-        st.error(
-            "No overlapping MSTR / MSTU price history available. Expected "
-            "`data/backtest/mstr_daily.csv` and `data/backtest/mstu_daily.csv` "
-            "(refresh them with `scripts/pull_backtest_data.py`)."
-        )
-        return
-
-    lo_ts, hi_ts = _mm.window_bounds(df, today_ct)
-    lo, hi = lo_ts.date(), hi_ts.date()
-
-    # Defaults — full history on first view; the viewer's own picks persist across
-    # the app's 60s auto-refresh because they live in session state. Stored values
-    # are clamped in case the bounds moved (a new trading day, a re-pulled CSV).
-    st.session_state.setdefault(_MM_START_KEY, lo)
-    st.session_state.setdefault(_MM_END_KEY, hi)
-    st.session_state[_MM_START_KEY] = min(max(st.session_state[_MM_START_KEY], lo), hi)
-    st.session_state[_MM_END_KEY] = min(max(st.session_state[_MM_END_KEY], lo), hi)
-
-    # ── controls: the window, then the quick ranges that rewrite it ───────────
-    c_start, c_end, c_quick = st.columns([1.1, 1.1, 2.8])
-    with c_start:
-        st.date_input("📅 Start date", min_value=lo, max_value=hi,
-                      key=_MM_START_KEY, format="YYYY-MM-DD",
-                      help=f"Earliest available is {lo:%b %d, %Y} — MSTU's first trading day.")
-    with c_end:
-        st.date_input("📅 End date", min_value=lo, max_value=hi,
-                      key=_MM_END_KEY, format="YYYY-MM-DD",
-                      help="Defaults to today; the chart ends at the last close on or before it.")
-    with c_quick:
-        st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
-        btn_cols = st.columns(len(_MM_PRESETS))
-        for (preset, tip), col in zip(_MM_PRESETS, btn_cols):
-            col.button(preset, key=f"mm_preset_{preset}", help=tip,
-                       use_container_width=True,
-                       on_click=_mm_set_range, args=(preset, lo, hi))
-
-    start_d, end_d = st.session_state[_MM_START_KEY], st.session_state[_MM_END_KEY]
-    if start_d > end_d:
-        st.warning("⚠️ Start date is after the end date — showing the window reversed.")
-    win = _mm.add_derived(_mm.slice_window(df, start_d, end_d))
-    if win.empty:
-        st.warning(
-            f"No MSTR/MSTU closes between **{start_d:%b %d, %Y}** and "
-            f"**{end_d:%b %d, %Y}** — both tickers are US-listed, so a window "
-            "landing entirely on a weekend or market holiday comes back empty. "
-            "Widen it, or press **MAX**."
-        )
-        return
-
-    # ── view controls, directly above the chart they steer ───────────────────
-    v_scale, v_spread, v_toggle = st.columns([1.5, 1.5, 0.8])
-    with v_scale:
-        scale_mode = st.radio(
-            "Price axis", options=list(_mm.SCALE_MODES),
-            format_func=lambda k: _mm.SCALE_MODES[k][0],
-            index=0, key="mstr_mstu_scale",
-            help="MSTR and MSTU trade at very different levels. Rather than give "
-                 "each its own y-axis — which makes every crossing point a "
-                 "coincidence of scaling — pick how to put them on one.",
-        )
-    with v_spread:
-        spread_mode = st.radio(
-            "Gap measured as", options=list(_mm.SPREAD_MODES),
-            format_func=lambda k: _mm.SPREAD_MODES[k]["label"],
-            index=0, key="mstr_mstu_spread",
-        )
-    with v_toggle:
-        st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
-        show_spread = st.checkbox("Show gap panel", value=True, key="mstr_mstu_showgap",
-                                  help="Hide it to give the price overlay the full height.")
-
-    st.caption(f"ℹ️ {_mm.SCALE_MODES[scale_mode][1]}")
-
-    # ── headline numbers ─────────────────────────────────────────────────────
-    s = _mm.summary_stats(win)
-    gap_now = float(win[_mm.SPREAD_MODES[spread_mode]["column"]].iloc[-1])
-    gap_ext, gap_ext_day = _mm.extreme_spread(win, spread_mode)
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("MSTR close", f"${s['mstr_end']:,.2f}",
-              f"{s['mstr_ret']:+.1f}% in window")
-    k2.metric("MSTU close", f"${s['mstu_end']:,.2f}",
-              f"{s['mstu_ret']:+.1f}% in window")
-    k3.metric("Gap now", _mm.format_spread(gap_now, spread_mode),
-              help=_mm.SPREAD_MODES[spread_mode]["help"])
-    k4.metric("Widest gap" if gap_ext_day is None
-              else f"Widest gap · {pd.Timestamp(gap_ext_day):%b %d, %Y}",
-              _mm.format_spread(gap_ext, spread_mode),
-              help="The furthest apart the two got inside this window — measured "
-                   "from parity, so for the ratio it is the day furthest from 1.00×, "
-                   "not the largest multiple.")
-    k5.metric("MSTU β vs MSTR",
-              "—" if not np.isfinite(s["beta"]) else f"{s['beta']:.2f}×",
-              help="Slope of MSTU's daily return on MSTR's, inside this window — "
-                   "the leverage the fund actually delivered against the 2.00× it "
-                   "targets. Measured on simple returns, the basis that target is "
-                   "stated on.")
-
-    _corr = "—" if not np.isfinite(s["corr"]) else f"{s['corr']:.4f}"
-    if np.isfinite(s["lev_ideal_ret"]) and np.isfinite(s["lev_gap_pp"]):
-        _decay = (
-            f" · A frictionless fund doubling MSTR's move **every day** would have "
-            f"returned **{s['lev_ideal_ret']:+.1f}%** over this window; MSTU returned "
-            f"**{s['mstu_ret']:+.1f}%**, a **{s['lev_gap_pp']:+.1f} pp** shortfall to "
-            f"fees, financing and daily rebalancing."
-        )
-    else:
-        _decay = ""
-    st.caption(
-        f"📊 **{s['n_days']} trading days** · {pd.Timestamp(s['start']):%b %d, %Y} → "
-        f"{pd.Timestamp(s['end']):%b %d, %Y} · daily-return correlation **{_corr}**"
-        f"{_decay}"
-    )
-
-    # ── vehicle verdict (rating + breakeven + regime audit) ──────────────────
-    # Placed above the chart because it is the question a viewer arrives with;
-    # `asof` is the window's end date, so dragging that back replays the verdict
-    # as it stood then rather than always quoting today.
-    st.markdown("#### 🧭 Vehicle verdict — MSTU vs MSTR")
-    _render_mstr_mstu_verdict(df, s["end"])
-    st.divider()
-
-    # ── the chart ────────────────────────────────────────────────────────────
-    fig = _mm.make_figure(win, scale_mode=scale_mode, spread_mode=spread_mode,
-                          show_spread=show_spread, height=620 if show_spread else 460)
-    _mm_plotly_chart(fig, key="mstr_mstu_overlay_chart")
-    if show_spread:
-        st.caption(
-            "Lower panel — every gap is **MSTU minus MSTR**, shaded **magenta "
-            "above the dashed parity line, where MSTU is ahead**, and **blue below "
-            "it, where MSTR is ahead**. "
-            f"{_mm.SPREAD_MODES[spread_mode]['help']} Drag to pan, scroll to zoom, "
-            "double-click to reset; both panels share the time axis."
-        )
-
-    st.caption(
-        f"📦 Price dataset {_backtest_dataset_version()} · MSTR & MSTU daily closes "
-        f"(split- and dividend-adjusted, via yfinance) · aligned on days both traded"
-    )
-
-    # ── the numbers behind the picture ───────────────────────────────────────
-    with st.expander("📄 Data table & CSV download", expanded=False):
-        table = _mm.export_frame(win)
-        st.dataframe(table.iloc[::-1], use_container_width=True, height=320)
-        st.download_button(
-            "⬇️ Download this window as CSV",
-            data=table.to_csv().encode("utf-8"),
-            file_name=(f"mstr_mstu_{pd.Timestamp(s['start']):%Y%m%d}_"
-                       f"{pd.Timestamp(s['end']):%Y%m%d}.csv"),
-            mime="text/csv",
-            key="mstr_mstu_csv",
-        )
+    _lev_pair_tab.render_lev_pair_tab(
+        _MM_PAIR, df, today_ct,
+        dataset_note=(f"Price dataset {_backtest_dataset_version()} · via yfinance"))
 
 
 # ════════════════════════════════════════════════════════════════════════
