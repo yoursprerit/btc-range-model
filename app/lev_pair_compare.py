@@ -1,56 +1,129 @@
-"""MSTR vs MSTU price comparison — data + figure helpers for the BTC app's
-**MSTR-MSTU Plot** tab.
+"""Leveraged-pair comparison — data + figure helpers for the **<BASE>-<LEV> Plot**
+tabs.
 
-The tab overlays MSTR (MicroStrategy) and MSTU (T-Rex 2× Long MSTR Daily Target
-ETF) closes since MSTU's inception, over a user-picked date window, and plots the
-gap between them underneath on a shared time axis.
+Every app that trades a 1× underlying alongside a leveraged daily-target sibling
+gets the same tab from this one module: the two closes overlaid since the pair's
+start, the gap between them underneath on a shared time axis, and a verdict on
+whether the wrapper is currently an efficient way to hold the underlying.
 
-Why this lives outside ``btc_hourly_app.py``
---------------------------------------------
+The pairs are registered in ``PAIRS``:
+
+    BTC app    MSTR → MSTU   2×    since MSTU's inception
+    GLDM app   GLDM → UGL    2×    full history
+    GDXM app   GDX  → NUGT   2×    since NUGT's 3×→2× change
+    SOXX app   SOXX → SOXL   3×    full history
+    XLE app    XLE  → ERX    2×    since ERX's 3×→2× change
+
 Everything here is pure ``pandas``/``plotly``: aligning the two series, slicing
 the window, the three spread definitions and the summary statistics.  Keeping it
-in its own module means the arithmetic is importable and unit-testable without a
-Streamlit runtime (see ``tests/test_mstr_mstu_compare.py``); the app module keeps
-only the widgets and the layout.
+out of the app modules means the arithmetic is importable and unit-testable
+without a Streamlit runtime (see ``tests/test_lev_pair_compare.py``); each app
+keeps only the widgets and the layout, and they share one implementation so the
+tabs stay identical as this evolves.
+
+Internally the two legs are always the columns ``BASE`` and ``LEV`` — never the
+tickers — so the arithmetic is written once and the labels come from the pair.
 
 A note on the y-axis
 --------------------
-MSTR and MSTU trade at very different levels (MSTU is a 2× daily-target fund that
-has decayed hard since launch), which is the classic temptation to reach for a
-second y-axis.  We do not: two scales on one plot make any crossing point a
-visual coincidence and invite false "they diverged here" readings.  Both series
-are dollars, so ``price`` puts them on ONE dollar axis; ``log`` keeps that single
-axis but makes equal percentage moves equal distances; ``indexed`` rebases both
-to 100 at the window start, which is the honest way to compare their *paths*.
+The two legs trade at very different levels (a leveraged fund decays away from
+its underlying), which is the classic temptation to reach for a second y-axis.
+We do not: two scales on one plot make any crossing point a visual coincidence
+and invite false "they diverged here" readings.  Both series are dollars, so
+``price`` puts them on ONE dollar axis; ``log`` keeps that single axis but makes
+equal percentage moves equal distances; ``indexed`` rebases both to 100 at the
+window start, which is the honest way to compare their *paths*.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ── constants ───────────────────────────────────────────────────────────────
-#: MSTU's first trading day (T-Rex 2× Long MSTR Daily Target ETF).  The window
-#: pickers floor here; ``data/backtest/mstu_daily.csv`` starts on the same day.
-MSTU_INCEPTION = pd.Timestamp("2024-09-18")
 
-#: MSTU's daily leverage target — used for the "ideal replication" benchmark.
-MSTU_TARGET_LEVERAGE = 2.0
+@dataclass(frozen=True)
+class LevPair:
+    """One underlying and its leveraged daily-target sibling.
 
-#: One hue per instrument, held fixed everywhere in the tab (chart, spread
+    ``leverage`` is the fund's STATED daily multiple, not a fitted one: it is
+    what the decay identity needs, and the tab reports the realised beta against
+    it so a drifting tracker shows up rather than being absorbed.
+
+    ``start`` is the first date the pair is comparable.  For MSTU that is its
+    inception; for NUGT and ERX it is the date their current multiple took
+    effect, because a fund that changed its target is a different instrument
+    for this arithmetic and splicing the eras would blend 3× decay into a 2×
+    reading.
+    """
+    key: str
+    base: str
+    lev: str
+    leverage: float
+    start: pd.Timestamp
+    start_note: str
+    source: str                 # CSV under data/, or "backtest" for the BTC pair
+    base_col: str = ""
+    lev_col: str = ""
+    base_name: str = ""
+    lev_name: str = ""
+
+    @property
+    def title(self) -> str:
+        return f"{self.base}-{self.lev} Plot"
+
+    @property
+    def lev_label(self) -> str:
+        return f"{self.leverage:g}× {self.base}"
+
+
+#: Every registered pair, keyed by the app that shows it.  Start dates for NUGT
+#: and ERX were measured, not recalled: a 40-session rolling beta on each pair
+#: sits at ~3.0 before 2020 and ~2.0 after, and from these dates the full-sample
+#: fit is beta 1.98 / 1.99 at R² 0.996 / 0.993.
+PAIRS: dict[str, LevPair] = {
+    "BTC": LevPair("BTC", "MSTR", "MSTU", 2.0, pd.Timestamp("2024-09-18"),
+                   "MSTU's first trading day", "backtest",
+                   base_name="MicroStrategy",
+                   lev_name="T-Rex 2× Long MSTR Daily Target ETF"),
+    "GLDM": LevPair("GLDM", "GLDM", "UGL", 2.0, pd.Timestamp("2018-06-26"),
+                    "the start of the shared price history",
+                    "gldm/gldm_macro_daily.csv", "gldm_close", "ugl_close",
+                    base_name="SPDR Gold MiniShares",
+                    lev_name="ProShares Ultra Gold"),
+    "GDXM": LevPair("GDXM", "GDX", "NUGT", 2.0, pd.Timestamp("2020-09-01"),
+                    "NUGT's 3× → 2× change (measured: rolling beta drops to ~2.0)",
+                    "gldm/gldm_macro_daily.csv", "gdx_close", "nugt_close",
+                    base_name="VanEck Gold Miners ETF",
+                    lev_name="Direxion Daily Gold Miners Bull 2×"),
+    "SOXX": LevPair("SOXX", "SOXX", "SOXL", 3.0, pd.Timestamp("2015-01-02"),
+                    "the start of the shared price history",
+                    "soxx/macro_daily.csv", "px_close", "soxl_close",
+                    base_name="iShares Semiconductor ETF",
+                    lev_name="Direxion Daily Semiconductor Bull 3×"),
+    "XLE": LevPair("XLE", "XLE", "ERX", 2.0, pd.Timestamp("2020-04-01"),
+                   "ERX's 3× → 2× change (measured: rolling beta drops to ~2.0)",
+                   "xle/macro_daily.csv", "px_close", "erx_close",
+                   base_name="Energy Select Sector SPDR",
+                   lev_name="Direxion Daily Energy Bull 2×"),
+}
+
+#: One hue per leg, held fixed across every pair and every tab (chart, spread
 #: shading, metric chips) so colour always means the same thing.  Validated as a
 #: categorical pair: worst-case CVD separation ΔE 18.7 (protan), normal-vision
 #: ΔE 32.9, both ≥ 3:1 against the light chart surface.
-COLOR_MSTR = "#2563eb"   # blue
-COLOR_MSTU = "#db2777"   # magenta
+COLOR_BASE = "#2563eb"   # blue — the 1× underlying
+COLOR_LEV = "#db2777"    # magenta — the leveraged sibling
 COLOR_INK = "#334155"    # slate — the spread line itself (never a series hue)
 COLOR_GRID = "#e2e8f0"
 COLOR_AXIS = "#94a3b8"
 SURFACE = "#f8fafc"
 
-#: Scale modes for the price panel.  ``key → (label, help)``.
-SCALE_MODES: dict[str, tuple[str, str]] = {
+#: Scale modes for the price panel.  ``key → (label, help)``, as templates that
+#: ``scale_modes(pair)`` fills with the pair's tickers.
+_SCALE_MODES: dict[str, tuple[str, str]] = {
     "price": (
         "💵 Actual price ($)",
         "Both closes in dollars on one shared axis — what each share actually cost.",
@@ -58,7 +131,7 @@ SCALE_MODES: dict[str, tuple[str, str]] = {
     "log": (
         "📐 Actual price — log scale",
         "Same dollars, log axis: equal percentage moves take equal vertical space, "
-        "so MSTR and MSTU stay comparable despite trading at different levels.",
+        "so {base} and {lev} stay comparable despite trading at different levels.",
     ),
     "indexed": (
         "📊 Indexed — both = 100 at window start",
@@ -67,14 +140,16 @@ SCALE_MODES: dict[str, tuple[str, str]] = {
     ),
 }
 
-#: Spread definitions for the lower panel.  ``key → spec``.
-SPREAD_MODES: dict[str, dict[str, str]] = {
+#: Spread definitions for the lower panel, as templates.  ``spread_modes(pair)``
+#: fills them.  Orientation is LEVERAGED-first throughout, so a positive number
+#: always reads "the leveraged fund is ahead".
+_SPREAD_MODES: dict[str, dict[str, str]] = {
     "usd": {
-        "label": "➖ Price difference (MSTU − MSTR), $",
+        "label": "➖ Price difference ({lev} − {base}), $",
         "column": "spread_usd",
-        "axis": "MSTU − MSTR ($)",
+        "axis": "{lev} − {base} ($)",
         "unit": "$",
-        "hover": "$%{y:,.2f}",
+        "hover": "$%{{y:,.2f}}",
         "tickformat": "$,.0f",
         "help": (
             "Literal difference of the two closes. It moves with the *price levels*, "
@@ -83,11 +158,11 @@ SPREAD_MODES: dict[str, dict[str, str]] = {
         ),
     },
     "pp": {
-        "label": "📊 Performance gap (MSTU − MSTR), pp",
+        "label": "📊 Performance gap ({lev} − {base}), pp",
         "column": "spread_pp",
-        "axis": "MSTU − MSTR (pp)",
+        "axis": "{lev} − {base} (pp)",
         "unit": "pp",
-        "hover": "%{y:+,.1f} pp",
+        "hover": "%{{y:+,.1f}} pp",
         "tickformat": "+,.0f",
         "help": (
             "Both series rebased to 100 at the window start, then subtracted: how far "
@@ -96,15 +171,15 @@ SPREAD_MODES: dict[str, dict[str, str]] = {
         ),
     },
     "ratio": {
-        "label": "➗ Price ratio (MSTU ÷ MSTR), ×",
+        "label": "➗ Price ratio ({lev} ÷ {base}), ×",
         "column": "ratio",
-        "axis": "MSTU ÷ MSTR (×)",
+        "axis": "{lev} ÷ {base} (×)",
         "unit": "×",
-        "hover": "%{y:,.3f}×",
+        "hover": "%{{y:,.3f}}×",
         "tickformat": ",.2f",
         "help": (
-            "How many MSTR shares one MSTU share buys. A flat line means the two "
-            "moved in step; a rising line means MSTU gained on MSTR *per share*. "
+            "How many {base} shares one {lev} share buys. A flat line means the two "
+            "moved in step; a rising line means {lev} gained on {base} *per share*. "
             "Like the dollar difference this is a share-price ratio, so a split or "
             "reverse split rescales it — read the performance gap for the clean "
             "comparison."
@@ -112,15 +187,89 @@ SPREAD_MODES: dict[str, dict[str, str]] = {
     },
 }
 
+
+def scale_modes(pair: LevPair) -> dict[str, tuple[str, str]]:
+    """``_SCALE_MODES`` with the pair's tickers filled in."""
+    return {k: (lbl, hlp.format(base=pair.base, lev=pair.lev))
+            for k, (lbl, hlp) in _SCALE_MODES.items()}
+
+
+def spread_modes(pair: LevPair) -> dict[str, dict[str, str]]:
+    """``_SPREAD_MODES`` with the pair's tickers filled in."""
+    return {k: {f: (v.format(base=pair.base, lev=pair.lev)
+                    if isinstance(v, str) else v)
+                for f, v in spec.items()}
+            for k, spec in _SPREAD_MODES.items()}
+
+
 _DEFAULT_SCALE = "price"
 _DEFAULT_SPREAD = "usd"
+
+
+def load_pair_csv(pair: LevPair, data_root) -> pd.DataFrame:
+    """Build a pair frame from the app's own committed macro CSV.
+
+    Every non-BTC pair already has both legs side by side in the app's daily
+    macro file, so no extra fetch is needed.  The BTC pair is the exception —
+    it lives in the versioned ``data/backtest`` CSVs and is topped up from
+    yfinance by its app, which builds the frame itself.
+    """
+    import pathlib as _pl
+    empty = pd.DataFrame(columns=["BASE", "LEV"], dtype="float64")
+    if pair.source == "backtest" or not pair.base_col or not pair.lev_col:
+        return empty
+    path = _pl.Path(data_root) / pair.source
+    try:
+        raw = pd.read_csv(path, index_col=0, parse_dates=True)
+    except (OSError, ValueError):
+        return empty
+    if pair.base_col not in raw or pair.lev_col not in raw:
+        return empty
+    base = raw[pair.base_col].rename("close").to_frame()
+    lev = raw[pair.lev_col].rename("close").to_frame()
+    for frame in (base, lev):
+        frame.index = pd.DatetimeIndex(frame.index).tz_localize(None).normalize()
+    return build_comparison_frame(base, lev, pair.start)
+
+
+def identity_fit(df: pd.DataFrame, pair: LevPair,
+                 horizon: int = 21) -> dict:
+    """How well ``k·L − (k(k−1)/2)·H·σ² − H·carry`` reproduces the fund.
+
+    Measured on THIS pair rather than quoted from the one it was first derived
+    on, so every tab's claim about the identity is about its own data.  Reports
+    the fit against the naive ``k × underlying`` too, which is the thing the
+    identity is an improvement on.
+    """
+    out = {"r2": np.nan, "resid_sd": np.nan, "naive_sd": np.nan,
+           "naive_bias": np.nan, "n": 0, "horizon": horizon}
+    if df.empty or len(df) < horizon + 5:
+        return out
+    k = pair.leverage
+    logret = np.log(df[["BASE", "LEV"]]).diff()
+    r = df[["BASE", "LEV"]].pct_change()
+    slip = tracking_slippage(df, pair)
+    lev_h = logret["LEV"].rolling(horizon).sum()
+    base_h = logret["BASE"].rolling(horizon).sum()
+    var_h = (r["BASE"] ** 2).rolling(horizon).mean()
+    carry_h = (-slip).rolling(horizon).mean()
+    pred = k * base_h - horizon * (k * (k - 1.0) / 2.0 * var_h + carry_h)
+    both = pd.concat([lev_h.rename("a"), pred.rename("p"),
+                      (k * base_h).rename("naive")], axis=1).dropna()
+    if len(both) < 10:
+        return out
+    corr = float(both["a"].corr(both["p"]))
+    out.update(r2=corr ** 2, resid_sd=float((both["a"] - both["p"]).std()),
+               naive_sd=float((both["a"] - both["naive"]).std()),
+               naive_bias=float((both["a"] - both["naive"]).mean()), n=len(both))
+    return out
 
 
 # ── data ────────────────────────────────────────────────────────────────────
 def build_comparison_frame(
     mstr: pd.DataFrame | None,
     mstu: pd.DataFrame | None,
-    inception: pd.Timestamp = MSTU_INCEPTION,
+    inception: pd.Timestamp,
 ) -> pd.DataFrame:
     """Align MSTR and MSTU closes onto the days BOTH actually traded.
 
@@ -134,14 +283,14 @@ def build_comparison_frame(
     never printed.  Returns an empty frame (not ``None``) when either side is
     missing, so callers have one shape to handle.
     """
-    empty = pd.DataFrame(columns=["MSTR", "MSTU"], dtype="float64")
+    empty = pd.DataFrame(columns=["BASE", "LEV"], dtype="float64")
     if mstr is None or mstu is None or "close" not in mstr or "close" not in mstu:
         return empty
 
     joined = pd.concat(
         [
-            pd.to_numeric(mstr["close"], errors="coerce").rename("MSTR"),
-            pd.to_numeric(mstu["close"], errors="coerce").rename("MSTU"),
+            pd.to_numeric(mstr["close"], errors="coerce").rename("BASE"),
+            pd.to_numeric(mstu["close"], errors="coerce").rename("LEV"),
         ],
         axis=1,
         join="inner",
@@ -150,7 +299,7 @@ def build_comparison_frame(
         return empty
 
     joined = joined[joined.index >= pd.Timestamp(inception)]
-    joined = joined[(joined["MSTR"] > 0) & (joined["MSTU"] > 0)]
+    joined = joined[(joined["BASE"] > 0) & (joined["LEV"] > 0)]
     return joined.sort_index()
 
 
@@ -189,23 +338,23 @@ def add_derived(win: pd.DataFrame) -> pd.DataFrame:
     """
     out = win.copy()
     if out.empty:
-        for col in ("MSTR_idx", "MSTU_idx", "spread_usd", "spread_pp", "ratio"):
+        for col in ("BASE_idx", "LEV_idx", "spread_usd", "spread_pp", "ratio"):
             out[col] = pd.Series(dtype="float64")
         return out
 
-    base_mstr = float(out["MSTR"].iloc[0])
-    base_mstu = float(out["MSTU"].iloc[0])
-    out["MSTR_idx"] = out["MSTR"] / base_mstr * 100.0
-    out["MSTU_idx"] = out["MSTU"] / base_mstu * 100.0
+    base_mstr = float(out["BASE"].iloc[0])
+    base_mstu = float(out["LEV"].iloc[0])
+    out["BASE_idx"] = out["BASE"] / base_mstr * 100.0
+    out["LEV_idx"] = out["LEV"] / base_mstu * 100.0
     # MSTU first in every gap, so a positive number always reads "the leveraged
     # fund is ahead" — the direction a viewer of this tab is asking about.
-    out["spread_usd"] = out["MSTU"] - out["MSTR"]
-    out["spread_pp"] = out["MSTU_idx"] - out["MSTR_idx"]
-    out["ratio"] = out["MSTU"] / out["MSTR"]
+    out["spread_usd"] = out["LEV"] - out["BASE"]
+    out["spread_pp"] = out["LEV_idx"] - out["BASE_idx"]
+    out["ratio"] = out["LEV"] / out["BASE"]
     return out
 
 
-def summary_stats(win: pd.DataFrame) -> dict:
+def summary_stats(win: pd.DataFrame, pair: LevPair) -> dict:
     """Headline numbers for the metric row above the chart.
 
     ``beta`` / ``corr`` are computed on daily *simple* returns, because that is the
@@ -219,8 +368,8 @@ def summary_stats(win: pd.DataFrame) -> dict:
     stats: dict = {
         "n_days": int(len(win)),
         "start": None, "end": None,
-        "mstr_start": np.nan, "mstr_end": np.nan, "mstr_ret": np.nan,
-        "mstu_start": np.nan, "mstu_end": np.nan, "mstu_ret": np.nan,
+        "base_start": np.nan, "base_end": np.nan, "base_ret": np.nan,
+        "lev_start": np.nan, "lev_end": np.nan, "lev_ret": np.nan,
         "beta": np.nan, "corr": np.nan,
         "lev_ideal_ret": np.nan, "lev_gap_pp": np.nan,
     }
@@ -229,7 +378,7 @@ def summary_stats(win: pd.DataFrame) -> dict:
 
     stats["start"] = win.index.min()
     stats["end"] = win.index.max()
-    for tic in ("MSTR", "MSTU"):
+    for tic in ("BASE", "LEV"):
         first = float(win[tic].iloc[0])
         last = float(win[tic].iloc[-1])
         stats[f"{tic.lower()}_start"] = first
@@ -238,20 +387,20 @@ def summary_stats(win: pd.DataFrame) -> dict:
 
     # Daily-return statistics need at least two returns, i.e. three closes.
     if len(win) >= 3:
-        rets = win[["MSTR", "MSTU"]].pct_change().dropna()
+        rets = win[["BASE", "LEV"]].pct_change().dropna()
         if len(rets) >= 2:
-            var_mstr = float(rets["MSTR"].var())
+            var_mstr = float(rets["BASE"].var())
             if var_mstr > 0:
-                stats["beta"] = float(rets["MSTU"].cov(rets["MSTR"]) / var_mstr)
-            corr = float(rets["MSTR"].corr(rets["MSTU"]))
+                stats["beta"] = float(rets["LEV"].cov(rets["BASE"]) / var_mstr)
+            corr = float(rets["BASE"].corr(rets["LEV"]))
             stats["corr"] = corr if np.isfinite(corr) else np.nan
 
     if len(win) >= 2:
-        simple = win["MSTR"].pct_change().dropna()
-        ideal = float(np.prod(1.0 + MSTU_TARGET_LEVERAGE * simple.to_numpy()) - 1.0) * 100.0
+        simple = win["BASE"].pct_change().dropna()
+        ideal = float(np.prod(1.0 + pair.leverage * simple.to_numpy()) - 1.0) * 100.0
         stats["lev_ideal_ret"] = ideal
-        if np.isfinite(stats["mstu_ret"]):
-            stats["lev_gap_pp"] = stats["mstu_ret"] - ideal
+        if np.isfinite(stats["lev_ret"]):
+            stats["lev_gap_pp"] = stats["lev_ret"] - ideal
     return stats
 
 
@@ -291,14 +440,15 @@ def format_spread(value: float, spread_mode: str) -> str:
     return f"{value:+,.2f}".replace("+", "+$").replace("-", "−$")
 
 
-def extreme_spread(win: pd.DataFrame, spread_mode: str) -> tuple[float, object]:
+def extreme_spread(win: pd.DataFrame, spread_mode: str,
+                   pair: LevPair | None = None) -> tuple[float, object]:
     """The window's widest gap (largest distance from parity) and the day it hit.
 
     "Widest" is measured from the mode's own neutral point — zero for the two
     differences, 1.0 for the ratio — so the answer means "furthest apart", not
     "largest number", which for the ratio are not the same thing.
     """
-    spec = SPREAD_MODES.get(spread_mode, SPREAD_MODES[_DEFAULT_SPREAD])
+    spec = _SPREAD_MODES.get(spread_mode, _SPREAD_MODES[_DEFAULT_SPREAD])
     col = spec["column"]
     if win.empty or col not in win or win[col].dropna().empty:
         return float("nan"), None
@@ -308,16 +458,16 @@ def extreme_spread(win: pd.DataFrame, spread_mode: str) -> tuple[float, object]:
     return float(series.loc[idx]), idx
 
 
-def export_frame(win: pd.DataFrame) -> pd.DataFrame:
+def export_frame(win: pd.DataFrame, pair: LevPair) -> pd.DataFrame:
     """The windowed data as a display/download table with readable column names."""
     cols = {
-        "MSTR": "MSTR close ($)",
-        "MSTU": "MSTU close ($)",
-        "MSTR_idx": "MSTR indexed (=100)",
-        "MSTU_idx": "MSTU indexed (=100)",
-        "spread_usd": "MSTU − MSTR ($)",
-        "spread_pp": "MSTU − MSTR (pp)",
-        "ratio": "MSTU ÷ MSTR (×)",
+        "BASE": f"{pair.base} close ($)",
+        "LEV": f"{pair.lev} close ($)",
+        "BASE_idx": f"{pair.base} indexed (=100)",
+        "LEV_idx": f"{pair.lev} indexed (=100)",
+        "spread_usd": f"{pair.lev} − {pair.base} ($)",
+        "spread_pp": f"{pair.lev} − {pair.base} (pp)",
+        "ratio": f"{pair.lev} ÷ {pair.base} (×)",
     }
     present = [c for c in cols if c in win.columns]
     out = win[present].rename(columns=cols).copy()
@@ -331,14 +481,15 @@ def export_frame(win: pd.DataFrame) -> pd.DataFrame:
 
 # ── figure ──────────────────────────────────────────────────────────────────
 def _series_columns(scale_mode: str) -> tuple[str, str, str, str, str]:
-    """``(mstr_col, mstu_col, axis_title, tickformat, hover_fmt)`` for a scale mode."""
+    """``(base_col, lev_col, axis_title, tickformat, hover_fmt)`` for a scale mode."""
     if scale_mode == "indexed":
-        return "MSTR_idx", "MSTU_idx", "Indexed (start = 100)", ",.0f", "%{y:,.1f}"
-    return "MSTR", "MSTU", "Close ($)", "$,.0f", "$%{y:,.2f}"
+        return "BASE_idx", "LEV_idx", "Indexed (start = 100)", ",.0f", "%{y:,.1f}"
+    return "BASE", "LEV", "Close ($)", "$,.0f", "$%{y:,.2f}"
 
 
-def _last_point_labels(win: pd.DataFrame, mstr_col: str, mstu_col: str,
-                       value_fmt, log_axis: bool = False) -> list[dict]:
+def _last_point_labels(win: pd.DataFrame, base_col: str, lev_col: str,
+                       value_fmt, pair: LevPair,
+                       log_axis: bool = False) -> list[dict]:
     """Direct labels pinned to each series' final point.
 
     Two series is well under the four the legend-plus-direct-label rule allows, and
@@ -353,37 +504,38 @@ def _last_point_labels(win: pd.DataFrame, mstr_col: str, mstu_col: str,
     if win.empty:
         return []
     x_last = win.index[-1]
-    y_mstr = float(win[mstr_col].iloc[-1])
-    y_mstu = float(win[mstu_col].iloc[-1])
-    text_mstr, text_mstu = value_fmt(y_mstr), value_fmt(y_mstu)
+    y_base = float(win[base_col].iloc[-1])
+    y_lev = float(win[lev_col].iloc[-1])
+    text_base, text_lev = value_fmt(y_base), value_fmt(y_lev)
     if log_axis:
-        y_mstr = float(np.log10(y_mstr)) if y_mstr > 0 else 0.0
-        y_mstu = float(np.log10(y_mstu)) if y_mstu > 0 else 0.0
+        y_base = float(np.log10(y_base)) if y_base > 0 else 0.0
+        y_lev = float(np.log10(y_lev)) if y_lev > 0 else 0.0
 
-    span = abs(y_mstr - y_mstu) if log_axis else float(
-        np.nanmax(win[[mstr_col, mstu_col]].to_numpy())
-        - np.nanmin(win[[mstr_col, mstu_col]].to_numpy()))
+    span = abs(y_base - y_lev) if log_axis else float(
+        np.nanmax(win[[base_col, lev_col]].to_numpy())
+        - np.nanmin(win[[base_col, lev_col]].to_numpy()))
     if log_axis:
-        col_max = float(np.nanmax(win[[mstr_col, mstu_col]].to_numpy()))
-        col_min = float(np.nanmin(win[[mstr_col, mstu_col]].to_numpy()))
+        col_max = float(np.nanmax(win[[base_col, lev_col]].to_numpy()))
+        col_min = float(np.nanmin(win[[base_col, lev_col]].to_numpy()))
         span = (float(np.log10(col_max)) - float(np.log10(col_min))
                 if col_min > 0 else 0.0)
-    too_close = span > 0 and abs(y_mstr - y_mstu) < 0.06 * span
-    shift_mstr = shift_mstu = 0
+    too_close = span > 0 and abs(y_base - y_lev) < 0.06 * span
+    shift_base = shift_lev = 0
     if too_close:
-        shift_mstr, shift_mstu = (9, -9) if y_mstr >= y_mstu else (-9, 9)
+        shift_base, shift_lev = (9, -9) if y_base >= y_lev else (-9, 9)
 
     return [
-        dict(x=x_last, y=y_mstr, text=f" MSTR {text_mstr}", showarrow=False,
-             xanchor="left", yanchor="middle", xshift=6, yshift=shift_mstr,
-             font=dict(size=11, color=COLOR_MSTR)),
-        dict(x=x_last, y=y_mstu, text=f" MSTU {text_mstu}", showarrow=False,
-             xanchor="left", yanchor="middle", xshift=6, yshift=shift_mstu,
-             font=dict(size=11, color=COLOR_MSTU)),
+        dict(x=x_last, y=y_base, text=f" {pair.base} {text_base}", showarrow=False,
+             xanchor="left", yanchor="middle", xshift=6, yshift=shift_base,
+             font=dict(size=11, color=COLOR_BASE)),
+        dict(x=x_last, y=y_lev, text=f" {pair.lev} {text_lev}", showarrow=False,
+             xanchor="left", yanchor="middle", xshift=6, yshift=shift_lev,
+             font=dict(size=11, color=COLOR_LEV)),
     ]
 
 
-def make_figure(win: pd.DataFrame, scale_mode: str = _DEFAULT_SCALE,
+def make_figure(win: pd.DataFrame, pair: LevPair,
+                scale_mode: str = _DEFAULT_SCALE,
                 spread_mode: str = _DEFAULT_SPREAD,
                 show_spread: bool = True, height: int = 620) -> go.Figure:
     """Build the tab's chart: prices on top, the chosen spread underneath.
@@ -395,10 +547,10 @@ def make_figure(win: pd.DataFrame, scale_mode: str = _DEFAULT_SCALE,
 
     ``show_spread=False`` collapses it to the price panel alone.
     """
-    scale_mode = scale_mode if scale_mode in SCALE_MODES else _DEFAULT_SCALE
-    spread_mode = spread_mode if spread_mode in SPREAD_MODES else _DEFAULT_SPREAD
-    spec = SPREAD_MODES[spread_mode]
-    mstr_col, mstu_col, y_title, y_tickfmt, hover_fmt = _series_columns(scale_mode)
+    scale_mode = scale_mode if scale_mode in _SCALE_MODES else _DEFAULT_SCALE
+    spread_mode = spread_mode if spread_mode in _SPREAD_MODES else _DEFAULT_SPREAD
+    spec = spread_modes(pair)[spread_mode]
+    base_col, lev_col, y_title, y_tickfmt, hover_fmt = _series_columns(scale_mode)
 
     rows = 2 if show_spread else 1
     fig = make_subplots(
@@ -406,8 +558,8 @@ def make_figure(win: pd.DataFrame, scale_mode: str = _DEFAULT_SCALE,
         row_heights=[0.66, 0.34] if rows == 2 else [1.0],
     )
 
-    for name, col, color in (("MSTR", mstr_col, COLOR_MSTR),
-                             ("MSTU", mstu_col, COLOR_MSTU)):
+    for name, col, color in ((pair.base, base_col, COLOR_BASE),
+                             (pair.lev, lev_col, COLOR_LEV)):
         fig.add_trace(go.Scatter(
             x=win.index, y=win[col] if col in win else [], name=name, mode="lines",
             line=dict(color=color, width=2),
@@ -428,8 +580,8 @@ def make_figure(win: pd.DataFrame, scale_mode: str = _DEFAULT_SCALE,
         # at the baseline — ``tozeroy`` would fill to y=0, which is the wrong
         # reference for the ratio (parity is 1.0, not 0).
         flat = pd.Series(baseline, index=win.index)
-        for clipped, color in ((rel.clip(lower=0), COLOR_MSTU),
-                               (rel.clip(upper=0), COLOR_MSTR)):
+        for clipped, color in ((rel.clip(lower=0), COLOR_LEV),
+                               (rel.clip(upper=0), COLOR_BASE)):
             fig.add_trace(go.Scatter(
                 x=win.index, y=flat, mode="lines", line=dict(width=0),
                 hoverinfo="skip", showlegend=False,
@@ -453,7 +605,7 @@ def make_figure(win: pd.DataFrame, scale_mode: str = _DEFAULT_SCALE,
         def _fmt(v): return f"{v:,.1f}"
     else:
         def _fmt(v): return f"${v:,.2f}"
-    annotations = _last_point_labels(win, mstr_col, mstu_col, _fmt,
+    annotations = _last_point_labels(win, base_col, lev_col, _fmt, pair,
                                      log_axis=scale_mode == "log")
 
     fig.update_layout(
@@ -582,8 +734,7 @@ DRIFT_LADDER_WINDOWS: tuple[tuple[int, str], ...] = (
 )
 #: Sessions per year, for annualising volatility.
 TRADING_DAYS = 252
-#: MSTU's daily leverage multiple, as the identity above uses it.
-LEVERAGE = 2.0
+
 
 #: The five levels, ordered worst → best, each with the lower bound of the
 #: monthly margin that selects it (``None`` = no lower bound).  Cuts are round
@@ -594,23 +745,23 @@ LEVERAGE = 2.0
 RATING_LEVELS: tuple[dict, ...] = (
     {"key": "strong_sell", "label": "STRONG SELL", "icon": "⛔",
      "color": "#b91c1c", "floor": None,
-     "gloss": "the leverage is deeply underwater — MSTR is nowhere near the "
-              "drift MSTU needs to justify its carry"},
+     "gloss": "the leverage is deeply underwater — {base} is nowhere near the "
+              "drift {lev} needs to justify its carry"},
     {"key": "sell", "label": "SELL", "icon": "🔻",
      "color": "#dc2626", "floor": -0.05,
-     "gloss": "MSTR is drifting below MSTU's hurdle; the wrapper is costing "
+     "gloss": "{base} is drifting below {lev}'s hurdle; the wrapper is costing "
               "more than the leverage is adding"},
     {"key": "neutral", "label": "NEUTRAL", "icon": "⚪",
      "color": "#64748b", "floor": -0.01,
-     "gloss": "MSTR's drift is within a point a month of MSTU's hurdle — the "
-              "two vehicles are close to a wash"},
+     "gloss": "{base}'s drift is within a point a month of {lev}'s hurdle — "
+              "the two vehicles are close to a wash"},
     {"key": "buy", "label": "BUY", "icon": "🟢",
      "color": "#16a34a", "floor": 0.01,
-     "gloss": "MSTR is compounding above MSTU's hurdle; the leverage is "
+     "gloss": "{base} is compounding above {lev}'s hurdle; the leverage is "
               "currently paying for its own decay"},
     {"key": "strong_buy", "label": "STRONG BUY", "icon": "✅",
      "color": "#15803d", "floor": 0.05,
-     "gloss": "MSTR is compounding far above MSTU's hurdle — the conditions "
+     "gloss": "{base} is compounding far above {lev}'s hurdle — the conditions "
               "leveraged ETFs are built for"},
 )
 
@@ -618,11 +769,11 @@ RATING_LEVELS: tuple[dict, ...] = (
 def daily_returns(df: pd.DataFrame) -> pd.DataFrame:
     """Simple daily returns for both legs, NaNs dropped."""
     if df.empty or len(df) < 2:
-        return pd.DataFrame(columns=["MSTR", "MSTU"], dtype="float64")
-    return df[["MSTR", "MSTU"]].pct_change().dropna()
+        return pd.DataFrame(columns=["BASE", "LEV"], dtype="float64")
+    return df[["BASE", "LEV"]].pct_change().dropna()
 
 
-def tracking_slippage(df: pd.DataFrame) -> pd.Series:
+def tracking_slippage(df: pd.DataFrame, pair: LevPair) -> pd.Series:
     """Per-session slippage of MSTU against a frictionless 2×-daily tracker.
 
     ``e_t = log(1 + r_MSTU) − log(1 + 2·r_MSTR)``, i.e. what the fund lost (or
@@ -634,7 +785,7 @@ def tracking_slippage(df: pd.DataFrame) -> pd.Series:
     r = daily_returns(df)
     if r.empty:
         return pd.Series(dtype="float64")
-    return np.log1p(r["MSTU"]) - np.log1p(LEVERAGE * r["MSTR"])
+    return np.log1p(r["LEV"]) - np.log1p(pair.leverage * r["BASE"])
 
 
 def tracking_fit(df: pd.DataFrame) -> dict:
@@ -649,8 +800,8 @@ def tracking_fit(df: pd.DataFrame) -> dict:
     r = daily_returns(df)
     if len(r) < 10:
         return out
-    x = r["MSTR"].to_numpy(dtype="float64")
-    y = r["MSTU"].to_numpy(dtype="float64")
+    x = r["BASE"].to_numpy(dtype="float64")
+    y = r["LEV"].to_numpy(dtype="float64")
     if not np.isfinite(x).all() or float(np.var(x)) <= 0:
         return out
     beta, alpha = np.polyfit(x, y, 1)
@@ -662,18 +813,28 @@ def tracking_fit(df: pd.DataFrame) -> dict:
     return out
 
 
-def rate(edge: float) -> dict:
-    """Map an edge (MSTU's projected outcome minus MSTR's) to a rating level."""
+def rate(edge: float, pair: LevPair | None = None) -> dict:
+    """Map an edge (the fund's projected outcome minus the underlying's) to a level.
+
+    With a ``pair`` the returned dict's ``gloss`` names that pair's tickers;
+    without one the template is returned untouched, which keeps the pure
+    threshold logic callable from anywhere.
+    """
     if edge is None or not np.isfinite(edge):
-        return RATING_LEVELS[2]          # NEUTRAL — say nothing, not something
-    chosen = RATING_LEVELS[0]
-    for level in RATING_LEVELS:
-        if level["floor"] is not None and edge >= level["floor"]:
-            chosen = level
-    return chosen
+        chosen = RATING_LEVELS[2]        # NEUTRAL — say nothing, not something
+    else:
+        chosen = RATING_LEVELS[0]
+        for level in RATING_LEVELS:
+            if level["floor"] is not None and edge >= level["floor"]:
+                chosen = level
+    if pair is None:
+        return chosen
+    return {**chosen,
+            "gloss": chosen["gloss"].format(base=pair.base, lev=pair.lev)}
 
 
-def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
+def vehicle_read(df: pd.DataFrame, pair: LevPair, asof=None,
+                 horizon: int = HORIZON_DAYS,
                  sigma_ann_override: float | None = None,
                  vol_win: int = 20, drag_win: int = 60,
                  drift_win: int = 60) -> dict:
@@ -686,15 +847,15 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
     back replays the verdict as it stood then, which is the useful behaviour.
 
     Everything comes out in ONE frame: simple total returns over ``horizon``
-    sessions, all pushed through ``projected_mstu``.  That matters because the
+    sessions, all pushed through ``projected_lev``.  That matters because the
     alternative — quoting a log-space hurdle beside a simple-return breakeven —
     puts two numbers for the same quantity on screen that do not agree, and a
     margin that does not equal the difference of the two figures above it.
 
         breakeven     what MSTR must gain for MSTU to merely match it
-        mstr_pace     what MSTR makes over the period at its trailing drift
-        mstu_at_pace  what MSTU makes at that same pace, decay included
-        edge          mstu_at_pace − mstr_pace, in points — what the rating grades
+        base_pace     what MSTR makes over the period at its trailing drift
+        lev_at_pace  what MSTU makes at that same pace, decay included
+        edge          lev_at_pace − base_pace, in points — what the rating grades
 
     ``edge`` scales with ``horizon``, and deliberately so: the decay compounds,
     so the same conditions grade further from neutral the longer you intend to
@@ -706,7 +867,7 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
     most sensitive to and the one most worth stress-testing; the measured value
     is still returned as ``sigma_ann_measured`` so the caller can show both and
     never pass a hypothetical off as an observation.  Note it does NOT touch
-    ``mstr_pace``, which comes from the drift and is independent of volatility.
+    ``base_pace``, which comes from the drift and is independent of volatility.
 
     Returns ``ready=False`` when the trailing history is too short to compute
     the inputs, so the caller can say so rather than render a confident-looking
@@ -718,7 +879,7 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
         "sigma_ann_measured": np.nan, "sigma_is_override": False,
         "drag_daily": np.nan, "drag_period": np.nan,
         "hurdle_daily": np.nan, "drift_daily": np.nan,
-        "breakeven": np.nan, "mstr_pace": np.nan, "mstu_at_pace": np.nan,
+        "breakeven": np.nan, "base_pace": np.nan, "lev_at_pace": np.nan,
         "edge": np.nan, "flat_outcome": np.nan, "rating": RATING_LEVELS[2],
         "vol_win": vol_win, "drag_win": drag_win, "drift_win": drift_win,
     }
@@ -732,10 +893,10 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
         return read
 
     r = daily_returns(hist)
-    logret = np.log(hist[["MSTR", "MSTU"]]).diff().dropna()
-    slip = tracking_slippage(hist)
+    logret = np.log(hist[["BASE", "LEV"]]).diff().dropna()
+    slip = tracking_slippage(hist, pair)
 
-    sigma_measured = float(r["MSTR"].iloc[-vol_win:].std())
+    sigma_measured = float(r["BASE"].iloc[-vol_win:].std())
     sigma = sigma_measured
     is_override = False
     if sigma_ann_override is not None and np.isfinite(sigma_ann_override):
@@ -751,13 +912,15 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
             abs(sigma_ann - sigma_measured * np.sqrt(TRADING_DAYS)) > VOL_STEP_ANN / 2)
     # Cost of carry as a POSITIVE number of log-points per session.
     drag = float(-slip.iloc[-drag_win:].mean())
-    # The hurdle per session: MSTU beats MSTR only once MSTR's log drift
-    # clears σ² + carry.  Over the period it becomes the breakeven move.
-    hurdle = sigma ** 2 + drag
-    drift = float(logret["MSTR"].iloc[-drift_win:].mean())
+    # The hurdle per session: the fund beats the underlying only once the
+    # underlying's log drift clears k/2·σ² + carry/(k−1).  Over the period that
+    # becomes the breakeven move.
+    k = pair.leverage
+    hurdle = k / 2.0 * sigma ** 2 + drag / (k - 1.0)
+    drift = float(logret["BASE"].iloc[-drift_win:].mean())
 
-    mstr_pace = float(np.expm1(drift * horizon))
-    mstu_at_pace = float(projected_mstu(mstr_pace, sigma, drag, horizon))
+    base_pace = float(np.expm1(drift * horizon))
+    lev_at_pace = float(projected_lev(base_pace, sigma, drag, horizon, k))
 
     read.update(
         ready=True, sigma_daily=sigma, sigma_ann=sigma * np.sqrt(TRADING_DAYS),
@@ -765,11 +928,11 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
         sigma_is_override=is_override,
         drag_daily=drag, drag_period=drag * horizon,
         hurdle_daily=hurdle, drift_daily=drift,
-        breakeven=breakeven_move(sigma, drag, horizon),
-        mstr_pace=mstr_pace, mstu_at_pace=mstu_at_pace,
-        edge=mstu_at_pace - mstr_pace,
-        flat_outcome=float(projected_mstu(0.0, sigma, drag, horizon)),
-        rating=rate(mstu_at_pace - mstr_pace),
+        breakeven=breakeven_move(sigma, drag, horizon, k),
+        base_pace=base_pace, lev_at_pace=lev_at_pace,
+        edge=lev_at_pace - base_pace,
+        flat_outcome=float(projected_lev(0.0, sigma, drag, horizon, k)),
+        rating=rate(lev_at_pace - base_pace, pair),
     )
     return read
 
@@ -795,7 +958,7 @@ def drift_ladder(df: pd.DataFrame, asof=None,
     """
     out: list[dict] = []
     hist = df if asof is None else df.loc[df.index <= pd.Timestamp(asof)]
-    closes = hist["MSTR"] if "MSTR" in hist else pd.Series(dtype="float64")
+    closes = hist["BASE"] if "BASE" in hist else pd.Series(dtype="float64")
     for sessions, label in windows:
         row = {"label": label, "sessions": sessions, "ready": False,
                "start": None, "end": None,
@@ -813,8 +976,8 @@ def drift_ladder(df: pd.DataFrame, asof=None,
 
 
 # ── B: the breakeven calculator ─────────────────────────────────────────────
-def projected_mstu(mstr_total_ret, sigma_daily: float, drag_daily: float,
-                   horizon: int = HORIZON_DAYS):
+def projected_lev(base_total_ret, sigma_daily: float, drag_daily: float,
+                  horizon: int = HORIZON_DAYS, leverage: float = 2.0):
     """MSTU's total return for a given MSTR total return over ``horizon``.
 
     Applies the identity at the top of this section, so it answers the question
@@ -822,36 +985,46 @@ def projected_mstu(mstr_total_ret, sigma_daily: float, drag_daily: float,
     MSTU land?" — including the decay that ``2 × X`` silently omits.  Accepts a
     scalar or an array; returns the same shape, as a simple (not log) return.
     """
-    arr = np.asarray(mstr_total_ret, dtype="float64")
+    arr = np.asarray(base_total_ret, dtype="float64")
     if not np.isfinite(sigma_daily) or not np.isfinite(drag_daily):
         return np.full(arr.shape, np.nan) if arr.ndim else np.nan
     with np.errstate(divide="ignore", invalid="ignore"):
         underlying_log = np.log1p(np.clip(arr, -0.9999, None))
-    decay = horizon * (sigma_daily ** 2 + drag_daily)
-    fund_log = LEVERAGE * underlying_log - decay
+    k = leverage
+    decay = horizon * (k * (k - 1.0) / 2.0 * sigma_daily ** 2 + drag_daily)
+    fund_log = k * underlying_log - decay
     out = np.expm1(fund_log)
     return out if arr.ndim else float(out)
 
 
 def breakeven_move(sigma_daily: float, drag_daily: float,
-                   horizon: int = HORIZON_DAYS) -> float:
-    """The MSTR total return at which MSTU exactly matches holding MSTR.
+                   horizon: int = HORIZON_DAYS, leverage: float = 2.0) -> float:
+    """The underlying's total return at which the fund exactly matches it.
 
     Below it the leverage loses to the plain shares; above it the leverage
-    wins.  It is ``exp(H·(σ² + drag)) − 1`` — a rearrangement of the hurdle, so
-    it carries no forecast of whether MSTR will get there.
+    wins.  Setting ``projected_lev(L) = L`` and solving gives
+
+        L* = exp(H · (k/2 · σ² + carry/(k−1))) − 1
+
+    which is ``exp(H·(σ² + carry)) − 1`` at k = 2 and a materially higher bar at
+    k = 3 — SOXL needs SOXX to clear 1.5σ² a session where MSTU needs 1.0σ².
+    It carries no forecast of whether the underlying will get there.
     """
-    if not np.isfinite(sigma_daily) or not np.isfinite(drag_daily):
+    if (not np.isfinite(sigma_daily) or not np.isfinite(drag_daily)
+            or leverage <= 1.0):
         return np.nan
-    return float(np.expm1(horizon * (sigma_daily ** 2 + drag_daily)))
+    k = leverage
+    per_session = k / 2.0 * sigma_daily ** 2 + drag_daily / (k - 1.0)
+    return float(np.expm1(horizon * per_session))
 
 
 def breakeven_curve(sigma_daily: float, drag_daily: float,
-                    horizon: int = HORIZON_DAYS,
+                    horizon: int = HORIZON_DAYS, leverage: float = 2.0,
                     moves=None) -> pd.DataFrame:
-    """``mstr`` / ``mstu`` / ``edge`` over a grid of MSTR moves.
+    """``base`` / ``lev`` / ``edge`` over a grid of underlying moves.
 
-    ``edge`` is MSTU minus MSTR: negative means the plain shares won.  It
+    ``edge`` is the fund minus the underlying: negative means the plain shares
+    won.  It
     crosses zero exactly once, at ``breakeven_move``.
 
     The default grid STRETCHES to contain that crossing.  At a 126-session hold
@@ -860,16 +1033,16 @@ def breakeven_curve(sigma_daily: float, drag_daily: float,
     point the chart exists to show, pushed out of frame.
     """
     if moves is None:
-        be = breakeven_move(sigma_daily, drag_daily, horizon)
+        be = breakeven_move(sigma_daily, drag_daily, horizon, leverage)
         top = 0.40 if not np.isfinite(be) else max(0.40, be * 1.25)
         moves = np.linspace(-0.40, top, 60)
     moves = np.asarray(moves, dtype="float64")
-    mstu = projected_mstu(moves, sigma_daily, drag_daily, horizon)
-    return pd.DataFrame({"mstr": moves, "mstu": mstu, "edge": mstu - moves})
+    lev = projected_lev(moves, sigma_daily, drag_daily, horizon, leverage)
+    return pd.DataFrame({"base": moves, "lev": lev, "edge": lev - moves})
 
 
 def make_breakeven_figure(curve: pd.DataFrame, breakeven: float,
-                          horizon: int = HORIZON_DAYS,
+                          pair: LevPair, horizon: int = HORIZON_DAYS,
                           height: int = 330) -> go.Figure:
     """Plot MSTU's projected outcome against MSTR's move over ``horizon``.
 
@@ -881,17 +1054,17 @@ def make_breakeven_figure(curve: pd.DataFrame, breakeven: float,
     fig = go.Figure()
     if curve.empty:
         return fig
-    x = curve["mstr"].to_numpy()
+    x = curve["base"].to_numpy()
 
     fig.add_trace(go.Scatter(
-        x=x, y=x, name="Hold MSTR", mode="lines",
-        line=dict(color=COLOR_MSTR, width=2, dash="dot"),
-        hovertemplate="<b>MSTR</b> %{y:+.1%}<extra></extra>",
+        x=x, y=x, name=f"Hold {pair.base}", mode="lines",
+        line=dict(color=COLOR_BASE, width=2, dash="dot"),
+        hovertemplate=f"<b>{pair.base}</b> %{{y:+.1%}}<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=x, y=curve["mstu"], name="Hold MSTU (projected)", mode="lines",
-        line=dict(color=COLOR_MSTU, width=2.5),
-        hovertemplate="<b>MSTU</b> %{y:+.1%}<extra></extra>",
+        x=x, y=curve["lev"], name=f"Hold {pair.lev} (projected)", mode="lines",
+        line=dict(color=COLOR_LEV, width=2.5),
+        hovertemplate=f"<b>{pair.lev}</b> %{{y:+.1%}}<extra></extra>",
     ))
     fig.add_hline(y=0, line_color=COLOR_AXIS, line_width=1, opacity=0.5)
     if np.isfinite(breakeven):
@@ -909,7 +1082,7 @@ def make_breakeven_figure(curve: pd.DataFrame, breakeven: float,
         dragmode="pan",
     )
     fig.update_xaxes(
-        title_text=f"MSTR total return over the next {horizon} sessions",
+        title_text=f"{pair.base} total return over the next {horizon} sessions",
         tickformat="+.0%", showgrid=True, gridcolor=COLOR_GRID, zeroline=False,
         tickfont=dict(size=11, color="#475569"),
         title_font=dict(size=12, color="#475569"),
