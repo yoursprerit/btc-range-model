@@ -16980,13 +16980,20 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
     in whichever direction they already point; a control that changed only the
     chart at the bottom would have hidden exactly that.
     """
-    horizon = st.select_slider(
+    # A continuous slider, not a handful of presets: the decay is smooth in the
+    # holding period, so any session count is a legitimate question to ask of it.
+    horizon = st.slider(
         "⏳ Holding period — everything below is measured over this many sessions",
-        options=[5, 10, 21, 42, 63, 126], value=_mm.HORIZON_DAYS,
-        key="mstr_mstu_hz",
-        help="21 sessions ≈ one month, 63 ≈ a quarter, 126 ≈ six months. The "
-             "leverage decay compounds with the holding period, so a longer hold "
-             "needs a proportionally bigger MSTR move to break even.",
+        min_value=1, max_value=_mm.MAX_HORIZON_DAYS, value=_mm.HORIZON_DAYS,
+        step=1, key="mstr_mstu_hz",
+        help="Trading sessions, not calendar days: 21 ≈ one month, 63 ≈ a quarter, "
+             "126 ≈ six months, 252 ≈ a year. The leverage decay compounds with the "
+             "holding period, so a longer hold needs a proportionally bigger MSTR "
+             "move to break even.",
+    )
+    st.caption(
+        f"≈ **{horizon / _mm.TRADING_DAYS * 12:.1f} months** of market time "
+        f"({horizon} trading sessions)."
     )
     read = _mm.vehicle_read(df, asof=asof, horizon=horizon)
     if not read["ready"]:
@@ -17033,6 +17040,16 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
     g5.metric("MSTR volatility", _mm_pct(read["sigma_ann"], 0, signed=False),
               help=f"Annualised, from the trailing {read['vol_win']} sessions. Drag rises "
                    "with the SQUARE of this, which is why a 2× fund suffers so much here.")
+
+    if horizon > 126:
+        st.warning(
+            f"📏 **{horizon} sessions is a long extrapolation.** The breakeven is still exact "
+            "arithmetic — it only needs today's volatility and carry. *MSTR at recent pace* is "
+            f"not: it compounds a trailing {read['drift_win']}-session drift out "
+            f"{horizon / _mm.TRADING_DAYS:.1f} years, which no drift estimate survives. Read the "
+            "breakeven at these lengths and treat the pace, the projection and the rating as "
+            "illustration."
+        )
 
     st.caption(
         f"⚠️ **This grades the vehicle, not the direction.** It says how expensive MSTU is "

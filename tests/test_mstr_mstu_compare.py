@@ -549,7 +549,7 @@ def test_vehicle_read_figures_are_internally_consistent():
     assert read["rating"] is mm.rate(read["edge"])
 
 
-@pytest.mark.parametrize("horizon", [5, 10, 21, 42, 63, 126])
+@pytest.mark.parametrize("horizon", [1, 2, 5, 7, 10, 20, 21, 42, 63, 100, 126, 252, 365])
 def test_vehicle_read_scales_every_figure_with_the_holding_period(horizon):
     """The slider drives the whole verdict, not just the chart underneath it.
 
@@ -616,7 +616,7 @@ def test_breakeven_figure_on_empty_curve_returns_a_figure():
     assert fig is not None and len(fig.data) == 0
 
 
-@pytest.mark.parametrize("horizon", [5, 21, 63, 126])
+@pytest.mark.parametrize("horizon", [1, 5, 21, 63, 126, 252, 365])
 def test_breakeven_curve_always_contains_its_own_crossing(horizon):
     """The marker must stay inside the plotted range at every holding period.
 
@@ -629,3 +629,43 @@ def test_breakeven_curve_always_contains_its_own_crossing(horizon):
 
     assert curve["mstr"].min() <= be <= curve["mstr"].max()
     assert (np.diff(np.sign(curve["edge"].to_numpy())) != 0).sum() == 1
+
+
+def test_every_whole_session_count_up_to_the_ceiling_is_usable():
+    """The slider is continuous, so every integer in range must actually compute.
+
+    It replaced a six-value preset picker, and the presets were the only counts
+    anything had ever been run at. A single horizon that returns NaN, overflows
+    or produces a curve the breakeven falls outside of would be a dead position
+    on the slider — invisible until someone dragged onto it.
+    """
+    df = _synthetic_pair(n=400, mu=0.002, sigma=0.02, carry=0.0005)
+
+    for horizon in range(1, mm.MAX_HORIZON_DAYS + 1):
+        read = mm.vehicle_read(df, horizon=horizon)
+        assert read["ready"], horizon
+        assert read["horizon"] == horizon
+        for key in ("breakeven", "mstr_pace", "mstu_at_pace", "edge", "flat_outcome"):
+            assert np.isfinite(read[key]), (horizon, key)
+        assert read["edge"] == pytest.approx(read["mstu_at_pace"] - read["mstr_pace"])
+        assert read["rating"] in mm.RATING_LEVELS
+        curve = mm.breakeven_curve(read["sigma_daily"], read["drag_daily"], horizon)
+        assert np.isfinite(curve[["mstu", "edge"]].to_numpy()).all(), horizon
+        assert curve["mstr"].min() <= read["breakeven"] <= curve["mstr"].max(), horizon
+
+
+def test_breakeven_and_flat_outcome_are_monotone_in_the_holding_period():
+    """Decay only accumulates, so the bar rises and the flat outcome sinks."""
+    sigma, drag = 0.03, 0.0008
+    horizons = list(range(1, mm.MAX_HORIZON_DAYS + 1))
+    be = [mm.breakeven_move(sigma, drag, h) for h in horizons]
+    flat = [mm.projected_mstu(0.0, sigma, drag, h) for h in horizons]
+
+    assert all(be[i] < be[i + 1] for i in range(len(be) - 1))
+    assert all(flat[i] > flat[i + 1] for i in range(len(flat) - 1))
+    assert flat[-1] > -1.0          # a total return can never be worse than −100%
+
+
+def test_max_horizon_is_the_advertised_ceiling():
+    assert mm.MAX_HORIZON_DAYS == 365
+    assert mm.HORIZON_DAYS < mm.MAX_HORIZON_DAYS
