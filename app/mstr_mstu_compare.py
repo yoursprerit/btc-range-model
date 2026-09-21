@@ -549,8 +549,12 @@ def _rgba(hex_color: str, alpha: float) -> str:
 # re-weight these components into something predictive, re-run that experiment
 # first — it is cheap, and it says no.
 
-#: Sessions in the "one month" horizon every carry number is quoted over.
+#: Sessions in the "one month" horizon every carry number defaults to.
 HORIZON_DAYS = 21
+#: The longest holding period the UI offers, in sessions.  Past roughly a year
+#: of sessions, extrapolating a trailing drift stops meaning anything at all —
+#: the caller warns about that well before this ceiling.
+MAX_HORIZON_DAYS = 365
 #: Sessions per year, for annualising volatility.
 TRADING_DAYS = 252
 #: MSTU's daily leverage multiple, as the identity above uses it.
