@@ -834,10 +834,10 @@ def test_lookbacks_longer_than_the_history_are_not_ready():
     ladder = mm.drift_ladder(_synthetic_pair(n=8))
 
     by_label = {r["label"]: r for r in ladder}
-    assert by_label["1 day"]["ready"] and by_label["1 week"]["ready"]
-    assert not by_label["1 month"]["ready"]
-    assert not by_label["2 months"]["ready"]
-    assert np.isnan(by_label["2 months"]["total_ret"])
+    assert by_label["1 session"]["ready"] and by_label["5 sessions"]["ready"]
+    assert not by_label["30 sessions"]["ready"]
+    assert not by_label["60 sessions"]["ready"]
+    assert np.isnan(by_label["60 sessions"]["total_ret"])
 
 
 def test_drift_ladder_on_empty_frame_returns_every_row_unready():
@@ -850,7 +850,11 @@ def test_drift_ladder_on_empty_frame_returns_every_row_unready():
 def test_ladder_windows_are_ordered_shortest_first():
     sessions = [n for n, _ in mm.DRIFT_LADDER_WINDOWS]
     assert sessions == sorted(sessions)
-    assert sessions == [1, 5, 21, 42]
+    assert sessions == [1, 5, 30, 60]
+    # Labels are counted in sessions, never calendar periods — the unit the
+    # holding-period slider and the decay identity both use.
+    assert all(lbl.endswith("session") or lbl.endswith("sessions")
+               for _, lbl in mm.DRIFT_LADDER_WINDOWS)
 
 
 def test_per_session_figure_stays_sane_where_annualising_would_not():
@@ -869,3 +873,22 @@ def test_per_session_figure_stays_sane_where_annualising_would_not():
     assert one_day["per_session_log"] == pytest.approx(np.log(1.164))
     assert abs(one_day["per_session_log"]) < 1.0            # readable, not 1e16
     assert np.expm1(one_day["per_session_log"] * mm.TRADING_DAYS) > 1e15   # why we don't
+
+
+def test_last_ladder_rung_is_the_verdicts_own_drift_window():
+    """The caption claims the final rung IS the drift the verdict extrapolates.
+
+    That is a coupling between two defaults in different functions, so pin it:
+    change one without the other and the panel starts asserting something false.
+    """
+    import inspect
+    default_drift_win = inspect.signature(mm.vehicle_read).parameters["drift_win"].default
+
+    assert mm.DRIFT_LADDER_WINDOWS[-1][0] == default_drift_win
+
+    df = _synthetic_pair(n=300)
+    last_rung = mm.drift_ladder(df)[-1]
+    read = mm.vehicle_read(df)
+
+    assert last_rung["ready"]
+    assert last_rung["per_session_log"] == pytest.approx(read["drift_daily"])

@@ -568,11 +568,14 @@ VOL_STEP_ANN = 0.01
 
 #: Lookbacks for the drift ladder: how far MSTR has actually moved, read over
 #: several trailing windows.  It exists because the verdict extrapolates ONE
-#: drift estimate (60 sessions by default) and the choice of window moves that
-#: estimate a great deal — the ladder makes the sensitivity visible instead of
-#: leaving it buried in a parameter.
+#: drift estimate and the choice of window moves that estimate a great deal —
+#: the ladder makes the sensitivity visible instead of leaving it buried in a
+#: parameter.  Counted in SESSIONS rather than calendar periods, matching the
+#: holding-period slider and the identity's own unit; the last rung is the
+#: verdict's default ``drift_win``, so the ladder ends on the number the
+#: verdict actually uses rather than near it.
 DRIFT_LADDER_WINDOWS: tuple[tuple[int, str], ...] = (
-    (1, "1 day"), (5, "1 week"), (21, "1 month"), (42, "2 months"),
+    (1, "1 session"), (5, "5 sessions"), (30, "30 sessions"), (60, "60 sessions"),
 )
 #: Sessions per year, for annualising volatility.
 TRADING_DAYS = 252

@@ -17115,22 +17115,27 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
             col.metric(
                 row["label"],
                 _mm_pct(row["total_ret"]),
-                help=(f"MSTR's total move over the last {row['sessions']} "
-                      f"session{'s' if row['sessions'] != 1 else ''} — "
-                      f"{pd.Timestamp(row['start']):%b %d} close to "
-                      f"{pd.Timestamp(row['end']):%b %d} close. That averages "
-                      f"{_mm_pct(row['per_session_log'], 2)} per session in log terms."),
+                help=(f"MSTR's total move from the "
+                      f"{pd.Timestamp(row['start']):%b %d, %Y} close to the "
+                      f"{pd.Timestamp(row['end']):%b %d, %Y} close — "
+                      f"{_mm_pct(row['per_session_log'], 2)} per session on average, "
+                      "in log terms."),
             )
         _per = " · ".join(
             f"**{r['label']}** {_mm_pct(r['per_session_log'], 2)}"
             for r in ladder if r["ready"])
+        _last = ladder[-1]
+        _tail = (
+            f" The verdict above extrapolates the **{read['drift_win']}-session** drift, "
+            f"so the last rung is the figure it actually uses"
+            + (f" ({_mm_pct(_last['per_session_log'], 2)} per session)"
+               if _last["ready"] and _last["sessions"] == read["drift_win"] else "")
+            + " — read the rest as the spread of answers a different window would have given."
+        )
         st.caption(
-            f"📐 Realised moves, not forecasts. Per session: {_per}. The verdict above "
-            f"extrapolates the **{read['drift_win']}-session** drift "
-            f"({_mm_pct(read['drift_daily'], 2)} per session) — read the ladder as the "
-            "spread of answers that choice could have given. Deliberately not annualised: "
-            "scaling one session to a year is legal arithmetic and meaningless (MSTR's last "
-            "session annualises to about 4×10¹⁸%)."
+            f"📐 Realised moves, not forecasts. Per session: {_per}.{_tail} Deliberately not "
+            "annualised: scaling one session to a year is legal arithmetic and meaningless "
+            "(MSTR's last session annualises to about 4×10¹⁸%)."
         )
 
     if horizon > 126:
