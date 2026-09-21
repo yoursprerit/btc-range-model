@@ -555,6 +555,16 @@ HORIZON_DAYS = 21
 #: of sessions, extrapolating a trailing drift stops meaning anything at all —
 #: the caller warns about that well before this ceiling.
 MAX_HORIZON_DAYS = 365
+
+#: Bounds for the volatility the UI lets you dial in, annualised.  MSTR's own
+#: trailing-20 reading has spanned 33–156% since MSTU launched (14–257% on a
+#: 5-session window), so this brackets everything observed with room for a
+#: calmer or a more violent regime than it has yet produced.
+MIN_VOL_ANN = 0.20
+MAX_VOL_ANN = 2.50
+#: The slider's resolution, annualised.  Differences finer than this cannot be
+#: dialled in, so they are measurement, not intent.
+VOL_STEP_ANN = 0.01
 #: Sessions per year, for annualising volatility.
 TRADING_DAYS = 252
 #: MSTU's daily leverage multiple, as the identity above uses it.
@@ -649,6 +659,7 @@ def rate(edge: float) -> dict:
 
 
 def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
+                 sigma_ann_override: float | None = None,
                  vol_win: int = 20, drag_win: int = 60,
                  drift_win: int = 60) -> dict:
     """Grade MSTU's cost of carry against MSTR, over a chosen holding period.
@@ -675,6 +686,13 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
     hold — in whichever direction they already point.  Extrapolating a trailing
     drift over six months is a heroic assumption, and the caller says so.
 
+    ``sigma_ann_override`` swaps in a what-if volatility (annualised) for the
+    trailing reading.  Decay scales with σ², so it is the input the verdict is
+    most sensitive to and the one most worth stress-testing; the measured value
+    is still returned as ``sigma_ann_measured`` so the caller can show both and
+    never pass a hypothetical off as an observation.  Note it does NOT touch
+    ``mstr_pace``, which comes from the drift and is independent of volatility.
+
     Returns ``ready=False`` when the trailing history is too short to compute
     the inputs, so the caller can say so rather than render a confident-looking
     number built on six observations.
@@ -682,6 +700,7 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
     read = {
         "ready": False, "asof": None, "n_obs": 0, "horizon": int(horizon),
         "sigma_daily": np.nan, "sigma_ann": np.nan,
+        "sigma_ann_measured": np.nan, "sigma_is_override": False,
         "drag_daily": np.nan, "drag_period": np.nan,
         "hurdle_daily": np.nan, "drift_daily": np.nan,
         "breakeven": np.nan, "mstr_pace": np.nan, "mstu_at_pace": np.nan,
@@ -701,7 +720,20 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
     logret = np.log(hist[["MSTR", "MSTU"]]).diff().dropna()
     slip = tracking_slippage(hist)
 
-    sigma = float(r["MSTR"].iloc[-vol_win:].std())
+    sigma_measured = float(r["MSTR"].iloc[-vol_win:].std())
+    sigma = sigma_measured
+    is_override = False
+    if sigma_ann_override is not None and np.isfinite(sigma_ann_override):
+        sigma_ann = float(np.clip(sigma_ann_override, MIN_VOL_ANN, MAX_VOL_ANN))
+        sigma = sigma_ann / np.sqrt(TRADING_DAYS)
+        # Flagged as a what-if only when it differs by MORE than the slider can
+        # express.  The control steps in whole percent, so a live reading of
+        # 111.88% arrives back as 112% and an exact comparison would brand the
+        # untouched default a hypothetical — which it is not.
+        # bool(): numpy comparisons yield np.bool_, which fails an `is False`
+        # check and pickles oddly into Streamlit's cache.
+        is_override = bool(
+            abs(sigma_ann - sigma_measured * np.sqrt(TRADING_DAYS)) > VOL_STEP_ANN / 2)
     # Cost of carry as a POSITIVE number of log-points per session.
     drag = float(-slip.iloc[-drag_win:].mean())
     # The hurdle per session: MSTU beats MSTR only once MSTR's log drift
@@ -714,6 +746,8 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
 
     read.update(
         ready=True, sigma_daily=sigma, sigma_ann=sigma * np.sqrt(TRADING_DAYS),
+        sigma_ann_measured=sigma_measured * np.sqrt(TRADING_DAYS),
+        sigma_is_override=is_override,
         drag_daily=drag, drag_period=drag * horizon,
         hurdle_daily=hurdle, drift_daily=drift,
         breakeven=breakeven_move(sigma, drag, horizon),

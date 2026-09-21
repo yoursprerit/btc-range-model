@@ -669,3 +669,120 @@ def test_breakeven_and_flat_outcome_are_monotone_in_the_holding_period():
 def test_max_horizon_is_the_advertised_ceiling():
     assert mm.MAX_HORIZON_DAYS == 365
     assert mm.HORIZON_DAYS < mm.MAX_HORIZON_DAYS
+
+
+# ── the volatility override ─────────────────────────────────────────────────
+def test_volatility_override_replaces_the_measured_reading():
+    df = _synthetic_pair(mu=0.002, sigma=0.02, carry=0.0005)
+
+    base = mm.vehicle_read(df)
+    what_if = mm.vehicle_read(df, sigma_ann_override=1.20)
+
+    assert what_if["sigma_ann"] == pytest.approx(1.20)
+    assert what_if["sigma_daily"] == pytest.approx(1.20 / np.sqrt(mm.TRADING_DAYS))
+    assert what_if["sigma_is_override"] is True
+    # The measured value survives alongside it, so the UI can show both and
+    # never pass a hypothetical off as an observation.
+    assert what_if["sigma_ann_measured"] == pytest.approx(base["sigma_ann_measured"])
+    assert base["sigma_is_override"] is False
+
+
+def test_override_moves_everything_except_the_drift_extrapolation():
+    """σ prices the decay; it has no business touching MSTR's own pace."""
+    df = _synthetic_pair(mu=0.003, sigma=0.02, carry=0.0005)
+
+    calm = mm.vehicle_read(df, sigma_ann_override=0.30)
+    wild = mm.vehicle_read(df, sigma_ann_override=1.50)
+
+    assert calm["mstr_pace"] == pytest.approx(wild["mstr_pace"])
+    assert wild["breakeven"] > calm["breakeven"]
+    assert wild["mstu_at_pace"] < calm["mstu_at_pace"]
+    assert wild["edge"] < calm["edge"]
+    assert wild["flat_outcome"] < calm["flat_outcome"]
+
+
+def test_override_can_flip_the_rating_across_the_whole_range():
+    """Decay scales with σ², so volatility alone swings the verdict end to end.
+
+    That sensitivity is the reason the slider exists — a verdict that barely
+    moved across MSTR's own observed 33–156% range would not be worth dialling.
+    """
+    df = _synthetic_pair(mu=0.004, sigma=0.02, carry=0.0005)
+    order = [lvl["key"] for lvl in mm.RATING_LEVELS]
+
+    calm = mm.vehicle_read(df, sigma_ann_override=mm.MIN_VOL_ANN)["rating"]["key"]
+    wild = mm.vehicle_read(df, sigma_ann_override=mm.MAX_VOL_ANN)["rating"]["key"]
+
+    # Pinning exact labels would hostage the test to the fixture's random draw;
+    # what must hold is that volatility alone spans most of the scale.
+    assert order.index(calm) - order.index(wild) >= 3
+    assert wild == "strong_sell"
+
+    # And it is monotone in between, not just at the ends.
+    keys = [mm.vehicle_read(df, sigma_ann_override=v)["rating"]["key"]
+            for v in (0.20, 0.50, 0.80, 1.10, 1.40, 1.70, 2.00)]
+    ranks = [order.index(k) for k in keys]
+    assert all(ranks[i] >= ranks[i + 1] for i in range(len(ranks) - 1)), keys
+
+
+@pytest.mark.parametrize("override", [-5.0, 0.0, 0.01, 99.0, 1e9])
+def test_override_is_clamped_to_the_advertised_bounds(override):
+    """A value off the slider's ends must clamp, never produce absurd arithmetic."""
+    read = mm.vehicle_read(_synthetic_pair(), sigma_ann_override=override)
+
+    assert mm.MIN_VOL_ANN <= read["sigma_ann"] <= mm.MAX_VOL_ANN
+    assert np.isfinite(read["breakeven"]) and np.isfinite(read["edge"])
+
+
+@pytest.mark.parametrize("override", [None, float("nan")])
+def test_no_override_falls_back_to_the_measurement(override):
+    df = _synthetic_pair()
+    assert mm.vehicle_read(df, sigma_ann_override=override)["sigma_ann"] == pytest.approx(
+        mm.vehicle_read(df)["sigma_ann_measured"])
+
+
+def test_override_equal_to_the_measurement_is_not_flagged_as_a_what_if():
+    """Dialling back onto the live reading must clear the what-if banner."""
+    df = _synthetic_pair()
+    measured = mm.vehicle_read(df)["sigma_ann_measured"]
+
+    assert mm.vehicle_read(df, sigma_ann_override=measured)["sigma_is_override"] is False
+
+
+def test_volatility_bounds_bracket_what_mstr_has_actually_done():
+    """MSTR's trailing-20 vol has run 33–156% since MSTU launched."""
+    assert mm.MIN_VOL_ANN <= 0.33
+    assert mm.MAX_VOL_ANN >= 1.56
+    assert mm.MIN_VOL_ANN < mm.MAX_VOL_ANN
+
+
+def test_every_whole_percent_of_volatility_is_usable():
+    """The slider steps in whole percent, so every step must compute."""
+    df = _synthetic_pair(n=400)
+    lo, hi = int(mm.MIN_VOL_ANN * 100), int(mm.MAX_VOL_ANN * 100)
+
+    for pct in range(lo, hi + 1):
+        read = mm.vehicle_read(df, sigma_ann_override=pct / 100.0)
+        assert read["ready"], pct
+        for key in ("breakeven", "mstu_at_pace", "edge", "flat_outcome"):
+            assert np.isfinite(read[key]), (pct, key)
+        assert read["flat_outcome"] > -1.0, pct        # never worse than −100%
+
+
+def test_an_override_within_slider_resolution_is_not_a_what_if():
+    """The untouched default must not brand itself a hypothetical.
+
+    The slider steps in whole percent, so a live reading of 111.88% comes back
+    as 112.00%. Comparing exactly lit the what-if banner on first load, saying
+    the decay was priced off 112% "rather than" 112%.
+    """
+    df = _synthetic_pair()
+    measured = mm.vehicle_read(df)["sigma_ann_measured"]
+    as_the_slider_sends_it = round(measured * 100) / 100.0
+
+    read = mm.vehicle_read(df, sigma_ann_override=as_the_slider_sends_it)
+
+    assert read["sigma_is_override"] is False
+    # But a genuine nudge of one whole step still registers.
+    nudged = mm.vehicle_read(df, sigma_ann_override=as_the_slider_sends_it + mm.VOL_STEP_ANN)
+    assert nudged["sigma_is_override"] is True
