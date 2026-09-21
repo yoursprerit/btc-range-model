@@ -489,18 +489,18 @@ def test_breakeven_curve_crosses_zero_edge_exactly_once():
 
 
 # ── the rating ──────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("margin,expected", [
+@pytest.mark.parametrize("edge,expected", [
     (-0.30, "STRONG SELL"), (-0.050001, "STRONG SELL"),
     (-0.05, "SELL"), (-0.02, "SELL"),
     (-0.01, "NEUTRAL"), (0.0, "NEUTRAL"), (0.009, "NEUTRAL"),
     (0.01, "BUY"), (0.04, "BUY"),
     (0.05, "STRONG BUY"), (0.50, "STRONG BUY"),
 ])
-def test_rating_thresholds(margin, expected):
-    assert mm.rate(margin)["label"] == expected
+def test_rating_thresholds(edge, expected):
+    assert mm.rate(edge)["label"] == expected
 
 
-def test_rating_of_an_unknown_margin_says_nothing_rather_than_something():
+def test_rating_of_an_unknown_edge_says_nothing_rather_than_something():
     assert mm.rate(float("nan"))["label"] == "NEUTRAL"
     assert mm.rate(None)["label"] == "NEUTRAL"
 
@@ -517,7 +517,7 @@ def test_every_rating_level_carries_an_icon_and_a_word():
 
 
 def test_vehicle_read_rates_a_calm_uptrend_above_a_violent_one():
-    """Same drift, more volatility → higher hurdle → worse vehicle rating.
+    """Same drift, more volatility → higher breakeven → worse vehicle rating.
 
     This is the whole mechanism in one assertion: decay scales with σ², so the
     identical drift stops covering the carry once the path gets rough.
@@ -526,17 +526,61 @@ def test_vehicle_read_rates_a_calm_uptrend_above_a_violent_one():
     wild = mm.vehicle_read(_synthetic_pair(mu=0.004, sigma=0.05, carry=0.0005))
 
     assert calm["ready"] and wild["ready"]
-    assert wild["hurdle_month"] > calm["hurdle_month"]
-    assert wild["margin_month"] < calm["margin_month"]
+    assert wild["breakeven"] > calm["breakeven"]
+    assert wild["edge"] < calm["edge"]
     assert calm["rating"]["label"] == "STRONG BUY"
     assert wild["rating"]["label"] == "STRONG SELL"
+
+
+def test_vehicle_read_figures_are_internally_consistent():
+    """The edge must be exactly the difference of the two figures shown above it.
+
+    The earlier build quoted a log-space hurdle beside a simple-return
+    breakeven, so the margin did not equal the visible subtraction. One frame,
+    one arithmetic.
+    """
+    read = mm.vehicle_read(_synthetic_pair(mu=0.002, sigma=0.02, carry=0.0005))
+
+    assert read["edge"] == pytest.approx(read["mstu_at_pace"] - read["mstr_pace"])
+    assert read["mstu_at_pace"] == pytest.approx(mm.projected_mstu(
+        read["mstr_pace"], read["sigma_daily"], read["drag_daily"], read["horizon"]))
+    assert read["breakeven"] == pytest.approx(mm.breakeven_move(
+        read["sigma_daily"], read["drag_daily"], read["horizon"]))
+    assert read["rating"] is mm.rate(read["edge"])
+
+
+@pytest.mark.parametrize("horizon", [5, 10, 21, 42, 63, 126])
+def test_vehicle_read_scales_every_figure_with_the_holding_period(horizon):
+    """The slider drives the whole verdict, not just the chart underneath it.
+
+    Decay compounds, so a longer hold needs a bigger MSTR move to break even and
+    bleeds further if MSTR goes nowhere — and the edge, which the rating grades,
+    moves further from neutral in whichever direction it already points.
+    """
+    df = _synthetic_pair(mu=0.003, sigma=0.02, carry=0.0005)
+    base = mm.vehicle_read(df, horizon=21)
+    read = mm.vehicle_read(df, horizon=horizon)
+
+    assert read["horizon"] == horizon
+    assert read["ready"]
+    if horizon > 21:
+        assert read["breakeven"] > base["breakeven"]
+        assert read["flat_outcome"] < base["flat_outcome"]
+        assert abs(read["edge"]) > abs(base["edge"])
+    elif horizon < 21:
+        assert read["breakeven"] < base["breakeven"]
+        assert abs(read["edge"]) < abs(base["edge"])
+
+
+def test_vehicle_read_defaults_to_the_one_month_horizon():
+    assert mm.vehicle_read(_synthetic_pair())["horizon"] == mm.HORIZON_DAYS
 
 
 def test_vehicle_read_reports_not_ready_rather_than_guessing():
     """Six observations must not produce a confident-looking verdict."""
     read = mm.vehicle_read(_synthetic_pair(n=30))
     assert read["ready"] is False and read["n_obs"] == 30
-    assert np.isnan(read["margin_month"])
+    assert np.isnan(read["edge"]) and np.isnan(read["breakeven"])
 
 
 def test_vehicle_read_on_empty_frame():
@@ -553,66 +597,7 @@ def test_vehicle_read_respects_asof_and_ignores_later_rows():
     b = mm.vehicle_read(df.loc[:cut])
 
     assert a["asof"] == cut
-    assert a["margin_month"] == pytest.approx(b["margin_month"])
-
-
-# ── the audit tables ────────────────────────────────────────────────────────
-def test_forward_relative_looks_forward_not_backward():
-    """Row t must sum the H sessions AFTER t, and the tail must be NaN."""
-    df = _synthetic_pair(n=60)
-    H = 5
-    fwd = mm.forward_relative(df, H)
-    logret = np.log(df).diff()
-    rel = logret["MSTU"] - logret["MSTR"]
-
-    t = 20
-    expected = float(rel.iloc[t + 1:t + 1 + H].sum())
-    assert float(fwd.iloc[t]) == pytest.approx(expected)
-    assert fwd.iloc[-1] != fwd.iloc[-1]          # NaN: no future to score
-
-
-def test_rating_history_is_causal():
-    """Appending future rows must not change any earlier day's rating."""
-    full = _synthetic_pair(n=400)
-    early = full.iloc[:300]
-
-    h_full = mm.rating_history(full).iloc[:300].dropna()
-    h_early = mm.rating_history(early).dropna()
-
-    common = h_full.index.intersection(h_early.index)
-    assert len(common) > 100
-    assert (h_full.loc[common] == h_early.loc[common]).all()
-
-
-def test_calibration_reports_every_level_and_the_base_rate():
-    df = _synthetic_pair(n=400, mu=0.001, sigma=0.02, carry=0.0005)
-
-    cal = mm.calibration(df, horizon=21)
-
-    assert list(cal["label"]) == [l["label"] for l in mm.RATING_LEVELS]
-    assert cal["n"].sum() == cal.attrs["n_total"]
-    assert 0.0 <= cal.attrs["base_rate"] <= 1.0
-    assert cal.attrs["horizon"] == 21
-
-
-def test_calibration_on_too_little_history_is_empty_not_wrong():
-    cal = mm.calibration(_synthetic_pair(n=40))
-    assert cal.empty and list(cal.columns)[:3] == ["label", "icon", "n"]
-
-
-def test_vol_regime_table_bands_are_ordered_and_flag_exactly_one_as_current():
-    df = _synthetic_pair(n=400)
-
-    reg = mm.vol_regime_table(df, horizon=21, n_bins=5)
-
-    assert len(reg) == 5
-    assert list(reg["lo_ann"]) == sorted(reg["lo_ann"])
-    assert int(reg["current"].sum()) == 1
-    assert reg["n"].sum() > 100
-
-
-def test_vol_regime_table_on_too_little_history_is_empty():
-    assert mm.vol_regime_table(_synthetic_pair(n=25)).empty
+    assert a["edge"] == pytest.approx(b["edge"])
 
 
 def test_breakeven_figure_uses_one_axis_and_shows_both_choices():
