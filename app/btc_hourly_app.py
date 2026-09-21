@@ -16971,40 +16971,96 @@ def _mm_pct(x, digits=1, signed=True):
     return s.replace("-", "−")
 
 
+_MM_VOL_KEY = "mstr_mstu_vol"
+
+
+def _mm_reset_vol(live_pct: int) -> None:
+    """Snap the volatility slider back onto MSTR's measured reading.
+
+    ASSIGNING the widget's key is the supported way to move a slider from code.
+    Deleting it instead resets the value Python sees but leaves the thumb where
+    the user dragged it — the figures snapped back to the live reading while the
+    control still read 163%, which is worse than not offering the button.
+    """
+    st.session_state[_MM_VOL_KEY] = int(live_pct)
+
+
 def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
     """The vehicle verdict: is MSTU an efficient way to hold MSTR right now?
 
-    The holding-period slider comes FIRST because it drives everything beneath
-    it — the rating included.  The decay term scales with the period, so the
-    same conditions grade further from neutral the longer you intend to hold,
-    in whichever direction they already point; a control that changed only the
-    chart at the bottom would have hidden exactly that.
+    Two controls drive everything beneath them, and both come first.
+
+    The holding period matters because the decay compounds with it, so the same
+    conditions grade further from neutral the longer you intend to hold.
+
+    The volatility matters more than anything else on the panel: decay scales
+    with σ², so it is the single input the verdict is most sensitive to — at
+    MSTR's own historical range the same drift swings the rating from STRONG BUY
+    to STRONG SELL. It defaults to the live trailing reading and is dialable
+    from there, because "what if the next month is calmer than the last" is the
+    question a 20-session estimate invites and cannot answer.
     """
-    # A continuous slider, not a handful of presets: the decay is smooth in the
-    # holding period, so any session count is a legitimate question to ask of it.
-    horizon = st.slider(
-        "⏳ Holding period — everything below is measured over this many sessions",
-        min_value=1, max_value=_mm.MAX_HORIZON_DAYS, value=_mm.HORIZON_DAYS,
-        step=1, key="mstr_mstu_hz",
-        help="Trading sessions, not calendar days: 21 ≈ one month, 63 ≈ a quarter, "
-             "126 ≈ six months, 252 ≈ a year. The leverage decay compounds with the "
-             "holding period, so a longer hold needs a proportionally bigger MSTR "
-             "move to break even.",
-    )
-    st.caption(
-        f"≈ **{horizon / _mm.TRADING_DAYS * 12:.1f} months** of market time "
-        f"({horizon} trading sessions)."
-    )
-    read = _mm.vehicle_read(df, asof=asof, horizon=horizon)
-    if not read["ready"]:
+    # Measured first, with no override, so the volatility slider can default to
+    # the live reading and the caption can always name it.
+    live = _mm.vehicle_read(df, asof=asof, horizon=_mm.HORIZON_DAYS)
+    if not live["ready"]:
         st.info(
-            f"📐 Vehicle verdict needs about {max(read['vol_win'], read['drag_win'], read['drift_win']) + 1} "
-            f"sessions of history to compute; only {read['n_obs']} are available up to this date."
+            f"📐 Vehicle verdict needs about {max(live['vol_win'], live['drag_win'], live['drift_win']) + 1} "
+            f"sessions of history to compute; only {live['n_obs']} are available up to this date."
         )
         return
 
+    c_hz, c_vol = st.columns(2)
+    with c_hz:
+        # A continuous slider, not a handful of presets: the decay is smooth in
+        # the holding period, so any session count is a legitimate question.
+        horizon = st.slider(
+            "⏳ Holding period (trading sessions)",
+            min_value=1, max_value=_mm.MAX_HORIZON_DAYS, value=_mm.HORIZON_DAYS,
+            step=1, key="mstr_mstu_hz",
+            help="Trading sessions, not calendar days: 21 ≈ one month, 63 ≈ a quarter, "
+                 "126 ≈ six months, 252 ≈ a year. The leverage decay compounds with the "
+                 "holding period, so a longer hold needs a proportionally bigger MSTR "
+                 "move to break even.",
+        )
+    with c_vol:
+        vol_pct = st.slider(
+            "📈 MSTR volatility, annualised",
+            min_value=int(round(_mm.MIN_VOL_ANN * 100)),
+            max_value=int(round(_mm.MAX_VOL_ANN * 100)),
+            value=int(np.clip(round(live["sigma_ann_measured"] * 100),
+                              round(_mm.MIN_VOL_ANN * 100), round(_mm.MAX_VOL_ANN * 100))),
+            step=1, key=_MM_VOL_KEY, format="%d%%",
+            help="Defaults to MSTR's live trailing-20-session reading. Decay scales with "
+                 "the SQUARE of this, so it is the input the verdict is most sensitive to "
+                 "— worth stress-testing. Since MSTU launched, MSTR's trailing-20 vol has "
+                 "spanned 33–156%. Moving this changes every figure below EXCEPT *MSTR at "
+                 "recent pace*, which comes from the drift and is independent of volatility.",
+        )
+
+    read = _mm.vehicle_read(df, asof=asof, horizon=horizon,
+                            sigma_ann_override=vol_pct / 100.0)
     lvl = read["rating"]
     fit = _mm.tracking_fit(df.loc[df.index <= pd.Timestamp(asof)] if asof is not None else df)
+
+    st.caption(
+        f"≈ **{horizon / _mm.TRADING_DAYS * 12:.1f} months** of market time "
+        f"({horizon} trading sessions) · volatility "
+        f"**{_mm_pct(read['sigma_ann'], 0, signed=False)}** annualised."
+    )
+    if read["sigma_is_override"]:
+        w, b = st.columns([5, 1])
+        w.warning(
+            f"🧪 **What-if volatility.** You are pricing the decay off "
+            f"**{_mm_pct(read['sigma_ann'], 0, signed=False)}** rather than MSTR's live "
+            f"trailing-{read['vol_win']} reading of "
+            f"**{_mm_pct(read['sigma_ann_measured'], 0, signed=False)}**. Every figure below "
+            "moves with it except *MSTR at recent pace*."
+        )
+        b.button("↺ Live vol", key="mstr_mstu_vol_reset", on_click=_mm_reset_vol,
+                 args=(int(round(read["sigma_ann_measured"] * 100)),),
+                 use_container_width=True,
+                 help="Snap the slider back to MSTR's measured trailing volatility.")
 
     st.markdown(
         f"""
@@ -17013,7 +17069,8 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
   <div style="font-size:1.45rem;font-weight:700;color:{lvl['color']};
               letter-spacing:0.02em;">{lvl['icon']} {lvl['label']}</div>
   <div style="font-size:0.94rem;color:#334155;margin-top:0.25rem;">
-    MSTU as a vehicle for MSTR exposure over <b>{horizon} sessions</b> —
+    MSTU as a vehicle for MSTR exposure over <b>{horizon} sessions</b> at
+    <b>{_mm_pct(read['sigma_ann'], 0, signed=False)}</b> volatility —
     {lvl['gloss']}.
   </div>
 </div>
@@ -17021,7 +17078,7 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
         unsafe_allow_html=True,
     )
 
-    g1, g2, g3, g4, g5 = st.columns(5)
+    g1, g2, g3, g4 = st.columns(4)
     g1.metric("MSTR must gain", _mm_pct(read["breakeven"]),
               help=f"The breakeven: what MSTR has to return over {horizon} sessions "
                    "just for MSTU to match it. It is the volatility drag plus the "
@@ -17029,26 +17086,26 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
     g2.metric("MSTR at recent pace", _mm_pct(read["mstr_pace"]),
               help=f"Where MSTR lands in {horizon} sessions if it keeps its trailing "
                    f"{read['drift_win']}-session drift. An extrapolation, and a heroic "
-                   "one over the longer periods — not a prediction.")
+                   "one over the longer periods — not a prediction. The volatility "
+                   "slider does not move this.")
     g3.metric("MSTU at that pace", _mm_pct(read["mstu_at_pace"]),
               help="The same path run through the 2×-daily identity, decay included. "
-                   "Note it is NOT double the figure to its left.")
+                   "Note it is NOT double the figure to its left: doubling each DAY's "
+                   "move squares over the period — (1+m)² − 1, an m² bonus — and the "
+                   "decay term then multiplies the whole thing down by e^(−H(σ²+carry)).")
     g4.metric("Edge (MSTU − MSTR)", _mm_pct(read["edge"]),
               help="The difference of the two figures to the left, in points. This is "
                    "what the rating grades: positive means the leverage is paying for "
                    "its own decay at the current pace.")
-    g5.metric("MSTR volatility", _mm_pct(read["sigma_ann"], 0, signed=False),
-              help=f"Annualised, from the trailing {read['vol_win']} sessions. Drag rises "
-                   "with the SQUARE of this, which is why a 2× fund suffers so much here.")
 
     if horizon > 126:
         st.warning(
             f"📏 **{horizon} sessions is a long extrapolation.** The breakeven is still exact "
-            "arithmetic — it only needs today's volatility and carry. *MSTR at recent pace* is "
-            f"not: it compounds a trailing {read['drift_win']}-session drift out "
-            f"{horizon / _mm.TRADING_DAYS:.1f} years, which no drift estimate survives. Read the "
-            "breakeven at these lengths and treat the pace, the projection and the rating as "
-            "illustration."
+            "arithmetic — it only needs the volatility set above and the measured carry. "
+            f"*MSTR at recent pace* is not: it compounds a trailing {read['drift_win']}-session "
+            f"drift out {horizon / _mm.TRADING_DAYS:.1f} years, which no drift estimate "
+            "survives. Read the breakeven at these lengths and treat the pace, the projection "
+            "and the rating as illustration."
         )
 
     st.caption(
@@ -17082,7 +17139,8 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
             key="mstr_mstu_breakeven_chart")
         st.caption(
             "The dotted blue line is holding MSTR; the magenta curve is MSTU's projection at "
-            f"today's volatility ({_mm_pct(read['sigma_ann'], 0, signed=False)} annualised) and "
+            f"the volatility set above ({_mm_pct(read['sigma_ann'], 0, signed=False)} annualised"
+            f"{', a what-if' if read['sigma_is_override'] else ', MSTR&apos;s live reading'}) and "
             f"its recent carry ({_mm_pct(read['drag_daily'] * -_mm.TRADING_DAYS)}/yr, from the "
             f"trailing {read['drag_win']} sessions — the caption above quotes the full-sample "
             "figure, which differs). They cross once, at breakeven. Volatility is held fixed "
