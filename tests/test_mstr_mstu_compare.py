@@ -786,3 +786,86 @@ def test_an_override_within_slider_resolution_is_not_a_what_if():
     # But a genuine nudge of one whole step still registers.
     nudged = mm.vehicle_read(df, sigma_ann_override=as_the_slider_sends_it + mm.VOL_STEP_ANN)
     assert nudged["sigma_is_override"] is True
+
+
+# ── the drift ladder ────────────────────────────────────────────────────────
+def test_drift_ladder_reports_the_realised_move_for_each_lookback():
+    """Straight measurement: last close over the close N sessions back."""
+    df = _synthetic_pair(n=200)
+    closes = df["MSTR"]
+
+    ladder = mm.drift_ladder(df)
+
+    assert [r["label"] for r in ladder] == [lbl for _, lbl in mm.DRIFT_LADDER_WINDOWS]
+    for row in ladder:
+        n = row["sessions"]
+        assert row["ready"]
+        assert row["total_ret"] == pytest.approx(
+            float(closes.iloc[-1]) / float(closes.iloc[-1 - n]) - 1.0)
+        assert row["per_session_log"] == pytest.approx(
+            np.log(float(closes.iloc[-1]) / float(closes.iloc[-1 - n])) / n)
+        assert row["end"] == closes.index[-1]
+        assert row["start"] == closes.index[-1 - n]
+
+
+def test_one_day_row_is_exactly_the_last_daily_return():
+    df = _synthetic_pair(n=100)
+    one_day = mm.drift_ladder(df)[0]
+
+    assert one_day["sessions"] == 1
+    assert one_day["total_ret"] == pytest.approx(
+        float(df["MSTR"].pct_change().iloc[-1]))
+
+
+def test_drift_ladder_respects_asof():
+    """Dragging the end date back must read the ladder as it stood then."""
+    df = _synthetic_pair(n=200)
+    cut = df.index[150]
+
+    a = mm.drift_ladder(df, asof=cut)
+    b = mm.drift_ladder(df.loc[:cut])
+
+    assert [r["total_ret"] for r in a] == pytest.approx([r["total_ret"] for r in b])
+    assert all(r["end"] == cut for r in a)
+
+
+def test_lookbacks_longer_than_the_history_are_not_ready():
+    """Better an em dash than a "2 month" figure computed from six sessions."""
+    ladder = mm.drift_ladder(_synthetic_pair(n=8))
+
+    by_label = {r["label"]: r for r in ladder}
+    assert by_label["1 day"]["ready"] and by_label["1 week"]["ready"]
+    assert not by_label["1 month"]["ready"]
+    assert not by_label["2 months"]["ready"]
+    assert np.isnan(by_label["2 months"]["total_ret"])
+
+
+def test_drift_ladder_on_empty_frame_returns_every_row_unready():
+    ladder = mm.drift_ladder(pd.DataFrame(columns=["MSTR", "MSTU"], dtype="float64"))
+
+    assert len(ladder) == len(mm.DRIFT_LADDER_WINDOWS)
+    assert not any(r["ready"] for r in ladder)
+
+
+def test_ladder_windows_are_ordered_shortest_first():
+    sessions = [n for n, _ in mm.DRIFT_LADDER_WINDOWS]
+    assert sessions == sorted(sessions)
+    assert sessions == [1, 5, 21, 42]
+
+
+def test_per_session_figure_stays_sane_where_annualising_would_not():
+    """The reason the ladder stops at per-session.
+
+    A +16% single session annualises to ~4e18%, which reads as a bug and
+    misleads anyone who takes it at face value. The per-session number for the
+    same move is a plain, readable 15%.
+    """
+    idx = pd.bdate_range("2026-01-01", periods=3)
+    df = pd.DataFrame({"MSTR": [100.0, 100.0, 116.4], "MSTU": [50.0, 50.0, 66.0]},
+                      index=idx)
+
+    one_day = mm.drift_ladder(df)[0]
+
+    assert one_day["per_session_log"] == pytest.approx(np.log(1.164))
+    assert abs(one_day["per_session_log"]) < 1.0            # readable, not 1e16
+    assert np.expm1(one_day["per_session_log"] * mm.TRADING_DAYS) > 1e15   # why we don't

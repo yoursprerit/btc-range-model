@@ -565,6 +565,15 @@ MAX_VOL_ANN = 2.50
 #: The slider's resolution, annualised.  Differences finer than this cannot be
 #: dialled in, so they are measurement, not intent.
 VOL_STEP_ANN = 0.01
+
+#: Lookbacks for the drift ladder: how far MSTR has actually moved, read over
+#: several trailing windows.  It exists because the verdict extrapolates ONE
+#: drift estimate (60 sessions by default) and the choice of window moves that
+#: estimate a great deal — the ladder makes the sensitivity visible instead of
+#: leaving it buried in a parameter.
+DRIFT_LADDER_WINDOWS: tuple[tuple[int, str], ...] = (
+    (1, "1 day"), (5, "1 week"), (21, "1 month"), (42, "2 months"),
+)
 #: Sessions per year, for annualising volatility.
 TRADING_DAYS = 252
 #: MSTU's daily leverage multiple, as the identity above uses it.
@@ -757,6 +766,44 @@ def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
         rating=rate(mstu_at_pace - mstr_pace),
     )
     return read
+
+
+def drift_ladder(df: pd.DataFrame, asof=None,
+                 windows: tuple[tuple[int, str], ...] = DRIFT_LADDER_WINDOWS
+                 ) -> list[dict]:
+    """MSTR's realised move over each trailing lookback.
+
+    Each entry carries the total return over the window and the average
+    log return per session inside it.  Both are measurements of what already
+    happened — nothing here is extrapolated.
+
+    Deliberately NOT annualised.  Scaling a single session to a year is
+    arithmetically legal and completely meaningless: MSTR's last session was
+    +16.4%, which annualises to about 4×10¹⁸ %.  A number that large on screen
+    reads as a bug, and a reader who takes it at face value has been actively
+    misled, so the per-session average is as far as this scales.
+
+    Entries whose window is longer than the available history come back with
+    ``ready=False`` rather than a value computed from fewer sessions than the
+    label claims.
+    """
+    out: list[dict] = []
+    hist = df if asof is None else df.loc[df.index <= pd.Timestamp(asof)]
+    closes = hist["MSTR"] if "MSTR" in hist else pd.Series(dtype="float64")
+    for sessions, label in windows:
+        row = {"label": label, "sessions": sessions, "ready": False,
+               "start": None, "end": None,
+               "total_ret": np.nan, "per_session_log": np.nan}
+        if len(closes) >= sessions + 1:
+            first = float(closes.iloc[-1 - sessions])
+            last = float(closes.iloc[-1])
+            if first > 0 and last > 0:
+                row.update(ready=True,
+                           start=closes.index[-1 - sessions], end=closes.index[-1],
+                           total_ret=last / first - 1.0,
+                           per_session_log=float(np.log(last / first)) / sessions)
+        out.append(row)
+    return out
 
 
 # ── B: the breakeven calculator ─────────────────────────────────────────────

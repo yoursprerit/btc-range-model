@@ -17098,6 +17098,41 @@ def _render_mstr_mstu_verdict(df: pd.DataFrame, asof) -> None:
                    "what the rating grades: positive means the leverage is paying for "
                    "its own decay at the current pace.")
 
+    # ── how far MSTR has actually moved, by lookback ─────────────────────────
+    # The verdict extrapolates ONE drift estimate; the window it uses moves that
+    # estimate a lot, so show the ladder rather than leave the choice implicit.
+    ladder = _mm.drift_ladder(df, asof=asof)
+    if any(row["ready"] for row in ladder):
+        st.markdown("###### MSTR's realised drift, by lookback")
+        d_cols = st.columns(len(ladder))
+        for col, row in zip(d_cols, ladder):
+            if not row["ready"]:
+                col.metric(row["label"], "—",
+                           help="Not enough history up to this date for this lookback.")
+                continue
+            # Plain period labels: an abbreviated session count ("21s") reads as
+            # seconds. The help below names the sessions explicitly.
+            col.metric(
+                row["label"],
+                _mm_pct(row["total_ret"]),
+                help=(f"MSTR's total move over the last {row['sessions']} "
+                      f"session{'s' if row['sessions'] != 1 else ''} — "
+                      f"{pd.Timestamp(row['start']):%b %d} close to "
+                      f"{pd.Timestamp(row['end']):%b %d} close. That averages "
+                      f"{_mm_pct(row['per_session_log'], 2)} per session in log terms."),
+            )
+        _per = " · ".join(
+            f"**{r['label']}** {_mm_pct(r['per_session_log'], 2)}"
+            for r in ladder if r["ready"])
+        st.caption(
+            f"📐 Realised moves, not forecasts. Per session: {_per}. The verdict above "
+            f"extrapolates the **{read['drift_win']}-session** drift "
+            f"({_mm_pct(read['drift_daily'], 2)} per session) — read the ladder as the "
+            "spread of answers that choice could have given. Deliberately not annualised: "
+            "scaling one session to a year is legal arithmetic and meaningless (MSTR's last "
+            "session annualises to about 4×10¹⁸%)."
+        )
+
     if horizon > 126:
         st.warning(
             f"📏 **{horizon} sessions is a long extrapolation.** The breakeven is still exact "
