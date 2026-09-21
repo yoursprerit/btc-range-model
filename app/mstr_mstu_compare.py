@@ -543,8 +543,11 @@ def _rgba(hex_color: str, alpha: float) -> str:
 # The features that looked predictive were proxies for MSTR mean-reverting
 # after a selloff — a directional bet on MSTR wearing a costume, fitted to one
 # crypto cycle.  So the rating grades the *vehicle's cost*, which is knowable,
-# and ``calibration()`` hands the UI the evidence that it does not predict,
-# for display next to it.  Keep those two jobs separate.
+# rather than direction, which on this evidence is not.  The UI carries that
+# caveat in prose beside the chip; the measurements behind it are in the commit
+# that introduced this block, and in the numbers above.  If you are tempted to
+# re-weight these components into something predictive, re-run that experiment
+# first — it is cheap, and it says no.
 
 #: Sessions in the "one month" horizon every carry number is quoted over.
 HORIZON_DAYS = 21
@@ -630,38 +633,55 @@ def tracking_fit(df: pd.DataFrame) -> dict:
     return out
 
 
-def rate(margin_month: float) -> dict:
-    """Map a monthly margin (MSTR drift − MSTU hurdle) to a rating level."""
-    if margin_month is None or not np.isfinite(margin_month):
+def rate(edge: float) -> dict:
+    """Map an edge (MSTU's projected outcome minus MSTR's) to a rating level."""
+    if edge is None or not np.isfinite(edge):
         return RATING_LEVELS[2]          # NEUTRAL — say nothing, not something
     chosen = RATING_LEVELS[0]
     for level in RATING_LEVELS:
-        if level["floor"] is not None and margin_month >= level["floor"]:
+        if level["floor"] is not None and edge >= level["floor"]:
             chosen = level
     return chosen
 
 
-def vehicle_read(df: pd.DataFrame, asof=None, vol_win: int = 20,
-                 drag_win: int = 60, drift_win: int = 60) -> dict:
-    """Grade MSTU's cost of carry against MSTR as of one date.
+def vehicle_read(df: pd.DataFrame, asof=None, horizon: int = HORIZON_DAYS,
+                 vol_win: int = 20, drag_win: int = 60,
+                 drift_win: int = 60) -> dict:
+    """Grade MSTU's cost of carry against MSTR, over a chosen holding period.
 
-    Everything is measured on the trailing sessions up to ``asof`` (default:
+    The inputs are measured on the trailing sessions up to ``asof`` (default:
     the last row), NOT on the chart's window — a viewer zoomed to two weeks
     should still get a hurdle built from enough history to mean something.
     Quoting ``asof`` from the picked end date does mean dragging the end date
     back replays the verdict as it stood then, which is the useful behaviour.
+
+    Everything comes out in ONE frame: simple total returns over ``horizon``
+    sessions, all pushed through ``projected_mstu``.  That matters because the
+    alternative — quoting a log-space hurdle beside a simple-return breakeven —
+    puts two numbers for the same quantity on screen that do not agree, and a
+    margin that does not equal the difference of the two figures above it.
+
+        breakeven     what MSTR must gain for MSTU to merely match it
+        mstr_pace     what MSTR makes over the period at its trailing drift
+        mstu_at_pace  what MSTU makes at that same pace, decay included
+        edge          mstu_at_pace − mstr_pace, in points — what the rating grades
+
+    ``edge`` scales with ``horizon``, and deliberately so: the decay compounds,
+    so the same conditions grade further from neutral the longer you intend to
+    hold — in whichever direction they already point.  Extrapolating a trailing
+    drift over six months is a heroic assumption, and the caller says so.
 
     Returns ``ready=False`` when the trailing history is too short to compute
     the inputs, so the caller can say so rather than render a confident-looking
     number built on six observations.
     """
     read = {
-        "ready": False, "asof": None, "n_obs": 0,
+        "ready": False, "asof": None, "n_obs": 0, "horizon": int(horizon),
         "sigma_daily": np.nan, "sigma_ann": np.nan,
-        "drag_daily": np.nan, "drag_month": np.nan,
-        "hurdle_daily": np.nan, "hurdle_month": np.nan,
-        "drift_daily": np.nan, "drift_month": np.nan,
-        "margin_month": np.nan, "rating": RATING_LEVELS[2],
+        "drag_daily": np.nan, "drag_period": np.nan,
+        "hurdle_daily": np.nan, "drift_daily": np.nan,
+        "breakeven": np.nan, "mstr_pace": np.nan, "mstu_at_pace": np.nan,
+        "edge": np.nan, "flat_outcome": np.nan, "rating": RATING_LEVELS[2],
         "vol_win": vol_win, "drag_win": drag_win, "drift_win": drift_win,
     }
     if df.empty:
@@ -680,17 +700,24 @@ def vehicle_read(df: pd.DataFrame, asof=None, vol_win: int = 20,
     sigma = float(r["MSTR"].iloc[-vol_win:].std())
     # Cost of carry as a POSITIVE number of log-points per session.
     drag = float(-slip.iloc[-drag_win:].mean())
-    # The hurdle: MSTU beats MSTR only once MSTR's log drift clears σ² + drag.
+    # The hurdle per session: MSTU beats MSTR only once MSTR's log drift
+    # clears σ² + carry.  Over the period it becomes the breakeven move.
     hurdle = sigma ** 2 + drag
     drift = float(logret["MSTR"].iloc[-drift_win:].mean())
-    margin = (drift - hurdle) * HORIZON_DAYS
 
-    read.update(ready=True, sigma_daily=sigma,
-                sigma_ann=sigma * np.sqrt(TRADING_DAYS),
-                drag_daily=drag, drag_month=drag * HORIZON_DAYS,
-                hurdle_daily=hurdle, hurdle_month=hurdle * HORIZON_DAYS,
-                drift_daily=drift, drift_month=drift * HORIZON_DAYS,
-                margin_month=margin, rating=rate(margin))
+    mstr_pace = float(np.expm1(drift * horizon))
+    mstu_at_pace = float(projected_mstu(mstr_pace, sigma, drag, horizon))
+
+    read.update(
+        ready=True, sigma_daily=sigma, sigma_ann=sigma * np.sqrt(TRADING_DAYS),
+        drag_daily=drag, drag_period=drag * horizon,
+        hurdle_daily=hurdle, drift_daily=drift,
+        breakeven=breakeven_move(sigma, drag, horizon),
+        mstr_pace=mstr_pace, mstu_at_pace=mstu_at_pace,
+        edge=mstu_at_pace - mstr_pace,
+        flat_outcome=float(projected_mstu(0.0, sigma, drag, horizon)),
+        rating=rate(mstu_at_pace - mstr_pace),
+    )
     return read
 
 
@@ -748,130 +775,6 @@ def breakeven_curve(sigma_daily: float, drag_daily: float,
     moves = np.asarray(moves, dtype="float64")
     mstu = projected_mstu(moves, sigma_daily, drag_daily, horizon)
     return pd.DataFrame({"mstr": moves, "mstu": mstu, "edge": mstu - moves})
-
-
-# ── A (audit) + C: what actually happened next ──────────────────────────────
-def forward_relative(df: pd.DataFrame, horizon: int = HORIZON_DAYS) -> pd.Series:
-    """Sum of the NEXT ``horizon`` daily ``log(MSTU) − log(MSTR)`` moves.
-
-    The realised answer to "would MSTU have beaten MSTR from here", aligned to
-    the day the call would have been made.  Tail rows are NaN — there is no
-    future to score them against, and inventing one is how backtests lie.
-    """
-    if df.empty or len(df) < 2:
-        return pd.Series(dtype="float64")
-    logret = np.log(df[["MSTR", "MSTU"]]).diff()
-    rel = (logret["MSTU"] - logret["MSTR"]).dropna()
-    # Reverse-roll so each row sums the H sessions that come AFTER it.
-    fwd = rel[::-1].rolling(horizon).sum()[::-1].shift(-1)
-    return fwd.reindex(df.index)
-
-
-def rating_history(df: pd.DataFrame, vol_win: int = 20, drag_win: int = 60,
-                   drift_win: int = 60) -> pd.Series:
-    """The rating as it would have read on every day, computed causally.
-
-    Every input is a trailing window, so no row sees a price that had not
-    printed yet.  This is what ``calibration`` scores.
-    """
-    if df.empty or len(df) < max(vol_win, drag_win, drift_win) + 2:
-        return pd.Series(dtype="object")
-    r = daily_returns(df)
-    logret = np.log(df[["MSTR", "MSTU"]]).diff()
-    slip = tracking_slippage(df)
-
-    sigma = r["MSTR"].rolling(vol_win).std()
-    drag = (-slip).rolling(drag_win).mean()
-    drift = logret["MSTR"].rolling(drift_win).mean()
-    margin = (drift - (sigma ** 2 + drag)) * HORIZON_DAYS
-    return margin.reindex(df.index).map(
-        lambda m: rate(m)["key"] if np.isfinite(m) else None)
-
-
-def calibration(df: pd.DataFrame, horizon: int = HORIZON_DAYS,
-                **kw) -> pd.DataFrame:
-    """What each rating was actually followed by, on this sample.
-
-    One row per level: how often it fired, how often MSTU then beat MSTR over
-    the next ``horizon`` sessions, and the mean/median relative outcome.  This
-    is the evidence the UI shows NEXT TO the rating, and on the current sample
-    it says plainly that the rating does not predict — no level clears the base
-    rate by a meaningful margin and every one of them has a negative mean.
-    Rows are overlapping windows, so the effective sample is far smaller than
-    ``n`` suggests; the caller is expected to say so.
-    """
-    cols = ["label", "icon", "n", "share", "beat_rate", "mean_rel", "median_rel"]
-    ratings = rating_history(df, **kw)
-    fwd = forward_relative(df, horizon)
-    joined = pd.concat([ratings.rename("key"), fwd.rename("y")],
-                       axis=1, sort=False).dropna()
-    if joined.empty:
-        return pd.DataFrame(columns=cols)
-
-    rows = []
-    for level in RATING_LEVELS:
-        grp = joined[joined["key"] == level["key"]]
-        rows.append({
-            "label": level["label"], "icon": level["icon"], "n": len(grp),
-            "share": len(grp) / len(joined) if len(joined) else np.nan,
-            "beat_rate": float((grp["y"] > 0).mean()) if len(grp) else np.nan,
-            "mean_rel": float(grp["y"].mean()) if len(grp) else np.nan,
-            "median_rel": float(grp["y"].median()) if len(grp) else np.nan,
-        })
-    out = pd.DataFrame(rows, columns=cols)
-    out.attrs["base_rate"] = float((joined["y"] > 0).mean())
-    out.attrs["base_mean"] = float(joined["y"].mean())
-    out.attrs["n_total"] = int(len(joined))
-    out.attrs["horizon"] = horizon
-    return out
-
-
-def vol_regime_table(df: pd.DataFrame, horizon: int = HORIZON_DAYS,
-                     n_bins: int = 5, vol_win: int = 20) -> pd.DataFrame:
-    """MSTR volatility band → what MSTU did against MSTR over the next window.
-
-    Purely descriptive of the sample: the band edges are the full-sample
-    quantiles of MSTR's trailing volatility, so this is a lookup of history
-    rather than a signal that could have been traded.  It is the most direct
-    answer available to "given where things sit, how has this pair behaved" —
-    it needs no model, only the record.
-
-    ``current`` marks the band today's volatility falls in.
-    """
-    cols = ["band", "lo_ann", "hi_ann", "n", "beat_rate",
-            "mean_rel", "median_rel", "current"]
-    r = daily_returns(df)
-    if len(r) < vol_win + horizon + 5:
-        return pd.DataFrame(columns=cols)
-
-    sigma_ann = r["MSTR"].rolling(vol_win).std() * np.sqrt(TRADING_DAYS)
-    fwd = forward_relative(df, horizon)
-    joined = pd.concat([sigma_ann.rename("v"), fwd.rename("y")],
-                       axis=1, sort=False).dropna()
-    if len(joined) < n_bins * 5:
-        return pd.DataFrame(columns=cols)
-
-    try:
-        bands = pd.qcut(joined["v"], n_bins, duplicates="drop")
-    except ValueError:
-        return pd.DataFrame(columns=cols)
-    latest = float(sigma_ann.dropna().iloc[-1]) if sigma_ann.notna().any() else np.nan
-
-    rows = []
-    for interval, grp in joined.groupby(bands, observed=True):
-        lo, hi = float(interval.left), float(interval.right)
-        rows.append({
-            "band": f"{max(lo, 0) * 100:.0f}–{hi * 100:.0f}%",
-            "lo_ann": lo, "hi_ann": hi, "n": len(grp),
-            "beat_rate": float((grp["y"] > 0).mean()),
-            "mean_rel": float(grp["y"].mean()),
-            "median_rel": float(grp["y"].median()),
-            "current": bool(np.isfinite(latest) and lo < latest <= hi),
-        })
-    out = pd.DataFrame(rows, columns=cols).sort_values("lo_ann").reset_index(drop=True)
-    out.attrs["latest_vol_ann"] = latest
-    out.attrs["horizon"] = horizon
-    return out
 
 
 def make_breakeven_figure(curve: pd.DataFrame, breakeven: float,
