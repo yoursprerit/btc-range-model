@@ -2,8 +2,8 @@
 
 Every page renders its own copy of the selector (``_ALL_APPS`` / ``_APP_LABELS``
 with the shared ``gldm_active_app`` widget key), and ``streamlit_app.py`` holds
-a ninth copy plus the routing branch that actually executes the chosen app.
-That is nine places to keep in step by hand: miss one and the new app is either
+one more copy plus the routing branch that actually executes the chosen app.
+That is ten places to keep in step by hand: miss one and the new app is either
 invisible from that page, or selectable there and silently routed to the
 default.
 
@@ -27,12 +27,13 @@ _SELECTOR_FILES = [
     _ROOT / "streamlit_app.py",
     *(_ROOT / "app" / n for n in (
         "overall_app.py", "ticker_app.py", "daily_audit_app.py", "health_app.py",
-        "target_book_app.py", "executed_book_app.py", "assistant_app.py")),
+        "target_book_app.py", "executed_book_app.py", "assistant_app.py",
+        "leveraged_app.py")),
 ]
 
 #: The apps that are not config-driven tickers, in sidebar order.
-_FIXED = ["OVERALL", "BTC", "GLDM", "GDXM", "DAILYAUDIT", "HEALTH",
-          "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"]
+_FIXED = ["OVERALL", "BTC", "GLDM", "GDXM", "LEVERAGED", "DAILYAUDIT",
+          "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"]
 
 _LIST_RE = re.compile(
     r"_ALL_APPS\s*=\s*\((\[[^\]]*\])\s*\+\s*ticker_config\.APP_KEYS\s*\+\s*(\[[^\]]*\])\)",
@@ -83,6 +84,12 @@ def test_the_router_routes_every_app():
             for k in chunk.replace("(", "").replace(")", "").split(",")}
     for key in _FIXED:
         assert key in flat, f"streamlit_app.py never routes {key}"
+
+
+def test_the_leveraged_board_page_exists_and_is_routed():
+    src = (_ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+    assert "leveraged_app.py" in src
+    assert (_ROOT / "app" / "leveraged_app.py").exists()
 
 
 def test_the_assistant_page_exists_and_is_routed():

@@ -115,10 +115,11 @@ The wrapper pickles and stores a second, identical copy of a payload the inner
 function has already stored.  With 6 assets × 3 fixed periods that is **36
 cached backtest payloads where 18 would do**.
 
-### 2.4 One process accumulates the caches of *all fifteen* apps
+### 2.4 One process accumulates the caches of *all sixteen* apps
 
-`streamlit_app.py` routes OVERALL / BTC / GLDM / GDXM / 7 tickers / DAILYAUDIT /
-HEALTH / TARGETBOOK / EXECUTEDBOOK / ASSISTANT through a single container.
+`streamlit_app.py` routes OVERALL / BTC / GLDM / GDXM / 7 tickers / LEVERAGED /
+DAILYAUDIT / HEALTH / TARGETBOOK / EXECUTEDBOOK / ASSISTANT through a single
+container.
 `st.cache_data` and `st.cache_resource` are **global to the process**, not
 per-app and not per-session.  A viewer who tours the sidebar leaves behind the
 resident cache of every app they touched, for the rest of the container's life.

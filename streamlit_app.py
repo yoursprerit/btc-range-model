@@ -7,6 +7,8 @@ Streamlit Community Cloud expects the main file at the repo root named
   * ``app/gldm_hourly_app.py``  — the gold (GLDM) forecaster (unchanged)
   * ``app/ticker_app.py``       — the generic, config-driven app that serves the
                                   new tickers (SOXX / GRID / XLE / REMX / …)
+  * ``app/leveraged_app.py``    — the cross-asset board of every leveraged
+                                  wrapper's vehicle verdict
   * ``app/assistant_app.py``    — the AI Assistant chat, grounded in the
                                   committed artifacts and the repo's own docs
 
@@ -40,10 +42,12 @@ sys.path.insert(0, str(_APP_DIR))
 import ticker_config  # noqa: E402
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"])
+             + ["LEVERAGED", "DAILYAUDIT", "HEALTH", "TARGETBOOK",
+                "EXECUTEDBOOK", "ASSISTANT"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
            "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
+           "LEVERAGED": "⚡  Leveraged Assets",
            "DAILYAUDIT": "🕵️  Daily Audit",
            "HEALTH": "🩺  Strategy Health",
            "TARGETBOOK": "📋  Target Book (IBKR)",
@@ -166,6 +170,10 @@ def _run_choice():
     if _choice == "OVERALL":
         # The combined cross-asset cockpit renders its own full selector.
         _exec_app(_APP_DIR / "overall_app.py")
+    elif _choice == "LEVERAGED":
+        # Every leveraged wrapper's vehicle verdict on one page — the same
+        # figures the per-pair tabs show, side by side at a shared horizon.
+        _exec_app(_APP_DIR / "leveraged_app.py")
     elif _choice == "DAILYAUDIT":
         # Freshness trail: per-app signal closes, Overall update, book publish.
         _exec_app(_APP_DIR / "daily_audit_app.py")

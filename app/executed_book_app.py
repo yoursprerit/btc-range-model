@@ -58,9 +58,12 @@ except Exception:
 
 # ── sidebar Application selector (same widget/key as every other app) ─────────
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"])
+             + ["LEVERAGED", "DAILYAUDIT", "HEALTH", "TARGETBOOK",
+                "EXECUTEDBOOK", "ASSISTANT"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading", "BTC": "₿  Bitcoin (BTC)",
-               "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)", "DAILYAUDIT": "🕵️  Daily Audit",
+               "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
+               "LEVERAGED": "⚡  Leveraged Assets",
+               "DAILYAUDIT": "🕵️  Daily Audit",
                "HEALTH": "🩺  Strategy Health",
                "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
