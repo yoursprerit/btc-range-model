@@ -161,7 +161,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 | Metals Dual-MA 50/200 golden cross | REMX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Miner MA-50 + volatility filter | WGMI | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Clean-energy / AI-Tech Divergence | PBW · ARTY | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy |
-| **Overall combined portfolio** | **all of the above** | **[`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md)** — how it works (universe, optimiser, priority, allocation)<br>_Additional docs:_ [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) |
+| **Overall combined portfolio** | **all of the above** | **[`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md)** — how it works (universe, optimiser, priority, allocation)<br>_Additional docs:_ [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) · [`INTRADAY_CAPITAL_EVAL.md`](INTRADAY_CAPITAL_EVAL.md) (intraday capital recycling — rejected) |
 
 All seven ETF apps share one config-driven engine — see
 [`TICKER_APPS_README.md`](TICKER_APPS_README.md).
