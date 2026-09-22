@@ -64,9 +64,13 @@ class LevPair:
     leverage: float
     start: pd.Timestamp
     start_note: str
-    source: str                 # CSV under data/, or "backtest" for the BTC pair
+    source: str                 # CSV under data/, or the directory holding the two
     base_col: str = ""
     lev_col: str = ""
+    #: Set when the two legs live in SEPARATE files under ``source`` (the BTC
+    #: pair); left empty when one CSV carries both columns (every other pair).
+    base_file: str = ""
+    lev_file: str = ""
     base_name: str = ""
     lev_name: str = ""
 
@@ -86,6 +90,7 @@ class LevPair:
 PAIRS: dict[str, LevPair] = {
     "BTC": LevPair("BTC", "MSTR", "MSTU", 2.0, pd.Timestamp("2024-09-18"),
                    "MSTU's first trading day", "backtest",
+                   "close", "close", "mstr_daily.csv", "mstu_daily.csv",
                    base_name="MicroStrategy",
                    lev_name="T-Rex 2× Long MSTR Daily Target ETF"),
     "GLDM": LevPair("GLDM", "GLDM", "UGL", 2.0, pd.Timestamp("2018-06-26"),
@@ -206,29 +211,45 @@ _DEFAULT_SCALE = "price"
 _DEFAULT_SPREAD = "usd"
 
 
-def load_pair_csv(pair: LevPair, data_root) -> pd.DataFrame:
-    """Build a pair frame from the app's own committed macro CSV.
-
-    Every non-BTC pair already has both legs side by side in the app's daily
-    macro file, so no extra fetch is needed.  The BTC pair is the exception —
-    it lives in the versioned ``data/backtest`` CSVs and is topped up from
-    yfinance by its app, which builds the frame itself.
-    """
-    import pathlib as _pl
-    empty = pd.DataFrame(columns=["BASE", "LEV"], dtype="float64")
-    if pair.source == "backtest" or not pair.base_col or not pair.lev_col:
-        return empty
-    path = _pl.Path(data_root) / pair.source
+def _read_leg(path, column: str) -> pd.DataFrame | None:
+    """One leg's closes from a committed CSV, as a single-column ``close`` frame."""
     try:
         raw = pd.read_csv(path, index_col=0, parse_dates=True)
     except (OSError, ValueError):
+        return None
+    if column not in raw:
+        return None
+    leg = raw[column].rename("close").to_frame()
+    leg.index = pd.DatetimeIndex(leg.index).tz_localize(None).normalize()
+    return leg
+
+
+def load_pair_csv(pair: LevPair, data_root) -> pd.DataFrame:
+    """Build a pair frame from the committed CSVs, for either data layout.
+
+    Most pairs have both legs side by side in their app's daily macro file, so
+    ``source`` names that one CSV and ``base_col``/``lev_col`` name the columns.
+    The BTC pair instead keeps each leg in its own file under the versioned
+    ``data/backtest`` directory, so it also sets ``base_file``/``lev_file``.
+
+    Either way this reads what is committed and nothing more.  The BTC app tops
+    its own frame up from yfinance before rendering its tab, which is why that
+    app builds the frame itself rather than calling this; a caller that wants
+    the same freshness here has to do the same top-up.
+    """
+    import pathlib as _pl
+    empty = pd.DataFrame(columns=["BASE", "LEV"], dtype="float64")
+    if not pair.base_col or not pair.lev_col:
         return empty
-    if pair.base_col not in raw or pair.lev_col not in raw:
+    root = _pl.Path(data_root)
+    if pair.base_file and pair.lev_file:
+        base = _read_leg(root / pair.source / pair.base_file, pair.base_col)
+        lev = _read_leg(root / pair.source / pair.lev_file, pair.lev_col)
+    else:
+        base = _read_leg(root / pair.source, pair.base_col)
+        lev = _read_leg(root / pair.source, pair.lev_col)
+    if base is None or lev is None:
         return empty
-    base = raw[pair.base_col].rename("close").to_frame()
-    lev = raw[pair.lev_col].rename("close").to_frame()
-    for frame in (base, lev):
-        frame.index = pd.DatetimeIndex(frame.index).tz_localize(None).normalize()
     return build_comparison_frame(base, lev, pair.start)
 
 
@@ -1094,3 +1115,169 @@ def make_breakeven_figure(curve: pd.DataFrame, breakeven: float,
         title_font=dict(size=12, color="#475569"),
     )
     return fig
+
+
+# ── the cross-asset board ───────────────────────────────────────────────────
+# Every pair's verdict on ONE page, so the question "which wrapper is currently
+# the cheapest way to hold its underlying?" is answered by looking rather than
+# by opening five tabs and remembering.  The arithmetic is not re-derived here:
+# each row is exactly what that pair's own tab shows, read through
+# ``vehicle_read`` at a shared holding period.
+
+#: Worst → best, so a rating can be sorted or compared as a number.
+RATING_ORDER: dict[str, int] = {lvl["key"]: i for i, lvl in enumerate(RATING_LEVELS)}
+
+
+def board_row(df: pd.DataFrame, pair: LevPair, asof=None,
+              horizon: int = HORIZON_DAYS) -> dict:
+    """One pair's verdict, flattened to a single record.
+
+    Same call the tab makes — ``vehicle_read`` at the shared holding period,
+    with the pair's own live volatility — plus the full-sample tracking fit and
+    the realised drift ladder, so a row carries both what is projected and what
+    already happened.  ``ready`` is False when the history is too short; the
+    caller shows the row as unavailable rather than dropping the pair silently.
+    """
+    read = vehicle_read(df, pair, asof=asof, horizon=horizon)
+    fit = tracking_fit(df if asof is None else df.loc[df.index <= pd.Timestamp(asof)])
+    lvl = read["rating"]
+    row = {
+        "key": pair.key, "base": pair.base, "lev": pair.lev,
+        "pair": f"{pair.base} → {pair.lev}", "leverage": pair.leverage,
+        "ready": bool(read["ready"]), "n_obs": read["n_obs"],
+        "asof": read["asof"], "horizon": int(horizon),
+        "rating": lvl["label"], "icon": lvl["icon"], "color": lvl["color"],
+        "rating_key": lvl["key"], "rating_order": RATING_ORDER[lvl["key"]],
+        "edge": read["edge"], "breakeven": read["breakeven"],
+        "base_pace": read["base_pace"], "lev_at_pace": read["lev_at_pace"],
+        "flat_outcome": read["flat_outcome"],
+        "sigma_ann": read["sigma_ann"], "drift_daily": read["drift_daily"],
+        "hurdle_daily": read["hurdle_daily"],
+        "carry_ann": -read["drag_daily"] * TRADING_DAYS,
+        "beta": fit["beta"], "alpha_ann": fit["alpha_ann"], "r2": fit["r2"],
+        "drift_win": read["drift_win"], "vol_win": read["vol_win"],
+    }
+    for entry in drift_ladder(df, asof=asof):
+        row[f"drift_{entry['sessions']}"] = (
+            entry["total_ret"] if entry["ready"] else np.nan)
+    return row
+
+
+def verdict_board(frames: dict[str, pd.DataFrame],
+                  horizon: int = HORIZON_DAYS, asof=None) -> pd.DataFrame:
+    """Every registered pair's verdict as one frame, best vehicle first.
+
+    ``frames`` maps a ``PAIRS`` key to that pair's aligned price frame — the
+    caller loads them, because the apps differ in where the prices come from.
+    Unknown keys are ignored; an empty frame still produces a row, flagged
+    ``ready=False``, so a broken data source is visible on the page instead of
+    quietly shortening the table.
+
+    Sorted by ``edge`` descending: the board's job is to rank the wrappers, and
+    the edge is the number the rating grades.
+    """
+    rows = [board_row(frames[key], PAIRS[key], asof=asof, horizon=horizon)
+            for key in PAIRS if key in frames]
+    if not rows:
+        return pd.DataFrame()
+    board = pd.DataFrame(rows)
+    return board.sort_values("edge", ascending=False,
+                             na_position="last").reset_index(drop=True)
+
+
+def make_board_figure(board: pd.DataFrame, height: int = 520) -> go.Figure:
+    """Realised drift against the hurdle it has to clear, one dot per pair.
+
+    This is the verdict itself, drawn.  In log space the fund beats its
+    underlying by ``(k−1)·H·(drift − hurdle)``, so for every k > 1 the SIGN of
+    the edge is just which side of the 45° line the pair sits on: above it the
+    leverage is paying for its own decay, below it the wrapper is bleeding.
+    Distance from the line is how much, per session.
+
+    Both quantities are PER SESSION, so the holding period H drops out entirely:
+    it scales every pair's edge by the same factor without moving any dot.  The
+    panel therefore does not respond to the holding-period control, and takes no
+    horizon argument to imply otherwise — the caller tells the reader.
+
+    Both axes are log return per session, so they share one scale and one range —
+    which is what makes the diagonal a true 45° parity line rather than an
+    artefact of two independently fitted axes.
+    """
+    fig = go.Figure()
+    ok = board[board["ready"]] if "ready" in board else board
+    ok = ok[np.isfinite(ok["hurdle_daily"]) & np.isfinite(ok["drift_daily"])]
+    if ok.empty:
+        return fig
+
+    span = pd.concat([ok["hurdle_daily"], ok["drift_daily"]])
+    lo = float(min(span.min(), 0.0))
+    hi = float(max(span.max(), 0.0))
+    pad = max((hi - lo) * 0.28, 0.0006)
+    lo, hi = lo - pad, hi + pad
+
+    # Parity first, so the dots sit on top of it.
+    fig.add_trace(go.Scatter(
+        x=[lo, hi], y=[lo, hi], mode="lines", name="Breakeven (parity)",
+        line=dict(color=COLOR_INK, width=1.5, dash="dash"),
+        hoverinfo="skip", showlegend=True,
+    ))
+    fig.add_trace(go.Scatter(
+        x=ok["hurdle_daily"], y=ok["drift_daily"], mode="markers+text",
+        name="Pair", text=ok["lev"], textposition="middle right",
+        textfont=dict(size=12, color=COLOR_INK),
+        # Colour repeats the verdict, which the label and the table also state —
+        # a redundant encoding, never the only one.
+        marker=dict(size=14, color=ok["color"], line=dict(color="#ffffff", width=2)),
+        customdata=np.stack([ok["pair"], ok["rating"], ok["edge"]], axis=-1),
+        hovertemplate=("<b>%{customdata[0]}</b><br>"
+                       "hurdle %{x:+.3%} / session<br>"
+                       "drift %{y:+.3%} / session<br>"
+                       "%{customdata[1]} · edge %{customdata[2]:+.1%}"
+                       "<extra></extra>"),
+        showlegend=False,
+    ))
+    # Anchored to the panel, not to data coordinates: ``scaleanchor`` lets
+    # plotly widen whichever axis has the spare pixels, so a data-space corner
+    # is not where the corner ends up.  The parity line runs bottom-left to
+    # top-right whatever that rescaling does, which keeps these two corners
+    # correct by construction.
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.02, y=0.98, showarrow=False,
+        text="above the line — the leverage is paying for its decay",
+        font=dict(size=11, color="#15803d"), xanchor="left", yanchor="top")
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.98, y=0.02, showarrow=False,
+        text="below the line — the wrapper is bleeding",
+        font=dict(size=11, color="#b91c1c"), xanchor="right", yanchor="bottom")
+
+    fig.update_layout(
+        height=height, margin=dict(l=0, r=16, t=42, b=0),
+        plot_bgcolor=SURFACE, paper_bgcolor="#ffffff", hovermode="closest",
+        legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                    xanchor="left", x=0, font=dict(size=12)),
+        dragmode="pan",
+    )
+    axis = dict(range=[lo, hi], tickformat="+.2%", showgrid=True,
+                gridcolor=COLOR_GRID, zeroline=True, zerolinecolor=COLOR_AXIS,
+                zerolinewidth=1, tickfont=dict(size=11, color="#475569"),
+                title_font=dict(size=12, color="#475569"))
+    fig.update_xaxes(title_text="Hurdle the fund must clear, per session", **axis)
+    fig.update_yaxes(title_text="Underlying's realised drift, per session",
+                     scaleanchor="x", scaleratio=1, **axis)
+    return fig
+
+
+def drift_matrix(board: pd.DataFrame) -> pd.DataFrame:
+    """The drift ladder for every pair, as one table — rows pairs, columns lookbacks.
+
+    The verdict extrapolates a single trailing drift, and the lookback moves
+    that estimate a lot.  Side by side across the pairs, a rating that rests on
+    one window disagreeing with the others is visible at a glance.
+    """
+    if board.empty:
+        return pd.DataFrame()
+    cols = {f"drift_{n}": label for n, label in DRIFT_LADDER_WINDOWS}
+    have = [c for c in cols if c in board]
+    out = board.set_index("base")[have].rename(columns=cols)
+    out.index.name = "Underlying"
+    return out

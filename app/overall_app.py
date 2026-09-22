@@ -113,11 +113,13 @@ _AUTOREFRESH_SECS = 45                # re-run cadence so the live price column 
 
 # ── app registry (shared with the router / other apps) ────────────────────
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
-             + ["DAILYAUDIT", "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"])
+             + ["LEVERAGED", "DAILYAUDIT", "HEALTH", "TARGETBOOK",
+                "EXECUTEDBOOK", "ASSISTANT"])
 _APP_LABELS = {
     "OVERALL": "🧭  Overall Trading",
     "BTC": "₿  Bitcoin (BTC)",
     "GLDM": "🥇  Gold Trend (GLDM·UGL)", "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
+    "LEVERAGED": "⚡  Leveraged Assets",
     "DAILYAUDIT": "🕵️  Daily Audit",
     "HEALTH": "🩺  Strategy Health",
     "TARGETBOOK": "📋  Target Book (IBKR)",

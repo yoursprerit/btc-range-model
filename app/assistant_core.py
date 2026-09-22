@@ -881,6 +881,11 @@ routes them; each sub-app also renders the same radio):
                 app/ticker_app.py + app/ticker_core.py, configured by
                 app/ticker_config.py. Tabs: Live, Historical replay, per-asset
                 Backtesting, Explain.
+  ⚡ LEVERAGED  app/leveraged_app.py — every leveraged wrapper's vehicle verdict
+                on one board (MSTR/MSTU, GLDM/UGL, GDX/NUGT, SOXX/SOXL,
+                XLE/ERX). Same figures as each pair's own <BASE>-<LEV> Plot tab,
+                at a shared holding period; grades the vehicle's COST, not
+                direction (app/lev_pair_compare.py).
   🕵️  DAILYAUDIT app/daily_audit_app.py — the freshness trail: per-app signal
                 closes, the Overall update and the book publish
                 (data/overall/daily_audit.json, app/freshness.py).

@@ -924,7 +924,11 @@ def test_ladder_carries_a_rung_at_the_default_holding_period():
 # The whole point of the shared module is that five tabs run one implementation.
 # These walk the real committed data for each pair so a k=3 assumption, a bad
 # column name or a shifted start date fails here rather than in a browser.
-_CSV_PAIRS = [p for p in mm.PAIRS.values() if p.source != "backtest"]
+#: All five — the BTC pair included, now that its two backtest CSVs load
+#: through the same entry point as the single-file pairs.  Its app still builds
+#: its own frame so it can top up from yfinance, but the committed data has to
+#: be readable here or the cross-asset board has nothing to show for MSTU.
+_CSV_PAIRS = list(mm.PAIRS.values())
 _DATA = _ROOT / "data"
 
 
@@ -1016,6 +1020,103 @@ def test_pair_registry_is_internally_consistent():
         assert pair.base and pair.lev and pair.base != pair.lev
         assert pair.start_note, key
         assert pair.title == f"{pair.base}-{pair.lev} Plot"
-        if pair.source != "backtest":
+        assert pair.base_col and pair.lev_col, key
+        if pair.base_file and pair.lev_file:
+            # Two files under a directory — the BTC layout.
+            assert (_DATA / pair.source / pair.base_file).exists(), pair.base_file
+            assert (_DATA / pair.source / pair.lev_file).exists(), pair.lev_file
+        else:
+            # One CSV carrying both columns — every other pair.
             assert (_DATA / pair.source).exists(), pair.source
-            assert pair.base_col and pair.lev_col
+
+
+# ── the cross-asset board (app/leveraged_app.py) ────────────────────────────
+# The board's one promise is that it re-states the per-pair tabs rather than
+# computing a second opinion.  These pin that, plus the claim its scatter makes
+# geometrically: which side of the 45° line a pair sits on IS the sign of its
+# edge.
+def _board_frames():
+    return {k: mm.load_pair_csv(p, _DATA) for k, p in mm.PAIRS.items()}
+
+
+@pytest.mark.parametrize("pair", _CSV_PAIRS, ids=lambda p: p.key)
+def test_a_board_row_is_exactly_what_the_pairs_own_tab_shows(pair):
+    """No second opinion: the row IS ``vehicle_read``, not a re-derivation.
+
+    If the board ever computed its own figures, a number here and the same
+    number on the pair's tab could drift apart with nothing on screen to
+    explain it. This is the test that objects.
+    """
+    df = mm.load_pair_csv(pair, _DATA)
+    read = mm.vehicle_read(df, pair, horizon=34)
+    row = mm.board_row(df, pair, horizon=34)
+
+    for field in ("edge", "breakeven", "base_pace", "lev_at_pace",
+                  "flat_outcome", "sigma_ann", "drift_daily", "hurdle_daily"):
+        assert row[field] == pytest.approx(read[field]), field
+    assert row["rating"] == read["rating"]["label"]
+    assert row["horizon"] == 34
+    assert row["carry_ann"] < 0, "carry is a cost, so it shows as a negative"
+
+
+def test_the_board_carries_every_pair_and_ranks_by_edge():
+    board = mm.verdict_board(_board_frames())
+
+    assert list(board["key"]) and set(board["key"]) == set(mm.PAIRS)
+    assert board["ready"].all()
+    edges = board["edge"].tolist()
+    assert edges == sorted(edges, reverse=True), "best vehicle first"
+    assert board["rating_order"].between(0, len(mm.RATING_LEVELS) - 1).all()
+
+
+def test_a_pair_whose_data_is_missing_still_gets_a_row():
+    """A broken source must be visible on the page, not silently absent — a
+    four-row board where five pairs are registered reads as "that one is fine"."""
+    frames = _board_frames()
+    frames["SOXX"] = pd.DataFrame(columns=["BASE", "LEV"], dtype="float64")
+    board = mm.verdict_board(frames)
+
+    assert len(board) == len(mm.PAIRS)
+    row = board.set_index("key").loc["SOXX"]
+    assert not row["ready"] and not np.isfinite(row["edge"])
+
+
+@pytest.mark.parametrize("pair", _CSV_PAIRS, ids=lambda p: p.key)
+def test_which_side_of_the_parity_line_a_pair_sits_on_is_the_sign_of_its_edge(pair):
+    """The scatter's whole claim, checked rather than asserted in a caption.
+
+    In log space the fund beats its underlying by ``(k−1)·H·(drift − hurdle)``,
+    so for every k > 1 the sign of the edge is just drift vs hurdle. If that
+    stopped holding, the chart would be drawing a different quantity from the
+    one the verdict column grades.
+    """
+    row = mm.board_row(mm.load_pair_csv(pair, _DATA), pair)
+
+    assert np.sign(row["edge"]) == np.sign(row["drift_daily"] - row["hurdle_daily"])
+
+
+def test_the_board_scatter_puts_both_axes_on_one_shared_scale():
+    """Two independently fitted axes would make the 45° line an artefact."""
+    fig = mm.make_board_figure(mm.verdict_board(_board_frames()))
+
+    assert fig.layout.xaxis.range == fig.layout.yaxis.range
+    assert fig.layout.yaxis.scaleanchor == "x"
+    assert fig.layout.yaxis.scaleratio == 1
+    # Parity is a real trace, so it lands in the legend and the hover layer
+    # cannot mistake it for data.
+    parity = fig.data[0]
+    assert parity.x == parity.y
+
+
+def test_the_drift_matrix_covers_every_pair_and_every_rung():
+    matrix = mm.drift_matrix(mm.verdict_board(_board_frames()))
+
+    assert list(matrix.columns) == [label for _, label in mm.DRIFT_LADDER_WINDOWS]
+    assert set(matrix.index) == {p.base for p in mm.PAIRS.values()}
+    assert matrix.notna().all().all()
+
+
+def test_rating_order_runs_worst_to_best():
+    order = [mm.RATING_ORDER[lvl["key"]] for lvl in mm.RATING_LEVELS]
+    assert order == sorted(order)
+    assert mm.RATING_ORDER[mm.rate(-0.50)["key"]] < mm.RATING_ORDER[mm.rate(0.50)["key"]]
