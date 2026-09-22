@@ -188,7 +188,8 @@ All seven ETF apps share one config-driven engine — see
 Deep-dives: **[`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md)**,
 **[`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md)**,
 **[`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md)**,
-**[`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md)**.
+**[`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md)**,
+**[`SHORT_SIGNALS_EVAL.md`](SHORT_SIGNALS_EVAL.md)** (why the bearish signals stay "go flat", not "go short").
 
 ---
 
