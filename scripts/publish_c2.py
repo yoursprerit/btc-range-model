@@ -29,7 +29,9 @@ Safety rails
 * Only sends on a US trading day inside regular hours — C2 cannot adjust
   positions while the market is shut (``--outside-rth`` overrides the hours).
 * Idempotent per book: a book already sent is skipped (``--force`` re-sends),
-  so a re-run cannot churn the model account on intraday price moves.
+  so a re-run cannot churn the model account on intraday price moves. The
+  marker is committed (``data/overall/c2_publish_state.json``) so the
+  scheduled workflow's fresh checkouts see it.
 * Share counts are floored and a cash buffer is held back, so the model account
   never sizes onto margin from stale publish-time prices.
 
@@ -65,7 +67,7 @@ import ibkr_common as ic                            # noqa: E402
 
 C2_API_BASE = "https://api4-general.collective2.com"
 DEFAULT_BOOK = _REPO / "data" / "overall" / "target_book.json"
-DEFAULT_STATE = _REPO / "logs" / "c2_publish_state.json"
+DEFAULT_STATE = _REPO / "data" / "overall" / "c2_publish_state.json"
 DEFAULT_CASH_BUFFER = 0.01      # keep 1% of model capital uninvested
 MAX_WEIGHT_SUM = 1.0 + 1e-6     # a book summing past 100% would size onto margin
 

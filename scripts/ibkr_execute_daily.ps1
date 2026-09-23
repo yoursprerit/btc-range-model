@@ -169,19 +169,6 @@ $ExecExit = $LASTEXITCODE
 $ErrorActionPreference = $prevEAP
 if ($ExecExit -ne 0) { Log "WARN: executor exited $ExecExit - see the lines above" }
 
-# Mirror the same book onto Collective2 AFTER our own orders (env C2_PUBLISH=1,
-# plus C2_API_KEY / C2_STRATEGY_ID). Best-effort, and only after a clean
-# executor run -- the same condition under which the bash twin reaches it.
-if ($env:C2_PUBLISH -eq '1' -and $ExecExit -eq 0) {
-    Log "publishing target book to Collective2"
-    # the paper book (no SATA park) unless C2_BOOK points elsewhere
-    $C2Book = if ($env:C2_BOOK) { $env:C2_BOOK } else { Join-Path $RepoRoot 'data\overall\target_book.json' }
-    $ErrorActionPreference = 'Continue'
-    & $Python "scripts\publish_c2.py" --file $C2Book --execute 2>&1 | ForEach-Object { Log $_ }
-    if ($LASTEXITCODE -ne 0) { Log "WARN: Collective2 publish exited $LASTEXITCODE - see the lines above" }
-    $ErrorActionPreference = $prevEAP
-}
-
 # Publish the execution report back so the cloud app's "Executed Book" tab shows
 # it. Requires git WRITE credentials on this host. On push failure, reset to
 # origin so the branch never diverges. Set env IBKR_NO_PUSH_REPORT=1 to skip.
