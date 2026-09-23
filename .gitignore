@@ -15,6 +15,8 @@ Thumbs.db
 
 # Local logs / scratch
 *.log
+# Collective2 publisher's already-sent marker (scripts/publish_c2.py)
+logs/c2_publish_state.json
 /tmp/
 
 # Streamlit — commit config.toml but never secrets

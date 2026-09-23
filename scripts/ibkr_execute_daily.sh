@@ -36,6 +36,11 @@
 #                      while the market is open; skips a bar already executed.
 #                      Set to 0 to opt out.
 #
+#   C2_PUBLISH        set to 1 to mirror the book onto Collective2 after the
+#                     rebalance (scripts/publish_c2.py). Needs C2_API_KEY and
+#                     C2_STRATEGY_ID. A C2 failure is logged, never fails the run.
+#                     Publishes the paper book (no SATA park) unless C2_BOOK is set.
+#
 # OVERALL_BOOK_SECRET must be exported (same value used to publish) so the book's
 # signature verifies before any order is placed.
 set -euo pipefail
@@ -103,6 +108,17 @@ log "account mode: ${ACCOUNT_MODE}"
 
 # --execute places orders; the executor's own guards decide if it actually trades.
 "${PYTHON}" scripts/ibkr_execute_book.py "${ARGS[@]}"
+
+# Mirror the same book onto Collective2 AFTER our own orders, so the public
+# strategy never competes with this account for fills. Best-effort: the
+# rebalance already happened, so a C2 outage must not fail the job or block the
+# execution report below. publish_c2.py skips a book it already sent.
+if [ "${C2_PUBLISH:-0}" = "1" ]; then
+  log "publishing target book to Collective2"
+  "${PYTHON}" scripts/publish_c2.py \
+    --file "${C2_BOOK:-${REPO_ROOT}/data/overall/target_book.json}" --execute \
+    || log "WARN: Collective2 publish failed — see output above"
+fi
 
 # Publish the execution report back so the cloud app's "Executed Book" tab shows
 # it. Requires git WRITE credentials on this host (deploy key / token). On push
