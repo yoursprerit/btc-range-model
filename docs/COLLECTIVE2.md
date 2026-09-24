@@ -16,8 +16,9 @@ its model account onto those positions.
 **Step-by-step runbook with testing:** [`COLLECTIVE2_SETUP.md`](COLLECTIVE2_SETUP.md).
 
 `.github/workflows/publish-c2.yml` sends the day's **paper** book to C2 at
-**9:00 AM America/Chicago** on weekdays, 30 minutes into the session and
-after the 7:15 AM CT book publish.
+**2:30 PM America/Chicago** on weekdays, 30 minutes before the close — the
+same slot as the IBKR executor, so C2 fills near the close the backtest books
+against.
 
 1. Create a strategy on C2 (US stocks enabled) and note its **StrategyId**.
 2. Create an API key in your C2 account settings.
@@ -26,9 +27,9 @@ after the 7:15 AM CT book publish.
    for the book publish). Until they are set the workflow exits green with a
    notice.
 4. Merge to `main` — `on: schedule` only fires from the default branch.
-5. For an on-time 9:00 fire, add the cron-job.org job in
-   [`EXTERNAL_SCHEDULER.md` § C2](EXTERNAL_SCHEDULER.md#collective2-publish-900-am-ct).
-   The workflow's hourly cron slots (to the close) are the backup.
+5. For an on-time 2:30 PM fire, add the cron-job.org job in
+   [`EXTERNAL_SCHEDULER.md` § C2](EXTERNAL_SCHEDULER.md#collective2-publish-230-pm-ct).
+   The workflow's 15-minute cron slots are a best-effort backup.
 
 Each run writes its output to the job summary. The last book sent is recorded
 in `data/overall/c2_publish_state.json` (committed by the workflow), so the
@@ -36,8 +37,11 @@ dispatch, backup slots and manual runs never send the same book twice. If
 today's book is late or withheld, runs skip until it lands; outside regular
 hours they skip too.
 
-**Order of fills:** C2 trades at ~9:00 AM CT, before the IBKR executor's 2:30
-PM CT slot, so C2 subscribers trade the book before your own account does.
+**Timing:** C2 trades at ~2:30 PM CT, alongside the IBKR executor, so the C2
+record, the IBKR account and the close-based backtest stay aligned. With only
+30 minutes to the close there is little room for delay: if the cron-job.org
+fire fails and no GitHub backup slot lands before 3:00 PM CT, that day is not
+sent and C2 keeps the previous positions until the next day's book.
 
 ## Manual use
 
