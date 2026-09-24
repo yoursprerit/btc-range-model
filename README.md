@@ -544,7 +544,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Overall strategy — walk-forward performance | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
 | Strategy decay monitor (🩺 Strategy Health) | [`STRATEGY_HEALTH.md`](STRATEGY_HEALTH.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
-| Signal distribution | [`docs/COLLECTIVE2.md`](docs/COLLECTIVE2.md) (mirror the book onto a Collective2 strategy) |
+| Signal distribution | [`docs/COLLECTIVE2.md`](docs/COLLECTIVE2.md) (mirror the book onto a Collective2 strategy) · [`docs/COLLECTIVE2_SETUP.md`](docs/COLLECTIVE2_SETUP.md) (setup + testing runbook) |
 | Deploy the dashboard (Streamlit) | [`docs/STREAMLIT_DEPLOY.md`](docs/STREAMLIT_DEPLOY.md) |
 | AI Assistant (grounding, tools, model choice) | [`README.md` § 🤖 AI Assistant](#-ai-assistant) |
 | Legacy (audit only) | [`legacy/README.md`](legacy/README.md) |
