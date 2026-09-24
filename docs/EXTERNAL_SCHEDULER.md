@@ -91,21 +91,22 @@ the curl test above — **HTTP 204**, and a `Publish target book` run with event
   sessions, whose GitHub credentials have `contents: write` but not the
   Actions scope this API needs).
 
-## Collective2 publish (9:00 AM CT)
+## Collective2 publish (2:30 PM CT)
 
 Full step-by-step setup and testing: [`COLLECTIVE2_SETUP.md`](COLLECTIVE2_SETUP.md).
 
 `.github/workflows/publish-c2.yml` mirrors the paper book onto Collective2
-(see [`COLLECTIVE2.md`](COLLECTIVE2.md)). Its GitHub cron slots are hourly
-backups; for an on-time send add a second cron-job.org job, reusing the same
+(see [`COLLECTIVE2.md`](COLLECTIVE2.md)). Its GitHub cron slots are best-effort
+backups (rarely in time for the 30-minute window before the close); for an
+on-time send add a second cron-job.org job, reusing the same
 PAT (it already has **Actions: Read and write** on this repo):
 
 | Setting | Value |
 | --- | --- |
 | URL | `https://api.github.com/repos/yoursprerit/btc-range-model/actions/workflows/publish-c2.yml/dispatches` |
-| Schedule | **Monday–Friday at 9:00 AM**, timezone **America/Chicago** |
+| Schedule | **Monday–Friday at 2:30 PM**, timezone **America/Chicago** |
 | Request method / body / headers | Same as the job above (`POST`, `{"ref":"main"}`, the three headers) |
 
-A dispatch bypasses only the workflow's 9:00 guard; `publish_c2.py` still
+A dispatch bypasses only the workflow's 2:30 PM guard; `publish_c2.py` still
 skips a book already sent, a non-trading day, and anything outside regular
 hours — so a holiday fire or an overlap with a backup slot is harmless.
