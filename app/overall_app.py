@@ -3056,6 +3056,162 @@ with tab_live:
                           "missing row — it is a day the strategy chose to "
                           "hold.")
 
+            # ── daily trade log position log — the positions behind the sales ──
+            # (the 🧾 log's sell-side chips re-cut as positions: one row per
+            # 🚦 sell-signal close or ⚖️ tilt trim, with the lot's real entry,
+            # plus every lot still open — the 📜 trade log's shape, but from
+            # what the BOOK held rather than the per-asset engines)
+            if not _bh_src and st.toggle(
+                    f"📒 Daily Trade Log Position Log {_win_lbl} — positions "
+                    "sold day by day through sell signals & optimizer tilts, "
+                    "plus those still open (toggle to show)",
+                    key="overall_daily_position_log"):
+                _res_by_key = {r["key"]: r for r in results}
+                _closes = {k: ov.asset_close_series(r)
+                           for k, r in _res_by_key.items()}
+                _pl = ov.daily_position_log(
+                    _wf["weights"], _wf["sata"], _start_sel, _rets_win,
+                    active=_wf.get("active"),
+                    closes={k: v for k, v in _closes.items()
+                            if v is not None},
+                    log=_get_dtl())
+                _pl_open = [r for r in _pl if r["open"]]
+                _pl_sold = [r for r in _pl if not r["open"]]
+                _pl_sig = sum(r["reason"] == "signal" for r in _pl_sold)
+                _pl_rlz = sum(r["pnl_usd"] for r in _pl_sold
+                              if r["pnl_usd"] is not None) * portfolio_value
+                st.caption(f"**{len(_pl_sold)} sale"
+                           f"{'s' if len(_pl_sold) != 1 else ''} "
+                           f"({_pl_sig} 🚦 sell signal"
+                           f"{'s' if _pl_sig != 1 else ''} · "
+                           f"{len(_pl_sold) - _pl_sig} ⚖️ tilt) · "
+                           f"{len(_pl_open)} position"
+                           f"{'s' if len(_pl_open) != 1 else ''} still open · "
+                           f"realized ${_pl_rlz:+,.0f}.** "
+                           "The actual positions the "
+                           + ("**as-published books**" if _actual
+                              else "**walk-forward replay**")
+                           + " held, re-cut from the 🧾 daily trade log's "
+                           "sell side: one row per sale — a **🚦 sell signal** "
+                           "that closed the position, or a **⚖️ optimizer "
+                           "tilt** that trimmed it (*trimmed* — the rest is "
+                           "still held) or re-sized it through zero "
+                           "(*closed*) — plus every position **still open** "
+                           "(highlighted, unrealised). **Entry** is the close "
+                           "the position was opened at (its real entry, even "
+                           "before the start date — the same lifetime view "
+                           "as the 📜 trade log); **Entry / Exit px** are the "
+                           "instrument's official closes on those dates. "
+                           "**Return** is the sale's gain over the position's "
+                           "**average cost** — tilt adds raise the cost at "
+                           "the price paid, daily re-balance flows included "
+                           "— on the sleeve's strategy returns, so a day the "
+                           "sleeve's own engine was flat earns 0% even if "
+                           "the price moved. **Cost basis** and **$ P&L** "
+                           "are the ledger's exact flows scaled to the 💼 "
+                           "portfolio value at the start date — the same "
+                           "figures the 🧾 log's sale chips show. Newest "
+                           "first.")
+                if not _pl:
+                    st.info("The book held nothing and sold nothing in this "
+                            "window — no positions to list.")
+                else:
+                    _plh = ("<tr style='background:#f1f5f9;font-size:12px;"
+                            "text-align:left'>"
+                            "<th style='padding:6px 10px'>Instrument</th>"
+                            "<th>Status</th>"
+                            "<th>Sold via</th>"
+                            "<th style='text-align:right'>Entry</th>"
+                            "<th style='text-align:right'>Entry px</th>"
+                            "<th style='text-align:right'>Exit</th>"
+                            "<th style='text-align:right'>Exit / last px</th>"
+                            "<th style='text-align:right'>Days</th>"
+                            "<th style='text-align:right'>Return</th>"
+                            "<th style='text-align:right'>Cost basis</th>"
+                            "<th style='text-align:right;padding-right:10px'>"
+                            "$ P&amp;L</th></tr>")
+
+                    def _pl_px(v):
+                        return "—" if v is None else (
+                            f"${v:,.2f}" if v < 1000 else f"${v:,.0f}")
+
+                    def _pl_dt(v):
+                        return "—" if v is None else \
+                            pd.Timestamp(v).strftime("%b %d, %Y")
+
+                    _plr = []
+                    for t in _pl:
+                        _m = _res_by_key.get(t["key"], {})
+                        _ret = t["ret"]
+                        _rc = "#94a3b8" if _ret is None else (
+                            C_BUY if _ret >= 0 else C_EXIT)
+                        _bg = "background:#fffbeb;" if t["open"] else ""
+                        if t["open"]:
+                            _status = (f"<span style='background:{C_HOLD}22;"
+                                       f"color:{C_HOLD};font-weight:700;"
+                                       f"font-size:10px;padding:1px 6px;"
+                                       f"border-radius:6px'>OPEN</span>")
+                            _via = ("<span style='color:#94a3b8;"
+                                    "font-size:11px'>— still held</span>")
+                            _wt = f" wt {t['w1']*100:.1f}%"
+                        else:
+                            _status = (f"<span style='color:#94a3b8;"
+                                       f"font-size:11px'>{t['status']}</span>")
+                            _via = ("🚦 sell signal" if t["reason"] == "signal"
+                                    else "⚖️ optimizer tilt")
+                            _wt = (f" wt {t['w0']*100:.1f}→"
+                                   f"{t['w1']*100:.1f}%")
+                        _usd = None if t["pnl_usd"] is None else \
+                            t["pnl_usd"] * portfolio_value
+                        _usd_s = ("—" if _usd is None else
+                                  f"<span style='color:"
+                                  f"{C_BUY if _usd >= 0 else C_EXIT}'>"
+                                  f"${_usd:+,.0f}</span>")
+                        _bas_s = ("—" if t["basis"] is None else
+                                  f"${t['basis'] * portfolio_value:,.0f}")
+                        _unreal = ("<div style='font-size:10px;color:#94a3b8;"
+                                   "font-weight:400'>unrealised</div>"
+                                   if t["open"] else "")
+                        _plr.append(
+                            f"<tr style='border-bottom:1px solid #eef2f7;{_bg}'>"
+                            f"<td style='padding:6px 10px;font-weight:700;"
+                            f"white-space:nowrap'>"
+                            f"{_m.get('emoji', '')} {t['key']}"
+                            f"{_kind_badge(_m['kind']) if _m.get('kind') else ''}"
+                            f"<span style='font-size:11px;color:#94a3b8;"
+                            f"font-weight:400'>{_wt}</span></td>"
+                            f"<td>{_status}</td>"
+                            f"<td style='font-size:11.5px'>{_via}</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>"
+                            f"{_pl_dt(t['entry_date'])}</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>"
+                            f"{_pl_px(t['entry_px'])}</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>"
+                            f"{_pl_dt(t['exit_date'])}</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>"
+                            f"{_pl_px(t['exit_px'])}</td>"
+                            f"<td style='text-align:right'>"
+                            f"{'—' if t['days'] is None else t['days']}</td>"
+                            f"<td style='text-align:right;font-weight:700;"
+                            f"color:{_rc}'>"
+                            f"{_pct(_ret * 100 if _ret is not None else None)}"
+                            f"{_unreal}</td>"
+                            f"<td style='text-align:right;"
+                            f"font-variant-numeric:tabular-nums'>{_bas_s}</td>"
+                            f"<td style='text-align:right;padding-right:10px;"
+                            f"font-variant-numeric:tabular-nums'>{_usd_s}</td>"
+                            f"</tr>")
+                    st.markdown(
+                        f"<div style='overflow-x:auto;max-height:440px;"
+                        f"overflow-y:auto;margin:8px 0;'>"
+                        f"<table style='width:100%;border-collapse:collapse'>"
+                        f"{_plh}{''.join(_plr)}</table></div>",
+                        unsafe_allow_html=True)
+
             # ── realized P&L by asset — what the sell tickets locked in ──────
             # (the 🧾 trade log's ⚖️ tilt trims + 🚦 sell signals rolled up
             # per sleeve — realized-only, per-trade approximation: it does

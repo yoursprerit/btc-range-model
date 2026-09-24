@@ -477,3 +477,50 @@ def test_win_stats_runs_off_the_as_published_replay_unchanged():
     s = oc.trade_log_win_stats(log)
     assert (s["n_tickets"], s["wins"], s["n_trims"]) == (1, 1, 1)
     assert s["win_rate"] == 1.0
+
+
+def test_dollar_flows_are_per_dollar_at_the_window_anchor():
+    # the blend doubles on IDX1 before the window opens at IDX2: $ flows must
+    # be per $1 at the ANCHOR close (not at the matrix's first row), while
+    # the % P&L still measures from the real pre-window entry
+    w = _frame(AAA=[1.0, 1.0, 0.5, 0.5, 0.0])
+    rets = _frame(AAA=[0.0, 1.00, 0.10, 0.10, 0.0])
+    sata = _sata([0.0, 0.0, 0.5, 0.5, 1.0])
+    log = oc.daily_trade_log(w, sata, IDX[2], returns=rets, sata_daily=0.0)
+    sell = next(a for d in log for a in d["actions"] if a["action"] == "sell")
+    # blend at the anchor close (IDX2) is 2 × 1.05 = 2.10 → rescaled to $1;
+    # the sale at the IDX3 close is 0.5 of that $1, grown 10% on IDX3
+    assert np.isclose(sell["sold"], 0.5 * 1.10)
+    assert np.isclose(sell["pnl"], 2.0 * 1.10 * 1.10 - 1)   # lifetime
+    assert sell["sold"] < 1.0                   # never scaled by pre-window growth
+    assert np.isclose(sell["sold"] / sell["basis"] - 1, sell["pnl"])
+    assert sell["entry_date"] < IDX[2]          # lifetime entry kept
+
+
+def test_position_log_rows_mirror_the_sale_chips_and_list_open_lots():
+    w = _frame(AAA=[0.0, 0.4, 0.4, 0.2, 0.0],
+               BBB=[0.0, 0.3, 0.3, 0.3, 0.3])
+    rets = _frame(AAA=[0.0, 0.10, 0.05, 0.02, 0.0],
+                  BBB=[0.0, 0.02, -0.03, 0.01, 0.04])
+    sata = _sata([1.0, 0.3, 0.3, 0.5, 0.7])
+    closes = {"AAA": pd.Series([10.0, 11, 12, 13, 14], index=IDX)}
+    log = oc.daily_trade_log(w, sata, IDX[0], returns=rets)
+    rows = oc.daily_position_log(w, sata, IDX[0], rets, closes=closes)
+    opens = [r for r in rows if r["open"]]
+    sold = [r for r in rows if not r["open"]]
+    # BBB is still held; AAA was trimmed (tilt) then closed (signal)
+    assert [r["key"] for r in opens] == ["BBB"]
+    assert opens[0]["entry_date"] == IDX[0] and opens[0]["status"] == "open"
+    assert [(r["key"], r["status"], r["reason"]) for r in sold] == \
+        [("AAA", "closed", "signal"), ("AAA", "trimmed", "tilt")]
+    chips = [a for d in log for a in d["actions"] if a["delta"] < 0]
+    for r, a in zip(sold, chips):
+        assert np.isclose(r["ret"], a["pnl"])
+        assert np.isclose(r["pnl_usd"], a["sold"] - a["basis"])
+    assert sold[0]["entry_px"] == 10.0 and sold[0]["exit_px"] == 13.0
+    assert sold[0]["days"] == 3
+    # the open lot's unrealized P&L is value over its average cost
+    assert np.isclose(opens[0]["pnl_usd"], opens[0]["sold"] - opens[0]["basis"])
+    # passing the precomputed log gives the same rows
+    assert oc.daily_position_log(w, sata, IDX[0], rets, closes=closes,
+                                 log=log) == rows
