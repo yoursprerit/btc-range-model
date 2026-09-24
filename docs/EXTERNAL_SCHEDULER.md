@@ -93,6 +93,8 @@ the curl test above — **HTTP 204**, and a `Publish target book` run with event
 
 ## Collective2 publish (9:00 AM CT)
 
+Full step-by-step setup and testing: [`COLLECTIVE2_SETUP.md`](COLLECTIVE2_SETUP.md).
+
 `.github/workflows/publish-c2.yml` mirrors the paper book onto Collective2
 (see [`COLLECTIVE2.md`](COLLECTIVE2.md)). Its GitHub cron slots are hourly
 backups; for an on-time send add a second cron-job.org job, reusing the same

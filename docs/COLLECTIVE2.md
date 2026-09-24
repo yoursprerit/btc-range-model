@@ -13,6 +13,8 @@ its model account onto those positions.
 
 ## Setup (runs in GitHub Actions — no PC needed)
 
+**Step-by-step runbook with testing:** [`COLLECTIVE2_SETUP.md`](COLLECTIVE2_SETUP.md).
+
 `.github/workflows/publish-c2.yml` sends the day's **paper** book to C2 at
 **9:00 AM America/Chicago** on weekdays, 30 minutes into the session and
 after the 7:15 AM CT book publish.
