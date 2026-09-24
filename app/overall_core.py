@@ -1021,6 +1021,72 @@ def trade_log_since(results: list[dict], weights: dict, start,
     return rows
 
 
+def _avg_cost_ledger(w: pd.DataFrame, cash: pd.Series,
+                     returns: pd.DataFrame, min_delta: float,
+                     sata_daily: float, anchor: int = 0) -> dict[str, dict]:
+    """Per-sleeve AVERAGE-COST lot ledger over the weight matrix ``w`` (row
+    0 = cost basis for anything already held).  Shared by
+    ``daily_trade_log`` (sale chips) and ``daily_position_log`` (position
+    rows) so both read the identical flows.  Dollar outputs are per $1 of
+    blend value at the close of row ``anchor`` (the P&L window's anchor), so
+    they scale straight onto the 💼 portfolio value; %-figures are
+    scale-free.
+
+    Returns ``{key: {...}}`` of arrays aligned to ``w``'s rows:
+    ``snap_pnl`` — % gain over average cost at that close BEFORE its
+    re-balance (what a sale there realizes); ``lot_entry`` — row the open
+    lot began (-1 = flat); ``sell_val``/``sell_cost`` — the dollars the
+    re-balance at that close sold and the basis they carried; plus the lot
+    still open at the last close: ``end_val``, ``end_cost``, ``end_entry``
+    (row, -1 = flat)."""
+    wz = w.where(w >= min_delta, 0.0)            # same flat floor as actions
+    kcols = [k for k in w.columns if k in returns.columns]
+    R = returns.reindex(w.index).fillna(0.0).astype(float)
+    biz = np.asarray(w.index.dayofweek < 5)
+    port = (wz[kcols].to_numpy(float) * R[kcols].to_numpy(float)) \
+        .sum(axis=1) + cash.to_numpy(float) * sata_daily * biz
+    port[0] = 0.0                                # anchor bar = cost basis
+    V = np.cumprod(1.0 + port)                   # blend value at each close
+    V = V / V[anchor]                            # $1 at the anchor close
+    out: dict[str, dict] = {}
+    for k in kcols:
+        wk = wz[k].to_numpy(float)
+        rk = R[k].to_numpy(float)
+        sp = np.full(len(wk), np.nan)
+        le = np.full(len(wk), -1, dtype=int)
+        sv = np.full(len(wk), np.nan)
+        sc = np.full(len(wk), np.nan)
+        cost = wk[0] * V[0]                      # basis = value at row 0
+        ent = 0 if wk[0] > 0 else -1
+        a_val = 0.0
+        for j in range(len(wk)):
+            a_val = wk[0] * V[0] if j == 0 else \
+                wk[j] * V[j - 1] * (1.0 + rk[j])     # pre-re-balance value
+            if a_val > 0 and cost > 0:
+                sp[j] = a_val / cost - 1.0
+                le[j] = ent
+            if j + 1 < len(wk):                  # re-balance at this close
+                h_val = wk[j + 1] * V[j]         # post-re-balance value
+                if a_val <= 0:
+                    if h_val > 0:                # fresh lot
+                        cost, ent = h_val, j
+                elif h_val <= 0:                 # emptied — lot closed
+                    sv[j], sc[j] = a_val, cost
+                    cost, ent = 0.0, -1
+                elif h_val > a_val:              # buy: cost added at value
+                    cost += h_val - a_val
+                else:                            # sell: cost removed pro-rata
+                    sv[j] = a_val - h_val
+                    sc[j] = cost * (1.0 - h_val / a_val)
+                    cost *= h_val / a_val
+        held = a_val > 0 and cost > 0
+        out[k] = dict(snap_pnl=sp, lot_entry=le, sell_val=sv, sell_cost=sc,
+                      end_val=float(a_val) if held else 0.0,
+                      end_cost=float(cost) if held else 0.0,
+                      end_entry=int(ent) if held else -1)
+    return out
+
+
 def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
                     min_delta: float = 0.0005,
                     returns: pd.DataFrame | None = None,
@@ -1101,62 +1167,16 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
         if active is not None else None
 
     # ── average-cost lot ledger ──────────────────────────────────────────
-    # snap_pnl[k][j]: sleeve k's % gain over its average cost at the close
-    # of row j, BEFORE that close's re-balance — exactly what a sale at
-    # that close realizes.  lot_entry[k][j]: row where the open lot began.
-    # sell_val/sell_cost[k][j]: the EXACT dollars (per $1 at the anchor
-    # close) the re-balance at close j sold, and the average-cost basis
-    # those dollars carried — the actual realized flows on the compounded
-    # value path.
-    snap_pnl: dict[str, np.ndarray] = {}
-    lot_entry: dict[str, np.ndarray] = {}
-    sell_val: dict[str, np.ndarray] = {}
-    sell_cost: dict[str, np.ndarray] = {}
-    if returns is not None:
-        wz = wf.where(wf >= min_delta, 0.0)      # same flat floor as actions
-        kcols = [k for k in wf.columns if k in returns.columns]
-        R = returns.reindex(wf.index).fillna(0.0).astype(float)
-        biz = np.asarray(wf.index.dayofweek < 5)
-        port = (wz[kcols].to_numpy(float) * R[kcols].to_numpy(float)) \
-            .sum(axis=1) + cash.to_numpy(float) * sata_daily * biz
-        port[0] = 0.0                            # anchor bar = cost basis
-        V = np.cumprod(1.0 + port)               # blend value at each close
-        for k in kcols:
-            wk = wz[k].to_numpy(float)
-            rk = R[k].to_numpy(float)
-            sp = np.full(len(wk), np.nan)
-            le = np.full(len(wk), -1, dtype=int)
-            sv = np.full(len(wk), np.nan)
-            sc = np.full(len(wk), np.nan)
-            cost = wk[0]                         # basis = value at row-0 close
-            ent = 0 if wk[0] > 0 else -1
-            for j in range(len(wk)):
-                a_val = wk[0] if j == 0 else \
-                    wk[j] * V[j - 1] * (1.0 + rk[j])   # pre-re-balance value
-                if a_val > 0 and cost > 0:
-                    sp[j] = a_val / cost - 1.0
-                    le[j] = ent
-                if j + 1 < len(wk):              # re-balance at this close
-                    h_val = wk[j + 1] * V[j]     # post-re-balance value
-                    if a_val <= 0:
-                        if h_val > 0:            # fresh lot
-                            cost, ent = h_val, j
-                    elif h_val <= 0:             # emptied — lot closed
-                        sv[j], sc[j] = a_val, cost
-                        cost, ent = 0.0, -1
-                    elif h_val > a_val:          # buy: cost added at value
-                        cost += h_val - a_val
-                    else:                        # sell: cost removed pro-rata
-                        sv[j] = a_val - h_val
-                        sc[j] = cost * (1.0 - h_val / a_val)
-                        cost *= h_val / a_val
-            snap_pnl[k] = sp
-            lot_entry[k] = le
-            sell_val[k] = sv
-            sell_cost[k] = sc
+    # Runs over the FULL matrix so a lot opened before the window keeps its
+    # real entry (trade-lifetime P&L), but its $ flows are rescaled to the
+    # ANCHOR close — the $1 every figure is "per".  (They used to be per $1
+    # at the matrix's first row: on the replay, years of blend growth before
+    # the anchor inflated every sold / cost-basis / $ P&L figure ~10×.)
+    off = wf.index.get_loc(w.index[0])
+    led = _avg_cost_ledger(wf, cash, returns, min_delta, sata_daily,
+                           anchor=off) if returns is not None else None
 
     days = []
-    off = wf.index.get_loc(w.index[0])
     for i in range(off + 1, len(wf)):
         prev, cur = wf.iloc[i - 1], wf.iloc[i]
         actions = []
@@ -1176,17 +1196,18 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
             else:
                 sig = act in ("buy", "sell")
             pnl = entry = sold = basis = None
-            if d < 0 and k in snap_pnl:
-                v = snap_pnl[k][i - 1]
+            if d < 0 and led is not None and k in led:
+                lk, j = led[k], i - 1             # ledger row of this close
+                v = lk["snap_pnl"][j]
                 if np.isfinite(v):
                     pnl = float(v)
-                    e = int(lot_entry[k][i - 1])
+                    e = int(lk["lot_entry"][j])
                     entry = wf.index[e] if e >= 0 else None
                 # the exact flows the re-balance at this close sold
-                sv = sell_val[k][i - 1]
+                sv = lk["sell_val"][j]
                 if np.isfinite(sv):
                     sold = float(sv)
-                    basis = float(sell_cost[k][i - 1])
+                    basis = float(lk["sell_cost"][j])
             actions.append(dict(key=k, w0=w0, w1=w1, delta=d, action=act,
                                 signal_change=sig, pnl=pnl, entry_date=entry,
                                 sold=sold, basis=basis))
@@ -1206,6 +1227,99 @@ def daily_trade_log(weights: pd.DataFrame, sata: pd.Series, start,
             n_resize=sum(not a["signal_change"] for a in actions)))
     days.reverse()
     return days
+
+
+def daily_position_log(weights: pd.DataFrame, sata: pd.Series, start,
+                       returns: pd.DataFrame,
+                       min_delta: float = 0.0005,
+                       active: pd.DataFrame | None = None,
+                       closes: dict | None = None,
+                       sata_daily: float = SATA_DAILY,
+                       log: list[dict] | None = None) -> list[dict]:
+    """Position-level view of ``daily_trade_log``: one row per position the
+    DAILY BOOK actually sold down in the window — every 🚦 exit-signal close
+    and every ⚖️ optimizer tilt trim (or tilt re-size through zero) — plus
+    one row per lot still open at the window end.  It is the 📜 trade log's
+    shape (entry → exit, prices, days, return) but built from what the book
+    held, not from the per-asset engines' round trips.
+
+    Each sale row: ``key``, ``open=False``, ``status`` (``"closed"`` — the
+    sale emptied the position — or ``"trimmed"`` — part of it was sold and
+    the rest is still held), ``reason`` (``"signal"`` or ``"tilt"``),
+    ``entry_date`` (the close the lot was opened at — the position's real
+    entry, even before ``start``), ``exit_date`` (the sale's execution
+    close), ``days``, ``w0``/``w1`` (book weight before/after), ``ret``
+    (realized % over the lot's AVERAGE cost), ``sold``/``basis`` (the
+    ledger's exact flows, per $1 at the anchor close) and ``pnl_usd``
+    (``sold − basis``).  Each open row: ``open=True``, ``status="open"``,
+    ``exit_date=None``, ``w1`` = weight at the last row, ``ret`` = unrealized
+    % over average cost, ``sold`` = its value at the last close, ``basis``
+    = its remaining average cost and ``pnl_usd`` their difference.
+
+    With ``closes`` (``{key: daily close Series}``) rows also carry
+    ``entry_px``/``exit_px`` — the instrument's official close on/before the
+    entry and exit (latest close for open rows); ``None`` otherwise.
+
+    Pass an already-computed ``log`` (same arguments) to skip re-diffing.
+    Rows come back newest-first: open positions, then sales by exit date."""
+    if log is None:
+        log = daily_trade_log(weights, sata, start, min_delta=min_delta,
+                              returns=returns, active=active,
+                              sata_daily=sata_daily)
+    closes = closes or {}
+
+    def _px(key, d):
+        s = closes.get(key)
+        if s is None or d is None or not len(s):
+            return None
+        s = s.loc[:pd.Timestamp(d)].dropna()
+        return float(s.iloc[-1]) if len(s) else None
+
+    rows = []
+    for day in log:
+        for a in day["actions"]:
+            if a["delta"] >= 0 or a.get("pnl") is None:
+                continue
+            ent, ex = a.get("entry_date"), day["date"]
+            full = a["w1"] < min_delta
+            sold, basis = a.get("sold"), a.get("basis")
+            rows.append(dict(
+                key=a["key"], open=False,
+                status="closed" if full else "trimmed",
+                reason="signal" if a["signal_change"] else "tilt",
+                entry_date=ent, exit_date=ex,
+                days=int((ex - ent).days) if ent is not None else None,
+                w0=a["w0"], w1=a["w1"], ret=a["pnl"], sold=sold, basis=basis,
+                pnl_usd=(sold - basis) if sold is not None
+                and basis is not None else None,
+                entry_px=_px(a["key"], ent), exit_px=_px(a["key"], ex)))
+
+    wf = weights.fillna(0.0)
+    w = wf.loc[pd.Timestamp(start):]
+    opens = []
+    if len(w) >= 2:
+        off = wf.index.get_loc(w.index[0])
+        cash = sata.reindex(wf.index).fillna(0.0).astype(float)
+        led = _avg_cost_ledger(wf, cash, returns, min_delta, sata_daily,
+                               anchor=off)
+        last = wf.index[-1]
+        for k, lk in led.items():
+            if lk["end_entry"] < 0 or lk["end_cost"] <= 0:
+                continue
+            ent = wf.index[lk["end_entry"]]
+            opens.append(dict(
+                key=k, open=True, status="open", reason=None,
+                entry_date=ent, exit_date=None,
+                days=int((last - ent).days), w0=None,
+                w1=float(wf[k].iloc[-1]),
+                ret=lk["end_val"] / lk["end_cost"] - 1.0,
+                sold=lk["end_val"], basis=lk["end_cost"],
+                pnl_usd=lk["end_val"] - lk["end_cost"],
+                entry_px=_px(k, ent), exit_px=_px(k, last)))
+        opens.sort(key=lambda r: -r["w1"])
+    rows.sort(key=lambda r: (r["exit_date"], r["entry_date"] or r["exit_date"]),
+              reverse=True)
+    return opens + rows
 
 
 def trade_log_win_stats(log: list[dict]) -> dict | None:

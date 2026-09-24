@@ -195,6 +195,27 @@ has stalled:
 All three helpers live in `app/overall_core.py` and are covered by
 `tests/test_book_ticket_visibility.py`.
 
+### Sale P&L, cost basis and the 📒 position log
+
+Every sale chip in the 🧾 log (🚦 sell signal or ⚖️ tilt trim) carries the
+realized % over the position's **average cost** and the exact dollars behind
+it, from one average-cost ledger (`_avg_cost_ledger`). The ledger runs over
+the whole weight matrix, so a position opened before the start date keeps its
+real entry (lifetime P&L %). Its dollar flows are rescaled so the blend is
+**$1 at the start date's close**, and that is what the 💼 portfolio value
+multiplies. Before this was fixed they were per $1 at the matrix's *first*
+row. On the walk-forward replay (history from 2021) that inflated every
+sold / cost-basis / $ P&L figure by the blend's pre-window growth, roughly
+10×.
+
+`daily_position_log` re-cuts the same sale side as positions, shown in the
+**📒 Daily Trade Log Position Log** toggle. It has one row per sale (status
+*closed* or *trimmed*, sold via 🚦 signal or ⚖️ tilt, entry and exit closes,
+days held, average-cost return, cost basis, $ P&L) plus one row per lot still
+open at the window's end. It uses the 📜 trade log's layout, but the rows come
+from what the book held rather than the per-asset engines' round trips.
+Covered by `tests/test_daily_trade_log.py`.
+
 ### Two win rates, deliberately
 
 The P&L metrics row publishes both, and they answer different questions:
