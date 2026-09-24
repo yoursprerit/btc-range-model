@@ -2294,7 +2294,7 @@ with tab_live:
                     f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
                     f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
-            pm = st.columns(5)
+            pm = st.columns(6)
             _pl_lbl = "Buy & hold P&L" if _bh_src else "Strategy P&L"
             pm[0].metric(_pl_lbl, f"{_sm['total_ret']*100:+.1f}%",
                          delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
@@ -2311,6 +2311,16 @@ with tab_live:
             pm[4].metric("Calmar", f"{_calmar:.2f}" if _calmar is not None else "—",
                          help="CAGR ÷ |max drawdown| since the chosen start date. "
                               "Shows — when the window had no drawdown.")
+            # Profit factor = gross gains ÷ gross losses of the daily P&L
+            # over the same window
+            _pf_r = _curve_all.loc[_sm['start']:_sm['end']].pct_change().dropna()
+            _pf_loss = float(-_pf_r[_pf_r < 0].sum())
+            _pf = float(_pf_r[_pf_r > 0].sum()) / _pf_loss if _pf_loss > 0 else None
+            pm[5].metric("Profit factor", f"{_pf:.2f}" if _pf is not None else "—",
+                         help="Sum of winning-day returns ÷ |sum of losing-day "
+                              "returns| since the chosen start date. Above 1 "
+                              "means gains outweigh losses. Shows — when the "
+                              "window had no losing day.")
             # per-asset since-start reads (also feed the blend-level trade stats)
             _pa = ov.per_asset_slice_metrics(results, _start_sel, end=_end_arg)
             if _bh_src:
