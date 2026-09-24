@@ -2083,6 +2083,7 @@ with tab_live:
             st.session_state.pop("overall_pnl_source", None)
         _pnl_src = st.radio(
             "Performance source", _src_opts,
+            index=_src_opts.index(_SRC_REPLAY),
             horizontal=True, key="overall_pnl_source",
             help="**As-published record** — compounds the target books the "
                  "publisher actually committed each day (one archived JSON "
