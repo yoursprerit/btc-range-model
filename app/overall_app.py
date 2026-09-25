@@ -2286,12 +2286,19 @@ with tab_live:
         # the replay (months back) would otherwise pin the C2 record to its
         # very first bar
         _src_key = "actual" if _c2_src else ("bh" if _bh_src else "replay")
-        if st.session_state.get("_overall_pnl_start_src") != _src_key:
-            st.session_state.pop("overall_pnl_start", None)
+        # The start date is driven through Session State, never the widget's
+        # ``value=``: with a key, Streamlit keeps a date_input's identity (and
+        # the browser keeps showing its old date) when only ``value`` changes,
+        # so clearing the key or passing a new default does NOT move the
+        # field. Assigning the key before the widget is created does.
+        _start_default = min(max(_default_start, _d0), _d1_start)
+        if (st.session_state.get("_overall_pnl_start_src") != _src_key
+                or "overall_pnl_start" not in st.session_state):
+            st.session_state["overall_pnl_start"] = _start_default
             st.session_state["_overall_pnl_start_src"] = _src_key
-        # switching source narrows the valid range (the as-published record is
-        # younger than the replay) — clamp a remembered date or the widget errors
-        if "overall_pnl_start" in st.session_state:
+        else:
+            # switching source narrows the valid range (the as-published
+            # record is younger than the replay) — clamp or the widget errors
             _remember = st.session_state["overall_pnl_start"]
             if _remember < _d0 or _remember > _d1_start:
                 st.session_state["overall_pnl_start"] = min(max(_remember, _d0),
@@ -2304,7 +2311,7 @@ with tab_live:
         pnl_cols = st.columns([1, 1, 2])
         with pnl_cols[0]:
             _start_sel = st.date_input(
-                "📅 Start date", value=min(max(_default_start, _d0), _d1_start),
+                "📅 Start date",
                 min_value=_d0, max_value=_d1_start, key="overall_pnl_start",
                 help="First strategy bar on/after this date becomes the cost-basis "
                      "anchor (weekends/holidays roll forward). Defaults to "
