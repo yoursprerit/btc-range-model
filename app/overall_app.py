@@ -2278,9 +2278,19 @@ with tab_live:
             _curves_view = _PF["curves"]
             _curve_all = _PF["curves"][STRAT_CURVE]
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
-        _default_start = pd.Timestamp("2026-03-01").date()
+        # the as-published (C2) record opens on the day C2 first traded it;
+        # the replay and buy & hold keep their long look-back
+        _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START if _actual
+                                      else "2026-03-01").date()
         _today = pd.Timestamp.now(tz="America/New_York").date()
         _end_max = max(_d1, _today)
+        # a new source brings its own default start — a date remembered from
+        # the replay (months back) would otherwise pin the C2 record to its
+        # very first bar
+        _src_key = "actual" if _actual else ("bh" if _bh_src else "replay")
+        if st.session_state.get("_overall_pnl_start_src") != _src_key:
+            st.session_state.pop("overall_pnl_start", None)
+            st.session_state["_overall_pnl_start_src"] = _src_key
         # switching source narrows the valid range (the as-published record is
         # younger than the replay) — clamp a remembered date or the widget errors
         if "overall_pnl_start" in st.session_state:
@@ -2299,7 +2309,12 @@ with tab_live:
                 min_value=_d0, max_value=_d1, key="overall_pnl_start",
                 help="First strategy bar on/after this date becomes the cost-basis "
                      "anchor (weekends/holidays roll forward). Defaults to "
-                     "March 1, 2026.")
+                     + (f"{pd.Timestamp(ov.C2_PNL_DEFAULT_START):%B %-d, %Y} — "
+                        "the day Collective2 first traded the record — for the "
+                        "as-published record, "
+                        if _actual else "")
+                     + "March 1, 2026"
+                     + (" for the other sources." if _actual else "."))
         with pnl_cols[1]:
             _end_sel = st.date_input(
                 "📅 End date", value=min(max(_today, _d0), _end_max),
@@ -2337,7 +2352,13 @@ with tab_live:
                            .loc[pd.Timestamp(_start_sel):].mean())
                   for k in _wf["weights"].columns} if _bh_src else {})
         _sm = ov.slice_metrics(_curve_all, _start_sel)
-        if _sm is None:
+        if _sm is None and _actual and _start_sel >= _d1:
+            st.info("🎯 The as-published record is measured from the "
+                    f"**{_start_sel:%b %d, %Y}** close, when Collective2 "
+                    "first held the book, so there is no P&L until the next "
+                    "completed close is in the data. Pick an earlier start "
+                    f"(from {_d0}) to include the record's opening bar.")
+        elif _sm is None:
             st.warning("Not enough strategy history between those dates — pick "
                        "an earlier start or a later end "
                        f"(data runs {_d0} → {_d1}).")
