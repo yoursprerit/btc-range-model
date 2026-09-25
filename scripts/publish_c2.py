@@ -34,6 +34,10 @@ Safety rails
   scheduled workflow's fresh checkouts see it.
 * Share counts are floored and a cash buffer is held back, so the model account
   never sizes onto margin from stale publish-time prices.
+* No-trade band (``--band``, default 1% of capital, the executor's
+  ``IBKR_BAND``): a name C2 already holds keeps its current quantity when the
+  resize would move less than the band, so an unchanged book sends no orders.
+  New positions and exits always go through.
 
 Stdlib + pandas only (no ``requests``), so it runs on the executor host.
 """
@@ -70,6 +74,7 @@ DEFAULT_BOOK = _REPO / "data" / "overall" / "target_book.json"
 DEFAULT_STATE = _REPO / "data" / "overall" / "c2_publish_state.json"
 DEFAULT_CASH_BUFFER = 0.01      # keep 1% of model capital uninvested
 MAX_WEIGHT_SUM = 1.0 + 1e-6     # a book summing past 100% would size onto margin
+DEFAULT_BAND = 0.01             # no-trade band, fraction of capital (= IBKR executor)
 
 
 class C2Error(RuntimeError):
@@ -128,6 +133,43 @@ def check_positions(weights: dict[str, float], positions: list[dict],
     if not allow_flat:
         return False, "book is all cash — pass --allow-flat to close every C2 position"
     return True, "all cash — closing every C2 position (--allow-flat)"
+
+
+def apply_band(positions: list[dict], current: dict[str, float], capital: float,
+               band: float = DEFAULT_BAND) -> tuple[list[dict], list[str]]:
+    """Hold C2's current quantity for names whose resize is inside the band.
+
+    ``current`` is C2's open positions, symbol → shares. A target for a symbol
+    already held whose ``|target − held| × price`` is below ``band × capital``
+    is replaced by the held quantity, so SetDesiredPositions places no order for
+    it. New names (not held) and exits (held, no target) are never banded.
+    If keeping the held quantities would put the book above 100% of capital,
+    the band is dropped for this run rather than size onto margin.
+
+    Returns ``(positions, banded_symbols)``."""
+    if band <= 0 or not current:
+        return positions, []
+    limit = band * capital
+    out, banded = [], []
+    for p in positions:
+        held = current.get(p["symbol"], 0.0)
+        if held > 0 and held != p["quantity"] \
+                and abs(p["quantity"] - held) * p["price"] < limit:
+            out.append({**p, "quantity": held, "banded_from": p["quantity"]})
+            banded.append(p["symbol"])
+        else:
+            out.append(p)
+    if sum(p["quantity"] * p["price"] for p in out) > capital:
+        return positions, []
+    return out, banded
+
+
+def orders_needed(positions: list[dict], current: dict[str, float]) -> bool:
+    """Would SetDesiredPositions trade anything? False when every target equals
+    C2's held quantity and nothing held is left out (which would close it)."""
+    target = {p["symbol"]: p["quantity"] for p in positions}
+    held = {s: q for s, q in current.items() if q}
+    return target != held
 
 
 def desired_positions_payload(strategy_id: int, positions: list[dict]) -> dict:
@@ -212,6 +254,24 @@ def model_account_value(api_key: str, strategy_id: int) -> float:
     return float(value)
 
 
+def parse_open_positions(resp: dict) -> dict[str, float]:
+    """GetStrategyOpenPositions response → {symbol: net shares} (stocks only)."""
+    out: dict[str, float] = {}
+    for pos in resp.get("Results") or []:
+        sym_ = ((pos.get("ExchangeSymbol") or {}).get("Symbol")
+                or (pos.get("C2Symbol") or {}).get("FullSymbol"))
+        qty = pos.get("Quantity")
+        if sym_ and qty:
+            out[sym_.upper()] = out.get(sym_.upper(), 0.0) + float(qty)
+    return out
+
+
+def open_positions(api_key: str, strategy_id: int) -> dict[str, float]:
+    resp = _c2_request("GET", "/Strategies/GetStrategyOpenPositions", api_key,
+                       params=f"StrategyIds={int(strategy_id)}&SecurityType=CS")
+    return parse_open_positions(resp)
+
+
 def set_desired_positions(api_key: str, body: dict) -> dict:
     return _c2_request("POST", "/v2/Strategies/SetDesiredPositions", api_key, body=body)
 
@@ -245,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--capital", type=float, default=None,
                     help="size against this capital instead of C2's model-account value")
     ap.add_argument("--cash-buffer", type=float, default=DEFAULT_CASH_BUFFER)
+    ap.add_argument("--band", type=float, default=DEFAULT_BAND,
+                    help="no-trade band as a fraction of capital (0 disables)")
     ap.add_argument("--allow-flat", action="store_true",
                     help="allow an all-cash book to close every C2 position")
     ap.add_argument("--outside-rth", action="store_true",
@@ -312,13 +374,30 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"capital: ${capital:,.0f} (C2 model account value)")
 
+    # C2's current holdings drive the no-trade band. Without credentials (a
+    # --capital preview) there is nothing to compare against, so no band.
+    current: dict[str, float] = {}
+    if api_key and args.strategy_id:
+        try:
+            current = open_positions(api_key, args.strategy_id)
+        except C2Error as e:
+            print(f"ABORT: {e}")
+            return 1
+        print(f"C2 holds {len(current)} position(s)")
+
     weights = payload.get("weights") or {}
     positions, dropped = build_positions(weights, payload.get("exec_price") or {},
                                          capital, args.cash_buffer)
+    positions, banded = apply_band(positions, current, capital, args.band)
     print(f"\n{'symbol':<7}{'weight':>8}{'shares':>9}{'price':>11}{'value':>13}")
     for p in positions:
-        print(f"{p['symbol']:<7}{p['weight']*100:>7.1f}%{p['quantity']:>9}"
-              f"{p['price']:>11,.2f}{p['quantity']*p['price']:>13,.0f}")
+        note = (f"  held (target {p['banded_from']}, inside {args.band*100:g}% band)"
+                if "banded_from" in p else "")
+        print(f"{p['symbol']:<7}{p['weight']*100:>7.1f}%{p['quantity']:>9g}"
+              f"{p['price']:>11,.2f}{p['quantity']*p['price']:>13,.0f}{note}")
+    targets = {p["symbol"] for p in positions}
+    for s_ in sorted(set(current) - targets):
+        print(f"  close: {s_} ({current[s_]:g} shares, no longer in the book)")
     invested = sum(p["quantity"] * p["price"] for p in positions)
     print(f"{'total':<7}{'':>8}{'':>9}{'':>11}{invested:>13,.0f}"
           f"  ({invested/capital*100:.1f}% of capital)")
@@ -330,25 +409,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ABORT: {why}")
         return 2
 
+    needed = orders_needed(positions, current) if current else True
     if not args.execute:
+        if not needed:
+            print("\nNo orders needed — C2 already holds these positions.")
         print("\nDRY-RUN — nothing sent. Re-run with --execute to publish.")
         return 0
     if not (api_key and args.strategy_id):
         print("ABORT: --execute needs C2_API_KEY and C2_STRATEGY_ID")
         return 2
 
-    body = desired_positions_payload(args.strategy_id, positions)
-    try:
-        resp = set_desired_positions(api_key, body)
-    except C2Error as e:
-        print(f"ABORT: {e}")
-        return 1
-    ok, lines = summarize_response(resp)
-    print("\nC2 response:")
-    print("\n".join(lines))
-    if not ok:
-        print("FAILED: C2 rejected part of the request — not recording as sent")
-        return 1
+    if not needed:
+        # every change was inside the band: nothing to trade, but the book is
+        # handled — record it so later slots skip it too
+        print("\nNo orders needed — C2 already holds these positions (nothing sent).")
+    else:
+        body = desired_positions_payload(args.strategy_id, positions)
+        try:
+            resp = set_desired_positions(api_key, body)
+        except C2Error as e:
+            print(f"ABORT: {e}")
+            return 1
+        ok, lines = summarize_response(resp)
+        print("\nC2 response:")
+        print("\n".join(lines))
+        if not ok:
+            print("FAILED: C2 rejected part of the request — not recording as sent")
+            return 1
 
     _save_state(state_path, {
         "fingerprint": fp, "as_of": payload.get("as_of"),
@@ -356,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
         "strategy_id": args.strategy_id, "capital": capital,
         "positions": {p["symbol"]: p["quantity"] for p in positions},
     })
-    print(f"\npublished {len(positions)} positions to C2 strategy {args.strategy_id}")
+    if needed:
+        print(f"\npublished {len(positions)} positions to C2 strategy {args.strategy_id}")
     return 0
 
 

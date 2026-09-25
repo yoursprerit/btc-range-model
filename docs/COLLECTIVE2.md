@@ -66,6 +66,7 @@ OVERALL_BOOK_SECRET=… C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish
 | Weights ≤ 100%, floored shares, 1% cash buffer | The model account never sizes onto margin from the book's publish-time prices. |
 | Trading day + regular hours | C2 cannot adjust positions while the market is shut (`--outside-rth` overrides the hours). |
 | Once per book | `data/overall/c2_publish_state.json` records the last book sent; a re-run skips it (`--force` re-sends), so intraday price moves cannot churn the model account. |
+| No-trade band (`--band`, default 1% of capital) | Same as the executor's `IBKR_BAND`: a name C2 already holds keeps its quantity when the resize would move less than 1% of capital, so an unchanged book places no orders. New positions and exits always go through; the band is dropped for a run if holding would exceed 100% of capital. Over the last 15 archived books it cut C2 orders from 63 to 29. |
 | Rejected signals fail the run | A C2 rejection (e.g. an unsupported symbol) exits non-zero and is not recorded as sent. |
 
 ## Notes
