@@ -103,21 +103,47 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
           exit $STATUS
 
-      - name: Commit the sent-book marker
+      # What the C2 model account actually holds (shares + average fill),
+      # for the Overall app's 💼 Current Positions. Read-only; runs on every
+      # slot so the fills of a book sent in an earlier slot land here, and
+      # the file is only rewritten when the holdings change (or once a day).
+      - name: Snapshot C2 positions
+        if: always() && steps.guard.outputs.run == 'true'
+        continue-on-error: true
+        env:
+          C2_API_KEY: ${{ secrets.C2_API_KEY }}
+          C2_STRATEGY_ID: ${{ secrets.C2_STRATEGY_ID }}
+        run: |
+          set -euo pipefail
+          # a book was just sent: give C2's market orders a moment to fill
+          if ! git diff --quiet -- data/overall/c2_publish_state.json; then
+            sleep 60
+          fi
+          python scripts/publish_c2.py --snapshot \
+            --state data/overall/c2_publish_state.json \
+            --snapshot-file data/overall/c2_positions.json
+
+      - name: Commit the sent-book marker and positions snapshot
         if: steps.guard.outputs.run == 'true'
         run: |
           set -euo pipefail
-          git add data/overall/c2_publish_state.json 2>/dev/null || true
+          git add data/overall/c2_publish_state.json data/overall/c2_positions.json 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "No new book sent — nothing to commit."; exit 0
+            echo "No new book sent and holdings unchanged — nothing to commit."; exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          ASOF="$(jq -r '.as_of // "unknown"' data/overall/c2_publish_state.json)"
-          git commit -m "chore(c2): published book as-of ${ASOF} to Collective2" \
+          if git diff --cached --quiet -- data/overall/c2_publish_state.json; then
+            MSG="chore(c2): positions snapshot"
+          else
+            ASOF="$(jq -r '.as_of // "unknown"' data/overall/c2_publish_state.json)"
+            MSG="chore(c2): published book as-of ${ASOF} to Collective2"
+          fi
+          git commit -m "${MSG}" \
             -m "Automated via .github/workflows/publish-c2.yml"
-          # Other workflows push to this branch too; the marker is the only
-          # path in this commit, so this run's copy wins any rebase conflict.
+          # Other workflows push to this branch too; the marker and snapshot
+          # are the only paths in this commit, so this run's copy wins any
+          # rebase conflict.
           for attempt in 1 2 3; do
             git fetch origin "${GITHUB_REF_NAME}"
             if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}" \

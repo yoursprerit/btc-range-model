@@ -213,3 +213,62 @@ def test_unchanged_book_sends_nothing_but_is_recorded(tmp_path, monkeypatch):
     assert pc.main(argv) == 0
     assert sent == []
     assert json.loads(state.read_text())["positions"] == {"XLE": 100.0}
+
+
+# ── positions snapshot (read-only, for the Overall app) ─────────────────────
+def _open_positions_resp():
+    return {"Results": [
+        {"ExchangeSymbol": {"Symbol": "GRID"}, "Quantity": 82, "AvgPx": 150.0,
+         "OpenedDate": "2026-09-10T19:31:00"},
+        {"ExchangeSymbol": {"Symbol": "grid"}, "Quantity": 18, "AvgPx": 160.0,
+         "OpenedDate": "2026-09-01T19:31:00"},
+        {"ExchangeSymbol": {"Symbol": "IBIT"}, "Quantity": 10, "AvgPx": 60.0},
+        {"ExchangeSymbol": {"Symbol": "XLE"}, "Quantity": 0, "AvgPx": 90.0},
+    ]}
+
+
+def test_snapshot_averages_lots_and_maps_proxy_symbols_to_keys():
+    snap = pc.build_snapshot(_open_positions_resp(), 157698006, 50_000.0,
+                             "2026-09-25T19:45:00+00:00", "2026-09-24")
+    assert snap["schema"] == pc.SNAPSHOT_SCHEMA
+    assert snap["book_as_of"] == "2026-09-24"
+    by = {p["symbol"]: p for p in snap["positions"]}
+    assert set(by) == {"GRID", "IBIT"}                 # zero-qty XLE dropped
+    assert by["GRID"]["shares"] == 100
+    assert by["GRID"]["avg_cost"] == (82 * 150 + 18 * 160) / 100
+    assert by["GRID"]["opened"] == "2026-09-01T19:31:00"
+    assert by["IBIT"]["key"] == "BTC"
+    assert snap["positions"][0]["symbol"] == "GRID"     # largest first
+
+
+def test_snapshot_rewrites_only_on_change_or_a_new_day():
+    a = pc.build_snapshot(_open_positions_resp(), 1, 50_000.0,
+                          "2026-09-25T19:45:00+00:00", "2026-09-24")
+    later = dict(a, fetched_at_utc="2026-09-25T20:00:00+00:00",
+                 model_account_value=50_100.0)
+    assert not pc.snapshot_changed(a, later)
+    assert pc.snapshot_changed(a, dict(later, fetched_at_utc="2026-09-26T19:45:00+00:00"))
+    assert pc.snapshot_changed(a, dict(later, positions=[]))
+    assert pc.snapshot_changed(a, dict(later, book_as_of="2026-09-25"))
+    assert pc.snapshot_changed({}, a)
+
+
+def test_snapshot_mode_needs_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("C2_API_KEY", raising=False)
+    monkeypatch.delenv("C2_STRATEGY_ID", raising=False)
+    assert pc.main(["--snapshot", "--snapshot-file", str(tmp_path / "s.json")]) == 2
+    assert not (tmp_path / "s.json").exists()
+
+
+def test_snapshot_mode_writes_the_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("C2_API_KEY", "k")
+    monkeypatch.setattr(pc, "_c2_request", lambda m, path, k, **kw: (
+        _open_positions_resp() if "OpenPositions" in path
+        else {"Results": [{"ModelAccountValue": 51_234.0}]}))
+    out = tmp_path / "s.json"
+    rc = pc.main(["--snapshot", "--strategy-id", "7", "--snapshot-file", str(out),
+                  "--state", str(tmp_path / "missing.json")])
+    assert rc == 0
+    import json
+    snap = json.loads(out.read_text())
+    assert snap["model_account_value"] == 51_234.0 and snap["strategy_id"] == 7
