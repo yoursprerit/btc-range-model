@@ -1,0 +1,58 @@
+{
+ "schema": "c2-positions/v1",
+ "fetched_at_utc": "2026-09-25T19:31:29+00:00",
+ "strategy_id": 157698006,
+ "book_as_of": "2026-09-24",
+ "model_account_value": 49986.0,
+ "positions": [
+  {
+   "key": "GRID",
+   "symbol": "GRID",
+   "shares": 82.0,
+   "avg_cost": 177.99,
+   "opened": "2026-09-24T14:01:58Z"
+  },
+  {
+   "key": "WGMI",
+   "symbol": "WGMI",
+   "shares": 178.0,
+   "avg_cost": 49.59,
+   "opened": "2026-09-24T14:01:58Z"
+  },
+  {
+   "key": "OIH",
+   "symbol": "OIH",
+   "shares": 16.0,
+   "avg_cost": 395.43,
+   "opened": "2026-09-24T14:01:58Z"
+  },
+  {
+   "key": "GLDM",
+   "symbol": "GLDM",
+   "shares": 62.0,
+   "avg_cost": 84.36,
+   "opened": "2026-09-24T14:01:58Z"
+  },
+  {
+   "key": "ERX",
+   "symbol": "ERX",
+   "shares": 47.0,
+   "avg_cost": 105.2,
+   "opened": "2026-09-24T14:01:58Z"
+  },
+  {
+   "key": "UGL",
+   "symbol": "UGL",
+   "shares": 101.0,
+   "avg_cost": 48.29,
+   "opened": "2026-09-24T14:01:58Z"
+  },
+  {
+   "key": "XLE",
+   "symbol": "XLE",
+   "shares": 64.0,
+   "avg_cost": 62.94,
+   "opened": "2026-09-24T14:01:58Z"
+  }
+ ]
+}
