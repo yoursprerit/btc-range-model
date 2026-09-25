@@ -2160,7 +2160,7 @@ with tab_live:
             st.session_state.pop("overall_pnl_source", None)
         _pnl_src = st.radio(
             "Performance source", _src_opts,
-            index=_src_opts.index(_SRC_REPLAY),
+            index=_src_opts.index(_SRC_ACTUAL),
             horizontal=True, key="overall_pnl_source",
             help="**As-published record** — compounds the target books "
                  "**Collective2 actually received** (one archived JSON per "
@@ -2183,19 +2183,12 @@ with tab_live:
                  "for a book that never trades.")
         _actual = _pnl_src == _SRC_ACTUAL
         _bh_src = _pnl_src == _SRC_BH
-        if _actual and _bookrep is None:
-            # the current version's record hasn't accumulated 2 bars yet —
-            # say so explicitly and fall back to the replay, never to
-            # old-generation books
-            st.info(f"🎯 The as-published record now **follows the books "
-                    f"Collective2 receives** and was reset to start on "
-                    f"**{_c2_start}**. So far {_n_c2} "
-                    f"book{'s' if _n_c2 != 1 else ''} "
-                    f"{'has' if _n_c2 == 1 else 'have'} been sent to C2 since "
-                    "then — the record needs a book plus at least one "
-                    "completed close after it before there is any P&L to "
-                    "show. Showing the 🧪 walk-forward replay (the current "
-                    "implementation's full-history back-test) until then.")
+        # the C2 record hasn't covered 2 bars yet: stay on this source (its
+        # own start date, no figures) rather than quietly showing the replay
+        # under the as-published label — the replay's series only sizes the
+        # date widgets below, and every figure is withheld
+        _c2_pending = _actual and _bookrep is None
+        if _c2_pending:
             _actual = False
         if _bh_src:
             # buy & hold in the replay's shape: an equal target weight in every
@@ -2265,14 +2258,15 @@ with tab_live:
                            "earns nothing): "
                            + ", ".join(f"`{k}`" for k in _bookrep["dropped"]))
         else:
-            st.caption(f"P&L, performance and risk of the **daily-gated Overall "
-                       f"strategy** (walk-forward replay — the same gate/tilt "
-                       f"logic the live book runs, anchors re-fit each quarter on "
-                       f"prior data only) measured from the start date below, "
-                       f"under the risk profile selected above (currently "
-                       f"**`{_profile}`**). Change the profile or the date and "
-                       "every figure recomputes. Dollar figures scale the 💼 "
-                       "portfolio value entered above.")
+            if not _c2_pending:
+                st.caption(f"P&L, performance and risk of the **daily-gated Overall "
+                           f"strategy** (walk-forward replay — the same gate/tilt "
+                           f"logic the live book runs, anchors re-fit each quarter on "
+                           f"prior data only) measured from the start date below, "
+                           f"under the risk profile selected above (currently "
+                           f"**`{_profile}`**). Change the profile or the date and "
+                           "every figure recomputes. Dollar figures scale the 💼 "
+                           "portfolio value entered above.")
             _wf = _PF["wf"]
             _strat_label = STRAT_CURVE
             _curves_view = _PF["curves"]
@@ -2280,14 +2274,18 @@ with tab_live:
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
         # the as-published (C2) record opens on the day C2 first traded it;
         # the replay and buy & hold keep their long look-back
-        _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START if _actual
+        _c2_src = _actual or _c2_pending
+        _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START if _c2_src
                                       else "2026-03-01").date()
+        # a record still waiting on its first close may start after the
+        # data's last bar — let the start field hold that date
+        _d1_start = max(_d1, _default_start) if _c2_pending else _d1
         _today = pd.Timestamp.now(tz="America/New_York").date()
         _end_max = max(_d1, _today)
         # a new source brings its own default start — a date remembered from
         # the replay (months back) would otherwise pin the C2 record to its
         # very first bar
-        _src_key = "actual" if _actual else ("bh" if _bh_src else "replay")
+        _src_key = "actual" if _c2_src else ("bh" if _bh_src else "replay")
         if st.session_state.get("_overall_pnl_start_src") != _src_key:
             st.session_state.pop("overall_pnl_start", None)
             st.session_state["_overall_pnl_start_src"] = _src_key
@@ -2295,8 +2293,9 @@ with tab_live:
         # younger than the replay) — clamp a remembered date or the widget errors
         if "overall_pnl_start" in st.session_state:
             _remember = st.session_state["overall_pnl_start"]
-            if _remember < _d0 or _remember > _d1:
-                st.session_state["overall_pnl_start"] = min(max(_remember, _d0), _d1)
+            if _remember < _d0 or _remember > _d1_start:
+                st.session_state["overall_pnl_start"] = min(max(_remember, _d0),
+                                                            _d1_start)
         if "overall_pnl_end" in st.session_state:
             _remember_e = st.session_state["overall_pnl_end"]
             if _remember_e < _d0 or _remember_e > _end_max:
@@ -2305,16 +2304,16 @@ with tab_live:
         pnl_cols = st.columns([1, 1, 2])
         with pnl_cols[0]:
             _start_sel = st.date_input(
-                "📅 Start date", value=min(max(_default_start, _d0), _d1),
-                min_value=_d0, max_value=_d1, key="overall_pnl_start",
+                "📅 Start date", value=min(max(_default_start, _d0), _d1_start),
+                min_value=_d0, max_value=_d1_start, key="overall_pnl_start",
                 help="First strategy bar on/after this date becomes the cost-basis "
                      "anchor (weekends/holidays roll forward). Defaults to "
                      + (f"{pd.Timestamp(ov.C2_PNL_DEFAULT_START):%B %-d, %Y} — "
                         "the day Collective2 first traded the record — for the "
                         "as-published record, "
-                        if _actual else "")
+                        if _c2_src else "")
                      + "March 1, 2026"
-                     + (" for the other sources." if _actual else "."))
+                     + (" for the other sources." if _c2_src else "."))
         with pnl_cols[1]:
             _end_sel = st.date_input(
                 "📅 End date", value=min(max(_today, _d0), _end_max),
@@ -2351,8 +2350,19 @@ with tab_live:
         _bh_w = ({k: float(_wf["weights"][k]
                            .loc[pd.Timestamp(_start_sel):].mean())
                   for k in _wf["weights"].columns} if _bh_src else {})
-        _sm = ov.slice_metrics(_curve_all, _start_sel)
-        if _sm is None and _actual and _start_sel >= _d1:
+        _sm = None if _c2_pending else ov.slice_metrics(_curve_all, _start_sel)
+        if _c2_pending:
+            st.info(f"🎯 The as-published record **follows the books "
+                    f"Collective2 receives** and was reset to start on "
+                    f"**{_c2_start}**; it is measured from the "
+                    f"**{_start_sel:%b %d, %Y}** close. So far {_n_c2} "
+                    f"book{'s' if _n_c2 != 1 else ''} "
+                    f"{'has' if _n_c2 == 1 else 'have'} been sent to C2 — "
+                    "P&L, performance and risk appear here once a completed "
+                    "close after the start is in the data (normally the next "
+                    "morning's refresh). Pick **🧪 Walk-forward replay** above "
+                    "for the full-history back-test meanwhile.")
+        elif _sm is None and _actual and _start_sel >= _d1:
             st.info("🎯 The as-published record is measured from the "
                     f"**{_start_sel:%b %d, %Y}** close, when Collective2 "
                     "first held the book, so there is no P&L until the next "
