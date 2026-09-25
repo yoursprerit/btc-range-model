@@ -214,7 +214,10 @@ no secret provided to verify*; that is fine for a preview.
 1. GitHub → **Actions → Publish book to Collective2 → Run workflow** (branch
    `main`), or **Test run** in cron-job.org.
 2. Open the run's **summary**: one `new BUY …` line per ticker and **no
-   `REJECTED` lines**.
+   `REJECTED` lines**. On later days most runs show only a few orders, or
+   `No orders needed — C2 already holds these positions`: resizes smaller than
+   1% of capital are held (the no-trade band, marked `held (… inside 1% band)`
+   in the table).
 3. A commit `chore(c2): published book as-of …` appears on `main` (the
    already-sent marker, `data/overall/c2_publish_state.json`).
 4. On collective2.com, the strategy shows the orders filled and positions
