@@ -38,7 +38,7 @@ model and backtest machinery.
 | 🖥️ **SOXX** · ⚡ **GRID** · 🛢️ **XLE** · 🧲 **REMX** · ⛏️ **WGMI** · ☀️ **PBW** · 🤖 **ARTY** | `app/ticker_app.py` | Seven config-driven ETF apps — one engine, one `TickerConfig` per asset. See **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)**. |
 | ⚡ **Leveraged Assets** | `app/leveraged_app.py` | Cross-asset board of every leveraged wrapper's **vehicle verdict** — MSTR·MSTU, GLDM·UGL, GDX·NUGT, SOXX·SOXL, XLE·ERX side by side at one holding period. Re-states each pair's own `<BASE>-<LEV> Plot` tab rather than computing a second opinion; grades the wrapper's **cost**, not direction. |
 | 📋 **Target Book (IBKR)** | `app/target_book_app.py` | Human-readable viewer for the signed target-allocation artifact the rebalancer trades. |
-| ✅ **Executed Book (IBKR)** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target, with the **realised P&L** each run banked. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
+| ✅ **Executed Book** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target, with the **realised P&L** each run banked. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
 | 🤖 **AI Assistant** | `app/assistant_app.py` | Chat that answers questions about the numbers on any tab, the calculations behind them and the design decisions in this repo — grounded in the committed artifacts plus read-only search over the working tree. See **[AI Assistant](#-ai-assistant)**. |
 
 Each **signal app** produces **one** signal but may trade several instruments

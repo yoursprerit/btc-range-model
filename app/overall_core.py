@@ -2727,6 +2727,13 @@ def pnl_daily_replay(returns: pd.DataFrame, weights: pd.DataFrame,
 # the exact historical performance record, as opposed to the walk-forward
 # replay's simulation of the same rules.
 BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
+# The books Collective2 actually RECEIVED — written by scripts/publish_c2.py
+# only after C2 accepted the book — i.e. the PAPER book (idle capital left as
+# cash). The 📈 as-published P&L view compounds these from C2_RECORD_START:
+# the record was reset on 2026-09-25, when C2 became the account of record
+# (IBKR paper trading stopped), and starts with the first book sent after it.
+C2_BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "c2_book_archive"
+C2_RECORD_START = "2026-09-24"
 
 # Deliberate strategy-logic version — single source of truth (and bump
 # instructions) in ``app/strategy_version.py``, dependency-light so every UI

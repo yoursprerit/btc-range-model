@@ -47,6 +47,17 @@ section reads this file by default, marked at the live spot. It keeps up to
 date without any local executor. The IBKR report is still available there as
 a second choice.
 
+**Archives:** each book C2 accepts is also kept verbatim as
+`data/overall/c2_book_archive/<as_of>.json`. The Overall app's **📈 Overall
+strategy P&L → 🎯 As-published record** compounds these books. That record
+was reset to start with the 2026-09-24 book (`C2_RECORD_START` in
+`app/overall_core.py`), and idle cash earns nothing, as on C2. Each
+rewritten snapshot is also copied to
+`data/overall/c2_positions_archive/<date>.json` (New-York date, last copy of
+the day wins). This is what the **✅ Executed Book** app's Collective2 view
+shows under 🕰️ Historical. That app now has a **Broker** picker, Collective2
+(default) or IBKR.
+
 **Timing:** C2 trades at ~2:30 PM CT, alongside the IBKR executor, so the C2
 record, the IBKR account and the close-based backtest stay aligned. With only
 30 minutes to the close there is little room for delay: if the cron-job.org

@@ -11,6 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 
 import publish_c2 as pc  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _archives_in_tmp(tmp_path, monkeypatch):
+    """Never let a test write the repo's real C2 archives."""
+    monkeypatch.setattr(pc, "DEFAULT_BOOK_ARCHIVE", tmp_path / "c2_book_archive")
+    monkeypatch.setattr(pc, "DEFAULT_SNAPSHOT_ARCHIVE",
+                        tmp_path / "c2_positions_archive")
 
 
 # ── sizing ──────────────────────────────────────────────────────────────────
@@ -121,6 +130,10 @@ def test_execute_sends_once_then_skips_the_same_book(tmp_path, monkeypatch):
     assert pc.main(argv) == 0
     assert sent[0]["Positions"][0]["Quantity"] == 99      # 0.5 × 9,900 / 50
     assert json.loads(state.read_text())["positions"] == {"XLE": 99}
+
+    # the exact book C2 received is archived for the as-published record
+    arch = tmp_path / "c2_book_archive" / f"{book['as_of']}.json"
+    assert json.loads(arch.read_text()) == book
 
     assert pc.main(argv) == 0                              # same book → skipped
     assert len(sent) == 1
@@ -272,3 +285,30 @@ def test_snapshot_mode_writes_the_file(tmp_path, monkeypatch):
     import json
     snap = json.loads(out.read_text())
     assert snap["model_account_value"] == 51_234.0 and snap["strategy_id"] == 7
+    assert len(list((tmp_path / "c2_positions_archive").glob("*.json"))) == 1
+
+
+def test_a_rejected_send_archives_nothing(tmp_path, monkeypatch):
+    import json
+    import pandas as pd
+    f = tmp_path / "book.json"
+    f.write_text(json.dumps({"schema": "overall-target-book/v1",
+                             "as_of": str(pd.Timestamp.now().normalize().date()),
+                             "weights": {"XLE": 0.5}, "exec_price": {"XLE": 50.0}}))
+    monkeypatch.setattr(pc, "set_desired_positions", lambda key, body: {
+        "Results": [{"RejectedSignals": [{"ExchangeSymbol": {"Symbol": "XLE"},
+                                          "RejectMessage": "no"}]}]})
+    monkeypatch.setattr(pc, "open_positions", lambda key, sid: {})
+    monkeypatch.setattr(pc.ic, "is_trading_day", lambda d: (True, ""))
+    monkeypatch.setattr(pc.ic, "market_session_open", lambda **k: (True, ""))
+    monkeypatch.setenv("C2_API_KEY", "k")
+    monkeypatch.delenv("OVERALL_BOOK_SECRET", raising=False)
+    assert pc.main(["--file", str(f), "--state", str(tmp_path / "s.json"),
+                    "--capital", "10000", "--strategy-id", "42", "--execute"]) == 1
+    assert not (tmp_path / "c2_book_archive").exists()
+
+
+def test_snapshot_archive_is_keyed_by_the_new_york_date(tmp_path):
+    # 01:30 UTC on the 26th is still the 25th in New York
+    p = pc.snapshot_archive_path(tmp_path, "2026-09-26T01:30:00+00:00")
+    assert p == tmp_path / "2026-09-25.json"

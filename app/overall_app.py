@@ -123,7 +123,7 @@ _APP_LABELS = {
     "DAILYAUDIT": "🕵️  Daily Audit",
     "HEALTH": "🩺  Strategy Health",
     "TARGETBOOK": "📋  Target Book (IBKR)",
-    "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
+    "EXECUTEDBOOK": "✅  Executed Book",
     "ASSISTANT": "🤖  AI Assistant",
 }
 for _k, _c in ticker_config.CONFIGS.items():
@@ -260,6 +260,13 @@ def get_published_books(bucket: str):
     """The archived as-published target books (one per signal day), re-read on
     the shared refresh bucket so a fresh publish shows up without a restart."""
     return ov.load_published_books()
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=2)
+def get_c2_books(bucket: str):
+    """The books Collective2 actually received (``c2_book_archive/``) — the
+    as-published record the 📈 P&L view compounds."""
+    return ov.load_published_books(ov.C2_BOOK_ARCHIVE_DIR)
 
 
 @st.cache_data(ttl=900, show_spinner=False, max_entries=2)
@@ -2110,35 +2117,35 @@ with tab_live:
                        f"**${float(_cp_report['net_liq']):,.0f}**"
                        if _cp_report.get("net_liq") else "")
                     + ". Full fills, drift-vs-target and the raw report "
-                      "are in the **✅ Executed Book (IBKR)** app."))
+                      "are in the **✅ Executed Book** app."))
 
     st.markdown("---")
 
     # ── 4. OVERALL STRATEGY P&L SINCE A USER-CHOSEN START DATE ──────────
     # What has the combined strategy actually delivered for someone who put
     # capital in on a given date?  Two selectable sources feed one identical
-    # pipeline: the AS-PUBLISHED record (the target books actually committed
-    # each day — data/overall/book_archive/ — so every daily optimiser
-    # trim/re-size is in every figure) or the WALK-FORWARD GATED REPLAY
+    # pipeline: the AS-PUBLISHED record (the target books Collective2
+    # actually received each day — data/overall/c2_book_archive/ — so every
+    # daily optimiser trim/re-size is in every figure) or the WALK-FORWARD GATED REPLAY
     # simulation of the same rules over the full back-test history.  Either
     # curve is re-based at the chosen date so drawdown, Sharpe etc. are
     # measured from the entry point, not from inception.
     with st.expander("📈 **Overall strategy P&L — pick your start & end dates**", expanded=False):
-        _books = get_published_books(_bucket())
+        # The as-published record FOLLOWS COLLECTIVE2: the books C2 actually
+        # received (c2_book_archive/), from the record reset
+        # (C2_RECORD_START), current strategy version only. C2 holds idle
+        # capital as plain cash, so the cash leg earns nothing (no SATA).
+        _books = get_c2_books(_bucket())
         _vmap = get_book_version_map(_bucket())
-        # full archive only for context (how many older-generation books
-        # exist); the as-published VIEW is CURRENT-STRATEGY BOOKS ONLY —
-        # stamped with STRATEGY_VERSION, signal days on/after its start date
-        _bookrep_all = (ov.published_book_replay(_PF["rets"], _books,
-                                                 version_map=_vmap)
-                        if _books else None)
+        _c2_start = pd.Timestamp(ov.C2_RECORD_START).strftime("%b %d, %Y")
         _bookrep = (ov.published_book_replay(
-                        _PF["rets"], _books, version_map=_vmap,
+                        _PF["rets"], _books, sata_daily=0.0, version_map=_vmap,
                         only_version=ov.STRATEGY_VERSION,
-                        min_as_of=ov.STRATEGY_VERSION_START)
+                        min_as_of=ov.C2_RECORD_START)
                     if _books else None)
+        _n_c2 = sum(1 for b in _books
+                    if str(b.get("as_of")) >= ov.C2_RECORD_START)
         _ver_up = ov.STRATEGY_VERSION.upper()
-        _ver_start = pd.Timestamp(ov.STRATEGY_VERSION_START).strftime("%b %d, %Y")
         _SRC_ACTUAL = "🎯 As-published record (actual books)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
         _SRC_BH = "⚖️ Equal-weight buy & hold"
@@ -2146,8 +2153,7 @@ with tab_live:
         # the buy-&-hold source is the "do nothing" alternative measured over
         # the identical window — always offered, since it needs no archive and
         # no profile.  The as-published option only exists once books do.
-        _src_opts = ([_SRC_ACTUAL] if _bookrep_all is not None else []) \
-            + [_SRC_REPLAY] + ([_SRC_BH] if _bhrep is not None else [])
+        _src_opts = [_SRC_ACTUAL, _SRC_REPLAY] + ([_SRC_BH] if _bhrep is not None else [])
         # a remembered choice can vanish from the list (first archived book,
         # or none at all) — clear it rather than let the widget error
         if st.session_state.get("overall_pnl_source") not in _src_opts:
@@ -2156,13 +2162,15 @@ with tab_live:
             "Performance source", _src_opts,
             index=_src_opts.index(_SRC_REPLAY),
             horizontal=True, key="overall_pnl_source",
-            help="**As-published record** — compounds the target books the "
-                 "publisher actually committed each day (one archived JSON "
-                 "per signal day), so the daily optimizer's trims and "
-                 "re-sizes are exactly the ones that really happened. "
-                 f"**Only books published under the current strategy "
-                 f"version ({_ver_up}, from {_ver_start}) are counted** — "
-                 "older-generation books never mix in. "
+            help="**As-published record** — compounds the target books "
+                 "**Collective2 actually received** (one archived JSON per "
+                 "signal day, `data/overall/c2_book_archive/`), so the daily "
+                 "optimizer's trims and re-sizes are exactly the ones C2 "
+                 f"traded. **The record was reset to start on {_c2_start}** "
+                 "(the first book sent after C2 became the account of "
+                 "record); earlier books are not counted, and a day C2 "
+                 "missed keeps the previous book, just like the account. "
+                 "Idle capital is held as cash and earns nothing. "
                  "**Walk-forward replay** — a look-ahead-free simulation "
                  "of the current rules over the full back-test "
                  "history (longer window, but a reconstruction, not the "
@@ -2173,27 +2181,21 @@ with tab_live:
                  "cash. Same dates, same instruments, no strategy — the "
                  "sections below switch to the ones that mean something "
                  "for a book that never trades.")
-        if _bookrep_all is None:
-            st.caption("ℹ️ No archived published books found "
-                       "(`data/overall/book_archive/`) — the as-published "
-                       "view unlocks once the daily publisher has archived "
-                       "books.")
         _actual = _pnl_src == _SRC_ACTUAL
         _bh_src = _pnl_src == _SRC_BH
         if _actual and _bookrep is None:
             # the current version's record hasn't accumulated 2 bars yet —
             # say so explicitly and fall back to the replay, never to
             # old-generation books
-            _n_old = len(_bookrep_all["books"])
-            st.info(f"🎯 The as-published record under the current strategy "
-                    f"version **{_ver_up}** starts accumulating on "
-                    f"**{_ver_start}** — not enough {_ver_up}-stamped books "
-                    f"yet. The {_n_old} archived "
-                    f"book{'s' if _n_old != 1 else ''} from earlier strategy "
-                    "generations are excluded by design, so old-logic "
-                    "performance can never mix into this view. Showing the "
-                    "🧪 walk-forward replay (the current implementation's "
-                    "full-history back-test) until the record exists.")
+            st.info(f"🎯 The as-published record now **follows the books "
+                    f"Collective2 receives** and was reset to start on "
+                    f"**{_c2_start}**. So far {_n_c2} "
+                    f"book{'s' if _n_c2 != 1 else ''} "
+                    f"{'has' if _n_c2 == 1 else 'have'} been sent to C2 since "
+                    "then — the record needs a book plus at least one "
+                    "completed close after it before there is any P&L to "
+                    "show. Showing the 🧪 walk-forward replay (the current "
+                    "implementation's full-history back-test) until then.")
             _actual = False
         if _bh_src:
             # buy & hold in the replay's shape: an equal target weight in every
@@ -2232,14 +2234,15 @@ with tab_live:
             _curve_all = _PF["curves"][BH_CURVE]
         elif _actual:
             _n_books = len(_bookrep["books"])
-            _n_old = len(_bookrep_all["books"]) - _n_books
             st.caption(f"P&L, performance and risk of the **as-published "
-                       f"Overall strategy book** — the {_n_books} dated target "
-                       f"book{'s' if _n_books != 1 else ''} committed by the "
-                       f"daily publisher (`data/overall/book_archive/`) "
-                       f"**under the current strategy version {_ver_up}** "
-                       f"(records start {_ver_start}), compounded at "
-                       "official closes. The optimizer re-sizes the book "
+                       f"Overall strategy book, as Collective2 received it** — "
+                       f"the {_n_books} dated target "
+                       f"book{'s' if _n_books != 1 else ''} sent to C2 "
+                       f"(`data/overall/c2_book_archive/`) since the record "
+                       f"reset on **{_c2_start}**, strategy version "
+                       f"{_ver_up}, compounded at official closes. Idle "
+                       "capital is held as cash and earns nothing, as on "
+                       "C2. The optimizer re-sizes the book "
                        "every morning, so **every daily trim/re-size that "
                        "really happened flows through every figure and "
                        "toggled section below** (the 🔁 toggle lists each "
@@ -2247,11 +2250,6 @@ with tab_live:
                        "each book was *actually published under* (shown per "
                        "book below) — the risk-profile selector above does "
                        "not rewrite history. "
-                       + (f"**{_n_old} older-generation "
-                          f"book{'s' if _n_old != 1 else ''}** (pre-{_ver_up} "
-                          "logic) are excluded so the record reflects only "
-                          "the currently-implemented strategy. "
-                          if _n_old else "")
                        + "Dollar figures scale the 💼 portfolio value entered "
                          "above.")
             # no separate signal record exists for archived books — the trade
@@ -2692,12 +2690,12 @@ with tab_live:
                            "full span. Not investment advice.")
             elif _actual:
                 st.caption("📌 The **as-published record**: each day compounds "
-                           "the archived book actually committed from the "
+                           "the book Collective2 actually received from the "
                            "previous bar's close — weights, daily optimizer "
-                           "trims, cash remainder (earning SATA on business "
-                           "days) exactly as published. Marked at official "
-                           "closes, gross of commissions/fills (the IBKR "
-                           "executed-book history is the fills-level record). "
+                           "trims and cash remainder (held as cash, earning "
+                           "nothing) exactly as sent. Marked at official "
+                           "closes, gross of commissions/fills (the ✅ Executed "
+                           "Book app's C2 view is the fills-level record). "
                            "Not investment advice.")
             else:
                 st.caption("⚠️ Simulated performance of the daily-gated strategy under "
@@ -4691,7 +4689,7 @@ with tab_hist:
                            f"(as reported then)"
                            if _hcp_rec["payload"].get("net_liq") else "")
                         + ". The full run — fills, drift vs the target book, the "
-                          "raw report — is in the **✅ Executed Book (IBKR)** "
+                          "raw report — is in the **✅ Executed Book** "
                           "app's 🕰️ Historical tab."))
 
 
