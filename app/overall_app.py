@@ -1993,7 +1993,12 @@ with tab_live:
     _cp_report = get_executed_report(_bucket())
     _cp_marks = {r["key"]: {"price": r["last_close"], "dchg": r["dchg"]}
                  for r in results}
-    _cp = eb.current_positions(_cp_report, _cp_marks)
+    # a rebalance whose report never got pushed leaves names the account has
+    # since SOLD in the report — drop what a newer, already-traded book took
+    # flat, and say so below
+    _cp_exited = eb.exited_since_report(_cp_report,
+                                        get_published_books(_bucket()))
+    _cp = eb.current_positions(eb.drop_exited(_cp_report, _cp_exited), _cp_marks)
     with st.expander("💼 **Current Positions** — executed book cost basis × live price",
                      expanded=False):
         if not _cp_report:
@@ -2030,6 +2035,19 @@ with tab_live:
                 st.caption("⚠️ No live spot quotes this refresh — the marks "
                            "below are each sleeve's **last completed bar "
                            "close**, so the P&L is as of that bar, not now.")
+            if _cp_exited:
+                st.warning(
+                    "⚠️ Exited since this report — "
+                    + "; ".join(
+                        f"**{k}** (book {v['as_of']}: {v['decision']})"
+                        for k, v in sorted(_cp_exited.items()))
+                    + ". A newer published book took "
+                    + ("this name" if len(_cp_exited) == 1 else "these names")
+                    + " flat and its rebalance has already run, but that run's "
+                      "execution report was never committed — so "
+                    + ("it is" if len(_cp_exited) == 1 else "they are")
+                    + " left out below. Cash and net liquidation are still "
+                      "the report's figures until the next report lands.")
             _render_current_positions(_cp, by_key, mark_label=_cp_mark_lbl)
             if _cp_report.get("cash"):
                 st.caption(_no_tex(

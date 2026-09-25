@@ -654,3 +654,63 @@ def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
         account_mode=(payload.get("account_mode") or "paper"),
         mode=(payload.get("mode") or ""),
         generated_at_utc=payload.get("generated_at_utc") or "")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# EXITS SINCE THE REPORT  (published books newer than the last execution run)
+# ════════════════════════════════════════════════════════════════════════════
+# The execution report only changes when the executor pushes one back.  A
+# rebalance that ran but never committed its report (a local run with the push
+# skipped or failed) leaves the report showing names the account has since
+# SOLD — e.g. a book that said CLOSE on bar D, executed on D+1, while the
+# report is still D-1's.  ``exited_since_report`` reads the published books
+# newer than the report and names the held keys a book already took to zero.
+
+def exited_since_report(payload: dict | None, books: list[dict] | None) -> dict:
+    """Held keys that a published book NEWER than *payload* took flat.
+
+    Only books whose rebalance has provably happened count: a book is executed
+    in the session after its signal bar, so a book is treated as traded once a
+    later book exists (the later one could only be published after that
+    session closed).  The newest book is therefore never used — its exit may
+    still be pending.  For each held key the LAST such book decides: flat
+    there (absent from ``weights`` while listed in ``actions`` with a zero
+    target) means sold; weighted there means (still/again) held.  A key a book
+    does not mention at all is left alone.
+
+    Returns ``{key: {"as_of": <book as_of>, "decision": <text>}}``."""
+    payload = payload or {}
+    rep_as_of = str(payload.get("as_of") or "")
+    if not rep_as_of:
+        return {}
+    held = {(p.get("key") or p.get("symbol") or "")
+            for p in payload.get("positions") or []
+            if float(p.get("shares") or 0.0)}
+    held.discard("")
+    newer = sorted((b for b in (books or [])
+                    if str(b.get("as_of") or "") > rep_as_of),
+                   key=lambda b: str(b.get("as_of")))
+    traded = newer[:-1]                      # the newest may not have executed
+    out: dict = {}
+    for book in traded:
+        weights = book.get("weights") or {}
+        acts = {a.get("key"): a for a in book.get("actions") or []
+                if isinstance(a, dict)}
+        for key in held:
+            if float(weights.get(key) or 0.0) > 0:
+                out.pop(key, None)           # (re-)held after this rebalance
+                continue
+            a = acts.get(key)
+            if a is not None and not float(a.get("target") or 0.0):
+                out[key] = dict(as_of=str(book.get("as_of")),
+                                decision=a.get("decision") or a.get("action") or "")
+    return out
+
+
+def drop_exited(payload: dict | None, exited: dict) -> dict | None:
+    """*payload* with the positions named in *exited* removed (a copy)."""
+    if not payload or not exited:
+        return payload
+    return dict(payload, positions=[
+        p for p in payload.get("positions") or []
+        if (p.get("key") or p.get("symbol")) not in exited])

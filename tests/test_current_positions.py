@@ -311,3 +311,53 @@ def test_opt_float_rejects_nan_and_blanks_but_keeps_zero():
     assert eb.opt_float("12.5") == pytest.approx(12.5)
     for bad in (None, "", "abc", float("nan")):
         assert eb.opt_float(bad) is None
+
+
+# ── exits committed by a newer book whose report never got pushed ──────────
+
+def _book(as_of, weights, actions):
+    return dict(as_of=as_of, weights=weights,
+                actions=[dict(key=k, action=a, target=weights.get(k, 0.0),
+                              decision=a) for k, a in actions.items()])
+
+
+def test_exit_in_a_traded_newer_book_drops_the_position():
+    """Report is D-1's; book D said CLOSE and book D+1 exists, so D's
+    rebalance has run — the name is sold even though no report says so."""
+    rep = _payload([_pos("ARTY", 356.0, 78.8), _pos("GRID", 100.0, 150.0)],
+                   as_of="2026-09-22")
+    books = [
+        _book("2026-09-22", {"ARTY": 0.3, "GRID": 0.3}, {"ARTY": "HOLD", "GRID": "HOLD"}),
+        _book("2026-09-23", {"GRID": 0.3}, {"ARTY": "CLOSE", "GRID": "HOLD"}),
+        _book("2026-09-24", {"GRID": 0.3}, {"ARTY": "STAND ASIDE", "GRID": "HOLD"}),
+    ]
+    ex = eb.exited_since_report(rep, books)
+    assert set(ex) == {"ARTY"} and ex["ARTY"]["as_of"] == "2026-09-23"
+    cp = eb.current_positions(eb.drop_exited(rep, ex), {"GRID": 151.0})
+    assert [r["key"] for r in cp["rows"]] == ["GRID"]
+
+
+def test_exit_in_the_newest_book_is_still_pending():
+    """The newest book's rebalance may not have run yet — keep the position."""
+    rep = _payload([_pos("ARTY", 356.0, 78.8)], as_of="2026-09-22")
+    books = [_book("2026-09-23", {}, {"ARTY": "CLOSE"})]
+    assert eb.exited_since_report(rep, books) == {}
+
+
+def test_reentry_in_a_later_traded_book_keeps_the_position():
+    rep = _payload([_pos("ARTY", 356.0, 78.8)], as_of="2026-09-22")
+    books = [
+        _book("2026-09-23", {}, {"ARTY": "CLOSE"}),
+        _book("2026-09-24", {"ARTY": 0.3}, {"ARTY": "BUY"}),
+        _book("2026-09-25", {"ARTY": 0.3}, {"ARTY": "HOLD"}),
+    ]
+    assert eb.exited_since_report(rep, books) == {}
+
+
+def test_unmentioned_keys_and_older_books_are_ignored():
+    rep = _payload([_pos("SOXX", 10.0, 500.0)], as_of="2026-09-22")
+    books = [_book("2026-09-21", {}, {"SOXX": "CLOSE"}),   # older than report
+             _book("2026-09-23", {}, {}),                   # SOXX not mentioned
+             _book("2026-09-24", {}, {})]
+    assert eb.exited_since_report(rep, books) == {}
+    assert eb.drop_exited(rep, {}) is rep
