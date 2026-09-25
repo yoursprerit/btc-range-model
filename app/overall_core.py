@@ -2734,6 +2734,10 @@ BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
 # (IBKR paper trading stopped), and starts with the first book sent after it.
 C2_BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "c2_book_archive"
 C2_RECORD_START = "2026-09-24"
+# Default start of the as-published P&L window: the day C2 first traded the
+# record's opening book (2026-09-24's book, filled near the 2026-09-25 close)
+# — that close is the cost basis, so the window measures only what C2 held.
+C2_PNL_DEFAULT_START = "2026-09-25"
 
 # Deliberate strategy-logic version — single source of truth (and bump
 # instructions) in ``app/strategy_version.py``, dependency-light so every UI
