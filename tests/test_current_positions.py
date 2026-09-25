@@ -361,3 +361,29 @@ def test_unmentioned_keys_and_older_books_are_ignored():
              _book("2026-09-24", {}, {})]
     assert eb.exited_since_report(rep, books) == {}
     assert eb.drop_exited(rep, {}) is rep
+
+
+# ── Collective2 model-account snapshot ─────────────────────────────────────
+
+def test_c2_snapshot_reads_through_the_same_pnl():
+    snap = {"schema": eb.C2_SNAPSHOT_SCHEMA, "strategy_id": 7,
+            "fetched_at_utc": "2026-09-25T19:45:00+00:00",
+            "book_as_of": "2026-09-24", "model_account_value": 50_000.0,
+            "positions": [{"key": "GRID", "symbol": "GRID", "shares": 100.0,
+                           "avg_cost": 150.0, "opened": None}]}
+    payload = eb.from_c2_snapshot(snap)
+    assert payload["as_of"] == "2026-09-24" and payload["net_liq"] == 50_000.0
+    cp = eb.current_positions(payload, {"GRID": 155.0})
+    assert cp["rows"][0]["pnl"] == pytest.approx(500.0)
+    assert cp["realized_known"] is False
+    assert eb.from_c2_snapshot({"schema": "other"}) is None
+    assert eb.from_c2_snapshot(None) is None
+
+
+def test_proxy_etf_is_never_marked_at_the_underlying_price():
+    """BTC is held as IBIT — the BTC spot mark must not price IBIT shares."""
+    cp = eb.current_positions(
+        _payload([dict(_pos("BTC", 10.0, 60.0, market_price=61.0), symbol="IBIT")]),
+        {"BTC": 110_000.0})
+    r = cp["rows"][0]
+    assert r["price"] == 61.0 and r["price_src"] == "report"

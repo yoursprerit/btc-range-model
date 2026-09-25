@@ -17,6 +17,10 @@ our own rebalance, so the public track record follows the book exactly.
     OVERALL_BOOK_SECRET=… C2_API_KEY=… C2_STRATEGY_ID=… \\
         python scripts/publish_c2.py --execute
 
+    # read-only: save what the C2 model account holds (shares + average fill)
+    # to data/overall/c2_positions.json for the Overall app's Current Positions:
+    C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py --snapshot
+
 Safety rails
 ------------
 * Dry-run is the DEFAULT; sending requires ``--execute``.
@@ -72,6 +76,8 @@ import ibkr_common as ic                            # noqa: E402
 C2_API_BASE = "https://api4-general.collective2.com"
 DEFAULT_BOOK = _REPO / "data" / "overall" / "target_book.json"
 DEFAULT_STATE = _REPO / "data" / "overall" / "c2_publish_state.json"
+DEFAULT_SNAPSHOT = _REPO / "data" / "overall" / "c2_positions.json"
+SNAPSHOT_SCHEMA = "c2-positions/v1"
 DEFAULT_CASH_BUFFER = 0.01      # keep 1% of model capital uninvested
 MAX_WEIGHT_SUM = 1.0 + 1e-6     # a book summing past 100% would size onto margin
 DEFAULT_BAND = 0.01             # no-trade band, fraction of capital (= IBKR executor)
@@ -185,6 +191,63 @@ def desired_positions_payload(strategy_id: int, positions: list[dict]) -> dict:
     }
 
 
+def build_snapshot(resp: dict, strategy_id: int, account_value: float | None,
+                   fetched_at_utc: str, book_as_of: str | None = None) -> dict:
+    """GetStrategyOpenPositions response → the positions snapshot the Overall
+    app's 💼 Current Positions reads. Shaped like an execution report's
+    ``positions`` (``key, symbol, shares, avg_cost``) so the app's cost-basis
+    P&L code reads both; ``avg_cost`` is C2's ``AvgPx`` — the model account's
+    real average fill. Stocks only, one row per symbol, largest first."""
+    agg: dict[str, dict] = {}
+    for pos in resp.get("Results") or []:
+        sym_ = ((pos.get("ExchangeSymbol") or {}).get("Symbol")
+                or (pos.get("C2Symbol") or {}).get("FullSymbol"))
+        try:
+            qty = float(pos.get("Quantity") or 0.0)
+            px = float(pos.get("AvgPx") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not sym_ or not qty:
+            continue
+        sym_ = sym_.upper()
+        row = agg.setdefault(sym_, {"shares": 0.0, "cost": 0.0, "opened": None})
+        row["shares"] += qty
+        row["cost"] += qty * px
+        opened = pos.get("OpenedDate") or pos.get("OpenedDateTime")
+        if opened and (row["opened"] is None or str(opened) < row["opened"]):
+            row["opened"] = str(opened)
+    positions = []
+    for sym_, r in agg.items():
+        if not r["shares"]:
+            continue
+        positions.append({
+            "key": sym.key_for_symbol(sym_) or sym_, "symbol": sym_,
+            "shares": r["shares"],
+            "avg_cost": round(r["cost"] / r["shares"], 6),
+            "opened": r["opened"],
+        })
+    positions.sort(key=lambda p: -abs(p["shares"] * p["avg_cost"]))
+    return {
+        "schema": SNAPSHOT_SCHEMA, "fetched_at_utc": fetched_at_utc,
+        "strategy_id": int(strategy_id), "book_as_of": book_as_of,
+        "model_account_value": account_value, "positions": positions,
+    }
+
+
+def snapshot_changed(old: dict, new: dict) -> bool:
+    """Whether *new* is worth committing over *old*: the holdings or the
+    book changed, or the old one is from an earlier (UTC) day — so the
+    15-minute workflow slots do not commit a fresh timestamp every run, but
+    the account value still refreshes at least daily."""
+    if not old or old.get("schema") != new.get("schema"):
+        return True
+    if old.get("positions") != new.get("positions"):
+        return True
+    if old.get("book_as_of") != new.get("book_as_of"):
+        return True
+    return str(old.get("fetched_at_utc"))[:10] != str(new.get("fetched_at_utc"))[:10]
+
+
 def book_fingerprint(payload: dict) -> str:
     """Identity of a book for the already-sent check: its bar plus its signature
     (or, unsigned, its weights) — a re-published book for the same bar re-sends."""
@@ -272,6 +335,44 @@ def open_positions(api_key: str, strategy_id: int) -> dict[str, float]:
     return parse_open_positions(resp)
 
 
+def fetch_snapshot(api_key: str, strategy_id: int,
+                   book_as_of: str | None = None) -> dict:
+    resp = _c2_request("GET", "/Strategies/GetStrategyOpenPositions", api_key,
+                       params=f"StrategyIds={int(strategy_id)}&SecurityType=CS")
+    try:
+        value = model_account_value(api_key, strategy_id)
+    except C2Error:
+        value = None                     # holdings are the point; value is extra
+    return build_snapshot(resp, strategy_id, value,
+                          datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                          book_as_of)
+
+
+def run_snapshot(api_key: str, strategy_id: int | None, path: Path,
+                 state_path: Path) -> int:
+    """``--snapshot``: read-only — record what the C2 model account holds."""
+    if not (api_key and strategy_id):
+        print("ABORT: --snapshot needs C2_API_KEY and C2_STRATEGY_ID")
+        return 2
+    book_as_of = _load_state(state_path).get("as_of")
+    try:
+        snap = fetch_snapshot(api_key, strategy_id, book_as_of)
+    except C2Error as e:
+        print(f"ABORT: {e}")
+        return 1
+    print(f"C2 holds {len(snap['positions'])} position(s)"
+          + (f" · model account ${snap['model_account_value']:,.0f}"
+             if snap["model_account_value"] else ""))
+    for p in snap["positions"]:
+        print(f"  {p['symbol']:<7}{p['shares']:>9g} @ {p['avg_cost']:,.2f}")
+    if not snapshot_changed(_load_state(path), snap):
+        print("snapshot unchanged — not rewritten")
+        return 0
+    _save_state(path, snap)
+    print(f"snapshot written to {path}")
+    return 0
+
+
 def set_desired_positions(api_key: str, body: dict) -> dict:
     return _c2_request("POST", "/v2/Strategies/SetDesiredPositions", api_key, body=body)
 
@@ -315,9 +416,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true",
                     help="re-send a book already published to C2")
     ap.add_argument("--state", default=str(DEFAULT_STATE))
+    ap.add_argument("--snapshot", action="store_true",
+                    help="only save C2's open positions (read-only, sends nothing)")
+    ap.add_argument("--snapshot-file", default=str(DEFAULT_SNAPSHOT))
     args = ap.parse_args(argv)
 
     api_key = os.environ.get("C2_API_KEY", "")
+    if args.snapshot:
+        print("── Collective2 positions snapshot ──")
+        return run_snapshot(api_key, args.strategy_id, Path(args.snapshot_file),
+                            Path(args.state))
     secret = os.environ.get("OVERALL_BOOK_SECRET")
     mode = "EXECUTE" if args.execute else "DRY-RUN"
     print(f"── Collective2 publish ({mode}) ──")

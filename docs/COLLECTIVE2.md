@@ -37,6 +37,16 @@ dispatch, backup slots and manual runs never send the same book twice. If
 today's book is late or withheld, runs skip until it lands; outside regular
 hours they skip too.
 
+**Positions snapshot:** every run also reads what the C2 model account
+actually holds (`GetStrategyOpenPositions` — shares and C2's average fill,
+`AvgPx`) and saves it to `data/overall/c2_positions.json`. After sending a
+book, the run waits a minute so the fills can land first. The file is rewritten
+only when the holdings or the book change, or once a day, so the 15-minute
+slots don't each add a commit. The 🧭 Overall app's **💼 Current Positions**
+section reads this file by default, marked at the live spot. It keeps up to
+date without any local executor. The IBKR report is still available there as
+a second choice.
+
 **Timing:** C2 trades at ~2:30 PM CT, alongside the IBKR executor, so the C2
 record, the IBKR account and the close-based backtest stay aligned. With only
 30 minutes to the close there is little room for delay: if the cron-job.org
@@ -54,6 +64,9 @@ C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py
 
 # send
 OVERALL_BOOK_SECRET=… C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py --execute
+
+# read-only: save C2's open positions for the Overall app's Current Positions
+C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py --snapshot
 ```
 
 ## Guards

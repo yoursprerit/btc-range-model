@@ -610,7 +610,10 @@ def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
         avg_cost = float(p.get("avg_cost") or 0.0)
         if not shares or avg_cost <= 0:
             continue                        # a closed / unpriced line, not a holding
-        px, dchg = _mark(key)
+        # a proxy-traded sleeve (BTC via IBIT) holds the ETF, not the
+        # signal's underlying — never mark ETF shares at the underlying's price
+        sym_ = p.get("symbol") or key
+        px, dchg = _mark(key if sym_ == key else sym_)
         src = "live"
         if px <= 0:                          # no live quote — the report's own mark
             px = float(p.get("market_price") or 0.0)
@@ -714,3 +717,34 @@ def drop_exited(payload: dict | None, exited: dict) -> dict | None:
     return dict(payload, positions=[
         p for p in payload.get("positions") or []
         if (p.get("key") or p.get("symbol")) not in exited])
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# COLLECTIVE2 MODEL ACCOUNT  (data/overall/c2_positions.json)
+# ════════════════════════════════════════════════════════════════════════════
+# The C2 publish workflow (scripts/publish_c2.py --snapshot) records what the
+# C2 model account holds after each book it mirrors: shares and C2's average
+# fill.  It runs entirely in GitHub Actions, so unlike the IBKR report it never
+# depends on a local executor pushing back.  ``from_c2_snapshot`` reshapes it
+# into an execution-report-like payload so ``current_positions`` (one P&L
+# definition) reads it unchanged.
+
+C2_SNAPSHOT_SCHEMA = "c2-positions/v1"
+
+
+def from_c2_snapshot(snap: dict | None) -> dict | None:
+    """A ``c2-positions/v1`` snapshot as a ``current_positions`` payload, or
+    None when it is missing/foreign.  C2 reports no cash figure, so ``cash``
+    is left unset; ``net_liq`` is the model-account value when C2 gave one."""
+    if not snap or snap.get("schema") != C2_SNAPSHOT_SCHEMA:
+        return None
+    return {
+        "schema": C2_SNAPSHOT_SCHEMA,
+        "as_of": snap.get("book_as_of"),
+        "generated_at_utc": snap.get("fetched_at_utc") or "",
+        "account_mode": "c2", "mode": "execute",
+        "account": str(snap.get("strategy_id") or ""),
+        "net_liq": snap.get("model_account_value") or 0.0,
+        "positions": [dict(p, market_price=0.0)
+                      for p in snap.get("positions") or []],
+    }

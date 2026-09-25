@@ -644,6 +644,20 @@ def get_executed_report(bucket: str) -> dict | None:
     return None
 
 
+_C2_SNAPSHOT_PATH = _EB_DIR / "c2_positions.json"
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=2)
+def get_c2_snapshot(bucket: str) -> dict | None:
+    """What the Collective2 model account holds — committed by the C2 publish
+    workflow (``scripts/publish_c2.py --snapshot``). None until it has run."""
+    import json as _json
+    try:
+        return _json.loads(_C2_SNAPSHOT_PATH.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 @st.cache_data(ttl=300, show_spinner=False, max_entries=2)
 def get_executed_archive(bucket: str) -> list[dict]:
     """Every archived execution run (live account first, else paper), newest
@@ -696,12 +710,13 @@ def _pos_meta(key: str, meta_by_key: dict) -> dict:
 
 
 def _render_current_positions(cp: dict, meta_by_key: dict, *,
-                              mark_label: str) -> None:
+                              mark_label: str, broker: str = "IBKR") -> None:
     """The executed book's holdings as per-instrument cards, grouped by parent
     signal — the same card grammar as *Live signal & positions* above, with the
     engine's entry bar swapped for the broker's average fill.
 
-    ``mark_label`` names the price the P&L is marked at, for the captions."""
+    ``mark_label`` names the price the P&L is marked at, for the captions;
+    ``broker`` names the account the rows come from (IBKR or C2)."""
     rows = cp["rows"]
     if not rows:
         st.info("The execution report lists **no open positions** — the account "
@@ -728,6 +743,10 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
                          "cost untouched, so without this the sold slice's "
                          "profit would simply vanish from the section. "
                          "**total** = open P&L + realised.")
+    elif broker != "IBKR":
+        k[4].metric("Realised this run", "—",
+                    help=f"{broker} reports holdings and average fills only — "
+                         "no per-run realised figure.")
     else:
         k[4].metric("Realised this run", "—",
                     help="Not recorded: this execution report predates the "
@@ -779,7 +798,7 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
                     f"{_kind_badge(m['kind'])}</span>"
                     f"<span style='font-size:12px;color:#64748b'>{px_s}{d_s}</span></div>",
                     f"<div style='font-size:10px;color:#94a3b8;margin-bottom:4px'>"
-                    f"{m['name']}{'' if r['symbol'] == r['key'] else ' · IBKR ' + str(r['symbol'])}"
+                    f"{m['name']}{'' if r['symbol'] == r['key'] else f' · {broker} ' + str(r['symbol'])}"
                     f"</div>",
                     f"<div style='font-size:11.5px;line-height:1.5'>"
                     f"📍 <b>LONG</b> {r['shares']:,.0f} sh @ ${r['avg_cost']:,.2f} "
@@ -1985,46 +2004,75 @@ with tab_live:
                 "BTC (BTC/MSTR/MSTU/ETH) or Gold (GDX/UGL), open the **₿ Bitcoin** or "
                 "**🥇 Gold** app in the sidebar.")
 
-    # ── 3b. CURRENT POSITIONS (executed book cost basis × live price) ────
+    # ── 3b. CURRENT POSITIONS (account cost basis × live price) ──────────
     # The section above is the ENGINE's book — entries at the daily closes the
-    # strategy decided on. This one is the ACCOUNT's: cost basis from the IBKR
-    # execution report the executor commits back, marked at the live spot that
-    # already drives every other price on this tab.
-    _cp_report = get_executed_report(_bucket())
+    # strategy decided on. This one is an ACCOUNT's: either the Collective2
+    # model account (snapshot the C2 publish workflow commits from Actions —
+    # no local executor involved) or the IBKR account (the execution report
+    # the executor commits back), both marked at the live spot that already
+    # drives every other price on this tab.
+    _cp_ibkr = get_executed_report(_bucket())
+    _cp_c2 = eb.from_c2_snapshot(get_c2_snapshot(_bucket()))
+    _CP_C2, _CP_IBKR = "📡 Collective2 model account", "🏦 IBKR account"
+    _cp_opts = ([_CP_C2] if _cp_c2 else []) + ([_CP_IBKR] if _cp_ibkr else [])
     _cp_marks = {r["key"]: {"price": r["last_close"], "dchg": r["dchg"]}
                  for r in results}
-    # a rebalance whose report never got pushed leaves names the account has
-    # since SOLD in the report — drop what a newer, already-traded book took
-    # flat, and say so below
-    _cp_exited = eb.exited_since_report(_cp_report,
-                                        get_published_books(_bucket()))
-    _cp = eb.current_positions(eb.drop_exited(_cp_report, _cp_exited), _cp_marks)
-    with st.expander("💼 **Current Positions** — executed book cost basis × live price",
+    _cp_books = get_published_books(_bucket())
+    with st.expander("💼 **Current Positions** — account cost basis × live price",
                      expanded=False):
-        if not _cp_report:
-            st.info("No execution report is available yet "
-                    "(`data/overall/executed_book.json`). This section fills in "
-                    "as soon as the IBKR executor runs a rebalance and commits "
-                    "its report back — see **IBKR_PAPER_TRADING.md** for the "
-                    "flow, or the **✅ Executed Book (IBKR)** app in the sidebar.")
+        if not _cp_opts:
+            st.info("No account positions are available yet — neither a "
+                    "Collective2 snapshot (`data/overall/c2_positions.json`, "
+                    "written by the **Publish book to Collective2** workflow) "
+                    "nor an IBKR execution report "
+                    "(`data/overall/executed_book.json`).")
         else:
-            _cp_live = (_cp_report.get("account_mode") or "paper").lower() == "live"
-            _cp_dry = (_cp_report.get("mode") or "").lower() == "dry-run"
-            st.caption(
-                "What the **account actually holds**, at the price it actually "
-                "paid. Cost basis is the IBKR average fill from the execution "
-                "report; the mark is the same **live spot** the cards above use, "
-                "so the P&L here is the account's real open profit right now — "
-                "not the engine's bar-to-bar P&L. The two differ by whatever the "
-                "fill gave up against the signal close. "
-                + ("🔴 **LIVE account** — real money. " if _cp_live
-                   else "🧪 **Paper account.** ")
-                + (f"Report for signal bar **{_cp_report.get('as_of')}**, run "
-                   f"**{fr.fmt_ct(_cp_report.get('generated_at_utc'))}** "
-                   f"(`{_cp_report.get('_source')}`).")
-                + ("  ⚠️ The last run was a **dry-run** — no orders were sent, "
-                   "but the holdings below are the account's real ones."
-                   if _cp_dry else ""))
+            if st.session_state.get("overall_cp_source") not in _cp_opts:
+                st.session_state.pop("overall_cp_source", None)
+            _cp_src = (st.radio("Account", _cp_opts, index=0, horizontal=True,
+                                key="overall_cp_source",
+                                help="**Collective2** is refreshed by a GitHub "
+                                     "Actions workflow after every book it "
+                                     "mirrors, so it never waits on a local "
+                                     "executor. **IBKR** is the last execution "
+                                     "report the executor pushed back.")
+                       if len(_cp_opts) > 1 else _cp_opts[0])
+            _cp_is_c2 = _cp_src == _CP_C2
+            _cp_report = _cp_c2 if _cp_is_c2 else _cp_ibkr
+            _cp_broker = "C2" if _cp_is_c2 else "IBKR"
+            # a rebalance whose record never landed leaves names the account
+            # has since SOLD in it — drop what a newer, already-traded book
+            # took flat, and say so below
+            _cp_exited = eb.exited_since_report(_cp_report, _cp_books)
+            _cp = eb.current_positions(eb.drop_exited(_cp_report, _cp_exited),
+                                       _cp_marks)
+            if _cp_is_c2:
+                st.caption(
+                    "What the **Collective2 model account holds**, at the "
+                    "price C2 actually filled it — C2's average entry price per "
+                    "name, marked at the same **live spot** the cards above "
+                    "use. C2 sizes the book against its own model-account "
+                    "value, so share counts differ from any other account. "
+                    + (f"Last book mirrored: signal bar **{_cp_report.get('as_of')}**; "
+                       if _cp_report.get("as_of") else "")
+                    + f"holdings read **{fr.fmt_ct(_cp_report.get('generated_at_utc'))}**.")
+            else:
+                _cp_live = (_cp_report.get("account_mode") or "paper").lower() == "live"
+                _cp_dry = (_cp_report.get("mode") or "").lower() == "dry-run"
+                st.caption(
+                    "What the **IBKR account holds**, at the price it actually "
+                    "paid. Cost basis is the IBKR average fill from the execution "
+                    "report; the mark is the same **live spot** the cards above "
+                    "use, so the P&L here is the account's real open profit right "
+                    "now — not the engine's bar-to-bar P&L. "
+                    + ("🔴 **LIVE account** — real money. " if _cp_live
+                       else "🧪 **Paper account.** ")
+                    + (f"Report for signal bar **{_cp_report.get('as_of')}**, run "
+                       f"**{fr.fmt_ct(_cp_report.get('generated_at_utc'))}** "
+                       f"(`{_cp_report.get('_source')}`).")
+                    + ("  ⚠️ The last run was a **dry-run** — no orders were sent, "
+                       "but the holdings below are the account's real ones."
+                       if _cp_dry else ""))
             # the marks are whatever the tab's price overlay produced: the
             # live spot when the quote fetch worked, otherwise each sleeve's
             # last completed bar close — say which, so the P&L is never read
@@ -2037,19 +2085,24 @@ with tab_live:
                            "close**, so the P&L is as of that bar, not now.")
             if _cp_exited:
                 st.warning(
-                    "⚠️ Exited since this report — "
+                    "⚠️ Exited since this record — "
                     + "; ".join(
                         f"**{k}** (book {v['as_of']}: {v['decision']})"
                         for k, v in sorted(_cp_exited.items()))
                     + ". A newer published book took "
                     + ("this name" if len(_cp_exited) == 1 else "these names")
-                    + " flat and its rebalance has already run, but that run's "
-                      "execution report was never committed — so "
+                    + " flat and its rebalance has already run, but no newer "
+                      f"{_cp_broker} record has landed — so "
                     + ("it is" if len(_cp_exited) == 1 else "they are")
-                    + " left out below. Cash and net liquidation are still "
-                      "the report's figures until the next report lands.")
-            _render_current_positions(_cp, by_key, mark_label=_cp_mark_lbl)
-            if _cp_report.get("cash"):
+                    + " left out below.")
+            _render_current_positions(_cp, by_key, mark_label=_cp_mark_lbl,
+                                      broker=_cp_broker)
+            if _cp_is_c2 and _cp_report.get("net_liq"):
+                st.caption(_no_tex(
+                    f"💵 C2 model-account value "
+                    f"**${float(_cp_report['net_liq']):,.0f}** (as read with the "
+                    "holdings)."))
+            elif not _cp_is_c2 and _cp_report.get("cash"):
                 st.caption(_no_tex(
                     f"💵 Uninvested cash in the account: "
                     f"**${float(_cp_report['cash']):,.0f}**"

@@ -532,7 +532,7 @@ broker knows the *fill*. So the 🧭 Overall Trading app reads it directly, in a
 
 | Tab | Cost basis | Marked at |
 |---|---|---|
-| 🔴 **Live — Decision Cockpit** | IBKR average fill from `executed_book_live.json`, else `executed_book.json` | the same **live spot** every other price on that tab uses |
+| 🔴 **Live — Decision Cockpit** | an **Account** picker: the Collective2 model account (`c2_positions.json`, default — see `docs/COLLECTIVE2.md`), or IBKR's average fill from `executed_book_live.json`, else `executed_book.json` | the same **live spot** every other price on that tab uses |
 | 🕰️ **Historical View** | the run standing on the chosen date, from `executed_archive/` | each sleeve's **official close on the viewed bar** |
 
 Each shows the position's **open** P&L (mark − cost basis on what is still held)
