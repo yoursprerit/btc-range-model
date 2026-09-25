@@ -77,6 +77,11 @@ C2_API_BASE = "https://api4-general.collective2.com"
 DEFAULT_BOOK = _REPO / "data" / "overall" / "target_book.json"
 DEFAULT_STATE = _REPO / "data" / "overall" / "c2_publish_state.json"
 DEFAULT_SNAPSHOT = _REPO / "data" / "overall" / "c2_positions.json"
+# every book C2 actually received (the as-published record the Overall app's
+# P&L view compounds) and a dated copy of each positions snapshot (the
+# Executed Book page's 🕰️ Historical tab for the C2 account)
+DEFAULT_BOOK_ARCHIVE = _REPO / "data" / "overall" / "c2_book_archive"
+DEFAULT_SNAPSHOT_ARCHIVE = _REPO / "data" / "overall" / "c2_positions_archive"
 SNAPSHOT_SCHEMA = "c2-positions/v1"
 DEFAULT_CASH_BUFFER = 0.01      # keep 1% of model capital uninvested
 MAX_WEIGHT_SUM = 1.0 + 1e-6     # a book summing past 100% would size onto margin
@@ -348,8 +353,24 @@ def fetch_snapshot(api_key: str, strategy_id: int,
                           book_as_of)
 
 
+def snapshot_archive_path(archive_dir: Path, fetched_at_utc: str) -> Path:
+    """Dated copy of a snapshot, keyed by the New-York date it was read (the
+    day's last read wins, so each file is that day's end state)."""
+    ts = pd.Timestamp(fetched_at_utc)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    return archive_dir / f"{ts.tz_convert(ic.ET_TZ).date()}.json"
+
+
+def archive_sent_book(archive_dir: Path, book_text: str, as_of) -> Path:
+    """Keep the exact (signed) book C2 was sent, as ``<as_of>.json``."""
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    out = archive_dir / f"{pd.Timestamp(as_of).date()}.json"
+    out.write_text(book_text)
+    return out
+
+
 def run_snapshot(api_key: str, strategy_id: int | None, path: Path,
-                 state_path: Path) -> int:
+                 state_path: Path, archive_dir: Path | None = None) -> int:
     """``--snapshot``: read-only — record what the C2 model account holds."""
     if not (api_key and strategy_id):
         print("ABORT: --snapshot needs C2_API_KEY and C2_STRATEGY_ID")
@@ -370,6 +391,10 @@ def run_snapshot(api_key: str, strategy_id: int | None, path: Path,
         return 0
     _save_state(path, snap)
     print(f"snapshot written to {path}")
+    if archive_dir is not None:
+        arch = snapshot_archive_path(archive_dir, snap["fetched_at_utc"])
+        _save_state(arch, snap)
+        print(f"archived as {arch}")
     return 0
 
 
@@ -419,19 +444,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--snapshot", action="store_true",
                     help="only save C2's open positions (read-only, sends nothing)")
     ap.add_argument("--snapshot-file", default=str(DEFAULT_SNAPSHOT))
+    ap.add_argument("--snapshot-archive", default=str(DEFAULT_SNAPSHOT_ARCHIVE),
+                    help="directory for dated snapshot copies ('' disables)")
+    ap.add_argument("--book-archive", default=str(DEFAULT_BOOK_ARCHIVE),
+                    help="directory for the books actually sent ('' disables)")
     args = ap.parse_args(argv)
 
     api_key = os.environ.get("C2_API_KEY", "")
     if args.snapshot:
         print("── Collective2 positions snapshot ──")
         return run_snapshot(api_key, args.strategy_id, Path(args.snapshot_file),
-                            Path(args.state))
+                            Path(args.state),
+                            Path(args.snapshot_archive) if args.snapshot_archive else None)
     secret = os.environ.get("OVERALL_BOOK_SECRET")
     mode = "EXECUTE" if args.execute else "DRY-RUN"
     print(f"── Collective2 publish ({mode}) ──")
 
     try:
-        payload = tb.loads(Path(args.file).read_text())
+        book_text = Path(args.file).read_text()
+        payload = tb.loads(book_text)
     except (OSError, ValueError) as e:
         print(f"ABORT: cannot read book {args.file}: {e}")
         return 2
@@ -551,6 +582,10 @@ def main(argv: list[str] | None = None) -> int:
         "strategy_id": args.strategy_id, "capital": capital,
         "positions": {p["symbol"]: p["quantity"] for p in positions},
     })
+    if args.book_archive:
+        arch = archive_sent_book(Path(args.book_archive), book_text,
+                                 payload.get("as_of"))
+        print(f"book archived as {arch}")
     if needed:
         print(f"\npublished {len(positions)} positions to C2 strategy {args.strategy_id}")
     return 0

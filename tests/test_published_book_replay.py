@@ -275,3 +275,20 @@ def test_daily_pnl_returns_none_when_window_too_short():
     rep = oc.published_book_replay(rets, books, sata_daily=0.0)
     assert oc.pnl_daily_replay(rets, rep["weights"], rep["sata"],
                                idx[-1], sata_daily=0.0) is None
+
+
+def test_c2_record_reads_its_own_archive_from_the_reset(tmp_path):
+    """The as-published view follows the books C2 received: its own archive
+    directory, only books from the reset on, idle cash earning nothing."""
+    rets = _rets(IDX, AAA=pd.Series(0.02, index=IDX))
+    for b in (_book("2026-07-06", {"AAA": 1.0}, 0.0, mode="paper"),     # pre-reset
+              _book("2026-07-07", {"AAA": 0.5}, 0.5, mode="paper")):
+        (tmp_path / f"{b['as_of']}.json").write_text(json.dumps(b))
+    books = oc.load_published_books(tmp_path)
+    assert [b["as_of"] for b in books] == ["2026-07-06", "2026-07-07"]
+    rep = oc.published_book_replay(rets, books, sata_daily=0.0,
+                                   min_as_of="2026-07-07")
+    assert len(rep["books"]) == 1
+    assert rep["ret"].iloc[0] == 0.0                   # the reset bar is the basis
+    assert np.allclose(rep["ret"].iloc[1:], 0.01)      # half AAA, cash earns 0
+    assert oc.C2_BOOK_ARCHIVE_DIR.name == "c2_book_archive"

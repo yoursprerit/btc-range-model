@@ -127,7 +127,12 @@ jobs:
         if: steps.guard.outputs.run == 'true'
         run: |
           set -euo pipefail
-          git add data/overall/c2_publish_state.json data/overall/c2_positions.json 2>/dev/null || true
+          # one path at a time: a path that does not exist yet would make a
+          # combined `git add` stage nothing at all
+          for p in data/overall/c2_publish_state.json data/overall/c2_positions.json \
+                   data/overall/c2_book_archive data/overall/c2_positions_archive; do
+            if [ -e "$p" ]; then git add "$p"; fi
+          done
           if git diff --cached --quiet; then
             echo "No new book sent and holdings unchanged — nothing to commit."; exit 0
           fi
@@ -141,9 +146,9 @@ jobs:
           fi
           git commit -m "${MSG}" \
             -m "Automated via .github/workflows/publish-c2.yml"
-          # Other workflows push to this branch too; the marker and snapshot
-          # are the only paths in this commit, so this run's copy wins any
-          # rebase conflict.
+          # Other workflows push to this branch too; the C2 marker, snapshot
+          # and their archives are the only paths in this commit, so this
+          # run's copy wins any rebase conflict.
           for attempt in 1 2 3; do
             git fetch origin "${GITHUB_REF_NAME}"
             if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}" \

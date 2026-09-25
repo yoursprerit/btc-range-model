@@ -79,7 +79,7 @@ _APP_LABELS = {"OVERALL": "🧭  Overall Trading",
                "DAILYAUDIT": "🕵️  Daily Audit",
                "HEALTH": "🩺  Strategy Health",
                "TARGETBOOK": "📋  Target Book (IBKR)",
-               "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
+               "EXECUTEDBOOK": "✅  Executed Book",
                "ASSISTANT": "🤖  AI Assistant"}
 for _k, _c in ticker_config.CONFIGS.items():
     _APP_LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"

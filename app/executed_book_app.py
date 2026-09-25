@@ -1,9 +1,17 @@
-"""Executed Book (IBKR) — post-rebalance report of trades + current positions.
+"""Executed Book — what an account actually holds after the book is traded.
 
-Selected from the sidebar **Application** radio ("✅ Executed Book (IBKR)"), right
-after Target Book. It reads the execution report the laptop/VM executor commits
-back after a rebalance (``data/overall/executed_book.json``) and shows, in a
-human-readable way:
+Selected from the sidebar **Application** radio ("✅ Executed Book"), right
+after Target Book. A **Broker** picker chooses the account:
+
+  * **📡 Collective2** (default) — the C2 model account, from the snapshot the
+    C2 publish workflow commits (``data/overall/c2_positions.json``: shares +
+    C2's average fill), marked at a live quote, plus the book C2 was last sent
+    (``c2_publish_state.json`` / ``c2_book_archive/``). Past days come from
+    ``c2_positions_archive/<date>.json``.
+  * **🏦 IBKR** — the execution report the laptop/VM executor commits back
+    after a rebalance (``data/overall/executed_book.json``), shown as below.
+
+For IBKR it shows, in a human-readable way:
 
   * a run header (when it ran, account, mode, net-liq, cash) with signature +
     freshness badges,
@@ -47,11 +55,14 @@ import ibkr_symbols as sym                 # noqa: E402  (BTC→IBIT mapping)
 
 REPORT_PATH = _REPO_ROOT / "data" / "overall" / "executed_book.json"
 REPORT_PATH_LIVE = _REPO_ROOT / "data" / "overall" / "executed_book_live.json"
+C2_SNAPSHOT_PATH = _REPO_ROOT / "data" / "overall" / "c2_positions.json"
+C2_STATE_PATH = _REPO_ROOT / "data" / "overall" / "c2_publish_state.json"
+C2_SNAPSHOT_ARCHIVE = _REPO_ROOT / "data" / "overall" / "c2_positions_archive"
 TARGET_PATH = _REPO_ROOT / "data" / "overall" / "target_book.json"
 TARGET_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / tb.ARCHIVE_DIRNAME
 
 try:
-    st.set_page_config(page_title="Executed Book (IBKR)", page_icon="✅",
+    st.set_page_config(page_title="Executed Book", page_icon="✅",
                        layout="wide", initial_sidebar_state="expanded")
 except Exception:
     pass
@@ -66,7 +77,7 @@ _APP_LABELS = {"OVERALL": "🧭  Overall Trading", "BTC": "₿  Bitcoin (BTC)",
                "DAILYAUDIT": "🕵️  Daily Audit",
                "HEALTH": "🩺  Strategy Health",
                "TARGETBOOK": "📋  Target Book (IBKR)",
-               "EXECUTEDBOOK": "✅  Executed Book (IBKR)",
+               "EXECUTEDBOOK": "✅  Executed Book",
                "ASSISTANT": "🤖  AI Assistant"}
 for _k, _c in ticker_config.CONFIGS.items():
     _APP_LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
@@ -76,8 +87,9 @@ with st.sidebar:
     st.radio("**Application**", options=_ALL_APPS,
              format_func=lambda x: _APP_LABELS.get(x, x), key="gldm_active_app")
     st.markdown("---")
-    st.caption("_The executed book is written back by the IBKR executor after a "
-               "rebalance. See IBKR_PAPER_TRADING.md for the full flow._")
+    st.caption("_Collective2 holdings are committed by the C2 publish workflow "
+               "(docs/COLLECTIVE2.md); the IBKR report is written back by the "
+               "IBKR executor (IBKR_PAPER_TRADING.md)._")
 
 C_BUY = "#16a34a"; C_SELL = "#dc2626"; C_CASH = "#94a3b8"
 
@@ -298,7 +310,9 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
     _download(payload, secret, historical=historical)
 
 
-def _drift_section(payload: dict, *, historical: bool = False) -> None:
+def _drift_section(payload: dict, *, historical: bool = False,
+                   target_path: Path | None = None, scope: str | None = None,
+                   broker: str = "IBKR") -> None:
     """Compare what the executor TARGETED (target_book weights) against what it
     actually HOLDS now (executed positions), per instrument, in percentage points.
     Small drifts are normal: whole-share rounding, the no-trade band, and fills
@@ -308,7 +322,11 @@ def _drift_section(payload: dict, *, historical: bool = False) -> None:
     run's own signal bar (``book_archive/<as_of>.json``) — comparing a past
     execution against today's book would only measure the days in between."""
     as_of = payload.get("as_of")
-    if historical:
+    if target_path is not None:
+        tgt_path = target_path
+        if not tgt_path.exists():
+            return
+    elif historical:
         # today's book says nothing about a past run — use that bar's own book
         tgt_path = (TARGET_ARCHIVE_DIR / f"{pd.Timestamp(as_of).date()}.json"
                     if as_of else None)
@@ -367,14 +385,14 @@ def _drift_section(payload: dict, *, historical: bool = False) -> None:
     for k in ordered:
         tw = float(t_weights.get(k, 0.0)) * 100
         aw = actual_val.get(k, 0.0) / denom * 100
-        rows.append(dict(Instrument=_name(k, k), IBKR=(sym.trade_symbol(k) or k),
-                         Target=tw, Actual=aw, Drift=aw - tw))
-    rows.append(dict(Instrument="💵 Cash", IBKR="—", Target=t_cash * 100,
-                     Actual=cash / denom * 100, Drift=cash / denom * 100 - t_cash * 100))
+        rows.append({"Instrument": _name(k, k), broker: (sym.trade_symbol(k) or k),
+                     "Target": tw, "Actual": aw, "Drift": aw - tw})
+    rows.append({"Instrument": "💵 Cash", broker: "—", "Target": t_cash * 100,
+                 "Actual": cash / denom * 100, "Drift": cash / denom * 100 - t_cash * 100})
 
     st.dataframe(
         pd.DataFrame(rows), hide_index=True, use_container_width=True,
-        key=f"{'hist' if historical else 'now'}_drift",
+        key=f"{scope or ('hist' if historical else 'now')}_drift",
         column_config={
             "Target": st.column_config.NumberColumn("Target %", format="%.1f%%"),
             "Actual": st.column_config.NumberColumn("Actual %", format="%.1f%%"),
@@ -540,12 +558,257 @@ def _render_history(report_path: Path) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-st.title("✅ Executed Book (IBKR)")
+# COLLECTIVE2 — the model account the C2 publish workflow mirrors the book onto
+# ══════════════════════════════════════════════════════════════════════════
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=4)
+def _c2_quotes(symbols: tuple) -> dict:
+    """Live (price, previous close) per C2 symbol from the backup quote chain —
+    the C2 snapshot records holdings and fills, not a mark."""
+    import market_fallback as mf
+    out = {}
+    for s_ in symbols:
+        try:
+            px, prev, _src = mf.live_quote(s_)
+        except Exception:
+            px, prev = None, None
+        if px:
+            out[s_] = (float(px), float(prev) if prev else None)
+    return out
+
+
+def _c2_sent_book_path(as_of) -> Path | None:
+    """The exact book C2 received for *as_of* (c2_book_archive/), else None."""
+    if not as_of:
+        return None
+    p = ov.C2_BOOK_ARCHIVE_DIR / f"{pd.Timestamp(as_of).date()}.json"
+    return p if p.exists() else None
+
+
+def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> None:
+    """One C2 positions snapshot: holdings × live quote, the book behind them,
+    and the drift against that book."""
+    scope = "c2hist" if historical else "c2now"
+    positions = snap.get("positions") or []
+    acct_val = float(snap.get("model_account_value") or 0.0)
+    fetched = snap.get("fetched_at_utc") or ""
+    book_as_of = snap.get("book_as_of")
+
+    if source:
+        st.caption(f"Source: {source}")
+    c = st.columns(4)
+    c[0].metric("C2 strategy", str(snap.get("strategy_id") or "—"))
+    c[1].metric("Model account value", f"${acct_val:,.0f}" if acct_val else "—",
+                help="C2's model-account value, read with the holdings.")
+    c[2].metric("Positions", f"{len(positions)}")
+    c[3].metric("Book traded", str(book_as_of or "—"),
+                help="Signal bar of the last book sent to C2 before these "
+                     "holdings were read.")
+    age_txt = f"holdings read {fr.fmt_ct(fetched)}" if fetched else "read time unknown"
+    st.markdown(
+        _badge("📡 COLLECTIVE2 model account", "#7c3aed") + "  "
+        + _badge(("🗄️ " if historical else "🕒 ") + age_txt,
+                 "#6366f1" if historical else "#0ea5e9")
+        + (f"  {_badge('for signal bar ' + str(book_as_of), '#0ea5e9')}"
+           if book_as_of else ""),
+        unsafe_allow_html=True)
+    st.markdown("")
+
+    # ── the book C2 was sent ─────────────────────────────────────────────────
+    if not historical:
+        state = _read_json(C2_STATE_PATH) or {}
+        if state:
+            st.markdown("### 🔁 Last book sent to C2")
+            st.caption(
+                f"Book for signal bar **{state.get('as_of')}**, sent "
+                f"**{fr.fmt_ct(state.get('sent_at_utc'))}** against "
+                f"\\${float(state.get('capital') or 0):,.0f} of model capital. C2 "
+                "places whatever orders move the model account onto these "
+                "share counts (SetDesiredPositions).")
+            want = state.get("positions") or {}
+            if want:
+                st.dataframe(
+                    pd.DataFrame([{"Instrument": _name(sym.key_for_symbol(k) or k, k),
+                                   "C2": k, "Target shares": float(q)}
+                                  for k, q in sorted(want.items(),
+                                                     key=lambda kv: -kv[1])]),
+                    hide_index=True, use_container_width=True, key=f"{scope}_sent",
+                    column_config={"Target shares": st.column_config.NumberColumn(
+                        "Target shares", format="%.0f")})
+            st.markdown("---")
+
+    # ── holdings ──────────────────────────────────────────────────────────────
+    st.markdown("### 📊 Current C2 positions" if not historical
+                else "### 📊 C2 positions held that day")
+    quotes = {} if historical else _c2_quotes(
+        tuple(sorted(p["symbol"] for p in positions if p.get("symbol"))))
+    rows, pos_for_drift = [], []
+    for p in positions:
+        shares = float(p.get("shares") or 0.0)
+        avg = float(p.get("avg_cost") or 0.0)
+        px = (quotes.get(p.get("symbol")) or (None, None))[0]
+        mv = shares * px if px else shares * avg
+        pnl = (px - avg) * shares if (px and avg) else None
+        rows.append(dict(
+            Instrument=_name(p.get("key"), p.get("symbol")), C2=p.get("symbol"),
+            Shares=shares, Avg_cost=(f"${avg:,.2f}" if avg else "—"),
+            Price=(f"${px:,.2f}" if px else "—"),
+            Value=f"${mv:,.0f}",
+            Unreal_PnL=("—" if pnl is None else f"${pnl:,.0f}"),
+            Unreal_Pct=("—" if (pnl is None or not avg) else
+                        f"{(px / avg - 1) * 100:+.2f}%"),
+            Opened=(str(p.get("opened"))[:10] if p.get("opened") else "—"),
+            _mv=mv, _pnl=pnl))
+        pos_for_drift.append(dict(p, market_value=mv))
+    if not rows:
+        st.info("C2 reports no open positions — the model account is all cash.")
+    else:
+        mv_total = sum(r["_mv"] for r in rows)
+        for r in rows:
+            r["Weight"] = r["_mv"] / mv_total * 100 if mv_total else 0.0
+        rows.sort(key=lambda r: -r["_mv"])
+        left, right = st.columns([3, 2])
+        with left:
+            st.dataframe(
+                pd.DataFrame(rows).drop(columns=["_mv", "_pnl"]), hide_index=True,
+                use_container_width=True, key=f"{scope}_positions",
+                column_config={
+                    "Shares": st.column_config.NumberColumn("Shares", format="%.0f"),
+                    "Avg_cost": st.column_config.TextColumn(
+                        "Avg cost", help="C2's average fill price (AvgPx)."),
+                    "Unreal_PnL": st.column_config.TextColumn("Unreal. P&L"),
+                    "Unreal_Pct": st.column_config.TextColumn("Unreal. P&L %"),
+                    "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%")})
+            _known = [r["_pnl"] for r in rows if r["_pnl"] is not None]
+            cost = sum(float(p.get("shares") or 0) * float(p.get("avg_cost") or 0)
+                       for p in positions)
+            st.caption((
+                (f"Open P&L at live quotes: **${sum(_known):,.0f}**"
+                 + (f" (**{sum(_known) / cost * 100:+.2f}%**)" if cost else "")
+                 + " · " if _known else "")
+                + f"invested **${mv_total:,.0f}** · cost basis **${cost:,.0f}**"
+                + (f" · cash ≈ **${max(acct_val - mv_total, 0):,.0f}**"
+                   if acct_val else "")).replace("$", "\\$"))
+            if historical:
+                st.caption("Valued at C2's average cost — a past day's holdings "
+                           "are not re-marked at today's prices.")
+            elif len(quotes) < len(rows):
+                st.caption("⚠️ No live quote for some names — those are valued "
+                           "at C2's average cost, with no P&L shown.")
+        with right:
+            labels = [r["C2"] for r in rows]
+            vals = [r["_mv"] for r in rows]
+            if acct_val and acct_val > mv_total:
+                labels += ["CASH"]; vals += [acct_val - mv_total]
+            fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.55,
+                                   sort=False, textinfo="label+percent"))
+            fig.update_layout(height=340, margin=dict(t=10, b=10, l=10, r=10),
+                              showlegend=False)
+            st.plotly_chart(fig, use_container_width=True, key=f"{scope}_donut")
+
+    # ── drift vs the book C2 was sent ────────────────────────────────────────
+    mv_sum = sum(p["market_value"] for p in pos_for_drift)
+    drift_payload = dict(as_of=book_as_of, net_liq=acct_val,
+                         cash=max(acct_val - mv_sum, 0.0) if acct_val else 0.0,
+                         positions=pos_for_drift)
+    _drift_section(drift_payload, historical=historical,
+                   target_path=_c2_sent_book_path(book_as_of) or
+                   (None if historical else TARGET_PATH),
+                   scope=f"{scope}", broker="C2")
+    with st.expander("Raw C2 positions snapshot (JSON)"):
+        st.code(json.dumps(snap, indent=1), language="json")
+
+
+def _c2_records() -> list[dict]:
+    """Dated C2 snapshots (``c2_positions_archive/<date>.json``), newest first,
+    in the ``executed_on``/``as_of`` shape ``eb.record_for`` expects."""
+    out = []
+    if C2_SNAPSHOT_ARCHIVE.is_dir():
+        for f in C2_SNAPSHOT_ARCHIVE.glob("*.json"):
+            snap = _read_json(f)
+            if not snap or snap.get("schema") != eb.C2_SNAPSHOT_SCHEMA:
+                continue
+            out.append(dict(executed_on=f.stem, as_of=snap.get("book_as_of"),
+                            path=f, payload=snap))
+    return sorted(out, key=lambda r: r["executed_on"], reverse=True)
+
+
+def _render_c2_history() -> None:
+    recs = _c2_records()
+    if not recs:
+        st.info("No archived C2 snapshots yet. The C2 publish workflow saves a "
+                "dated copy (`data/overall/c2_positions_archive/<date>.json`) each "
+                "time the holdings change, so this fills in from its next run.")
+        return
+    dates = sorted(r["executed_on"] for r in recs)
+    first, last = pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[-1]).date()
+    st.markdown("### 📅 Pick a past day")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        picked = st.date_input("Date", value=last, min_value=first,
+                               max_value=last, key="c2_hist_date")
+    with c2:
+        st.caption(f"**{len(recs)}** archived snapshot(s) from **{first}** to "
+                   f"**{last}**. A day without one falls back to the most recent "
+                   "snapshot before it — the holdings did not change that day.")
+    if isinstance(picked, (tuple, list)):
+        picked = picked[-1] if picked else None
+    rec = eb.record_for(recs, picked or last)
+    if rec is None:
+        st.warning(f"No snapshot on or before **{picked}** — the archive starts "
+                   f"at **{first}**.")
+        return
+    if str(picked) != rec["executed_on"]:
+        st.caption(f"No snapshot on **{picked}** — showing **{rec['executed_on']}**.")
+    st.markdown(f"#### 🕰️ C2 holdings on {rec['executed_on']}"
+                + (f" (book for signal bar {rec['as_of']})" if rec["as_of"] else ""))
+    _render_c2(rec["payload"], historical=True,
+               source=f"`{rec['path'].relative_to(_REPO_ROOT)}`")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+st.title("✅ Executed Book")
 import strategy_version as _sv                 # noqa: E402
 if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
     import importlib                           # stale hot-loaded module (the
     _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()
+import freshness as fr                         # noqa: E402
+
+_BROKER_C2, _BROKER_IBKR = "📡 Collective2", "🏦 IBKR"
+_broker = st.radio(
+    "Broker", [_BROKER_C2, _BROKER_IBKR], index=0, horizontal=True,
+    key="executed_book_broker",
+    help="**Collective2** — the C2 model account the book is mirrored onto, "
+         "refreshed by a GitHub Actions workflow (no local executor). "
+         "**IBKR** — the last execution report the IBKR executor pushed back.")
+
+if _broker == _BROKER_C2:
+    st.caption("What the Collective2 model account holds after the book is "
+               "mirrored onto it — shares and C2's average fill, marked at a "
+               "live quote — plus every earlier day, by date, under "
+               "🕰️ Historical.")
+    _c2_now, _c2_hist = st.tabs(["✅ Latest", "🕰️ Historical"])
+    with _c2_now:
+        _snap = _read_json(C2_SNAPSHOT_PATH)
+        if _snap and _snap.get("schema") == eb.C2_SNAPSHOT_SCHEMA:
+            _render_c2(_snap, source=f"`{C2_SNAPSHOT_PATH.relative_to(_REPO_ROOT)}`")
+        else:
+            st.warning("No C2 positions snapshot yet "
+                       f"(`{C2_SNAPSHOT_PATH.relative_to(_REPO_ROOT)}`).")
+            st.markdown("The **Publish book to Collective2** workflow writes it "
+                        "on each run (2:30 PM CT on trading days). To get one "
+                        "sooner, run that workflow by hand from the Actions tab.")
+    with _c2_hist:
+        _render_c2_history()
+    st.stop()
+
 st.caption("What the IBKR executor actually did on the last rebalance — trades "
            "placed and the resulting positions — plus every earlier run, by date, "
            "under 🕰️ Historical.")
