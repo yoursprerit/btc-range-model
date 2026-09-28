@@ -1031,7 +1031,8 @@ with tab_live:
 
     # ── 1. TARGETBOOKS — previous & current (as published) vs live view ──
     st.markdown("### 📐 Targetbooks — published vs live recommendation")
-    st.caption("**Previous Targetbook** = **yesterday's** published book — "
+    st.caption("**Previously Traded Targetbook** = **yesterday's** "
+               "published book (the one the IBKR executor traded) — "
                "BTC · MSTR · MSTU · ETH from *yesterday's* 7:00 AM CT bar close, all "
                "other tickers from the market close of the **day before "
                "yesterday**. An intraday re-publish never replaces it: the prev "
@@ -1116,7 +1117,7 @@ with tab_live:
     if _cur_book and fr.publish_pending(_cur_book.get("generated_at_utc")):
         st.warning(
             "⏳ **Today's ≈7:15 AM CT publish hasn't landed yet** — the "
-            "Previous / Current Targetbooks below are still **yesterday's** "
+            "Previously Traded / Current Targetbooks below are still **yesterday's** "
             "books. GitHub's scheduler often delivers the publish cycle late; "
             "the donuts roll forward automatically once today's book commits. "
             "To publish right now, use the 🚀 button in the 📋 Target Book "
@@ -1126,14 +1127,16 @@ with tab_live:
     with ac[0]:
         if _prev_book:
             _pw, _pidle = _book_alloc(_prev_book)
-            st.plotly_chart(_alloc_donut(_pw, _pidle, "Previous Targetbook"),
+            st.plotly_chart(_alloc_donut(_pw, _pidle,
+                                         "Previously Traded Targetbook"),
                             use_container_width=True)
-            st.caption(f"Yesterday's published book — "
+            st.caption(f"Yesterday's published book, as traded — "
                        f"{_book_close_caption(_prev_book)} · profile "
                        f"**{_prev_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_prev_book.get('generated_at_utc'))}**")
         else:
-            st.info("**Previous Targetbook** — none recorded yet. It appears "
+            st.info("**Previously Traded Targetbook** — none recorded yet. "
+                    "It appears "
                     "after the next publish rotates the current book out "
                     "(`target_book*_prev.json`).")
     with ac[1]:
@@ -1375,7 +1378,7 @@ with tab_live:
         # not a live recomputation — see ov.book_move_reasons.
         if _prev_book and _cur_book:
             st.markdown("---")
-            st.markdown(f"**Previous → Current Targetbook** "
+            st.markdown(f"**Previously Traded → Current Targetbook** "
                         f"(as-of {_prev_book.get('as_of', '—')} → "
                         f"{_cur_book.get('as_of', '—')}: why the optimizer moved)")
             st.caption("Each published book's weights are the optimal base "

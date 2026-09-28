@@ -80,13 +80,13 @@ _ROTATE_TZ = "America/Chicago"     # the publish cycle's anchor timezone
 
 def rotate_prev(path: Path, now=None) -> bool:
     """Preserve the outgoing book at *path* as ``*_prev.json`` before a new one
-    lands, so the UI's *Previous Targetbook* always shows **yesterday's** book.
+    lands, so the UI's *Previously Traded Targetbook* always shows **yesterday's** book.
 
     Day-aware (America/Chicago, the 7:15-AM-CT publish anchor): the outgoing
     book is rotated only when it was generated on an EARLIER Central-time day
     than *now*.  An intraday re-publish (the UI's 🚀 button) therefore replaces
     today's book WITHOUT clobbering the previous-day book in the prev slot —
-    "Previous Targetbook" keeps meaning yesterday's, not "an hour ago's".
+    "Previously Traded Targetbook" keeps meaning yesterday's, not "an hour ago's".
 
     Returns True when the prev file was (re)written.  Best-effort: a
     missing/unreadable old book never blocks a publish."""

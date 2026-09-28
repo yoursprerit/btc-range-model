@@ -168,8 +168,8 @@ def _render_publish_button() -> None:
              "book (IBKR Option C)** GitHub Action now: the engine recomputes "
              "today's allocation from the freshest data, signs it, and commits "
              f"the new target_book(_live).json to `{repo}@{ref}` — the current "
-             "book is rotated to target_book*_prev.json (the *Previous "
-             "Targetbook* donut).")
+             "book is rotated to target_book*_prev.json (the *Previously "
+             "Traded Targetbook* donut).")
     if not token:
         cols[1].caption(
             "_Add a `GITHUB_TOKEN` (fine-grained PAT with **Actions: write** on "
