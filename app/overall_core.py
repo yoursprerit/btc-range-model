@@ -3063,7 +3063,8 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                           sata_daily: float = SATA_DAILY,
                           version_map: dict | None = None,
                           only_version: str | None = None,
-                          min_as_of=None) -> dict | None:
+                          min_as_of=None,
+                          fill_on_sessions: bool = False) -> dict | None:
     """Compound the ACTUALLY-PUBLISHED daily books — the exact historical
     record, daily optimiser trims included — into the same shapes the
     walk-forward replay returns (``ret``/``equity``/``weights``/``sata``), so
@@ -3078,6 +3079,15 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     on at that close) but earns nothing.  Sleeve returns come from the same
     ``returns_matrix`` as the replay; the book's cash remainder earns the
     SATA coupon on business days.  Gross of costs/fills, like the replay.
+
+    ``fill_on_sessions`` — for a broker that only trades US sessions
+    (Collective2): a book takes effect at the close of the first US trading
+    day on/after its ``as_of`` and earns from the day after.  A weekday book
+    is traded the day it is published, so nothing changes for it; a
+    weekend/holiday book (the 7-day crypto calendar publishes them) is traded
+    at the NEXT session, so that session is still earned by the previous
+    book — a Sunday exit loses Monday's move like the real account did,
+    instead of being booked at Friday's close.
 
     A LIVE book parks its idle remainder as a real ``SATA`` weights entry
     (``cash_weight`` 0 — see the publisher); that leg is folded back into the
@@ -3130,10 +3140,19 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
         parsed = [r for r in parsed if r["as_of"] >= pd.Timestamp(min_as_of)]
     if not parsed or returns is None or returns.empty:
         return None
-    idx = returns.index[returns.index >= parsed[0]["as_of"]]
+    for r in parsed:
+        eff = r["as_of"]
+        if fill_on_sessions:
+            while not _frs.is_us_trading_day(eff.date()):
+                eff += pd.Timedelta(days=1)
+        r["effective"] = eff
+    # two books filling on the same session: only the later one traded
+    parsed = [r for i, r in enumerate(parsed)
+              if i + 1 == len(parsed) or parsed[i + 1]["effective"] != r["effective"]]
+    idx = returns.index[returns.index >= parsed[0]["effective"]]
     if len(idx) < 2:
         return None
-    a_dates = np.array([r["as_of"].to_datetime64() for r in parsed])
+    a_dates = np.array([r["effective"].to_datetime64() for r in parsed])
     keys = list(returns.columns)
     col = {k: j for j, k in enumerate(keys)}
     R = np.nan_to_num(returns.reindex(idx).to_numpy(float))

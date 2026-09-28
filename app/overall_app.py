@@ -2271,7 +2271,8 @@ with tab_live:
         _bookrep = (ov.published_book_replay(
                         _PF["rets"], _books, sata_daily=0.0, version_map=_vmap,
                         only_version=ov.STRATEGY_VERSION,
-                        min_as_of=ov.C2_RECORD_START)
+                        min_as_of=ov.C2_RECORD_START,
+                        fill_on_sessions=True)   # C2 trades US sessions only
                     if _books else None)
         _n_c2 = sum(1 for b in _books
                     if str(b.get("as_of")) >= ov.C2_RECORD_START)

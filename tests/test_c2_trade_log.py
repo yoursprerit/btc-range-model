@@ -83,3 +83,17 @@ def test_headline_return_is_c2s_own_figure_in_either_unit():
         assert np.isclose(s["value_ret"], 48_803 / 50_000 - 1)
     s = oc.c2_account_summary(base)                     # none yet: value-based
     assert s["c2_return"] is None and np.isclose(s["total_ret"], s["value_ret"])
+
+
+def test_c2_replay_fills_a_weekend_book_at_the_next_session():
+    # Thu book holds EQ; the Sunday book exits it. C2 sells at MONDAY's close,
+    # so Monday's −4% is still earned; Tuesday is not.
+    idx = pd.date_range("2026-09-24", "2026-09-29", freq="D")    # Thu..Tue
+    rets = pd.DataFrame({"EQ": [0.0, 0.01, 0.0, 0.0, -0.04, 0.02]}, index=idx)
+    books = [{"as_of": "2026-09-24", "weights": {"EQ": 1.0}, "cash_weight": 0.0},
+             {"as_of": "2026-09-27", "weights": {}, "cash_weight": 1.0}]
+    lag = oc.published_book_replay(rets, books, sata_daily=0.0, fill_on_sessions=True)
+    assert np.allclose(lag["ret"].to_numpy(), [0, 0.01, 0, 0, -0.04, 0])
+    # without the session rule the exit is booked at Friday's close
+    old = oc.published_book_replay(rets, books, sata_daily=0.0)
+    assert np.allclose(old["ret"].to_numpy(), [0, 0.01, 0, 0, 0, 0])
