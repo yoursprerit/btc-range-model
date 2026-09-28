@@ -1961,6 +1961,30 @@ def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
                                           if k not in opened)))
 
 
+def book_held_reentries(book_payload: dict | None, gate: dict) -> list[str]:
+    """Committed entries on sleeves the published book already HOLDS.
+
+    The engine's latest close left the sleeve flat with its buy signal live
+    (action OPEN, not in position) while the book records it held (HOLD /
+    ``in_pos``).  The sim exited at that close — typically its fixed stop
+    (e.g. GLDM/UGL's −3%, which fires while the dual-MA trend is still long) —
+    and its signal re-enters on the next bar.  Net for the book: the position
+    is KEPT and the strategy's entry (and stop level) resets.  These must not
+    be announced as "new committed entries the book doesn't carry yet": the
+    book does carry them.  Returns sorted keys.
+    """
+    book = {a.get("key"): a for a in ((book_payload or {}).get("actions") or [])
+            if a.get("key")}
+    out = []
+    for a in gate.get("actions") or []:
+        ba = book.get(a.get("key"))
+        if not ba or a.get("action") != "OPEN" or a.get("in_pos"):
+            continue
+        if ba.get("in_pos") and ba.get("action") == "HOLD":
+            out.append(a["key"])
+    return sorted(out)
+
+
 def book_phantom_actions(book_payload: dict | None, gate: dict,
                          live_exits=(), live_entries=()) -> dict:
     """Published-book instructions today's engine cannot reproduce.

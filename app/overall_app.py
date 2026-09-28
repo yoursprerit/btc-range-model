@@ -1251,10 +1251,15 @@ with tab_live:
     # different action — the signal committed after the morning publish (e.g. a
     # divergence pure-regime buy at today's close). The action table flags the
     # row green; say it here too so it isn't lost behind the book-pinned pill.
+    # A sleeve the book already HOLDS is not a new entry: the engine exited it
+    # at today's close (typically its fixed stop) with the buy signal still
+    # live, so it re-enters next bar — net, the position is kept.
+    _held_reentries = ov.book_held_reentries(_cur_book, gate)
     _new_commits = sorted(
         a["key"] for a in gate["actions"]
         if a["action"] == "OPEN" and not a["in_pos"]
-        and _book_act_now.get(a["key"]) not in (None, "OPEN"))
+        and _book_act_now.get(a["key"]) not in (None, "OPEN")
+        and a["key"] not in _held_reentries)
     if _new_commits:
         st.success("🟢 **New committed " +
                    ("entry" if len(_new_commits) == 1 else "entries") +
@@ -1266,6 +1271,15 @@ with tab_live:
                    ("gets" if len(_new_commits) == 1 else "get") +
                    " funded at the next ≈7:15 AM CT publish (or a manual 🚀 "
                    "publish).")
+    if _held_reentries:
+        _one = len(_held_reentries) == 1
+        st.info("🔁 **Exit + re-entry:** " + ", ".join(_held_reentries) +
+                " — the Current Targetbook holds " + ("it" if _one else "them") +
+                ", but the strategy exited at today's close (typically its "
+                "fixed stop) while the buy signal is still live, so " +
+                ("it re-enters" if _one else "they re-enter") +
+                " on the **next bar**. Net: the position is **kept** — no "
+                "trade — and the strategy's entry price and stop level reset.")
 
     # …and the mismatch that is NOT a lifecycle lag: an instruction the frozen
     # book carries that today's engine cannot derive from the same as-of bar,
@@ -1770,7 +1784,9 @@ with tab_live:
             # a committed entry the frozen morning book predates (its recorded
             # action isn't OPEN) gets called out — the pill and flag disagree
             # on purpose: the pill is the book, the flag is today's signal.
-            _book_masked_entry = _committed_entry and _ba and _act != "OPEN"
+            _book_held_reentry = _committed_entry and a["key"] in _held_reentries
+            _book_masked_entry = (_committed_entry and _ba and _act != "OPEN"
+                                  and not _book_held_reentry)
             # …and the flat-side mask: a FLAT sleeve whose committed signal
             # flipped to AVOID (an active exit signal / D1 downtrend — entry
             # blocked) at a close the frozen morning book predates, so the
@@ -1829,6 +1845,10 @@ with tab_live:
                 warn = ("<div style='font-size:10px;color:#d97706;font-weight:700'>"
                         f"⚠️ signal flipped at a later close — now {a['decision']};"
                         " entry blocked</div>")
+            elif _book_held_reentry:                   # book holds; sim exited + re-enters
+                warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
+                        "🔁 exited at today's close, signal still long — "
+                        "re-enters next bar (position kept)</div>")
             elif _book_masked_entry:                   # fired after the morning publish
                 warn = ("<div style='font-size:10px;color:#16a34a;font-weight:700'>"
                         "🟢 signal fired at today's close — enters next bar</div>")
