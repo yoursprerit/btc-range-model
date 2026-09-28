@@ -312,3 +312,70 @@ def test_snapshot_archive_is_keyed_by_the_new_york_date(tmp_path):
     # 01:30 UTC on the 26th is still the 25th in New York
     p = pc.snapshot_archive_path(tmp_path, "2026-09-26T01:30:00+00:00")
     assert p == tmp_path / "2026-09-25.json"
+
+
+# ── closed trades + account details (C2's own fills for the trade log) ─────
+def _closed_trades_resp():
+    return {"Results": [
+        {"TradeId": 2, "ExchangeSymbol": {"Symbol": "WGMI"}, "OpenSide": "1",
+         "OpenDate": "2026-09-24T14:01:58Z", "CloseDate": "2026-09-28T19:31:02Z",
+         "AvgOpenFillPrice": 49.59, "AvgCloseFillPrice": 46.05,
+         "OpenedQuantity": 178, "ClosedQuantity": 178,
+         "ProfitLoss": -630.12, "Commission": 1.0},
+        {"TradeId": 1, "ExchangeSymbol": {"Symbol": "IBIT"}, "OpenSide": "1",
+         "OpenDate": "2026-09-24T14:01:58Z", "CloseDate": "2026-09-25T19:31:00Z",
+         "AvgOpenFillPrice": 60.0, "AvgCloseFillPrice": 61.0,
+         "OpenedQuantity": 10, "ClosedQuantity": 10, "ProfitLoss": 9.0},
+        {"TradeId": 3, "ExchangeSymbol": {"Symbol": "XLE"},   # still open: no close
+         "OpenDate": "2026-09-24T14:01:58Z", "AvgOpenFillPrice": 62.0,
+         "AvgCloseFillPrice": 0, "OpenedQuantity": 5},
+    ]}
+
+
+def test_closed_trades_keep_c2_fill_prices_and_dates_oldest_first():
+    rows = pc.parse_closed_trades(_closed_trades_resp())
+    assert [r["symbol"] for r in rows] == ["IBIT", "WGMI"]
+    w = rows[1]
+    assert w["key"] == "WGMI" and w["side"] == "long" and w["quantity"] == 178
+    assert (w["entry_px"], w["exit_px"]) == (49.59, 46.05)
+    assert w["closed"] == "2026-09-28T19:31:02Z" and w["pnl"] == -630.12
+    assert rows[0]["key"] == "BTC"                      # proxy symbol → key
+
+
+def test_account_details_read_starting_cash():
+    acct = pc.parse_account({"Results": [{"ModelAccountValue": 48_803.0,
+                                          "StartingCash": 50_000.0, "Cash": 120.5}]})
+    assert acct == {"model_account_value": 48_803.0, "starting_cash": 50_000.0,
+                    "cash": 120.5}
+    assert pc.parse_account({})["starting_cash"] is None
+
+
+def test_snapshot_carries_closed_trades_and_rewrites_when_they_change(tmp_path,
+                                                                     monkeypatch):
+    import json
+    monkeypatch.setenv("C2_API_KEY", "k")
+
+    def fake(m, path, k, **kw):
+        if "OpenPositions" in path:
+            return _open_positions_resp()
+        if "ClosedTrades" in path:
+            return _closed_trades_resp()
+        return {"Results": [{"ModelAccountValue": 48_803.0, "StartingCash": 50_000.0}]}
+    monkeypatch.setattr(pc, "_c2_request", fake)
+    out = tmp_path / "s.json"
+    argv = ["--snapshot", "--strategy-id", "7", "--snapshot-file", str(out),
+            "--state", str(tmp_path / "missing.json"), "--snapshot-archive", ""]
+    assert pc.main(argv) == 0
+    snap = json.loads(out.read_text())
+    assert snap["starting_cash"] == 50_000.0
+    assert [t["symbol"] for t in snap["closed_trades"]] == ["IBIT", "WGMI"]
+    assert pc.snapshot_changed(snap, dict(snap, closed_trades=snap["closed_trades"][:1]))
+
+    # a failed trade-history read keeps the committed list
+    def failing(m, path, k, **kw):
+        if "ClosedTrades" in path:
+            raise pc.C2Error("boom")
+        return fake(m, path, k, **kw)
+    monkeypatch.setattr(pc, "_c2_request", failing)
+    assert pc.main(argv) == 0
+    assert len(json.loads(out.read_text())["closed_trades"]) == 2

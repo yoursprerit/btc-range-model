@@ -524,3 +524,25 @@ def test_position_log_rows_mirror_the_sale_chips_and_list_open_lots():
     # passing the precomputed log gives the same rows
     assert oc.daily_position_log(w, sata, IDX[0], rets, closes=closes,
                                  log=log) == rows
+
+
+def test_a_weekend_book_sale_fills_at_the_next_session_close():
+    # 7-day book calendar (crypto sleeves trade weekends): the Sunday book
+    # drops the equity sleeve. It sells at MONDAY's close — never dated
+    # Sunday at Friday's close — and is pending until Monday's bar lands.
+    idx = pd.date_range("2026-09-24", "2026-09-27", freq="D")   # Thu..Sun
+    w = pd.DataFrame({"EQ": [0.5, 0.5, 0.5, 0.0]}, index=idx)
+    rets = pd.DataFrame({"EQ": [0.0, 0.01, 0.0, 0.0]}, index=idx)
+    sata = pd.Series([0.5, 0.5, 0.5, 1.0], index=idx)
+    fri = pd.Series([50.0, 48.22], index=pd.to_datetime(["2026-09-24", "2026-09-25"]))
+    rows = oc.daily_position_log(w, sata, idx[0], rets, closes={"EQ": fri})
+    sale = next(r for r in rows if not r["open"])
+    assert sale["exit_date"].dayofweek >= 5            # still the weekend book date
+    assert sale["exit_px"] is None and sale["pending"]  # not Friday's 48.22
+    mon = pd.concat([fri, pd.Series([46.0], index=[pd.Timestamp("2026-09-28")])])
+    sale = next(r for r in oc.daily_position_log(w, sata, idx[0], rets,
+                                                 closes={"EQ": mon})
+                if not r["open"])
+    assert sale["exit_date"] == pd.Timestamp("2026-09-28")
+    assert sale["exit_px"] == 46.0 and not sale["pending"]
+    assert sale["entry_px"] == 50.0

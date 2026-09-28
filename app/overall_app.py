@@ -666,6 +666,21 @@ def get_c2_snapshot(bucket: str) -> dict | None:
 
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=2)
+def get_c2_archive(bucket: str) -> list[dict]:
+    """Every dated C2 positions snapshot (``c2_positions_archive/``), oldest
+    first — spots positions C2 closed before its trade history caught up."""
+    return ov.load_c2_snapshots()
+
+
+def _c2_prices() -> dict:
+    """Live/last price per sleeve for marking C2's open positions — only
+    where C2 trades the sleeve's own ticker (a proxy such as IBIT for BTC is
+    left unmarked rather than priced off the wrong instrument)."""
+    return {r["key"]: r.get("last_close") for r in results
+            if r.get("last_close") is not None}
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=2)
 def get_executed_archive(bucket: str) -> list[dict]:
     """Every archived execution run (live account first, else paper), newest
     first — the 🕰️ Historical tab picks the one standing on the chosen bar."""
@@ -2128,6 +2143,82 @@ with tab_live:
 
     st.markdown("---")
 
+    def _c2_snapshot_with_prices():
+        _snap = get_c2_snapshot(_bucket())
+        if not _snap or _snap.get("schema") != "c2-positions/v1":
+            return None, [], {}
+        _arch = get_c2_archive(_bucket())
+        _px = {k: v for k, v in _c2_prices().items()
+               if any(p["key"] == k and p["symbol"] == k
+                      for p in _snap.get("positions") or [])}
+        return _snap, _arch, _px
+
+    def _render_c2_account(pv):
+        """📡 The Collective2 model account — C2's own account value, fills
+        and P&L — re-scaled from its starting cash to the 💼 portfolio value
+        (default $100,000), so every dollar reads as that account size."""
+        _snap, _arch, _px = _c2_snapshot_with_prices()
+        acct = ov.c2_account_summary(_snap, _arch, _px)
+        if acct is None:
+            return
+
+        def _sd(x):                      # signed dollars: +$1,234 / −$1,234
+            return f"{'-' if x < 0 else '+'}${abs(x):,.0f}"
+        _k = pv / acct["start_cash"]
+        st.markdown(
+            f"<div style='font-size:13.5px;font-weight:700;margin:8px 0 2px'>"
+            f"📡 Collective2 account — calibrated to "
+            f"${pv:,.0f} initial capital</div>", unsafe_allow_html=True)
+        cm = st.columns(6)
+        _pl = acct["total_ret"] * pv
+        cm[0].metric("Total portfolio value", f"${acct['value'] * pv:,.0f}",
+                     delta=f"{_sd(_pl)} ({acct['total_ret']*100:+.2f}%)",
+                     help="C2's model-account value (open positions marked by "
+                          "C2, plus cash) at its latest snapshot, scaled from "
+                          "its starting cash to the 💼 portfolio value.")
+        cm[1].metric("Initial capital", f"${pv:,.0f}",
+                     delta=(f"since {acct['start_date']:%b %d, %Y}"
+                            if acct["start_date"] is not None else None),
+                     delta_color="off")
+        cm[2].metric("Realized P&L", _sd(acct['realized'] * pv),
+                     delta=f"{acct['n_closed']} closed trade"
+                           f"{'s' if acct['n_closed'] != 1 else ''}",
+                     delta_color="off",
+                     help="Sum of C2's net P&L (commission included) on every "
+                          "closed round trip.")
+        cm[3].metric("Unrealized P&L",
+                     "—" if acct["unrealized"] is None
+                     else _sd(acct['unrealized'] * pv),
+                     delta=f"{acct['n_open']} open position"
+                           f"{'s' if acct['n_open'] != 1 else ''}",
+                     delta_color="off",
+                     help="Open positions at C2's average fill, marked at the "
+                          "live / last price.")
+        cm[4].metric("Max drawdown", f"{acct['mdd']*100:.2f}%",
+                     help="Deepest peak-to-trough fall of C2's daily "
+                          "model-account value since the first fill.")
+        cm[5].metric("Win rate",
+                     "—" if acct["win_rate"] is None
+                     else f"{acct['win_rate']*100:.0f}%",
+                     delta=f"{acct['wins']}/{acct['n_closed']} winners",
+                     delta_color="off")
+        _notes = [f"C2 account started with **\\${acct['start_cash']:,.0f}**"
+                  + ("" if acct["starting_cash_known"] else
+                     " (assumed until the next C2 sync records its starting cash)")
+                  + f" — every \\$ figure is × {_k:.4g} to read as \\${pv:,.0f}",
+                  f"value as of {acct['value_asof'].tz_convert('America/New_York'):%b %d, %Y %-I:%M %p} ET"]
+        if acct["invested"] is not None:
+            _notes.append(f"invested ≈ \\${acct['invested'] * pv:,.0f} at live prices")
+        if acct["cash"] is not None:
+            _notes.append(f"cash \\${acct['cash'] * pv:,.0f}")
+        if acct["n_pending"]:
+            _notes.append(f"{acct['n_pending']} exit"
+                          f"{'s' if acct['n_pending'] != 1 else ''} awaiting "
+                          "C2's fill in the next sync")
+        st.caption(" · ".join(_notes) + ". The strategy figures below compound "
+                   "the books C2 received at official closes; these are C2's "
+                   "own fills.")
+
     # ── 4. OVERALL STRATEGY P&L SINCE A USER-CHOSEN START DATE ──────────
     # What has the combined strategy actually delivered for someone who put
     # capital in on a given date?  Two selectable sources feed one identical
@@ -2260,6 +2351,7 @@ with tab_live:
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
                             **_PF["curves"]}
             _curve_all = _bookrep["equity"]
+            _render_c2_account(portfolio_value)
             if _bookrep["dropped"]:
                 st.caption("⚠️ Book keys not in today's universe (weight "
                            "earns nothing): "
@@ -3181,51 +3273,89 @@ with tab_live:
                     "plus those still open (toggle to show)",
                     key="overall_daily_position_log"):
                 _res_by_key = {r["key"]: r for r in results}
-                _closes = {k: ov.asset_close_series(r)
-                           for k, r in _res_by_key.items()}
-                _pl = ov.daily_position_log(
-                    _wf["weights"], _wf["sata"], _start_sel, _rets_win,
-                    active=_wf.get("active"),
-                    closes={k: v for k, v in _closes.items()
-                            if v is not None},
-                    log=_get_dtl())
+                # the as-published record trades on Collective2: list C2's
+                # own fills (dates, prices, net P&L) rather than the book's
+                # weight diffs priced at official closes
+                _c2_snap, _c2_arch, _c2_px = (_c2_snapshot_with_prices()
+                                              if _actual else (None, [], {}))
+                _pl_c2 = _c2_snap is not None
+                if _pl_c2:
+                    _w0, _w1 = pd.Timestamp(_start_sel), _end_ts
+                    _pl = [r for r in ov.c2_trade_log(_c2_snap, _c2_arch, _c2_px)
+                           if (r["open"] and _end_arg is None)
+                           or (not r["open"] and r["exit_date"] is not None
+                               and _w0 <= r["exit_date"] <= _w1)]
+                else:
+                    _closes = {k: ov.asset_close_series(r)
+                               for k, r in _res_by_key.items()}
+                    _pl = ov.daily_position_log(
+                        _wf["weights"], _wf["sata"], _start_sel, _rets_win,
+                        active=_wf.get("active"),
+                        closes={k: v for k, v in _closes.items()
+                                if v is not None},
+                        log=_get_dtl())
                 _pl_open = [r for r in _pl if r["open"]]
                 _pl_sold = [r for r in _pl if not r["open"]]
                 _pl_sig = sum(r["reason"] == "signal" for r in _pl_sold)
                 _pl_rlz = sum(r["pnl_usd"] for r in _pl_sold
                               if r["pnl_usd"] is not None) * portfolio_value
-                st.caption(f"**{len(_pl_sold)} sale"
-                           f"{'s' if len(_pl_sold) != 1 else ''} "
-                           f"({_pl_sig} 🚦 sell signal"
-                           f"{'s' if _pl_sig != 1 else ''} · "
-                           f"{len(_pl_sold) - _pl_sig} ⚖️ tilt) · "
-                           f"{len(_pl_open)} position"
-                           f"{'s' if len(_pl_open) != 1 else ''} still open · "
-                           f"realized ${_pl_rlz:+,.0f}.** "
-                           "The actual positions the "
-                           + ("**as-published books**" if _actual
-                              else "**walk-forward replay**")
-                           + " held, re-cut from the 🧾 daily trade log's "
-                           "sell side: one row per sale — a **🚦 sell signal** "
-                           "that closed the position, or a **⚖️ optimizer "
-                           "tilt** that trimmed it (*trimmed* — the rest is "
-                           "still held) or re-sized it through zero "
-                           "(*closed*) — plus every position **still open** "
-                           "(highlighted, unrealised). **Entry** is the close "
-                           "the position was opened at (its real entry, even "
-                           "before the start date — the same lifetime view "
-                           "as the 📜 trade log); **Entry / Exit px** are the "
-                           "instrument's official closes on those dates. "
-                           "**Return** is the sale's gain over the position's "
-                           "**average cost** — tilt adds raise the cost at "
-                           "the price paid, daily re-balance flows included "
-                           "— on the sleeve's strategy returns, so a day the "
-                           "sleeve's own engine was flat earns 0% even if "
-                           "the price moved. **Cost basis** and **$ P&L** "
-                           "are the ledger's exact flows scaled to the 💼 "
-                           "portfolio value at the start date — the same "
-                           "figures the 🧾 log's sale chips show. Newest "
-                           "first.")
+                if _pl_c2:
+                    _pl_pend = sum(1 for r in _pl_sold if r["pending"])
+                    st.caption(
+                        f"**{len(_pl_sold)} closed trade"
+                        f"{'s' if len(_pl_sold) != 1 else ''}"
+                        + (f" ({_pl_pend} awaiting C2's fill)" if _pl_pend else "")
+                        + f" · {len(_pl_open)} position"
+                        f"{'s' if len(_pl_open) != 1 else ''} still open · "
+                        f"realized {'-' if _pl_rlz < 0 else '+'}\\${abs(_pl_rlz):,.0f}.** "
+                        "**📡 Collective2's own fills** — the account of "
+                        "record. **Entry / Exit** are the dates C2 filled "
+                        "(New York), **Entry / Exit px** C2's volume-weighted "
+                        "average fill prices, **\\$ P&L** C2's net P&L "
+                        "(commission included); open positions are at C2's "
+                        "average fill, marked at the live / last price. A "
+                        "position C2 has already closed but whose trade has "
+                        "not reached the committed snapshot yet shows "
+                        "**⏳ fill pending** (it fills in with the next C2 "
+                        "sync). Every \\$ figure is scaled from C2's starting "
+                        "cash to the 💼 portfolio value "
+                        f"(\\${portfolio_value:,.0f}). Newest first.")
+                if not _pl_c2:
+                    st.caption(f"**{len(_pl_sold)} sale"
+                               f"{'s' if len(_pl_sold) != 1 else ''} "
+                               f"({_pl_sig} 🚦 sell signal"
+                               f"{'s' if _pl_sig != 1 else ''} · "
+                               f"{len(_pl_sold) - _pl_sig} ⚖️ tilt) · "
+                               f"{len(_pl_open)} position"
+                               f"{'s' if len(_pl_open) != 1 else ''} still open · "
+                               f"realized ${_pl_rlz:+,.0f}.** "
+                               "The actual positions the "
+                               + ("**as-published books**" if _actual
+                                  else "**walk-forward replay**")
+                               + " held, re-cut from the 🧾 daily trade log's "
+                               "sell side: one row per sale — a **🚦 sell signal** "
+                               "that closed the position, or a **⚖️ optimizer "
+                               "tilt** that trimmed it (*trimmed* — the rest is "
+                               "still held) or re-sized it through zero "
+                               "(*closed*) — plus every position **still open** "
+                               "(highlighted, unrealised). **Entry** is the close "
+                               "the position was opened at (its real entry, even "
+                               "before the start date — the same lifetime view "
+                               "as the 📜 trade log); **Entry / Exit px** are the "
+                               "instrument's official close that filled the book "
+                               "— a weekend/holiday book fills at the next "
+                               "session's close and is dated that day "
+                               "(**⏳ pending** until that close is in the data). "
+                               "**Return** is the sale's gain over the position's "
+                               "**average cost** — tilt adds raise the cost at "
+                               "the price paid, daily re-balance flows included "
+                               "— on the sleeve's strategy returns, so a day the "
+                               "sleeve's own engine was flat earns 0% even if "
+                               "the price moved. **Cost basis** and **$ P&L** "
+                               "are the ledger's exact flows scaled to the 💼 "
+                               "portfolio value at the start date — the same "
+                               "figures the 🧾 log's sale chips show. Newest "
+                               "first.")
                 if not _pl:
                     st.info("The book held nothing and sold nothing in this "
                             "window — no positions to list.")
@@ -3260,6 +3390,8 @@ with tab_live:
                         _rc = "#94a3b8" if _ret is None else (
                             C_BUY if _ret >= 0 else C_EXIT)
                         _bg = "background:#fffbeb;" if t["open"] else ""
+                        if t["reason"] == "c2" or (t["open"] and _pl_c2):
+                            _wt = f" {t['shares']:g} sh"
                         if t["open"]:
                             _status = (f"<span style='background:{C_HOLD}22;"
                                        f"color:{C_HOLD};font-weight:700;"
@@ -3267,7 +3399,13 @@ with tab_live:
                                        f"border-radius:6px'>OPEN</span>")
                             _via = ("<span style='color:#94a3b8;"
                                     "font-size:11px'>— still held</span>")
-                            _wt = f" wt {t['w1']*100:.1f}%"
+                            if not _pl_c2:
+                                _wt = f" wt {t['w1']*100:.1f}%"
+                        elif t["reason"] == "c2":
+                            _status = (f"<span style='color:#94a3b8;"
+                                       f"font-size:11px'>{t['status']}</span>")
+                            _via = ("⏳ C2 fill pending" if t["pending"]
+                                    else "📡 C2 fill")
                         else:
                             _status = (f"<span style='color:#94a3b8;"
                                        f"font-size:11px'>{t['status']}</span>")
@@ -3307,7 +3445,7 @@ with tab_live:
                             f"{_pl_dt(t['exit_date'])}</td>"
                             f"<td style='text-align:right;"
                             f"font-variant-numeric:tabular-nums'>"
-                            f"{_pl_px(t['exit_px'])}</td>"
+                            f"{'⏳ pending' if t.get('pending') else _pl_px(t['exit_px'])}</td>"
                             f"<td style='text-align:right'>"
                             f"{'—' if t['days'] is None else t['days']}</td>"
                             f"<td style='text-align:right;font-weight:700;"

@@ -1257,8 +1257,14 @@ def daily_position_log(weights: pd.DataFrame, sata: pd.Series, start,
     = its remaining average cost and ``pnl_usd`` their difference.
 
     With ``closes`` (``{key: daily close Series}``) rows also carry
-    ``entry_px``/``exit_px`` — the instrument's official close on/before the
-    entry and exit (latest close for open rows); ``None`` otherwise.
+    ``entry_px``/``exit_px`` — the close that FILLED the book's decision: the
+    instrument's first official close on/after the book date (latest close for
+    open rows); ``None`` otherwise.  The book runs on the 7-day calendar its
+    crypto sleeves need, so a weekend/holiday book's equity sale executes at
+    the NEXT session's close — the row's ``entry_date``/``exit_date`` move to
+    that session, never back to the previous one (a Sunday exit is Monday's
+    close, not Friday's).  While that close is not in the data yet the row is
+    ``pending=True`` with no price.
 
     Pass an already-computed ``log`` (same arguments) to skip re-diffing.
     Rows come back newest-first: open positions, then sales by exit date."""
@@ -1275,12 +1281,23 @@ def daily_position_log(weights: pd.DataFrame, sata: pd.Series, start,
         s = s.loc[:pd.Timestamp(d)].dropna()
         return float(s.iloc[-1]) if len(s) else None
 
+    def _fill(key, d):
+        """(date, px) of the close that executed a book decision dated ``d``:
+        the instrument's first close on/after it.  ``(d, None)`` without a
+        price series or while that session has not closed yet."""
+        s = closes.get(key)
+        if s is None or d is None or not len(s):
+            return d, None
+        s = s.loc[pd.Timestamp(d):].dropna()
+        return (s.index[0], float(s.iloc[0])) if len(s) else (d, None)
+
     rows = []
     for day in log:
         for a in day["actions"]:
             if a["delta"] >= 0 or a.get("pnl") is None:
                 continue
-            ent, ex = a.get("entry_date"), day["date"]
+            ent, ent_px = _fill(a["key"], a.get("entry_date"))
+            ex, ex_px = _fill(a["key"], day["date"])
             full = a["w1"] < min_delta
             sold, basis = a.get("sold"), a.get("basis")
             rows.append(dict(
@@ -1292,7 +1309,8 @@ def daily_position_log(weights: pd.DataFrame, sata: pd.Series, start,
                 w0=a["w0"], w1=a["w1"], ret=a["pnl"], sold=sold, basis=basis,
                 pnl_usd=(sold - basis) if sold is not None
                 and basis is not None else None,
-                entry_px=_px(a["key"], ent), exit_px=_px(a["key"], ex)))
+                entry_px=ent_px, exit_px=ex_px,
+                pending=bool(closes.get(a["key"]) is not None and ex_px is None)))
 
     wf = weights.fillna(0.0)
     w = wf.loc[pd.Timestamp(start):]
@@ -1306,16 +1324,16 @@ def daily_position_log(weights: pd.DataFrame, sata: pd.Series, start,
         for k, lk in led.items():
             if lk["end_entry"] < 0 or lk["end_cost"] <= 0:
                 continue
-            ent = wf.index[lk["end_entry"]]
+            ent, ent_px = _fill(k, wf.index[lk["end_entry"]])
             opens.append(dict(
                 key=k, open=True, status="open", reason=None,
                 entry_date=ent, exit_date=None,
-                days=int((last - ent).days), w0=None,
+                days=max(0, int((last - ent).days)), w0=None,
                 w1=float(wf[k].iloc[-1]),
                 ret=lk["end_val"] / lk["end_cost"] - 1.0,
                 sold=lk["end_val"], basis=lk["end_cost"],
                 pnl_usd=lk["end_val"] - lk["end_cost"],
-                entry_px=_px(k, ent), exit_px=_px(k, last)))
+                entry_px=ent_px, exit_px=_px(k, last), pending=False))
         opens.sort(key=lambda r: -r["w1"])
     rows.sort(key=lambda r: (r["exit_date"], r["entry_date"] or r["exit_date"]),
               reverse=True)
@@ -2801,6 +2819,179 @@ def load_book_version_map(path: Path | None = None) -> dict:
         return dict(payload.get("books") or {})
     except Exception:
         return {}
+
+
+# ── Collective2 fills — the account of record's own trades ─────────────────
+# scripts/publish_c2.py --snapshot commits what the C2 model account holds
+# (``c2_positions.json``, a dated copy per New-York day in
+# ``c2_positions_archive/``): open positions at C2's average fill, the closed
+# round trips at C2's own open/close fill prices and timestamps, the model
+# account value and its starting cash.  The as-published P&L view's trade log
+# and account figures read these rather than reconstructing fills from closes.
+C2_SNAPSHOT_PATH = _REPO_ROOT / "data" / "overall" / "c2_positions.json"
+C2_SNAPSHOT_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "c2_positions_archive"
+# The C2 strategy's starting cash (GetStrategyDetails.StartingCash) — used only
+# until a committed snapshot records it.
+C2_STARTING_CASH_DEFAULT = 50_000.0
+
+
+def load_c2_snapshots(archive_dir: Path | None = None) -> list[dict]:
+    """Every archived C2 positions snapshot, oldest first (unreadable or
+    foreign files skipped)."""
+    import json
+    out = []
+    for p in sorted(Path(archive_dir or C2_SNAPSHOT_ARCHIVE_DIR).glob("*.json")):
+        try:
+            snap = json.loads(p.read_text())
+        except Exception:
+            continue
+        if snap.get("schema") == "c2-positions/v1" and snap.get("fetched_at_utc"):
+            out.append(snap)
+    out.sort(key=lambda x: pd.Timestamp(x["fetched_at_utc"]))
+    return out
+
+
+def _ny_date(ts) -> pd.Timestamp | None:
+    """A C2 / snapshot timestamp → its New-York calendar date (naive)."""
+    if not ts:
+        return None
+    t = pd.Timestamp(ts)
+    t = t.tz_localize("UTC") if t.tzinfo is None else t
+    return pd.Timestamp(t.tz_convert("America/New_York").date())
+
+
+def c2_starting_cash(snap: dict | None) -> float:
+    v = (snap or {}).get("starting_cash")
+    return float(v) if v and v > 0 else C2_STARTING_CASH_DEFAULT
+
+
+def c2_trade_log(snap: dict | None, archive: list[dict] | None = None,
+                 prices: dict | None = None) -> list[dict]:
+    """The C2 model account's trade log in the 📒 position-log row shape.
+
+    * **Closed** rows — C2's own round trips (``closed_trades``): entry/exit
+      dates are C2's fill timestamps (New-York date), prices its VWAP fills,
+      ``pnl_usd`` its net P&L (commission included).
+    * **Pending** rows — a position an earlier snapshot held that the next one
+      no longer does, with no closed trade on record yet (C2's trade history
+      lands with the next snapshot): the exit date is the snapshot day it
+      disappeared, price and P&L unknown (``pending=True``).
+    * **Open** rows — what C2 holds now at its average fill, marked at
+      ``prices[key]`` (live/last close) when given.
+
+    Dollar fields (``basis``, ``pnl_usd``, ``value``) are per $1 of C2's
+    starting cash, so ``× portfolio value`` re-scales the account to any
+    size.  Newest first: open, then closes by exit date."""
+    if not snap:
+        return []
+    cash0 = c2_starting_cash(snap)
+    prices = prices or {}
+    rows = []
+    closed = snap.get("closed_trades") or []
+    for t in closed:
+        sign = -1.0 if t.get("side") == "short" else 1.0
+        e_px, x_px, q = float(t["entry_px"]), float(t["exit_px"]), float(t["quantity"])
+        ent, ex = _ny_date(t.get("opened")), _ny_date(t.get("closed"))
+        pnl = t.get("pnl")
+        pnl = float(pnl) if pnl is not None else sign * q * (x_px - e_px)
+        rows.append(dict(
+            key=t["key"], symbol=t.get("symbol"), open=False, status="closed",
+            reason="c2", pending=False, side=t.get("side", "long"), shares=q,
+            entry_date=ent, exit_date=ex, entry_px=e_px, exit_px=x_px,
+            days=int((ex - ent).days) if ent is not None and ex is not None else None,
+            ret=sign * (x_px / e_px - 1), basis=q * e_px / cash0,
+            pnl_usd=pnl / cash0, value=None))
+
+    # positions that vanished between snapshots without a closed trade yet
+    seq = [x for x in (archive or []) if x.get("fetched_at_utc")]
+    if not seq or seq[-1].get("fetched_at_utc") != snap.get("fetched_at_utc"):
+        seq = seq + [snap]
+    for prev, nxt in zip(seq, seq[1:]):
+        held = {p["symbol"] for p in nxt.get("positions") or []}
+        gone_on = _ny_date(nxt["fetched_at_utc"])
+        for p in prev.get("positions") or []:
+            if p["symbol"] in held:
+                continue
+            opened = _ny_date(p.get("opened"))
+            if any(t.get("symbol") == p["symbol"]
+                   and _ny_date(t.get("closed")) is not None
+                   and _ny_date(t.get("closed")) >= _ny_date(prev["fetched_at_utc"])
+                   for t in closed):
+                continue
+            rows.append(dict(
+                key=p["key"], symbol=p["symbol"], open=False, status="closed",
+                reason="c2", pending=True, side="long", shares=float(p["shares"]),
+                entry_date=opened, exit_date=gone_on,
+                entry_px=float(p["avg_cost"]), exit_px=None,
+                days=int((gone_on - opened).days) if opened is not None else None,
+                ret=None, basis=float(p["shares"]) * float(p["avg_cost"]) / cash0,
+                pnl_usd=None, value=None))
+
+    opens = []
+    asof = _ny_date(snap.get("fetched_at_utc"))
+    for p in snap.get("positions") or []:
+        q, avg = float(p["shares"]), float(p["avg_cost"])
+        px = prices.get(p["key"])
+        px = float(px) if px is not None and np.isfinite(px) and px > 0 else None
+        opened = _ny_date(p.get("opened"))
+        opens.append(dict(
+            key=p["key"], symbol=p["symbol"], open=True, status="open",
+            reason=None, pending=False, side="long", shares=q,
+            entry_date=opened, exit_date=None, entry_px=avg, exit_px=px,
+            days=(int((max(asof, pd.Timestamp.now().normalize()) - opened).days)
+                  if opened is not None and asof is not None else None),
+            ret=(px / avg - 1) if px else None, basis=q * avg / cash0,
+            pnl_usd=(q * (px - avg) / cash0) if px else None,
+            value=(q * px / cash0) if px else None))
+    opens.sort(key=lambda r: -(r["value"] or r["basis"]))
+    _far = pd.Timestamp("1900-01-01")
+    rows.sort(key=lambda r: (r["exit_date"] or _far, r["entry_date"] or _far),
+              reverse=True)
+    return opens + rows
+
+
+def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
+                       prices: dict | None = None) -> dict | None:
+    """The C2 model account's performance, every dollar figure per $1 of its
+    starting cash (``× portfolio value`` re-scales it, e.g. to $100,000).
+
+    ``value`` is C2's own ModelAccountValue at the latest snapshot
+    (``value_asof``); ``curve`` is that value per snapshot day (New York),
+    opened with the starting cash on the day before the first fill, so
+    ``total_ret``/``mdd`` are measured on what C2 reports.  ``realized`` sums
+    C2's closed-trade net P&L; ``unrealized``/``invested`` mark the open
+    positions at ``prices`` (live/last close) against C2's average fills."""
+    if not snap or not snap.get("model_account_value"):
+        return None
+    cash0 = c2_starting_cash(snap)
+    log = c2_trade_log(snap, archive, prices)
+    closed = [r for r in log if not r["open"] and not r["pending"]]
+    opens = [r for r in log if r["open"]]
+    pts = {}
+    for x in (archive or []) + [snap]:
+        v, d = x.get("model_account_value"), _ny_date(x.get("fetched_at_utc"))
+        if v and d is not None:
+            pts[d] = float(v) / cash0
+    firsts = [r["entry_date"] for r in log if r["entry_date"] is not None]
+    if firsts:
+        pts.setdefault(min(firsts) - pd.Timedelta(days=1), 1.0)
+    curve = pd.Series(pts).sort_index()
+    mdd = float((curve / curve.cummax() - 1).min()) if len(curve) else 0.0
+    value = float(snap["model_account_value"]) / cash0
+    wins = sum(1 for r in closed if (r["pnl_usd"] or 0) > 0)
+    marked = [r for r in opens if r["value"] is not None]
+    return dict(
+        start_cash=cash0, starting_cash_known=bool(snap.get("starting_cash")),
+        value=value, value_asof=pd.Timestamp(snap["fetched_at_utc"]),
+        total_ret=value - 1.0, curve=curve, mdd=mdd,
+        realized=sum(r["pnl_usd"] for r in closed),
+        unrealized=(sum(r["pnl_usd"] for r in marked) if marked else None),
+        invested=(sum(r["value"] for r in marked) if marked else None),
+        cash=(float(snap["cash"]) / cash0 if snap.get("cash") is not None else None),
+        n_closed=len(closed), wins=wins,
+        win_rate=(wins / len(closed)) if closed else None,
+        n_open=len(opens), n_pending=sum(1 for r in log if r["pending"]),
+        start_date=(min(firsts) if firsts else None), log=log)
 
 
 def load_published_books(archive_dir: Path | None = None) -> list[dict]:

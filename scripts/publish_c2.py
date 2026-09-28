@@ -17,7 +17,8 @@ our own rebalance, so the public track record follows the book exactly.
     OVERALL_BOOK_SECRET=… C2_API_KEY=… C2_STRATEGY_ID=… \\
         python scripts/publish_c2.py --execute
 
-    # read-only: save what the C2 model account holds (shares + average fill)
+    # read-only: save what the C2 model account holds (shares + average fill),
+    # its closed trades (C2 fill prices/dates, net P&L) and starting cash
     # to data/overall/c2_positions.json for the Overall app's Current Positions:
     C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py --snapshot
 
@@ -196,8 +197,72 @@ def desired_positions_payload(strategy_id: int, positions: list[dict]) -> dict:
     }
 
 
+def _symbol_of(row: dict) -> str | None:
+    s = ((row.get("ExchangeSymbol") or {}).get("Symbol")
+         or (row.get("C2Symbol") or {}).get("FullSymbol"))
+    return s.upper() if s else None
+
+
+def parse_closed_trades(resp: dict) -> list[dict]:
+    """GetStrategyHistoricalClosedTrades response → the model account's closed
+    round trips, oldest close first: C2's own open/close timestamps, the
+    volume-weighted average open and close FILL prices, the quantity and the
+    net P&L (commission included) — the fills-level trade log the Overall
+    app's as-published view shows."""
+    out = []
+    for t in resp.get("Results") or []:
+        sym_ = _symbol_of(t)
+        try:
+            qty = float(t.get("ClosedQuantity") or t.get("OpenedQuantity") or 0.0)
+            entry = float(t.get("AvgOpenFillPrice") or 0.0)
+            exit_ = float(t.get("AvgCloseFillPrice") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not sym_ or not qty or entry <= 0 or exit_ <= 0 or not t.get("CloseDate"):
+            continue
+
+        def _num(k):
+            try:
+                return round(float(t.get(k)), 2) if t.get(k) is not None else None
+            except (TypeError, ValueError):
+                return None
+        out.append({
+            "trade_id": t.get("TradeId") or t.get("Id"),
+            "key": sym.key_for_symbol(sym_) or sym_, "symbol": sym_,
+            "side": "short" if str(t.get("OpenSide")) == "2" else "long",
+            "quantity": abs(qty), "entry_px": entry, "exit_px": exit_,
+            "opened": str(t.get("OpenDate")) if t.get("OpenDate") else None,
+            "closed": str(t.get("CloseDate")),
+            "pnl": _num("ProfitLoss"), "commission": _num("Commission"),
+        })
+    out.sort(key=lambda r: (r["closed"], str(r["trade_id"])))
+    return out
+
+
+def parse_account(resp: dict) -> dict:
+    """GetStrategyDetails response → the model account's value, starting cash
+    and cash (``None`` where C2 does not report one)."""
+    res = (resp.get("Results") or [{}])[0] or {}
+
+    def _pos(k):
+        try:
+            v = float(res.get(k))
+        except (TypeError, ValueError):
+            return None
+        return v if v > 0 else None
+    cash = res.get("Cash")
+    try:
+        cash = float(cash) if cash is not None else None
+    except (TypeError, ValueError):
+        cash = None
+    return {"model_account_value": _pos("ModelAccountValue"),
+            "starting_cash": _pos("StartingCash"), "cash": cash}
+
+
 def build_snapshot(resp: dict, strategy_id: int, account_value: float | None,
-                   fetched_at_utc: str, book_as_of: str | None = None) -> dict:
+                   fetched_at_utc: str, book_as_of: str | None = None,
+                   starting_cash: float | None = None, cash: float | None = None,
+                   closed_trades: list[dict] | None = None) -> dict:
     """GetStrategyOpenPositions response → the positions snapshot the Overall
     app's 💼 Current Positions reads. Shaped like an execution report's
     ``positions`` (``key, symbol, shares, avg_cost``) so the app's cost-basis
@@ -235,7 +300,9 @@ def build_snapshot(resp: dict, strategy_id: int, account_value: float | None,
     return {
         "schema": SNAPSHOT_SCHEMA, "fetched_at_utc": fetched_at_utc,
         "strategy_id": int(strategy_id), "book_as_of": book_as_of,
-        "model_account_value": account_value, "positions": positions,
+        "model_account_value": account_value, "starting_cash": starting_cash,
+        "cash": cash, "positions": positions,
+        "closed_trades": closed_trades,
     }
 
 
@@ -249,6 +316,8 @@ def snapshot_changed(old: dict, new: dict) -> bool:
     if old.get("positions") != new.get("positions"):
         return True
     if old.get("book_as_of") != new.get("book_as_of"):
+        return True
+    if (old.get("closed_trades") or []) != (new.get("closed_trades") or []):
         return True
     return str(old.get("fetched_at_utc"))[:10] != str(new.get("fetched_at_utc"))[:10]
 
@@ -312,14 +381,23 @@ def _c2_request(method: str, path: str, api_key: str, *, params: str = "",
         raise C2Error(f"{method} {path} → {e.reason}") from e
 
 
-def model_account_value(api_key: str, strategy_id: int) -> float:
+def account_details(api_key: str, strategy_id: int) -> dict:
     resp = _c2_request("GET", "/Strategies/GetStrategyDetails", api_key,
                        params=f"StrategyId={int(strategy_id)}")
-    results = resp.get("Results") or []
-    value = results[0].get("ModelAccountValue") if results else None
-    if not value or value <= 0:
+    acct = parse_account(resp)
+    if not acct["model_account_value"]:
         raise C2Error(f"no ModelAccountValue for strategy {strategy_id}: {resp}")
-    return float(value)
+    return acct
+
+
+def model_account_value(api_key: str, strategy_id: int) -> float:
+    return account_details(api_key, strategy_id)["model_account_value"]
+
+
+def fetch_closed_trades(api_key: str, strategy_id: int) -> list[dict]:
+    resp = _c2_request("GET", "/Strategies/GetStrategyHistoricalClosedTrades",
+                       api_key, params=f"StrategyId={int(strategy_id)}")
+    return parse_closed_trades(resp)
 
 
 def parse_open_positions(resp: dict) -> dict[str, float]:
@@ -345,12 +423,18 @@ def fetch_snapshot(api_key: str, strategy_id: int,
     resp = _c2_request("GET", "/Strategies/GetStrategyOpenPositions", api_key,
                        params=f"StrategyIds={int(strategy_id)}&SecurityType=CS")
     try:
-        value = model_account_value(api_key, strategy_id)
+        acct = account_details(api_key, strategy_id)
     except C2Error:
-        value = None                     # holdings are the point; value is extra
-    return build_snapshot(resp, strategy_id, value,
+        acct = {}                        # holdings are the point; value is extra
+    try:
+        trades = fetch_closed_trades(api_key, strategy_id)
+    except C2Error as e:
+        print(f"warning: closed trades unavailable ({e})")
+        trades = None                    # run_snapshot keeps the last good list
+    return build_snapshot(resp, strategy_id, acct.get("model_account_value"),
                           datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                          book_as_of)
+                          book_as_of, starting_cash=acct.get("starting_cash"),
+                          cash=acct.get("cash"), closed_trades=trades)
 
 
 def snapshot_archive_path(archive_dir: Path, fetched_at_utc: str) -> Path:
@@ -381,12 +465,19 @@ def run_snapshot(api_key: str, strategy_id: int | None, path: Path,
     except C2Error as e:
         print(f"ABORT: {e}")
         return 1
+    old = _load_state(path)
+    # a failed read of the trade history must not wipe the committed one
+    if snap["closed_trades"] is None:
+        snap["closed_trades"] = old.get("closed_trades") or []
+    if not snap.get("starting_cash") and old.get("starting_cash"):
+        snap["starting_cash"] = old["starting_cash"]
     print(f"C2 holds {len(snap['positions'])} position(s)"
           + (f" · model account ${snap['model_account_value']:,.0f}"
              if snap["model_account_value"] else ""))
     for p in snap["positions"]:
         print(f"  {p['symbol']:<7}{p['shares']:>9g} @ {p['avg_cost']:,.2f}")
-    if not snapshot_changed(_load_state(path), snap):
+    print(f"C2 closed trades on record: {len(snap['closed_trades'])}")
+    if not snapshot_changed(old, snap):
         print("snapshot unchanged — not rewritten")
         return 0
     _save_state(path, snap)
