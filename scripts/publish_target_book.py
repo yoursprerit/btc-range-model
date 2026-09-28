@@ -322,7 +322,8 @@ def main() -> int:
     outdir = Path(args.out).parent
     outdir.mkdir(parents=True, exist_ok=True)
     for _bp in (Path(args.out), Path(args.live_out)):
-        # outgoing books → *_prev.json (the "Previous Targetbook" the UI shows)
+        # outgoing books → *_prev.json (the "Previously Traded Targetbook" the UI shows;
+        # weekend/holiday books are skipped — see tb.rotate_prev)
         if tb.rotate_prev(_bp):
             print(f"Rotated previous book → {tb.prev_path(_bp)}")
     Path(args.out).write_text(tb.dumps(paper, secret))

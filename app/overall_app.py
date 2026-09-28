@@ -1031,12 +1031,16 @@ with tab_live:
 
     # ── 1. TARGETBOOKS — previous & current (as published) vs live view ──
     st.markdown("### 📐 Targetbooks — published vs live recommendation")
-    st.caption("**Previously Traded Targetbook** = **yesterday's** "
-               "published book (the one the IBKR executor traded) — "
-               "BTC · MSTR · MSTU · ETH from *yesterday's* 7:00 AM CT bar close, all "
-               "other tickers from the market close of the **day before "
-               "yesterday**. An intraday re-publish never replaces it: the prev "
-               "slot only rolls forward at the first publish of a new day. "
+    st.caption("**Previously Traded Targetbook** = the book published on "
+               "the **last US trading day** before today (the one the IBKR "
+               "executor last traded) — normally yesterday's, but after a "
+               "weekend or market holiday it is **Friday's** (or the "
+               "pre-holiday day's): books published on non-trading days are "
+               "never traded, so they never enter this slot. Its BTC · MSTR · "
+               "MSTU · ETH come from that day's 7:00 AM CT bar close, all "
+               "other tickers from the market close before it. An intraday "
+               "re-publish never replaces it: the prev slot only rolls "
+               "forward at the first publish of a new day. "
                "**Current Targetbook** = the *officially published* book the "
                "IBKR executor trades — its data basis is pinned to the "
                "morning **7:15 AM CT anchor**: all tickers as of the market "
@@ -1130,7 +1134,7 @@ with tab_live:
             st.plotly_chart(_alloc_donut(_pw, _pidle,
                                          "Previously Traded Targetbook"),
                             use_container_width=True)
-            st.caption(f"Yesterday's published book, as traded — "
+            st.caption(f"Last trading day's published book, as traded — "
                        f"{_book_close_caption(_prev_book)} · profile "
                        f"**{_prev_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_prev_book.get('generated_at_utc'))}**")

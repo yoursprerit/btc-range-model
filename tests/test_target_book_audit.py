@@ -99,7 +99,7 @@ def test_validate_rejects_book_just_past_the_window():
     assert "stale" in why
 
 
-# ── previous-book rotation (the "Previous Targetbook" the UI shows) ───────────
+# ── previous-book rotation (the "Previously Traded Targetbook" the UI shows) ───────────
 def _book_text(gen_utc: str) -> str:
     return ('{"schema": "overall-target-book/v1", "as_of": "2026-07-23", '
             f'"generated_at_utc": "{gen_utc}"}}')
@@ -117,7 +117,7 @@ def test_rotate_prev_preserves_outgoing_book(tmp_path):
 
 def test_rotate_prev_same_day_republish_keeps_yesterdays_prev(tmp_path):
     """An intraday 🚀 re-publish must NOT clobber yesterday's book in the prev
-    slot — "Previous Targetbook" always means yesterday's."""
+    slot — "Previously Traded Targetbook" always means yesterday's."""
     book = tmp_path / "target_book.json"
     prev = tb.prev_path(book)
     prev.write_text(_book_text("2026-07-23T12:16:00+00:00"))     # yesterday's
@@ -148,3 +148,31 @@ def test_rotate_prev_missing_book_is_noop(tmp_path):
     book = tmp_path / "target_book.json"
     assert not tb.rotate_prev(book)
     assert not tb.prev_path(book).exists()
+
+
+def test_rotate_prev_skips_weekend_books(tmp_path):
+    """Saturday's and Sunday's books were never traded: on Monday the prev slot
+    still holds Friday's book."""
+    book = tmp_path / "target_book.json"
+    prev = tb.prev_path(book)
+    book.write_text(_book_text("2026-09-25T12:17:00+00:00"))     # Fri
+    assert tb.rotate_prev(book, now="2026-09-26T12:17:00+00:00")  # Sat publish
+    book.write_text(_book_text("2026-09-26T12:17:00+00:00"))     # Sat
+    assert not tb.rotate_prev(book, now="2026-09-27T12:17:00+00:00")  # Sun
+    book.write_text(_book_text("2026-09-27T12:17:00+00:00"))     # Sun
+    assert not tb.rotate_prev(book, now="2026-09-28T12:17:00+00:00")  # Mon
+    assert "2026-09-25T12:17:00" in prev.read_text()             # still Friday's
+    book.write_text(_book_text("2026-09-28T12:17:00+00:00"))     # Mon
+    assert tb.rotate_prev(book, now="2026-09-29T12:17:00+00:00")  # Tue
+    assert "2026-09-28T12:17:00" in prev.read_text()
+
+
+def test_rotate_prev_skips_market_holiday_books(tmp_path):
+    """Thanksgiving (2026-11-26) book is never traded: the day after, the prev
+    slot keeps Wednesday's (the pre-holiday) book."""
+    book = tmp_path / "target_book.json"
+    prev = tb.prev_path(book)
+    prev.write_text(_book_text("2026-11-25T13:17:00+00:00"))     # Wed
+    book.write_text(_book_text("2026-11-26T13:17:00+00:00"))     # Thu holiday
+    assert not tb.rotate_prev(book, now="2026-11-27T13:17:00+00:00")
+    assert "2026-11-25T13:17:00" in prev.read_text()
