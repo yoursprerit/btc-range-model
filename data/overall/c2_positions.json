@@ -1,9 +1,13 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-09-28T19:31:34+00:00",
+ "fetched_at_utc": "2026-09-28T22:29:09+00:00",
  "strategy_id": 157698006,
  "book_as_of": "2026-09-27",
- "model_account_value": 48803.0,
+ "model_account_value": 48636.0,
+ "starting_cash": 50000.0,
+ "cash": 23980.0,
+ "c2_return": -2.81,
+ "c2_return_label": "Cumul. Return",
  "positions": [
   {
    "key": "GRID",
@@ -46,6 +50,21 @@
    "shares": 101.0,
    "avg_cost": 48.29,
    "opened": "2026-09-24T14:01:58Z"
+  }
+ ],
+ "closed_trades": [
+  {
+   "trade_id": 157701464,
+   "key": "WGMI",
+   "symbol": "WGMI",
+   "side": "long",
+   "quantity": 178.0,
+   "entry_px": 49.59,
+   "exit_px": 46.36,
+   "opened": "2026-09-24T14:01:58Z",
+   "closed": "2026-09-28T19:30:33Z",
+   "pnl": -578.5,
+   "commission": 3.56
   }
  ]
 }
