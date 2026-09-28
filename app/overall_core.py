@@ -2889,6 +2889,23 @@ def c2_starting_cash(snap: dict | None) -> float:
     return float(v) if v and v > 0 else C2_STARTING_CASH_DEFAULT
 
 
+def c2_reported_return(snap: dict | None) -> float | None:
+    """C2's own total-return figure (GetStrategyDetails ``Return``) as a
+    fraction, or ``None`` when the snapshot has none.  The API does not say
+    whether it is a percent or a fraction, so the reading closer to the
+    account value ÷ starting cash is taken (a percent of −2.8 is −0.028,
+    never −280%)."""
+    raw = (snap or {}).get("c2_return")
+    if raw is None or not np.isfinite(raw):
+        return None
+    raw = float(raw)
+    v = (snap or {}).get("model_account_value")
+    ref = (float(v) / c2_starting_cash(snap) - 1) if v else None
+    if ref is None:
+        return raw / 100.0
+    return min((raw / 100.0, raw), key=lambda r: abs(r - ref))
+
+
 def c2_trade_log(snap: dict | None, archive: list[dict] | None = None,
                  prices: dict | None = None) -> list[dict]:
     """The C2 model account's trade log in the 📒 position-log row shape.
@@ -2979,8 +2996,12 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
     """The C2 model account's performance, every dollar figure per $1 of its
     starting cash (``× portfolio value`` re-scales it, e.g. to $100,000).
 
-    ``value`` is C2's own ModelAccountValue at the latest snapshot
-    (``value_asof``); ``curve`` is that value per snapshot day (New York),
+    ``total_ret`` is C2's OWN reported return (``c2_return``) when the
+    snapshot carries it — so the headline matches C2's site — else the
+    model-account value ÷ starting cash (``value_ret``, always given);
+    ``value`` is ``1 + total_ret``, as of the latest snapshot (``value_asof``,
+    normally the after-close read).  ``curve`` is the account value per
+    snapshot day (New York),
     opened with the starting cash on the day before the first fill, so
     ``total_ret``/``mdd`` are measured on what C2 reports.  ``realized`` sums
     C2's closed-trade net P&L; ``unrealized``/``invested`` mark the open
@@ -3001,13 +3022,16 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
         pts.setdefault(min(firsts) - pd.Timedelta(days=1), 1.0)
     curve = pd.Series(pts).sort_index()
     mdd = float((curve / curve.cummax() - 1).min()) if len(curve) else 0.0
-    value = float(snap["model_account_value"]) / cash0
+    value_ret = float(snap["model_account_value"]) / cash0 - 1.0
+    c2_ret = c2_reported_return(snap)
+    total_ret = c2_ret if c2_ret is not None else value_ret
     wins = sum(1 for r in closed if (r["pnl_usd"] or 0) > 0)
     marked = [r for r in opens if r["value"] is not None]
     return dict(
         start_cash=cash0, starting_cash_known=bool(snap.get("starting_cash")),
-        value=value, value_asof=pd.Timestamp(snap["fetched_at_utc"]),
-        total_ret=value - 1.0, curve=curve, mdd=mdd,
+        value=1.0 + total_ret, value_asof=pd.Timestamp(snap["fetched_at_utc"]),
+        total_ret=total_ret, value_ret=value_ret, c2_return=c2_ret,
+        c2_return_label=snap.get("c2_return_label"), curve=curve, mdd=mdd,
         realized=sum(r["pnl_usd"] for r in closed),
         unrealized=(sum(r["pnl_usd"] for r in marked) if marked else None),
         invested=(sum(r["value"] for r in marked) if marked else None),

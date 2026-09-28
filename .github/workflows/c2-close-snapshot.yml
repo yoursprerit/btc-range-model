@@ -1,0 +1,104 @@
+name: Collective2 after-close snapshot
+
+# Read-only: records what the Collective2 model account holds and is worth
+# AFTER the 4 PM ET close — the closing account value, C2's own reported
+# return, closed trades (fill dates/prices, net P&L) and starting cash — so
+# the Overall app's 📡 Collective2 account panel matches C2's site rather than
+# the intraday read publish-c2.yml takes at ~3:30 PM ET. Sends no orders.
+#
+# 4:15 PM ET is 20:15 UTC (EDT) / 21:15 UTC (EST); both slots (plus a
+# half-hour backup each, since GitHub delivers fires late) run, and the guard
+# skips any fire before 4:10 PM ET. publish_c2.py rewrites the snapshot only
+# for the day's first after-close read (or a change in holdings/trades), so
+# the extra slots commit nothing.
+#
+# Required repo secrets: C2_API_KEY, C2_STRATEGY_ID.
+# NOTE: `on: schedule` fires only from the repo's DEFAULT branch.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "15,45 20,21 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-c2          # never overlap the publisher's own commits
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Guard (configured + after 4:10 PM ET)
+        id: guard
+        env:
+          C2_API_KEY: ${{ secrets.C2_API_KEY }}
+          C2_STRATEGY_ID: ${{ secrets.C2_STRATEGY_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${C2_API_KEY}" ] || [ -z "${C2_STRATEGY_ID}" ]; then
+            echo "::notice title=Collective2 not configured::Set the C2_API_KEY and C2_STRATEGY_ID repo secrets."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            NOW="$(date -u +%s)"
+            ANCHOR="$(TZ=America/New_York date -d "$(TZ=America/New_York date +%F) 16:10" +%s)"
+            if [ "$NOW" -lt "$ANCHOR" ]; then
+              echo "Before 4:10 PM ET — the close is not in yet; skipping."
+              echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.guard.outputs.run == 'true'
+        run: pip install "numpy>=1.26,<2.3" "pandas>=2.1,<2.3"
+
+      - name: Snapshot C2 account
+        if: steps.guard.outputs.run == 'true'
+        env:
+          C2_API_KEY: ${{ secrets.C2_API_KEY }}
+          C2_STRATEGY_ID: ${{ secrets.C2_STRATEGY_ID }}
+        run: |
+          python scripts/publish_c2.py --snapshot \
+            --state data/overall/c2_publish_state.json \
+            --snapshot-file data/overall/c2_positions.json
+
+      - name: Commit the snapshot
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          for p in data/overall/c2_positions.json data/overall/c2_positions_archive; do
+            if [ -e "$p" ]; then git add "$p"; fi
+          done
+          if git diff --cached --quiet; then
+            echo "Snapshot unchanged — nothing to commit."; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(c2): after-close account snapshot" \
+            -m "Automated via .github/workflows/c2-close-snapshot.yml"
+          # only the snapshot paths are in this commit, so this run's copy wins
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}" \
+               && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "Snapshot pushed on attempt ${attempt}."; exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 5))
+          done
+          echo "::error title=C2 snapshot not landed::could not push the after-close snapshot."
+          exit 1

@@ -255,14 +255,23 @@ def parse_account(resp: dict) -> dict:
         cash = float(cash) if cash is not None else None
     except (TypeError, ValueError):
         cash = None
+    ret = res.get("Return")
+    try:
+        ret = float(ret) if ret is not None else None
+    except (TypeError, ValueError):
+        ret = None
+    label = res.get("ReturnLabel")
     return {"model_account_value": _pos("ModelAccountValue"),
-            "starting_cash": _pos("StartingCash"), "cash": cash}
+            "starting_cash": _pos("StartingCash"), "cash": cash,
+            "c2_return": ret, "c2_return_label": str(label) if label else None}
 
 
 def build_snapshot(resp: dict, strategy_id: int, account_value: float | None,
                    fetched_at_utc: str, book_as_of: str | None = None,
                    starting_cash: float | None = None, cash: float | None = None,
-                   closed_trades: list[dict] | None = None) -> dict:
+                   closed_trades: list[dict] | None = None,
+                   c2_return: float | None = None,
+                   c2_return_label: str | None = None) -> dict:
     """GetStrategyOpenPositions response → the positions snapshot the Overall
     app's 💼 Current Positions reads. Shaped like an execution report's
     ``positions`` (``key, symbol, shares, avg_cost``) so the app's cost-basis
@@ -301,7 +310,8 @@ def build_snapshot(resp: dict, strategy_id: int, account_value: float | None,
         "schema": SNAPSHOT_SCHEMA, "fetched_at_utc": fetched_at_utc,
         "strategy_id": int(strategy_id), "book_as_of": book_as_of,
         "model_account_value": account_value, "starting_cash": starting_cash,
-        "cash": cash, "positions": positions,
+        "cash": cash, "c2_return": c2_return, "c2_return_label": c2_return_label,
+        "positions": positions,
         "closed_trades": closed_trades,
     }
 
@@ -319,7 +329,27 @@ def snapshot_changed(old: dict, new: dict) -> bool:
         return True
     if (old.get("closed_trades") or []) != (new.get("closed_trades") or []):
         return True
+    # the first read after the 4 PM ET close records the day's closing
+    # account value — what C2's own site reports — over an intraday one
+    if _after_close(new.get("fetched_at_utc")) and not _after_close(
+            old.get("fetched_at_utc"), same_day_as=new.get("fetched_at_utc")):
+        return True
     return str(old.get("fetched_at_utc"))[:10] != str(new.get("fetched_at_utc"))[:10]
+
+
+def _after_close(ts, same_day_as=None) -> bool:
+    """Whether ``ts`` is at/after the 4 PM New-York close (and, with
+    ``same_day_as``, on that timestamp's New-York day)."""
+    if not ts:
+        return False
+    t = pd.Timestamp(ts)
+    t = (t.tz_localize("UTC") if t.tzinfo is None else t).tz_convert(ic.ET_TZ)
+    if same_day_as is not None:
+        o = pd.Timestamp(same_day_as)
+        o = (o.tz_localize("UTC") if o.tzinfo is None else o).tz_convert(ic.ET_TZ)
+        if o.date() != t.date():
+            return False
+    return t.hour >= 16
 
 
 def book_fingerprint(payload: dict) -> str:
@@ -434,7 +464,9 @@ def fetch_snapshot(api_key: str, strategy_id: int,
     return build_snapshot(resp, strategy_id, acct.get("model_account_value"),
                           datetime.now(timezone.utc).isoformat(timespec="seconds"),
                           book_as_of, starting_cash=acct.get("starting_cash"),
-                          cash=acct.get("cash"), closed_trades=trades)
+                          cash=acct.get("cash"), closed_trades=trades,
+                          c2_return=acct.get("c2_return"),
+                          c2_return_label=acct.get("c2_return_label"))
 
 
 def snapshot_archive_path(archive_dir: Path, fetched_at_utc: str) -> Path:
@@ -477,6 +509,9 @@ def run_snapshot(api_key: str, strategy_id: int | None, path: Path,
     for p in snap["positions"]:
         print(f"  {p['symbol']:<7}{p['shares']:>9g} @ {p['avg_cost']:,.2f}")
     print(f"C2 closed trades on record: {len(snap['closed_trades'])}")
+    if snap.get("c2_return") is not None:
+        print(f"C2 reported return: {snap['c2_return']:g}"
+              + (f" ({snap['c2_return_label']})" if snap.get("c2_return_label") else ""))
     if not snapshot_changed(old, snap):
         print("snapshot unchanged — not rewritten")
         return 0

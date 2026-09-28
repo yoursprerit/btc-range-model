@@ -72,3 +72,14 @@ def test_missing_starting_cash_falls_back_to_the_default():
     snap = dict(_snap("2026-09-25T19:31:29+00:00", []), starting_cash=None)
     assert oc.c2_starting_cash(snap) == oc.C2_STARTING_CASH_DEFAULT
     assert not oc.c2_account_summary(snap)["starting_cash_known"]
+
+
+def test_headline_return_is_c2s_own_figure_in_either_unit():
+    base = _snap("2026-09-28T20:16:00+00:00", [], value=48_803.0)
+    for raw in (-2.8, -0.028):                          # percent or fraction
+        s = oc.c2_account_summary(dict(base, c2_return=raw))
+        assert np.isclose(s["total_ret"], -0.028)
+        assert np.isclose(s["value"] * 100_000, 97_200.0)
+        assert np.isclose(s["value_ret"], 48_803 / 50_000 - 1)
+    s = oc.c2_account_summary(base)                     # none yet: value-based
+    assert s["c2_return"] is None and np.isclose(s["total_ret"], s["value_ret"])

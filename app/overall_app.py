@@ -2193,9 +2193,17 @@ with tab_live:
         _pl = acct["total_ret"] * pv
         cm[0].metric("Total portfolio value", f"${acct['value'] * pv:,.0f}",
                      delta=f"{_sd(_pl)} ({acct['total_ret']*100:+.2f}%)",
-                     help="C2's model-account value (open positions marked by "
-                          "C2, plus cash) at its latest snapshot, scaled from "
-                          "its starting cash to the 💼 portfolio value.")
+                     help=("Initial capital grown by **C2's own reported "
+                           "return**"
+                           + (f" ({acct['c2_return_label']})"
+                              if acct["c2_return_label"] else "")
+                           + " — the figure C2's site shows." if
+                           acct["c2_return"] is not None else
+                           "C2's model-account value (open positions marked "
+                           "by C2, plus cash) at its latest snapshot, scaled "
+                           "from its starting cash to the 💼 portfolio value "
+                           "(C2's own return figure arrives with the next "
+                           "sync)."))
         cm[1].metric("Initial capital", f"${pv:,.0f}",
                      delta=(f"since {acct['start_date']:%b %d, %Y}"
                             if acct["start_date"] is not None else None),
@@ -2226,7 +2234,11 @@ with tab_live:
                   + ("" if acct["starting_cash_known"] else
                      " (assumed until the next C2 sync records its starting cash)")
                   + f" — every \\$ figure is × {_k:.4g} to read as \\${pv:,.0f}",
-                  f"value as of {acct['value_asof'].tz_convert('America/New_York'):%b %d, %Y %-I:%M %p} ET"]
+                  f"as of {acct['value_asof'].tz_convert('America/New_York'):%b %d, %Y %-I:%M %p} ET"]
+        if acct["c2_return"] is not None:
+            _notes.append(f"C2-reported return {acct['c2_return']*100:+.2f}%"
+                          f" · account value ÷ starting cash "
+                          f"{acct['value_ret']*100:+.2f}%")
         if acct["invested"] is not None:
             _notes.append(f"invested ≈ \\${acct['invested'] * pv:,.0f} at live prices")
         if acct["cash"] is not None:

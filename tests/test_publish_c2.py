@@ -257,7 +257,7 @@ def test_snapshot_averages_lots_and_maps_proxy_symbols_to_keys():
 def test_snapshot_rewrites_only_on_change_or_a_new_day():
     a = pc.build_snapshot(_open_positions_resp(), 1, 50_000.0,
                           "2026-09-25T19:45:00+00:00", "2026-09-24")
-    later = dict(a, fetched_at_utc="2026-09-25T20:00:00+00:00",
+    later = dict(a, fetched_at_utc="2026-09-25T19:55:00+00:00",   # 3:55 PM ET
                  model_account_value=50_100.0)
     assert not pc.snapshot_changed(a, later)
     assert pc.snapshot_changed(a, dict(later, fetched_at_utc="2026-09-26T19:45:00+00:00"))
@@ -346,7 +346,7 @@ def test_account_details_read_starting_cash():
     acct = pc.parse_account({"Results": [{"ModelAccountValue": 48_803.0,
                                           "StartingCash": 50_000.0, "Cash": 120.5}]})
     assert acct == {"model_account_value": 48_803.0, "starting_cash": 50_000.0,
-                    "cash": 120.5}
+                    "cash": 120.5, "c2_return": None, "c2_return_label": None}
     assert pc.parse_account({})["starting_cash"] is None
 
 
@@ -379,3 +379,23 @@ def test_snapshot_carries_closed_trades_and_rewrites_when_they_change(tmp_path,
     monkeypatch.setattr(pc, "_c2_request", failing)
     assert pc.main(argv) == 0
     assert len(json.loads(out.read_text())["closed_trades"]) == 2
+
+
+def test_account_details_keep_c2s_own_return_figure():
+    acct = pc.parse_account({"Results": [{"ModelAccountValue": 48_600.0,
+                                          "StartingCash": 50_000.0,
+                                          "Return": -2.8,
+                                          "ReturnLabel": "Cumulative return"}]})
+    assert acct["c2_return"] == -2.8
+    assert acct["c2_return_label"] == "Cumulative return"
+
+
+def test_first_read_after_the_close_is_rewritten_once():
+    a = pc.build_snapshot(_open_positions_resp(), 1, 48_803.0,
+                          "2026-09-28T19:31:34+00:00", "2026-09-27")   # 3:31 PM ET
+    close = dict(a, fetched_at_utc="2026-09-28T20:16:00+00:00",        # 4:16 PM ET
+                 model_account_value=48_600.0)
+    assert pc.snapshot_changed(a, close)
+    later = dict(close, fetched_at_utc="2026-09-28T20:31:00+00:00",
+                 model_account_value=48_610.0)
+    assert not pc.snapshot_changed(close, later)
