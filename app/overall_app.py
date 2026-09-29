@@ -1164,7 +1164,7 @@ with tab_live:
             st.plotly_chart(_alloc_donut(_cw, _cidle, "Current Targetbook"),
                             use_container_width=True)
             st.caption(f"{_book_close_caption(_cur_book)} — committed closes "
-                       f"only, matching the action plan's last-close targets · "
+                       f"only · "
                        f"profile **{_cur_book.get('profile', '—')}** · published "
                        f"**{fr.fmt_ct(_cur_book.get('generated_at_utc'))}** · "
                        f"frozen until the next 7:15 AM CT publish (or a manual "
@@ -1456,14 +1456,18 @@ with tab_live:
     st.markdown("---")
 
     # ── 2. TODAY'S ACTION PLAN ──────────────────────────────────────────
-    # The "Target % / $ (Last bar)" columns must show the SAME committed
-    # allocation the Current Targetbook donut draws — the *published* book.
-    # They used to show ``gate["target"]``, the engine's re-run of the
-    # committed signals: its priority tilt blends live momentum/sentiment, so
-    # the column drifted through the day and contradicted the frozen donut
-    # above it.  Fall back to the engine's committed target only when nothing
-    # has been published yet (same rule as the rebalancing-moves baseline).
-    if _cur_book:
+    # The "Target % / $ (Last bar)" columns show the book the IBKR executor
+    # actually TRADED on the previous business day — the *Previously Traded
+    # Targetbook* donut (``target_book*_prev.json``, rotated in only from a
+    # US trading day, so on a Monday it is Friday's book).  They must be a
+    # published, frozen book, never ``gate["target"]`` (the engine's re-run,
+    # whose priority tilt blends live momentum/sentiment and drifts through
+    # the day).  Fall back to the Current Targetbook when no previous book has
+    # been rotated in yet, and to the engine's committed target only when
+    # nothing has been published at all.
+    if _prev_book:
+        _committed_w, _committed_idle = _book_alloc(_prev_book)
+    elif _cur_book:
         _committed_w, _committed_idle = _book_alloc(_cur_book)
     else:
         _committed_w, _committed_idle = None, None
@@ -1558,10 +1562,13 @@ with tab_live:
                    "price from a backup feed is labelled **via …** underneath. "
                    "**Unreal. P&L** is measured "
                    "against each position's real cost basis — the official close on its "
-                   "entry bar. **Target % / $ (Last bar)** is the committed allocation "
-                   "of the **published Current Targetbook** — the same values as the "
-                   "donut above (falling back to the engine's last-close targets only "
-                   "when nothing has been published yet); **Target % / $ (Live)** re-runs it "
+                   "entry bar. **Target % / $ (Last bar)** is the allocation of the "
+                   "**Previously Traded Targetbook** — the book the IBKR executor "
+                   "traded on the previous business day, the same values as the "
+                   "left-hand donut above (falling back to the Current Targetbook "
+                   "when no previous book has been recorded, and to the engine's "
+                   "last-close targets only when nothing has been published yet); "
+                   "**Target % / $ (Live)** re-runs the allocation "
                    "against the current live price — dropping any position exiting next "
                    "bar, funding likely live entries, and reallocating to the survivors "
                    "and SATA (differences are coloured green/red).")
@@ -1620,8 +1627,8 @@ with tab_live:
             _dec_col = (_ACTION_COL.get(_act, C_FLAT) if _ba
                         else _TONE_COL.get(a["tone"], C_FLAT))
             ac = _ACTION_COL.get(_act, C_FLAT)
-            # last-bar (committed) — the published book's weight, so the column
-            # matches the Current Targetbook donut slice for slice
+            # last-bar — the previous business day's traded book's weight, so
+            # the column matches the Previously Traded Targetbook donut
             tgt = (_committed_w.get(a["key"], 0.0) if _committed_w is not None
                    else a["target"])
             # live-adjusted target, further reduced by the user's include/exclude
@@ -1883,8 +1890,8 @@ with tab_live:
                 f"<td style='text-align:right;font-weight:700;color:{_live_col}'>{tgt_live_s}{bar_live}</td>"
                 f"<td style='text-align:right;font-weight:700;font-variant-numeric:tabular-nums;color:{_live_col}'>{amt_live_s}</td></tr>")
         # SATA row — the idle-cash park absorbing whatever risk assets can't hold;
-        # the last-bar cell shows the published book's idle weight (the donut's
-        # SATA slice), falling back to the engine's committed SATA when unpublished.
+        # the last-bar cell shows the previously traded book's idle weight (its
+        # donut's SATA slice), falling back as the risk rows do.
         si = gate["sata_info"]
         sata_pct = _committed_idle if _committed_idle is not None else gate["sata"]
         sata_live = gate_live["sata"]
