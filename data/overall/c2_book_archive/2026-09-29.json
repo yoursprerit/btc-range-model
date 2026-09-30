@@ -1,0 +1,204 @@
+{
+ "schema": "overall-target-book/v1",
+ "generated_at_utc": "2026-09-30T12:18:10+00:00",
+ "as_of": "2026-09-29",
+ "profile": "Balanced",
+ "book_mode": "paper",
+ "weights": {
+  "GLDM": 0.17466110054849304,
+  "UGL": 0.1,
+  "GRID": 0.3,
+  "XLE": 0.1453388994515068,
+  "OIH": 0.18,
+  "ERX": 0.1
+ },
+ "cash_weight": 2.220446049250313e-16,
+ "exec_price": {
+  "GLDM": 82.64,
+  "UGL": 46.21,
+  "GRID": 178.27,
+  "XLE": 61.54,
+  "OIH": 380.26,
+  "ERX": 100.5
+ },
+ "actions": [
+  {
+   "key": "XLE",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.1453388994515068,
+   "in_pos": true,
+   "priority": 0.6346556880976062,
+   "exits_next_bar": false
+  },
+  {
+   "key": "ERX",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.1,
+   "in_pos": true,
+   "priority": 0.6330069567797366,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GRID",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.3,
+   "in_pos": true,
+   "priority": 0.5386435766258533,
+   "exits_next_bar": false
+  },
+  {
+   "key": "OIH",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.18,
+   "in_pos": true,
+   "priority": 0.5228571428571429,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GLDM",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.17466110054849304,
+   "in_pos": true,
+   "priority": 0.36812578710197813,
+   "exits_next_bar": false
+  },
+  {
+   "key": "UGL",
+   "action": "HOLD",
+   "decision": "LONG \u2014 HOLDING",
+   "target": 0.1,
+   "in_pos": true,
+   "priority": 0.29340589924114546,
+   "exits_next_bar": false
+  },
+  {
+   "key": "BTC",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "MSTR",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "MSTU",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "ETH",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "GDX",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "NUGT",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "SOXX",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "SOXL",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "REMX",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "WGMI",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "PBW",
+   "action": "STAND ASIDE",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "ARTY",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 NO SIGNAL",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  }
+ ],
+ "signal_audit": {
+  "passed": true,
+  "checked_at_utc": "2026-09-30T12:18:09+00:00",
+  "stale_apps": []
+ },
+ "signal_basis": {
+  "anchor_ct": "Sep 30, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-29",
+  "btc_bar_close_utc": "2026-09-30T12:00:00+00:00"
+ },
+ "strategy_version": "v1",
+ "code_sha": "4ac59e03f5cc",
+ "signature": {
+  "alg": "HMAC-SHA256",
+  "value": "e2c163a8fc7584f4a10ae9fee6751767ce3b612ba6588810b029350562a0a034"
+ }
+}
