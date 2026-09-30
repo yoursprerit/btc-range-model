@@ -1,43 +1,52 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-09-28T12:17:55+00:00",
- "as_of": "2026-09-27",
+ "generated_at_utc": "2026-09-29T12:17:56+00:00",
+ "as_of": "2026-09-28",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
-  "GLDM": 0.174637297611905,
-  "UGL": 0.1,
   "GRID": 0.3,
-  "XLE": 0.14536270238809504,
+  "XLE": 0.1475217832298423,
   "OIH": 0.18,
-  "ERX": 0.1
+  "ERX": 0.1,
+  "GLDM": 0.17247821677015773,
+  "UGL": 0.1
  },
  "cash_weight": 0.0,
  "exec_price": {
-  "GLDM": 84.89,
-  "UGL": 48.85,
-  "GRID": 179.57,
-  "XLE": 62.04,
-  "OIH": 393.68,
-  "ERX": 101.99
+  "GRID": 177.53,
+  "XLE": 62.1,
+  "OIH": 389.79,
+  "ERX": 102.24,
+  "GLDM": 81.56,
+  "UGL": 45.03
  },
  "actions": [
   {
-   "key": "WGMI",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 BELOW TREND",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
+   "key": "GLDM",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
+   "target": 0.17247821677015773,
+   "in_pos": false,
+   "priority": 0.36863167417162523,
+   "exits_next_bar": false
+  },
+  {
+   "key": "UGL",
+   "action": "OPEN",
+   "decision": "ENTER \u2014 DUAL-MA CROSS-UP",
+   "target": 0.1,
+   "in_pos": false,
+   "priority": 0.2923304157609618,
+   "exits_next_bar": false
   },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.14536270238809504,
+   "target": 0.1475217832298423,
    "in_pos": true,
-   "priority": 0.6674164800869014,
+   "priority": 0.6669528916718119,
    "exits_next_bar": false
   },
   {
@@ -46,25 +55,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1,
    "in_pos": true,
-   "priority": 0.6655551903698648,
-   "exits_next_bar": false
-  },
-  {
-   "key": "OIH",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.18,
-   "in_pos": true,
-   "priority": 0.5580952380952382,
-   "exits_next_bar": false
-  },
-  {
-   "key": "GLDM",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.174637297611905,
-   "in_pos": true,
-   "priority": 0.3929231262974746,
+   "priority": 0.665115041875112,
    "exits_next_bar": false
   },
   {
@@ -73,16 +64,16 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.3446689856685171,
+   "priority": 0.5737870939132464,
    "exits_next_bar": false
   },
   {
-   "key": "UGL",
+   "key": "OIH",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1,
+   "target": 0.18,
    "in_pos": true,
-   "priority": 0.312005692358184,
+   "priority": 0.5533333333333335,
    "exits_next_bar": false
   },
   {
@@ -167,6 +158,15 @@
    "exits_next_bar": false
   },
   {
+   "key": "WGMI",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
    "key": "PBW",
    "action": "STAND ASIDE",
    "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
@@ -178,7 +178,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 DOWNTREND (D1)",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -187,18 +187,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-09-28T12:17:54+00:00",
+  "checked_at_utc": "2026-09-29T12:17:55+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Sep 28, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-09-25",
-  "btc_bar_close_utc": "2026-09-28T12:00:00+00:00"
+  "anchor_ct": "Sep 29, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-09-28",
+  "btc_bar_close_utc": "2026-09-29T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "93c3bf1986f7",
+ "code_sha": "c608581afd08",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "1bb97c61de334bb920c9e8d0e9ba11d9104c21a93abed08e5a4682a7abe1a6ff"
+  "value": "9c8164ab226bce6f49efe15a261b01c3858aabfaff888bd2bec24fd32d0a249a"
  }
 }
