@@ -2857,6 +2857,9 @@ C2_SNAPSHOT_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "c2_positions_archiv
 # The C2 strategy's starting cash (GetStrategyDetails.StartingCash) — used only
 # until a committed snapshot records it.
 C2_STARTING_CASH_DEFAULT = 50_000.0
+# How far (fraction of starting cash) C2's reported account value/return may
+# stray from the account rebuilt from its own fills before the fills win.
+C2_LEDGER_TOLERANCE = 0.05
 
 
 def load_c2_snapshots(archive_dir: Path | None = None) -> list[dict]:
@@ -3005,7 +3008,14 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
     opened with the starting cash on the day before the first fill, so
     ``total_ret``/``mdd`` are measured on what C2 reports.  ``realized`` sums
     C2's closed-trade net P&L; ``unrealized``/``invested`` mark the open
-    positions at ``prices`` (live/last close) against C2's average fills."""
+    positions at ``prices`` (live/last close) against C2's average fills.
+
+    ``ledger_ret`` is the account rebuilt from those fills (realized +
+    unrealized) when every open position is marked and no exit is pending;
+    if C2's figure strays from it by more than ``C2_LEDGER_TOLERANCE``,
+    ``c2_mismatch`` is set and ``total_ret``/``value`` and the latest curve
+    point use the fills instead.  ``cash`` is starting cash + realized −
+    open cost basis (C2's ``Cash`` field only when that can't be built)."""
     if not snap or not snap.get("model_account_value"):
         return None
     cash0 = c2_starting_cash(snap)
@@ -3020,25 +3030,49 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
     firsts = [r["entry_date"] for r in log if r["entry_date"] is not None]
     if firsts:
         pts.setdefault(min(firsts) - pd.Timedelta(days=1), 1.0)
-    curve = pd.Series(pts).sort_index()
-    mdd = float((curve / curve.cummax() - 1).min()) if len(curve) else 0.0
     value_ret = float(snap["model_account_value"]) / cash0 - 1.0
     c2_ret = c2_reported_return(snap)
     total_ret = c2_ret if c2_ret is not None else value_ret
     wins = sum(1 for r in closed if (r["pnl_usd"] or 0) > 0)
     marked = [r for r in opens if r["value"] is not None]
+    realized = sum(r["pnl_usd"] for r in closed)
+    unrealized = sum(r["pnl_usd"] for r in marked) if marked else None
+    # The account rebuilt from C2's own fills: starting cash + realized P&L,
+    # less what the open positions cost = cash; + those positions at the
+    # live/last price = account value.  Only when the ledger is complete (no
+    # exit still awaiting its fill, every open position marked).
+    n_pending = sum(1 for r in log if r["pending"])
+    ledger_ok = not n_pending and len(marked) == len(opens)
+    ledger_cash = (1.0 + realized - sum(r["basis"] for r in opens)
+                   if not n_pending else None)
+    ledger_ret = realized + (unrealized or 0.0) if ledger_ok else None
+    # C2's reported value/return can be plainly wrong (e.g. a position its
+    # mark dropped: −32.5% on a day the same holdings moved −0.5%).  When it
+    # disagrees with the fills by more than C2_LEDGER_TOLERANCE of starting
+    # cash, the fills win and the mismatch is flagged.
+    c2_mismatch = (ledger_ret is not None
+                   and abs(total_ret - ledger_ret) > C2_LEDGER_TOLERANCE)
+    if c2_mismatch:
+        total_ret = ledger_ret
+        pts[_ny_date(snap["fetched_at_utc"])] = 1.0 + ledger_ret
+    curve = pd.Series(pts).sort_index()
+    mdd = float((curve / curve.cummax() - 1).min()) if len(curve) else 0.0
+    if ledger_cash is not None:
+        cash = ledger_cash
+    else:
+        cash = float(snap["cash"]) / cash0 if snap.get("cash") is not None else None
     return dict(
         start_cash=cash0, starting_cash_known=bool(snap.get("starting_cash")),
         value=1.0 + total_ret, value_asof=pd.Timestamp(snap["fetched_at_utc"]),
         total_ret=total_ret, value_ret=value_ret, c2_return=c2_ret,
         c2_return_label=snap.get("c2_return_label"), curve=curve, mdd=mdd,
-        realized=sum(r["pnl_usd"] for r in closed),
-        unrealized=(sum(r["pnl_usd"] for r in marked) if marked else None),
+        ledger_ret=ledger_ret, c2_mismatch=c2_mismatch,
+        realized=realized, unrealized=unrealized,
         invested=(sum(r["value"] for r in marked) if marked else None),
-        cash=(float(snap["cash"]) / cash0 if snap.get("cash") is not None else None),
+        cash=cash,
         n_closed=len(closed), wins=wins,
         win_rate=(wins / len(closed)) if closed else None,
-        n_open=len(opens), n_pending=sum(1 for r in log if r["pending"]),
+        n_open=len(opens), n_pending=n_pending,
         start_date=(min(firsts) if firsts else None), log=log)
 
 

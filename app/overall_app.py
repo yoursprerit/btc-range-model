@@ -2200,7 +2200,12 @@ with tab_live:
         _pl = acct["total_ret"] * pv
         cm[0].metric("Total portfolio value", f"${acct['value'] * pv:,.0f}",
                      delta=f"{_sd(_pl)} ({acct['total_ret']*100:+.2f}%)",
-                     help=("Initial capital grown by **C2's own reported "
+                     help=("C2's reported figure disagrees with its own "
+                           "fills, so this is the account **rebuilt from C2's "
+                           "fills**: initial capital + realized P&L + open "
+                           "positions marked at the live / last price."
+                           if acct["c2_mismatch"] else
+                           "Initial capital grown by **C2's own reported "
                            "return**"
                            + (f" ({acct['c2_return_label']})"
                               if acct["c2_return_label"] else "")
@@ -2246,6 +2251,9 @@ with tab_live:
             _notes.append(f"C2-reported return {acct['c2_return']*100:+.2f}%"
                           f" · account value ÷ starting cash "
                           f"{acct['value_ret']*100:+.2f}%")
+        if acct["ledger_ret"] is not None:
+            _notes.append(f"rebuilt from C2's fills "
+                          f"{acct['ledger_ret']*100:+.2f}%")
         if acct["invested"] is not None:
             _notes.append(f"invested ≈ \\${acct['invested'] * pv:,.0f} at live prices")
         if acct["cash"] is not None:
@@ -2254,6 +2262,15 @@ with tab_live:
             _notes.append(f"{acct['n_pending']} exit"
                           f"{'s' if acct['n_pending'] != 1 else ''} awaiting "
                           "C2's fill in the next sync")
+        if acct["c2_mismatch"]:
+            st.warning(
+                "⚠️ C2's reported account value "
+                f"(\\${acct['value_ret'] * pv + pv:,.0f}, "
+                f"{(acct['c2_return'] if acct['c2_return'] is not None else acct['value_ret'])*100:+.2f}%) "
+                "does not match its own fills — the same holdings marked at "
+                f"market give {acct['ledger_ret']*100:+.2f}%. The figures above "
+                "use the fills; C2's figure is usually a missing mark on its "
+                "side and corrects itself at the next sync.")
         st.caption(" · ".join(_notes) + ". The strategy figures below compound "
                    "the books C2 received at official closes; these are C2's "
                    "own fills.")

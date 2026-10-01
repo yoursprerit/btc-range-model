@@ -97,3 +97,33 @@ def test_c2_replay_fills_a_weekend_book_at_the_next_session():
     # without the session rule the exit is booked at Friday's close
     old = oc.published_book_replay(rets, books, sata_daily=0.0)
     assert np.allclose(old["ret"].to_numpy(), [0, 0.01, 0, 0, 0, 0])
+
+
+def test_c2_value_that_contradicts_its_own_fills_falls_back_to_the_ledger():
+    # 2026-09-30: C2 reported $33,794 (−32.5%) for the same six holdings that
+    # were worth $48.5k the day before — its mark dropped GRID.  Marked at
+    # market, the fills give ≈ −3.4%, and the cash is what the fills left.
+    held = [_pos("GRID", 82, 177.99), _pos("OIH", 22, 394.35545),
+            _pos("GLDM", 99, 83.39576), _pos("XLE", 113, 62.56274),
+            _pos("ERX", 47, 105.2), _pos("UGL", 101, 48.29)]
+    px = {"GRID": 177.11, "OIH": 378.37, "GLDM": 82.18, "XLE": 61.5,
+          "ERX": 100.42, "UGL": 45.73}
+    wgmi = dict(WGMI_CLOSED, exit_px=46.36, pnl=-578.5)
+    tue = dict(_snap("2026-09-29T21:43:56+00:00", held, [wgmi], value=48_517.0),
+               c2_return=-3.05, cash=23_980.1)
+    wed = dict(_snap("2026-09-30T21:44:31+00:00", held, [wgmi], value=33_794.0),
+               c2_return=-32.5, cash=23_980.0)
+    s = oc.c2_account_summary(wed, [FRI, tue, wed], prices=px)
+    ledger = (-578.5 + sum(p["shares"] * (px[p["key"]] - p["avg_cost"])
+                           for p in held)) / 50_000
+    assert s["c2_mismatch"] and np.isclose(s["total_ret"], ledger)
+    assert -0.04 < s["total_ret"] < -0.03
+    assert np.isclose(s["value"] * 100_000, 100_000 * (1 + ledger))
+    assert np.isclose(s["c2_return"], -0.325)              # still reported
+    cost = sum(p["shares"] * p["avg_cost"] for p in held)
+    assert np.isclose(s["cash"] * 50_000, 50_000 - 578.5 - cost)
+    assert np.isclose(s["curve"].iloc[-1], 1 + ledger) and s["mdd"] > -0.05
+    # a C2 figure in line with the fills is kept as reported
+    ok = oc.c2_account_summary(tue, [FRI, tue],
+                               prices={k: v + 0.5 for k, v in px.items()})
+    assert not ok["c2_mismatch"] and np.isclose(ok["total_ret"], -0.0305)
