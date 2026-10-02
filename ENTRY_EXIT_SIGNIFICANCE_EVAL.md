@@ -53,6 +53,54 @@ random-hold runs whose drawdown is at least as shallow as the real exits'.*
   example by holding longer or replacing D2 with a trailing rule. Treat any
   exit retune as a new hypothesis, not as a fix this eval has confirmed.
 
+## Exit package (signal exit + fixed stop) and the strategy vs buy-and-hold
+
+Sections D and E of the harness treat the fixed stop as **part of** the exit
+rather than holding it constant. The null in D uses the same real entries,
+with random holding periods drawn from *all* observed holds and **no** stop.
+
+**D. Exit rule ablation** (real entries, only the exit rule changes):
+
+| Exit rule | BTC | MSTR | MSTU |
+|---|---|---|---|
+| Signal + stop (live) | +58% · MDD −28% · Sharpe 0.97 | **+245% · −22.5% · 1.55** | **+677% · −42% · 1.48** |
+| Signal only | (same, no stop) | +184% · −27.5% · 1.26 | +402% · −49% · 1.19 |
+| Stop only | — | −23% · −65% · 0.18 | −50% · −88% · 0.31 |
+| Random holds, no stop (null median) | +42% · −26% · 0.74 | +165% · −38% · 1.12 | +313% · −69% · 1.07 |
+| Package p (return / MDD / Sharpe) | 0.28 / 0.95 / 0.25 | 0.22 / 0.17 / 0.10 | 0.16 / 0.15 / 0.11 |
+
+On MSTR/MSTU the two parts work together: signal plus stop beats either one
+alone on return, drawdown and Sharpe. The stop on its own is a disaster
+because it lets trades run until they get stopped out. Compared with a random
+holding period, the package is consistently better, but **not significant on
+its own** (p 0.10–0.22).
+
+**E. Full strategy (entries + signal exits + stop) vs buy-and-hold:**
+
+| | BTC | MSTR | MSTU |
+|---|---|---|---|
+| Return vs B&H | +58% vs +29% | +245% vs +29% | +677% vs −89% |
+| MDD vs B&H | −28% vs −53% | −22.5% vs −83% | −42% vs −99% |
+| Sharpe vs B&H | 0.97 vs 0.44 | 1.55 vs 0.55 | 1.48 vs 0.35 |
+| Block bootstrap P(excess return ≤ 0) | 0.37 | 0.22 | **0.04** |
+| Block bootstrap P(Sharpe ≤ B&H) | 0.22 | 0.06 | **0.04** |
+| Random-timing null, p(null ≥ strategy) | 0.10 | **0.02** | **0.01** |
+| Rolling 6-month windows beating B&H | 58% | 73% | 83% |
+| Log excess by year (2024 / 2025 / 2026) | −0.28 / +0.28 / +0.20 | −0.32 / +0.96 / +0.35 | +0.27 / +2.65 / +1.38 |
+
+- **MSTU** beats buy-and-hold significantly on every test. Its benchmark,
+  however, is a 2× product that decays in volatile markets (B&H −89%), which
+  makes it easy to beat.
+- **MSTR** has clear timing skill: a random timer of the same exposure almost
+  never matches it (p=0.02). Its risk-adjusted edge over B&H is borderline
+  (p=0.06). Its excess *return* over B&H is not significant (p=0.22),
+  because a ~2.5-year sample is too short to rule out luck in a few big moves.
+- **BTC** beats buy-and-hold on drawdown and Sharpe, but none of its
+  return tests are significant.
+- **Reliability:** the strategy lagged buy-and-hold in 2024 (a strong rally
+  it was mostly out of) for BTC and MSTR, and beat it in 2025 and 2026. Its
+  value is in avoiding drawdowns, not in out-earning a bull market.
+
 ## Caveats
 
 - **Small sample:** ~8 trades per sleeve, with 7 executed entries

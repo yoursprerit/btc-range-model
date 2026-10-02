@@ -23,6 +23,16 @@ sleeve (BTC · MSTR · MSTU by default; ETH via --assets):
      drawdown is at least as shallow as the real exits'.  Low p ⇒ the exits
      genuinely cut drawdown beyond what an equal-length hold would.
 
+  D. Exit PACKAGE (signal exit + fixed stop scored together) — real entries
+     under live / signal-only / stop-only exits, against random holds drawn
+     from all observed holds with NO stop (so the stop is credited to the
+     package, unlike B/C) → p for return, MDD and Sharpe.
+
+  E. Full strategy vs buy-and-hold — circular block bootstrap of the paired
+     daily returns (P(excess ≤ 0), P(Sharpe ≤ B&H)), a random-timing null
+     (random entries at the live rate + random holds), and reliability: share
+     of rolling 126-bar windows beating B&H plus per-calendar-year excess.
+
 The simulator in B/C mirrors btc_ct_engine._run_bt (signal exits, fixed stop,
 SL5 regime-adaptive re-entry, post-stop override); the "observed" line is the
 simulator under the real rules and is printed next to the engine's own result
@@ -63,6 +73,9 @@ START = "2024-01-01"
 HORIZONS = (1, 3, 5, 10, 20)
 EXEC_HORIZONS = (3, 5, 10, 20)
 SL_COOLDOWN = 10            # _run_bt: re-entry after a stop waits 10 bars unless bull
+BARS_PER_YEAR = 365         # CT bars are calendar-daily (equity sleeves carry fills over weekends)
+BLOCK = 20                  # block-bootstrap block length (~1 month)
+ROLL = 126                  # rolling reliability window (~6 months of bars)
 
 
 # ── data ─────────────────────────────────────────────────────────────────────
@@ -232,7 +245,110 @@ def run_sleeve(key, dates, sigs, px_all, n_sims, seed):
           f"  observed {np.expm1(mdd):+7.1%}  p={np.mean(ext_null[:, 1] >= mdd):.3f}")
     print(f"    worst in-trade DD     null median {np.expm1(np.median(ext_null[:, 2])):+7.1%}"
           f"  observed {np.expm1(worst):+7.1%}  p={np.mean(ext_null[:, 2] >= worst):.3f}")
+
+    exit_package(lp, b0, entry, exit_sig, stop, bull, override_ok, tr_obs, pos_obs, n_sims, rng)
+    vs_buy_hold(lp, b0, dates, entry, tr_obs, pos_obs, n_sims, rng)
     print()
+
+
+def sharpe(lp, pos, b0):
+    r = (np.expm1(np.r_[0.0, np.diff(lp)]) * pos)[b0 + 1:]
+    return float(r.mean() / r.std() * np.sqrt(BARS_PER_YEAR)) if r.std() > 0 else 0.0
+
+
+def exit_package(lp, b0, entry, exit_sig, stop, bull, override_ok, tr_obs, pos_obs, n_sims, rng):
+    """D. Exit = signal exit + fixed stop, scored as ONE package.
+
+    Same real entries throughout; only the exit rule changes.  The null holds
+    each trade for a random length drawn from ALL observed holds (stopped ones
+    included) with NO stop, so the stop's contribution is credited to the
+    package instead of being kept in the null as in B/C."""
+    n = len(lp)
+    no_exit = np.zeros(n, bool)
+    variants = [("signal + stop (live)", exit_sig, stop, override_ok),
+                ("signal only", exit_sig, None, override_ok),
+                ("stop only", no_exit, stop, override_ok)]
+    print(f"\n  D. Exit package — real entries, exit rule varied "
+          f"(stop {'none — package = signal only' if stop is None else f'−{stop:.0%}'})")
+    print(f"    {'exit rule':24s} {'trades':>6s} {'return':>9s} {'MDD':>8s} {'Sharpe':>7s}")
+    for name, ex, st, ovr in variants:
+        if st is None and ex is no_exit:
+            continue
+        tr, pos = simulate(lp, b0, entry, ex, st, bull, ovr)
+        tot, mdd, _ = score(lp, tr, pos)
+        print(f"    {name:24s} {len(tr):6d} {np.expm1(tot):+9.1%} {np.expm1(mdd):+8.1%} {sharpe(lp, pos, b0):7.2f}")
+    tot, mdd, _ = score(lp, tr_obs, pos_obs)
+    durs = np.array([j - i for i, j, _ in tr_obs] or [1])
+    null = []
+    for _ in range(n_sims):
+        tr, pos = simulate(lp, b0, entry, no_exit, None, bull, np.zeros(n, bool),
+                           hold_fn=lambda i: int(rng.choice(durs)))
+        null.append((*score(lp, tr, pos)[:2], sharpe(lp, pos, b0)))
+    null = np.array(null)
+    sh = sharpe(lp, pos_obs, b0)
+    print(f"    {'random holds, no stop':24s} {'':6s} {np.expm1(np.median(null[:, 0])):+9.1%} "
+          f"{np.expm1(np.median(null[:, 1])):+8.1%} {np.median(null[:, 2]):7.2f}   ← null median")
+    print(f"    package p-values vs null:  return p={np.mean(null[:, 0] >= tot):.3f}  "
+          f"MDD p={np.mean(null[:, 1] >= mdd):.3f}  Sharpe p={np.mean(null[:, 2] >= sh):.3f}")
+
+
+def vs_buy_hold(lp, b0, dates, entry, tr_obs, pos_obs, n_sims, rng):
+    """E. Does the full strategy (entries + signal exits + stop) beat buy-and-hold,
+    and how reliably?"""
+    n = len(lp)
+    r_bh = np.expm1(np.r_[0.0, np.diff(lp)])[b0 + 1:]
+    r_st = r_bh * pos_obs[b0 + 1:]
+    tot_st, tot_bh = np.log1p(r_st).sum(), np.log1p(r_bh).sum()
+    obs_ex = tot_st - tot_bh
+    sh_st, sh_bh = sharpe(lp, pos_obs, b0), sharpe(lp, np.ones(n), b0)
+    bh_lp = lp[b0:] - lp[b0]
+    bh_mdd = float((bh_lp - np.maximum.accumulate(bh_lp)).min())
+    st_mdd = score(lp, tr_obs, pos_obs)[1]
+
+    # circular block bootstrap of the PAIRED daily returns (keeps vol clustering
+    # and the strategy/B&H dependence) → distribution of log excess & Sharpe gap
+    m = len(r_bh)
+    nb = int(np.ceil(m / BLOCK))
+    ex_bs, dsh_bs = [], []
+    for _ in range(n_sims):
+        idx = ((rng.integers(0, m, nb)[:, None] + np.arange(BLOCK)) % m).ravel()[:m]
+        a, b = r_st[idx], r_bh[idx]
+        ex_bs.append(np.log1p(a).sum() - np.log1p(b).sum())
+        sa = a.mean() / a.std() if a.std() > 0 else 0.0
+        dsh_bs.append((sa - b.mean() / b.std()) * np.sqrt(BARS_PER_YEAR))
+    ex_bs, dsh_bs = np.array(ex_bs), np.array(dsh_bs)
+    lo, hi = np.percentile(ex_bs, [5, 95])
+
+    # random-timing null: random entries at the live rate, random holds, no stop
+    p_ent = entry[b0:].mean()
+    durs = np.array([j - i for i, j, _ in tr_obs] or [1])
+    zero = np.zeros(n, bool)
+    rt = []
+    for _ in range(n_sims):
+        tr, pos = simulate(lp, b0, rng.random(n) < p_ent, zero, None, zero, zero,
+                           hold_fn=lambda i: int(rng.choice(durs)))
+        rt.append(score(lp, tr, pos)[0])
+    rt = np.array(rt)
+
+    # reliability: rolling windows + calendar years
+    cs_st = np.r_[0.0, np.cumsum(np.log1p(r_st))]
+    cs_bh = np.r_[0.0, np.cumsum(np.log1p(r_bh))]
+    wins = [(cs_st[k + ROLL] - cs_st[k]) > (cs_bh[k + ROLL] - cs_bh[k])
+            for k in range(0, m - ROLL + 1)]
+    yrs = pd.Series(np.log1p(r_st) - np.log1p(r_bh), index=dates[b0 + 1:]).groupby(
+        dates[b0 + 1:].year).sum()
+
+    print(f"\n  E. Full strategy (entries + signal exits + stop) vs buy-and-hold")
+    print(f"    return {np.expm1(tot_st):+.1%} vs B&H {np.expm1(tot_bh):+.1%}  ·  "
+          f"MDD {np.expm1(st_mdd):+.1%} vs {np.expm1(bh_mdd):+.1%}  ·  "
+          f"Sharpe {sh_st:.2f} vs {sh_bh:.2f}")
+    print(f"    block bootstrap ({BLOCK}-bar blocks): log excess {obs_ex:+.2f}  "
+          f"90% CI [{lo:+.2f}, {hi:+.2f}]  P(excess ≤ 0)={np.mean(ex_bs <= 0):.3f}  "
+          f"P(Sharpe ≤ B&H)={np.mean(dsh_bs <= 0):.3f}")
+    print(f"    random-timing null (same entry rate & holds): median {np.expm1(np.median(rt)):+.1%}  "
+          f"p(null ≥ strategy)={np.mean(rt >= tot_st):.3f}")
+    print(f"    rolling {ROLL}-bar windows beating B&H: {np.mean(wins):.0%} of {len(wins)}  ·  "
+          "by year (log excess): " + "  ".join(f"{y} {v:+.2f}" for y, v in yrs.items()))
 
 
 def main():
