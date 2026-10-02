@@ -1,15 +1,16 @@
 {
- "fingerprint": "2026-09-30|eb01b4e0a89246e5d9dd70b0b4fd5e9e756922fadb574267bfb662216b646d03",
- "as_of": "2026-09-30",
- "sent_at_utc": "2026-10-01T19:30:28+00:00",
+ "fingerprint": "2026-10-01|c92afcee82be344ec5f4697f4ab994ce03ac939cd572ce3bc6a5bf206d0b501e",
+ "as_of": "2026-10-01",
+ "sent_at_utc": "2026-10-02T19:30:36+00:00",
  "strategy_id": 157698006,
- "capital": 48709.0,
+ "capital": 49088.0,
  "positions": {
+  "ARTY": 184,
   "ERX": 47.0,
-  "GLDM": 99.0,
-  "GRID": 82.0,
-  "OIH": 22,
+  "GLDM": 44,
+  "GRID": 78,
+  "OIH": 10,
   "UGL": 101.0,
-  "XLE": 113
+  "XLE": 41
  }
 }
