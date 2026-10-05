@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-04T12:17:55+00:00",
- "as_of": "2026-10-03",
+ "generated_at_utc": "2026-10-05T12:17:48+00:00",
+ "as_of": "2026-10-04",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -189,18 +189,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-04T12:17:54+00:00",
+  "checked_at_utc": "2026-10-05T12:17:47+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Oct 4, 2026 at 7:15 AM CDT",
+  "anchor_ct": "Oct 5, 2026 at 7:15 AM CDT",
   "equity_close": "2026-10-02",
-  "btc_bar_close_utc": "2026-10-04T12:00:00+00:00"
+  "btc_bar_close_utc": "2026-10-05T12:00:00+00:00"
  },
  "strategy_version": "v1",
- "code_sha": "9860c950ca47",
+ "code_sha": "c41a9134a049",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "5658da2bdf2355f8fe909a41f2d1a54746a0b81050bf987f72acf4e286685a10"
+  "value": "b3b2ac0745a6db58c700fb0c55022a599ee09d0aa619a199758245af37190baf"
  }
 }
