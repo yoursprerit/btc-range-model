@@ -2857,7 +2857,7 @@ C2_SNAPSHOT_PATH = _REPO_ROOT / "data" / "overall" / "c2_positions.json"
 C2_SNAPSHOT_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "c2_positions_archive"
 # The C2 strategy's starting cash (GetStrategyDetails.StartingCash) — used only
 # until a committed snapshot records it.
-C2_STARTING_CASH_DEFAULT = 50_000.0
+C2_STARTING_CASH_DEFAULT = 100_000.0
 # How far (fraction of starting cash) C2's reported account value/return may
 # stray from the account rebuilt from its own fills before the fills win.
 C2_LEDGER_TOLERANCE = 0.05
