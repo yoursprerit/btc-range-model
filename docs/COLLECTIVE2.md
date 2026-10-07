@@ -50,7 +50,7 @@ a second choice.
 **Archives:** each book C2 accepts is also kept verbatim as
 `data/overall/c2_book_archive/<as_of>.json`. The Overall app's **📈 Overall
 strategy P&L → 🎯 As-published record** compounds these books. That record
-was reset to start with the 2026-09-24 book (`C2_RECORD_START` in
+was reset on 2026-10-07 for a new C2 strategy (old files: `data/overall/legacy_c2_157698006/`; `C2_RECORD_START` in
 `app/overall_core.py`), and idle cash earns nothing, as on C2. Each
 rewritten snapshot is also copied to
 `data/overall/c2_positions_archive/<date>.json` (New-York date, last copy of

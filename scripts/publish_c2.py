@@ -621,7 +621,13 @@ def main(argv: list[str] | None = None) -> int:
 
     state_path = Path(args.state)
     fp = book_fingerprint(payload)
-    if args.execute and not args.force and _load_state(state_path).get("fingerprint") == fp:
+    sent = _load_state(state_path)
+    # a marker written for a different C2 strategy (the strategy was reset or
+    # replaced) says nothing about THIS one — never skip on it
+    same_strategy = (not args.strategy_id or not sent.get("strategy_id")
+                     or int(sent["strategy_id"]) == int(args.strategy_id))
+    if (args.execute and not args.force and same_strategy
+            and sent.get("fingerprint") == fp):
         print(f"SKIP: book for {payload.get('as_of')} already sent to C2 (--force to re-send)")
         return 0
 

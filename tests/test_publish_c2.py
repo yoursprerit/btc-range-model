@@ -138,6 +138,12 @@ def test_execute_sends_once_then_skips_the_same_book(tmp_path, monkeypatch):
     assert pc.main(argv) == 0                              # same book → skipped
     assert len(sent) == 1
 
+    # a new strategy id ignores the old strategy's sent-marker
+    argv2 = [a if a != "42" else "43" for a in argv]
+    assert pc.main(argv2) == 0
+    assert len(sent) == 2
+    assert json.loads(state.read_text())["strategy_id"] == 43
+
 
 def test_missing_credentials_abort_without_capital(tmp_path, monkeypatch, capsys):
     import json
