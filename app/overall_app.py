@@ -2070,36 +2070,71 @@ with tab_live:
     _cp_ibkr = get_executed_report(_bucket())
     _cp_c2 = eb.from_c2_snapshot(get_c2_snapshot(_bucket()))
     _CP_C2, _CP_IBKR = "📡 Collective2 model account", "🏦 IBKR account"
-    _cp_opts = ([_CP_C2] if _cp_c2 else []) + ([_CP_IBKR] if _cp_ibkr else [])
+    _CP_WF = "🧪 Walk-forward replay"
+    _cp_opts = [_CP_C2, _CP_IBKR, _CP_WF]
+    # C2 is the default; with no C2 snapshot the replay is (it always exists)
+    _cp_default = 0 if _cp_c2 else _cp_opts.index(_CP_WF)
     _cp_marks = {r["key"]: {"price": r["last_close"], "dchg": r["dchg"]}
                  for r in results}
     _cp_books = get_published_books(_bucket())
+
+    def _replay_positions_report():
+        """The walk-forward replay's latest book as an execution-report-like
+        payload: each funded sleeve's weight × the portfolio value, bought at
+        the engine's entry price for the open position."""
+        _wf = (_PF or {}).get("wf") if _PF else None
+        if not _wf or _wf.get("weights") is None or not len(_wf["weights"]):
+            return None
+        _w = _wf["weights"].iloc[-1]
+        _poss = []
+        for _k, _wt in _w.items():
+            _wt = float(_wt or 0.0)
+            _r = by_key.get(_k)
+            _p = (_r or {}).get("pos") or {}
+            _ep = _p.get("entry_px")
+            if _wt <= 0.0005 or not _ep or not _p.get("in_pos"):
+                continue
+            _poss.append({"key": _k, "symbol": _k,
+                          "shares": _wt * portfolio_value / float(_ep),
+                          "avg_cost": float(_ep), "market_price": 0.0})
+        return {"schema": eb.SCHEMA, "as_of": str(_wf["weights"].index[-1].date()),
+                "generated_at_utc": "", "account_mode": "replay",
+                "mode": "simulated", "positions": _poss}
+
     with st.expander("💼 **Current Positions** — account cost basis × live price",
                      expanded=False):
-        if not _cp_opts:
-            st.info("No account positions are available yet — neither a "
-                    "Collective2 snapshot (`data/overall/c2_positions.json`, "
-                    "written by the **Publish book to Collective2** workflow) "
-                    "nor an IBKR execution report "
-                    "(`data/overall/executed_book.json`).")
+        if st.session_state.get("overall_cp_source") not in _cp_opts:
+            st.session_state.pop("overall_cp_source", None)
+        _cp_src = st.radio("Source", _cp_opts, index=_cp_default,
+                           horizontal=True, key="overall_cp_source",
+                           help="**Collective2** is refreshed by a GitHub "
+                                "Actions workflow after every book it "
+                                "mirrors, so it never waits on a local "
+                                "executor. **IBKR** is the last execution "
+                                "report the executor pushed back. "
+                                "**Walk-forward replay** is the "
+                                "simulated book from the back-test, at "
+                                "the engine's entry prices.")
+        _cp_is_c2 = _cp_src == _CP_C2
+        _cp_is_wf = _cp_src == _CP_WF
+        _cp_report = (_cp_c2 if _cp_is_c2 else
+                      _replay_positions_report() if _cp_is_wf else _cp_ibkr)
+        _cp_broker = "C2" if _cp_is_c2 else ("Replay" if _cp_is_wf else "IBKR")
+        if not _cp_report:
+            st.info({
+                _CP_C2: "No Collective2 snapshot yet "
+                        "(`data/overall/c2_positions.json`, written by the "
+                        "**Publish book to Collective2** workflow).",
+                _CP_IBKR: "No IBKR execution report yet "
+                          "(`data/overall/executed_book.json`).",
+                _CP_WF: "The walk-forward replay has no book to show.",
+            }[_cp_src])
         else:
-            if st.session_state.get("overall_cp_source") not in _cp_opts:
-                st.session_state.pop("overall_cp_source", None)
-            _cp_src = (st.radio("Account", _cp_opts, index=0, horizontal=True,
-                                key="overall_cp_source",
-                                help="**Collective2** is refreshed by a GitHub "
-                                     "Actions workflow after every book it "
-                                     "mirrors, so it never waits on a local "
-                                     "executor. **IBKR** is the last execution "
-                                     "report the executor pushed back.")
-                       if len(_cp_opts) > 1 else _cp_opts[0])
-            _cp_is_c2 = _cp_src == _CP_C2
-            _cp_report = _cp_c2 if _cp_is_c2 else _cp_ibkr
-            _cp_broker = "C2" if _cp_is_c2 else "IBKR"
             # a rebalance whose record never landed leaves names the account
             # has since SOLD in it — drop what a newer, already-traded book
             # took flat, and say so below
-            _cp_exited = eb.exited_since_report(_cp_report, _cp_books)
+            _cp_exited = ({} if _cp_is_wf
+                          else eb.exited_since_report(_cp_report, _cp_books))
             _cp = eb.current_positions(eb.drop_exited(_cp_report, _cp_exited),
                                        _cp_marks)
             if _cp_is_c2:
@@ -2112,6 +2147,13 @@ with tab_live:
                     + (f"Last book mirrored: signal bar **{_cp_report.get('as_of')}**; "
                        if _cp_report.get("as_of") else "")
                     + f"holdings read **{fr.fmt_ct(_cp_report.get('generated_at_utc'))}**.")
+            elif _cp_is_wf:
+                st.caption(
+                    "The **walk-forward replay's book** — a simulation, not an "
+                    "account. Each funded sleeve is sized at its replayed weight "
+                    "× the portfolio value and held from the engine's entry "
+                    "price, marked at the same **live spot**. "
+                    f"Replay bar **{_cp_report.get('as_of')}**.")
             else:
                 _cp_live = (_cp_report.get("account_mode") or "paper").lower() == "live"
                 _cp_dry = (_cp_report.get("mode") or "").lower() == "dry-run"
@@ -2158,7 +2200,7 @@ with tab_live:
                     f"💵 C2 model-account value "
                     f"**${float(_cp_report['net_liq']):,.0f}** (as read with the "
                     "holdings)."))
-            elif not _cp_is_c2 and _cp_report.get("cash"):
+            elif not _cp_is_c2 and not _cp_is_wf and _cp_report.get("cash"):
                 st.caption(_no_tex(
                     f"💵 Uninvested cash in the account: "
                     f"**${float(_cp_report['cash']):,.0f}**"
