@@ -4840,17 +4840,31 @@ with tab_hist:
         st.markdown("")
         with st.expander("💼 **Current Positions** — executed book cost basis × "
                          f"close on {_h_bar.strftime('%b %d, %Y')}", expanded=False):
-            _hcp_recs = get_executed_archive(_bucket())
+            _HCP_C2, _HCP_IBKR = "📡 Collective2 model account", "🏦 IBKR account"
+            _hcp_src = st.radio("Source", [_HCP_C2, _HCP_IBKR], index=0,
+                                horizontal=True, key="overall_hcp_source")
+            _hcp_is_c2 = _hcp_src == _HCP_C2
+            if _hcp_is_c2:
+                # the last C2 snapshot taken on or before the chosen date
+                _hcp_recs = [
+                    {"executed_on": str(ov._ny_date(s_["fetched_at_utc"]).date()),
+                     "as_of": s_.get("book_as_of") or "",
+                     "payload": eb.from_c2_snapshot(s_)}
+                    for s_ in get_c2_archive(_bucket())]
+            else:
+                _hcp_recs = get_executed_archive(_bucket())
             _hcp_rec = eb.record_for(_hcp_recs, _h_sel) if _hcp_recs else None
             if not _hcp_recs:
-                st.info("No archived execution runs yet "
+                st.info("No archived Collective2 snapshots yet "
+                        "(`data/overall/c2_positions_archive/`)." if _hcp_is_c2 else
+                        "No archived execution runs yet "
                         "(`data/overall/executed_archive/`), so there is no "
                         "record of what the account held on this date. This "
                         "section fills in as the IBKR executor rebalances and "
                         "archives each run — one dated record per signal bar.")
             elif _hcp_rec is None:
                 _hcp_first = min(r["executed_on"] for r in _hcp_recs)
-                st.info(f"**{_h_sel}** precedes the executed-book archive — the "
+                st.info(f"**{_h_sel}** precedes the account archive — the "
                         f"first archived run is **{_hcp_first}**. Pick a later "
                         "date to see the account's real cost basis and P&L.")
             else:
@@ -4863,8 +4877,11 @@ with tab_hist:
                 st.caption(
                     "What the **account actually held** on this date, at the "
                     "price it actually paid — the broker's record, not the "
-                    "engine's. Cost basis is the IBKR average fill from the "
-                    f"rebalance executed **{_hcp_rec['executed_on']}** "
+                    "engine's. Cost basis is the "
+                    + ("Collective2 average fill from the snapshot taken"
+                       if _hcp_is_c2 else
+                       "IBKR average fill from the rebalance executed")
+                    + f" **{_hcp_rec['executed_on']}** "
                     f"(signal bar **{_hcp_rec['as_of']}**)"
                     + ("" if _hcp_same else
                        f" — the last run standing on {_h_sel}, so this is the "
@@ -4872,7 +4889,8 @@ with tab_hist:
                     + ("; marked at each sleeve's official close on "
                        f"**{_h_bar.strftime('%b %d, %Y')}**, so the P&L is as "
                        "of that bar, not today. ")
-                    + ("🔴 **LIVE account** — real money." if _hcp_live
+                    + ("" if _hcp_is_c2 else
+                       "🔴 **LIVE account** — real money." if _hcp_live
                        else "🧪 **Paper account.**"))
                 _render_current_positions(
                     _hcp, {r["key"]: r for r in _snap["rows"]},
