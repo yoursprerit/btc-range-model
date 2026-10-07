@@ -407,6 +407,44 @@ def _fetch_coinbase_hourly():
     return cb["close"].astype(float).rename("coinbase_close")
 
 
+_YH_HOSTS = ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com")
+
+
+def _yahoo_hourly_direct(sym, period_days):
+    """Hourly OHLCV straight from Yahoo's chart API via ``requests``.
+
+    The yfinance client frequently gets 429/empty from shared cloud IPs
+    (Streamlit Cloud); a plain request with a browser UA, tried on both Yahoo
+    hosts with a short back-off, usually still succeeds. Returns an empty
+    DataFrame on failure."""
+    end = int(time.time())
+    params = {"interval": "60m", "period1": end - period_days * 86400,
+              "period2": end, "includePrePost": "false"}
+    for attempt in range(2):
+        for host in _YH_HOSTS:
+            try:
+                r = requests.get(f"{host}/v8/finance/chart/{sym}", params=params,
+                                 headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+                if r.status_code != 200:
+                    continue
+                res = r.json()["chart"]["result"][0]
+                ts = res.get("timestamp")
+                if not ts:
+                    continue
+                q = res["indicators"]["quote"][0]
+                df = pd.DataFrame({
+                    "Open": q["open"], "High": q["high"], "Low": q["low"],
+                    "Close": q["close"], "Volume": q["volume"],
+                }, index=pd.to_datetime(ts, unit="s"), dtype=float)
+                df = df.dropna(subset=["Close"])
+                if not df.empty:
+                    return df
+            except Exception:
+                continue
+        time.sleep(1.5)
+    return pd.DataFrame()
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False, max_entries=2)
 def fetch_data():
     SYMS = {"btc":"BTC-USD","eth":"ETH-USD","spx":"^GSPC","ndx":"^IXIC",
@@ -428,8 +466,35 @@ def fetch_data():
                     break
             except Exception:
                 continue
+        if raw.empty:
+            # yfinance client blocked/rate-limited → hit Yahoo's API directly.
+            for days in (729, 365, 180, 59):
+                raw = _yahoo_hourly_direct(sym, days)
+                if not raw.empty:
+                    break
+        if raw.empty:
+            # Keep the column schema so downstream joins/ffill still work; the
+            # committed macro cache (merged below) fills what it can.
+            raw = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"],
+                               index=pd.DatetimeIndex([]), dtype=float)
         parts[name] = _flat(raw, name)
     btc = parts["btc"]
+    if btc.empty:
+        # Yahoo is unreachable for BTC: rebuild the BTC bars from Binance
+        # (CSV history + live top-up), the same source used for the live tail.
+        try:
+            _b = _fetch_binance_hourly()
+            if _b is not None and not _b.empty:
+                _b = _b.rename(columns={c: f"btc_{c}" for c in
+                                        ("open", "high", "low", "close", "volume")})
+                _b.index = pd.to_datetime(_b.index).floor("h")
+                _b = _b[~_b.index.duplicated(keep="last")].sort_index()
+                _cols = ["btc_open", "btc_high", "btc_low", "btc_close", "btc_volume"]
+                if set(_cols).issubset(_b.columns):
+                    _b = _b[_cols].iloc[-24 * 729:]
+                    parts["btc"] = btc = _b
+        except Exception:
+            pass
     if btc.empty:
         st.error(
             "⚠️ Could not fetch live BTC/market data from Yahoo Finance. "
