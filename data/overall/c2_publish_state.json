@@ -1,0 +1,16 @@
+{
+ "fingerprint": "2026-10-06|6a6eb08ee7b5982f2d8fcdc3e681c069583c3c35eed8c074a96e90cf15b17e98",
+ "as_of": "2026-10-06",
+ "sent_at_utc": "2026-10-07T19:30:41+00:00",
+ "strategy_id": 157874453,
+ "capital": 100000.0,
+ "positions": {
+  "ARTY": 365,
+  "ERX": 92,
+  "GLDM": 84,
+  "GRID": 161,
+  "OIH": 19,
+  "UGL": 215,
+  "XLE": 79
+ }
+}

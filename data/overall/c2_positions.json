@@ -1,0 +1,63 @@
+{
+ "schema": "c2-positions/v1",
+ "fetched_at_utc": "2026-10-07T19:30:42+00:00",
+ "strategy_id": 157874453,
+ "book_as_of": "2026-10-06",
+ "model_account_value": 100000.0,
+ "starting_cash": 100000.0,
+ "cash": 100000.0,
+ "c2_return": null,
+ "c2_return_label": null,
+ "positions": [
+  {
+   "key": "ARTY",
+   "symbol": "ARTY",
+   "shares": 365.0,
+   "avg_cost": 80.49,
+   "opened": "2026-10-07T19:30:28Z"
+  },
+  {
+   "key": "GRID",
+   "symbol": "GRID",
+   "shares": 161.0,
+   "avg_cost": 179.84,
+   "opened": "2026-10-07T19:30:33Z"
+  },
+  {
+   "key": "ERX",
+   "symbol": "ERX",
+   "shares": 92.0,
+   "avg_cost": 106.56,
+   "opened": "2026-10-07T19:30:30Z"
+  },
+  {
+   "key": "UGL",
+   "symbol": "UGL",
+   "shares": 215.0,
+   "avg_cost": 44.56,
+   "opened": "2026-10-07T19:30:37Z"
+  },
+  {
+   "key": "OIH",
+   "symbol": "OIH",
+   "shares": 19.0,
+   "avg_cost": 382.9,
+   "opened": "2026-10-07T19:30:35Z"
+  },
+  {
+   "key": "GLDM",
+   "symbol": "GLDM",
+   "shares": 84.0,
+   "avg_cost": 81.25,
+   "opened": "2026-10-07T19:30:32Z"
+  },
+  {
+   "key": "XLE",
+   "symbol": "XLE",
+   "shares": 79.0,
+   "avg_cost": 63.44,
+   "opened": "2026-10-07T19:30:39Z"
+  }
+ ],
+ "closed_trades": []
+}
