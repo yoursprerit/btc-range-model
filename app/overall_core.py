@@ -2772,14 +2772,15 @@ BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "book_archive"
 # The books Collective2 actually RECEIVED — written by scripts/publish_c2.py
 # only after C2 accepted the book — i.e. the PAPER book (idle capital left as
 # cash). The 📈 as-published P&L view compounds these from C2_RECORD_START:
-# the record was reset on 2026-09-25, when C2 became the account of record
-# (IBKR paper trading stopped), and starts with the first book sent after it.
+# the record was reset on 2026-10-07 for a new C2 strategy (the earlier
+# strategy's files are kept under data/overall/legacy_c2_157698006/) and
+# starts with the first book sent to the new strategy.
 C2_BOOK_ARCHIVE_DIR = _REPO_ROOT / "data" / "overall" / "c2_book_archive"
-C2_RECORD_START = "2026-09-24"
-# Default start of the as-published P&L window: the day C2 first traded the
-# record's opening book (2026-09-24's book, filled near the 2026-09-25 close)
+C2_RECORD_START = "2026-10-05"
+# Default start of the as-published P&L window: the day C2 first trades the
+# new strategy's opening book (sent 2026-10-07, filled near that day's close)
 # — that close is the cost basis, so the window measures only what C2 held.
-C2_PNL_DEFAULT_START = "2026-09-25"
+C2_PNL_DEFAULT_START = "2026-10-07"
 
 # Deliberate strategy-logic version — single source of truth (and bump
 # instructions) in ``app/strategy_version.py``, dependency-light so every UI
