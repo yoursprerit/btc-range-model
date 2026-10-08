@@ -3000,9 +3000,10 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
     """The C2 model account's performance, every dollar figure per $1 of its
     starting cash (``× portfolio value`` re-scales it, e.g. to $100,000).
 
-    ``total_ret`` is C2's OWN reported return (``c2_return``) when the
-    snapshot carries it — so the headline matches C2's site — else the
-    model-account value ÷ starting cash (``value_ret``, always given);
+    ``total_ret`` is the account rebuilt from C2's fills (``ledger_ret``) when
+    the ledger is complete; otherwise C2's OWN reported return (``c2_return``)
+    when the snapshot carries it, else the model-account value ÷ starting
+    cash (``value_ret``, always given);
     ``value`` is ``1 + total_ret``, as of the latest snapshot (``value_asof``,
     normally the after-close read).  ``curve`` is the account value per
     snapshot day (New York),
@@ -3013,9 +3014,9 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
 
     ``ledger_ret`` is the account rebuilt from those fills (realized +
     unrealized) when every open position is marked and no exit is pending;
-    if C2's figure strays from it by more than ``C2_LEDGER_TOLERANCE``,
-    ``c2_mismatch`` is set and ``total_ret``/``value`` and the latest curve
-    point use the fills instead.  ``cash`` is starting cash + realized −
+    whenever it can be built ``total_ret``/``value`` and the latest curve
+    point use the fills; if C2's figure also strays from it by more than
+    ``C2_LEDGER_TOLERANCE``, ``c2_mismatch`` is set to warn.  ``cash`` is starting cash + realized −
     open cost basis (C2's ``Cash`` field only when that can't be built)."""
     if not snap or not snap.get("model_account_value"):
         return None
@@ -3053,7 +3054,11 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
     # cash, the fills win and the mismatch is flagged.
     c2_mismatch = (ledger_ret is not None
                    and abs(total_ret - ledger_ret) > C2_LEDGER_TOLERANCE)
-    if c2_mismatch:
+    # The fills win whenever the ledger is complete: C2's reported figure is a
+    # point-in-time read (often the ~3:30 PM ET intraday snapshot) and lags
+    # the live marks, so it is only the fallback when the ledger can't be
+    # built.  ``c2_mismatch`` still flags a gross (> tolerance) disagreement.
+    if ledger_ret is not None and log:
         total_ret = ledger_ret
         pts[_ny_date(snap["fetched_at_utc"])] = 1.0 + ledger_ret
     curve = pd.Series(pts).sort_index()

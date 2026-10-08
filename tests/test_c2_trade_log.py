@@ -59,8 +59,11 @@ def test_account_summary_is_per_dollar_of_starting_cash():
     mon = _snap("2026-09-28T19:45:00+00:00", [_pos("GRID", 82, 177.99)],
                 closed=[WGMI_CLOSED], value=48_803.0)
     s = oc.c2_account_summary(mon, [FRI, mon], prices={"GRID": 180.0})
-    assert np.isclose(s["value"] * 100_000, 97_606.0)       # $100k-calibrated
-    assert np.isclose(s["total_ret"], 48_803 / 50_000 - 1)
+    ledger = (-631.12 + 82 * (180.0 - 177.99)) / 50_000
+    assert np.isclose(s["value"] * 100_000, 100_000 * (1 + ledger))  # $100k-calibrated
+    # headline = the account rebuilt from C2's fills at the given prices
+    assert np.isclose(s["ledger_ret"], ledger) and np.isclose(s["total_ret"], ledger)
+    assert np.isclose(s["value_ret"], 48_803 / 50_000 - 1)
     assert np.isclose(s["realized"] * 50_000, -631.12)
     assert s["n_closed"] == 1 and s["wins"] == 0 and s["n_pending"] == 0
     assert s["curve"].index[0] == pd.Timestamp("2026-09-23")
@@ -123,7 +126,9 @@ def test_c2_value_that_contradicts_its_own_fills_falls_back_to_the_ledger():
     cost = sum(p["shares"] * p["avg_cost"] for p in held)
     assert np.isclose(s["cash"] * 50_000, 50_000 - 578.5 - cost)
     assert np.isclose(s["curve"].iloc[-1], 1 + ledger) and s["mdd"] > -0.05
-    # a C2 figure in line with the fills is kept as reported
+    # a C2 figure in line with the fills is not flagged, but the fills still
+    # drive the headline (C2's read is point-in-time and can lag the marks)
     ok = oc.c2_account_summary(tue, [FRI, tue],
                                prices={k: v + 0.5 for k, v in px.items()})
-    assert not ok["c2_mismatch"] and np.isclose(ok["total_ret"], -0.0305)
+    assert not ok["c2_mismatch"] and np.isclose(ok["total_ret"], ok["ledger_ret"])
+    assert np.isclose(ok["c2_return"], -0.0305)
