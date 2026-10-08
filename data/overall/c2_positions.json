@@ -1,9 +1,9 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-10-07T22:30:23+00:00",
+ "fetched_at_utc": "2026-10-08T00:09:54+00:00",
  "strategy_id": 157874453,
  "book_as_of": "2026-10-06",
- "model_account_value": 99962.0,
+ "model_account_value": 99963.0,
  "starting_cash": 100000.0,
  "cash": 49134.5,
  "c2_return": -0.22,
