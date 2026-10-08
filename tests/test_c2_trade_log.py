@@ -132,3 +132,27 @@ def test_c2_value_that_contradicts_its_own_fills_falls_back_to_the_ledger():
                                prices={k: v + 0.5 for k, v in px.items()})
     assert not ok["c2_mismatch"] and np.isclose(ok["total_ret"], ok["ledger_ret"])
     assert np.isclose(ok["c2_return"], -0.0305)
+
+
+def test_c2_replay_trades_a_book_the_session_it_is_published():
+    # Book A (as_of Tue) holds EQ and is sent Wed morning; book B (as_of Wed)
+    # closes EQ and is sent Thu morning.  C2 therefore still holds EQ through
+    # Thursday's move — the as_of-based replay would have exited it Wed close.
+    idx = pd.date_range("2026-10-06", "2026-10-09", freq="D")   # Tue..Fri
+    rets = pd.DataFrame({"EQ": [0.0, 0.01, -0.025, 0.03]}, index=idx)
+    books = [{"as_of": "2026-10-06", "weights": {"EQ": 1.0}, "cash_weight": 0.0,
+              "generated_at_utc": "2026-10-07T12:18:00+00:00"},
+             {"as_of": "2026-10-07", "weights": {}, "cash_weight": 1.0,
+              "generated_at_utc": "2026-10-08T12:17:00+00:00"}]
+    pub = oc.published_book_replay(rets, books, sata_daily=0.0,
+                                   fill_on_sessions=True, fill_on_publish=True)
+    # Wed = cost basis; Thu −2.5% still earned; Fri flat
+    assert pub["equity"].index[0] == pd.Timestamp("2026-10-07")
+    assert np.allclose(pub["ret"].to_numpy(), [0, -0.025, 0])
+    old = oc.published_book_replay(rets, books, sata_daily=0.0,
+                                   fill_on_sessions=True)
+    assert np.allclose(old["ret"].to_numpy(), [0, 0.01, 0, 0])
+    # a book published after the close rolls to the next day
+    late = [dict(books[0], generated_at_utc="2026-10-07T21:00:00+00:00"), books[1]]
+    lt = oc.published_book_replay(rets, late, sata_daily=0.0, fill_on_publish=True)
+    assert lt["equity"].index[0] == pd.Timestamp("2026-10-08")

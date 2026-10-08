@@ -3104,7 +3104,8 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                           version_map: dict | None = None,
                           only_version: str | None = None,
                           min_as_of=None,
-                          fill_on_sessions: bool = False) -> dict | None:
+                          fill_on_sessions: bool = False,
+                          fill_on_publish: bool = False) -> dict | None:
     """Compound the ACTUALLY-PUBLISHED daily books — the exact historical
     record, daily optimiser trims included — into the same shapes the
     walk-forward replay returns (``ret``/``equity``/``weights``/``sata``), so
@@ -3128,6 +3129,16 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     at the NEXT session, so that session is still earned by the previous
     book — a Sunday exit loses Monday's move like the real account did,
     instead of being booked at Friday's close.
+
+    ``fill_on_publish`` — for the C2 record: a book is sent to the broker on
+    the morning AFTER its ``as_of`` bar (``generated_at_utc``) and traded
+    that session (~3:30 PM ET), so it takes effect at the close of its
+    PUBLICATION session, not at its ``as_of`` close.  Until then the
+    previous book is still what the account holds — e.g. a position the new
+    book closes keeps earning (or losing) for that one more session, exactly
+    as in the real account.  A book published after the 4 PM ET close, or
+    with no ``generated_at_utc``, rolls to the next day; ``fill_on_sessions``
+    then moves it to a US trading day.
 
     A LIVE book parks its idle remainder as a real ``SATA`` weights entry
     (``cash_weight`` 0 — see the publisher); that leg is folded back into the
@@ -3170,7 +3181,8 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                 version=str(b.get("strategy_version")
                             or side.get("strategy_version") or "unstamped"),
                 code_sha=(str(b.get("code_sha") or side.get("code_sha") or "")
-                          [:12] or None)))
+                          [:12] or None),
+                generated_at=b.get("generated_at_utc")))
         except Exception:
             continue
     parsed.sort(key=lambda r: r["as_of"])
@@ -3182,6 +3194,8 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
         return None
     for r in parsed:
         eff = r["as_of"]
+        if fill_on_publish:
+            eff = _publish_fill_day(r["as_of"], r.get("generated_at"))
         if fill_on_sessions:
             while not _frs.is_us_trading_day(eff.date()):
                 eff += pd.Timedelta(days=1)
@@ -3238,6 +3252,21 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                 weights=pd.DataFrame(W, index=idx, columns=keys),
                 sata=pd.Series(sata_w, index=idx),
                 books=parsed, version_spans=spans, dropped=sorted(dropped))
+
+
+def _publish_fill_day(as_of: pd.Timestamp, generated_at) -> pd.Timestamp:
+    """The calendar day a book published at ``generated_at`` is traded: the
+    New-York date it was published (the next day if after the 4 PM ET close
+    or unknown), never earlier than ``as_of``."""
+    try:
+        t = pd.Timestamp(generated_at)
+        t = (t.tz_localize("UTC") if t.tzinfo is None else t).tz_convert(
+            "America/New_York")
+        day = pd.Timestamp(t.date()) + (pd.Timedelta(days=1) if t.hour >= 16
+                                        else pd.Timedelta(0))
+    except Exception:
+        day = as_of + pd.Timedelta(days=1)
+    return max(day, as_of)
 
 
 def _book_legs(b: dict) -> tuple:
@@ -3321,7 +3350,8 @@ def pending_book_tickets(books: list[dict], covered_through,
     # the book in the matrix's last row is the newest one published strictly
     # before that bar; everything from it onwards is still unrepresented
     rep = [i for i, b in enumerate(parsed)
-           if cut is not None and pd.Timestamp(b["as_of"]) < cut]
+           if cut is not None
+           and pd.Timestamp(b.get("effective") or b["as_of"]) < cut]
     start = rep[-1] if rep else 0
     out = [t for t in (_book_ticket(prev, cur, min_delta)
                        for prev, cur in zip(parsed[start:],
