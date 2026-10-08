@@ -2023,6 +2023,14 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     if not np.isnan(sent_now):
         mood = "Bullish" if sent_now >= 60 else "Bearish" if sent_now <= 40 else "Neutral"
         cols[ci].metric(cfg.sentiment_label, f"{sent_now:.0f}/100", mood); ci += 1
+    if cfg.strategy_mode == "macd" and ci <= 3:
+        # live histogram on d_df (incl. the in-progress bar) — refreshes with
+        # the same cached data as the close/sentiment metrics beside it
+        _lh = bt.macd_hist_array(cfg, d_df["px_close"].dropna().to_numpy(float))
+        if len(_lh):
+            cols[ci].metric(f"MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist",
+                            f"{_lh[-1]:+.4f}", "above signal" if _lh[-1] > 0 else "below signal",
+                            delta_color="normal" if _lh[-1] > 0 else "inverse"); ci += 1
     if ci <= 4:
         _bull = sigs.get("bull_regime") if sigs else None
         cols[4].metric("Market regime", ("🐂 BULL" if _bull else "🐻 BEAR/NEUTRAL") if _bull is not None else "—",
