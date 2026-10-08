@@ -1166,6 +1166,16 @@ def position_panel(label, col, col_container, end=None):
         return f"<table style='font-size:12px;color:#334155;width:100%;border-collapse:collapse'>{body}</table>"
 
     trig = "U1 + Pure-Regime gate" if IS_DIV else TUI["cond"]
+    # macd mode: live histogram on completed bars (the traded quantity, long > 0)
+    macd_row = None
+    if cfg.strategy_mode == "macd":
+        _pc = preds[col] if end is None else preds[preds["target_date"] <= pd.Timestamp(end)][col]
+        _pc = _pc.dropna().to_numpy(float)
+        if len(_pc):
+            _mh = float(bt.macd_hist_array(cfg, _pc)[-1])
+            _mc = "#16a34a" if _mh > 0 else "#dc2626"
+            macd_row = (f"MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist",
+                        f"<b style='color:{_mc}'>{_mh:+.4f}</b>")
     if r["in_pos_now"] and r["entry_px"]:
         e_px = r["entry_px"]; e_date = pd.Timestamp(r["entry_date"])
         upnl = (px / e_px - 1) * 100; col_pnl = "#16a34a" if upnl >= 0 else "#dc2626"
@@ -1179,6 +1189,8 @@ def position_panel(label, col, col_container, end=None):
         else:
             rows_.append(("Exit", "signal-only — <b>no fixed stop</b>"))
         rows_.append(("Days held", f"{days}d"))
+        if macd_row:
+            rows_.insert(3, macd_row)
         html = (
             f"<div style='background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px;'>"
             f"<div style='font-size:13px;font-weight:700;color:#15803d;margin-bottom:6px;'>"
@@ -1203,13 +1215,15 @@ def position_panel(label, col, col_container, end=None):
                     ("Exit", f"{x_date.strftime('%b %d, %Y')} @ ${lt['exit_px']:,.2f}"),
                     ("Trade P&amp;L", f"<b style='color:{pcol}'>{ret:+.2f}%</b>"),
                     ("Days held", f"{(x_date - e_date).days}d"),
-                    ("Now", f"⚪ FLAT · ${px:,.2f}, awaiting next entry")]) + "</div>")
+                    ("Now", f"⚪ FLAT · ${px:,.2f}, awaiting next entry")]
+                   + ([macd_row] if macd_row else [])) + "</div>")
         col_container.markdown(html, unsafe_allow_html=True)
     else:
         col_container.markdown(
             f"<div style='background:#f8fafc;border:2px solid #94a3b8;border-radius:10px;"
             f"padding:12px 14px;font-size:13px;'><b>⚪ {label} — FLAT</b><br>"
-            f"<span style='color:#475569'>last close ${px:,.2f} · no trades yet, awaiting entry</span></div>",
+            f"<span style='color:#475569'>last close ${px:,.2f} · no trades yet, awaiting entry"
+            + (f"<br>{macd_row[0]} {macd_row[1]}" if macd_row else "") + "</span></div>",
             unsafe_allow_html=True)
 
 
