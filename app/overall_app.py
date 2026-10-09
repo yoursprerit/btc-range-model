@@ -50,6 +50,7 @@ import streamlit as st
 import plotly.graph_objects as go
 
 import overall_core as ov
+import overall_frictions as fx
 import ticker_config
 import freshness as fr
 import executed_book as eb          # cost-basis positions from the IBKR report
@@ -339,6 +340,24 @@ def get_portfolio(bucket: str, profile: str):
     p = allp["profiles"][profile]
     return dict(results=allp["results"], computed_at=allp["computed_at"],
                 rets=allp["rets"], bm=allp["bm"], profile=profile, **p)
+
+
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
+def get_sleeve_prices(bucket: str):
+    """Daily close per sleeve (share-price scale for the IBKR commission
+    schedule), aligned to the strategy returns calendar."""
+    allp = get_all_profiles(bucket)
+    if not allp:
+        return None
+    cols = {}
+    for r in allp["results"]:
+        try:
+            ser = ov.asset_close_series(r)
+        except Exception:
+            ser = None
+        if ser is not None:
+            cols[r["key"]] = ser[~ser.index.duplicated()]
+    return pd.DataFrame(cols).reindex(allp["rets"].index) if cols else None
 
 
 def get_profile_comparison(bucket: str):
@@ -2385,6 +2404,44 @@ with tab_live:
             _strat_label = STRAT_CURVE
             _curves_view = _PF["curves"]
             _curve_all = _PF["curves"][STRAT_CURVE]
+            # ── realism toggles: IBKR Pro costs and capital-gains taxes ──
+            _fx_cols = st.columns(2)
+            with _fx_cols[0]:
+                _fx_costs = st.radio(
+                    "🏦 Brokerage costs", ["Without brokerage costs",
+                                          "With IBKR Pro costs"],
+                    index=0, horizontal=True, key="overall_pnl_costs",
+                    help="**IBKR Pro Fixed** pricing for US stocks/ETFs on "
+                         "every order the book places: $0.005/share, $1.00 "
+                         "minimum, capped at 1% of trade value, plus the SEC "
+                         "fee and FINRA TAF on sales. Shares are sized off "
+                         "each sleeve's own price. Resizes under 0.25% of the "
+                         "portfolio are skipped. All metrics, the growth "
+                         "curve and portfolio value below become net of these "
+                         "costs.") == "With IBKR Pro costs"
+            with _fx_cols[1]:
+                _fx_taxes = st.radio(
+                    "🧾 Taxes", ["Without taxes", "With capital-gains taxes"],
+                    index=0, horizontal=True, key="overall_pnl_taxes",
+                    help="Federal tax on realized gains for a married-filing-"
+                         "jointly household with $300–350k of other income "
+                         "(2025 brackets): short-term gains (held ≤ 1 year) "
+                         "at ordinary rates (24%, rising to 32% on large "
+                         "gains) and long-term gains at 15%, plus the 3.8% "
+                         "NIIT on both. Lots are sold FIFO; a running "
+                         "short/long-term tally is kept per calendar year, "
+                         "with netting, the $3,000 ordinary-income loss "
+                         "offset and loss carry-forwards. Tax is accrued "
+                         "when gains are realized and paid from the cash leg "
+                         "at each year-end.") == "With capital-gains taxes"
+            _fx_income = fx.INCOME_DEFAULT
+            if _fx_taxes:
+                _fx_income = st.number_input(
+                    "Household income (other than this portfolio)",
+                    min_value=fx.INCOME_MIN, max_value=fx.INCOME_MAX,
+                    value=fx.INCOME_DEFAULT, step=5_000, key="overall_pnl_income",
+                    help="Between $300k and $350k. Strategy gains are stacked "
+                         "on top of this income to find the bracket.")
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
         # the as-published (C2) record opens on the day C2 first traded it;
         # the replay and buy & hold keep their long look-back
@@ -2471,6 +2528,26 @@ with tab_live:
         _bh_w = ({k: float(_wf["weights"][k]
                            .loc[pd.Timestamp(_start_sel):].mean())
                   for k in _wf["weights"].columns} if _bh_src else {})
+        # replay only: re-play the book in dollars with IBKR costs / taxes and
+        # swap the net curve in, so every metric downstream is net of them
+        _fx_sim = None
+        _fx_on = (not _actual and not _bh_src and not _c2_pending
+                  and (_fx_costs or _fx_taxes))
+        if _fx_on:
+            _fx_sim = fx.simulate_frictions(
+                _PF["rets"], _wf["weights"], _wf["sata"],
+                get_sleeve_prices(_bucket()), _start_sel, end=_end_arg,
+                portfolio_value=float(portfolio_value), costs=_fx_costs,
+                taxes=_fx_taxes, income=float(_fx_income),
+                sata_daily=ov.SATA_DAILY)
+            if _fx_sim is not None:
+                _a0 = _fx_sim["net"].index[0]
+                _net_curve = _curve_all.copy()
+                _net_curve.loc[_a0:] = (float(_curve_all.loc[_a0])
+                                        * _fx_sim["net"].reindex(
+                                            _curve_all.loc[_a0:].index).ffill())
+                _curve_all = _net_curve
+                _curves_view = {**_curves_view, STRAT_CURVE: _net_curve}
         _sm = None if _c2_pending else ov.slice_metrics(_curve_all, _start_sel)
         if _c2_pending:
             st.info(f"🎯 The as-published record **follows the books "
@@ -2515,6 +2592,39 @@ with tab_live:
                     f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
                     f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
+            if _fx_on and _fx_sim is not None:
+                _fx_gross_end = portfolio_value * float(_fx_sim["gross"].iloc[-1])
+                _fx_bits = [f"gross ${_fx_gross_end:,.0f}"]
+                if _fx_costs:
+                    _fx_bits.append(f"IBKR commissions & fees "
+                                    f"**${_fx_sim['commissions']:,.0f}** "
+                                    f"({_fx_sim['orders']:,} orders)")
+                if _fx_taxes:
+                    _fx_bits.append(f"capital-gains tax (paid + accrued) "
+                                    f"**${_fx_sim['taxes']:,.0f}**")
+                st.caption("🏦🧾 Net of frictions — " + " · ".join(_fx_bits)
+                           + f" → net ${portfolio_value*float(_fx_sim['net'].iloc[-1]):,.0f}. "
+                           "Every metric, the growth curve and portfolio value "
+                           "below are net; the trade log / attribution tables "
+                           "show the gross book.")
+                if _fx_taxes and _fx_sim["years"]:
+                    with st.expander("🧾 Realized gains & tax by calendar year"):
+                        _ytab = pd.DataFrame([{
+                            "Year": f"{y['year']}" + (" (to date)" if y.get("partial") else ""),
+                            "ST gains": y["st_gain"], "ST losses": -y["st_loss"],
+                            "LT gains": y["lt_gain"], "LT losses": -y["lt_loss"],
+                            "Net ST": y["net_st"], "Net LT": y["net_lt"],
+                            "Loss carried in (ST/LT)": y["carry_in_st"] + y["carry_in_lt"],
+                            "Tax": y["tax"]} for y in _fx_sim["years"]])
+                        st.dataframe(
+                            _ytab.style.format({c: "${:,.0f}" for c in _ytab.columns
+                                                if c != "Year"}),
+                            hide_index=True, use_container_width=True)
+                        st.caption("Federal only (no state tax), MFJ 2025 brackets "
+                                   "held constant, wash-sale rules ignored, "
+                                   "unrealized gains untaxed. Tax on the "
+                                   "current year is an accrual that moves with "
+                                   "each realized gain.")
             pm = st.columns(6)
             _pl_lbl = "Buy & hold P&L" if _bh_src else "Strategy P&L"
             pm[0].metric(_pl_lbl, f"{_sm['total_ret']*100:+.1f}%",
