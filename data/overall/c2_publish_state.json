@@ -1,15 +1,13 @@
 {
- "fingerprint": "2026-10-07|479d9946c9e16152848da42b67ec44b8bd1d7eeff23d2c84952191d4cc28ea1a",
- "as_of": "2026-10-07",
- "sent_at_utc": "2026-10-08T19:30:33+00:00",
+ "fingerprint": "2026-10-08|3c6e89bc3bd36d049cde04883ebb1851524307afbd958cefc61ffe720a9fc47d",
+ "as_of": "2026-10-08",
+ "sent_at_utc": "2026-10-09T19:30:31+00:00",
  "strategy_id": 157874453,
- "capital": 100308.0,
+ "capital": 100842.0,
  "positions": {
   "ERX": 92.0,
-  "GLDM": 214,
-  "GRID": 161.0,
+  "GRID": 168,
   "OIH": 46,
-  "UGL": 215.0,
-  "XLE": 227
+  "XLE": 459
  }
 }
