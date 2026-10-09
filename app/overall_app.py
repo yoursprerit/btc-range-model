@@ -2322,6 +2322,33 @@ with tab_live:
         _c2_pending = _actual and _bookrep is None
         if _c2_pending:
             _actual = False
+        _fx_costs, _fx_taxes, _fx_income = False, False, fx.INCOME_DEFAULT
+        def _tax_controls():
+            """Taxes radio (+ income) shared by the replay and as-published views."""
+            _t = st.radio(
+                "🧾 Taxes", ["Without taxes", "With capital-gains taxes"],
+                index=0, horizontal=True, key="overall_pnl_taxes",
+                help="Federal tax on realized gains for a married-filing-"
+                     "jointly household with $300–350k of other income "
+                     "(2025 brackets): short-term gains (held ≤ 1 year) "
+                     "at ordinary rates (24%, rising to 32% on large "
+                     "gains) and long-term gains at 15%, plus the 3.8% "
+                     "NIIT on both. Lots are sold FIFO; a running "
+                     "short/long-term tally is kept per calendar year, "
+                     "with netting, the $3,000 ordinary-income loss "
+                     "offset and loss carry-forwards. Tax is accrued "
+                     "when gains are realized and paid from the cash leg "
+                     "at each year-end.") == "With capital-gains taxes"
+            _inc = fx.INCOME_DEFAULT
+            if _t:
+                _inc = st.number_input(
+                    "Household income (other than this portfolio)",
+                    min_value=fx.INCOME_MIN, max_value=fx.INCOME_MAX,
+                    value=fx.INCOME_DEFAULT, step=5_000, key="overall_pnl_income",
+                    help="Between $300k and $350k. Strategy gains are stacked "
+                         "on top of this income to find the bracket.")
+            return _t, _inc
+
         if _bh_src:
             # buy & hold in the replay's shape: an equal target weight in every
             # instrument every day (renormalised over the sleeves that have
@@ -2386,6 +2413,7 @@ with tab_live:
                             **_PF["curves"]}
             _curve_all = _bookrep["equity"]
             _render_c2_account(portfolio_value)
+            _fx_taxes, _fx_income = _tax_controls()
             if _bookrep["dropped"]:
                 st.caption("⚠️ Book keys not in today's universe (weight "
                            "earns nothing): "
@@ -2420,28 +2448,7 @@ with tab_live:
                          "curve and portfolio value below become net of these "
                          "costs.") == "With IBKR Pro costs"
             with _fx_cols[1]:
-                _fx_taxes = st.radio(
-                    "🧾 Taxes", ["Without taxes", "With capital-gains taxes"],
-                    index=0, horizontal=True, key="overall_pnl_taxes",
-                    help="Federal tax on realized gains for a married-filing-"
-                         "jointly household with $300–350k of other income "
-                         "(2025 brackets): short-term gains (held ≤ 1 year) "
-                         "at ordinary rates (24%, rising to 32% on large "
-                         "gains) and long-term gains at 15%, plus the 3.8% "
-                         "NIIT on both. Lots are sold FIFO; a running "
-                         "short/long-term tally is kept per calendar year, "
-                         "with netting, the $3,000 ordinary-income loss "
-                         "offset and loss carry-forwards. Tax is accrued "
-                         "when gains are realized and paid from the cash leg "
-                         "at each year-end.") == "With capital-gains taxes"
-            _fx_income = fx.INCOME_DEFAULT
-            if _fx_taxes:
-                _fx_income = st.number_input(
-                    "Household income (other than this portfolio)",
-                    min_value=fx.INCOME_MIN, max_value=fx.INCOME_MAX,
-                    value=fx.INCOME_DEFAULT, step=5_000, key="overall_pnl_income",
-                    help="Between $300k and $350k. Strategy gains are stacked "
-                         "on top of this income to find the bracket.")
+                _fx_taxes, _fx_income = _tax_controls()
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
         # the as-published (C2) record opens on the day C2 first traded it;
         # the replay and buy & hold keep their long look-back
@@ -2531,7 +2538,7 @@ with tab_live:
         # replay only: re-play the book in dollars with IBKR costs / taxes and
         # swap the net curve in, so every metric downstream is net of them
         _fx_sim = None
-        _fx_on = (not _actual and not _bh_src and not _c2_pending
+        _fx_on = (not _bh_src and not _c2_pending
                   and (_fx_costs or _fx_taxes))
         if _fx_on:
             _fx_sim = fx.simulate_frictions(
@@ -2539,15 +2546,20 @@ with tab_live:
                 get_sleeve_prices(_bucket()), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
-                sata_daily=ov.SATA_DAILY)
+                sata_daily=0.0 if _actual else ov.SATA_DAILY)
             if _fx_sim is not None:
                 _a0 = _fx_sim["net"].index[0]
+                # apply the friction drag (net ÷ gross of the same dollar
+                # re-play) to the displayed curve, so the as-published book's
+                # own fill timing is kept and only costs/taxes are layered on
+                _drag = (_fx_sim["net"] / _fx_sim["gross"])
                 _net_curve = _curve_all.copy()
-                _net_curve.loc[_a0:] = (float(_curve_all.loc[_a0])
-                                        * _fx_sim["net"].reindex(
-                                            _curve_all.loc[_a0:].index).ffill())
+                _tail = _curve_all.loc[_a0:]
+                _net_curve.loc[_a0:] = _tail * _drag.reindex(_tail.index).ffill()
                 _curve_all = _net_curve
-                _curves_view = {**_curves_view, STRAT_CURVE: _net_curve}
+                _curves_view = {**_curves_view,
+                                (STRAT_CURVE_ACTUAL if _actual else STRAT_CURVE):
+                                _net_curve}
         _sm = None if _c2_pending else ov.slice_metrics(_curve_all, _start_sel)
         if _c2_pending:
             st.info(f"🎯 The as-published record **follows the books "
