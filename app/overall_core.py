@@ -4336,7 +4336,7 @@ def live_exit_keys(results: list[dict], spot: dict,
         cfg = r.get("cfg"); close_hist = r.get("close_hist")
         _live_fn = getattr(bt, "trend_long_now_live", None)  # absent on a stale reload
         if cfg is not None and close_hist is not None and _live_fn is not None:
-            long_live = _live_fn(cfg, close_hist, plive)
+            long_live = _live_fn(cfg, close_hist, plive, r.get("version"))
             if long_live is False:          # trend genuinely flips flat on live px
                 out.add(r["key"])
         elif mode == "ma":
@@ -4345,6 +4345,13 @@ def live_exit_keys(results: list[dict], spot: dict,
             ma = r.get("ma_val")
             if ma is not None and plive < ma:
                 out.add(r["key"])
+        # V2 trailing stop: a held position whose live price sits at/below its
+        # trail level is stopped out at the close (the live mirror of the
+        # engine's trail exit; the level only ratchets up, so reading it off
+        # the last close is conservative)
+        trail = p.get("trail_px")
+        if is_hold and trail and plive <= float(trail):
+            out.add(r["key"])
     return out
 
 
@@ -4415,6 +4422,8 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
             continue
         if (r.get("decision") or {}).get("tone") == "buy":
             continue                    # committed entry — not a live "likely"
+        if r.get("gate_ok") is False:
+            continue                    # V2 entry gate not met on the last bar
         plive = (spot.get(r.get("parent")) or {}).get("price")
         if plive is None:
             continue
@@ -4429,7 +4438,7 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
             continue
         _live_fn = getattr(bt, "trend_long_now_live", None)  # absent on a stale reload
         if cfg is not None and close_hist is not None and _live_fn is not None:
-            if _live_fn(cfg, close_hist, plive) is True:  # trend flips long on live px
+            if _live_fn(cfg, close_hist, plive, r.get("version")) is True:  # trend flips long on live px
                 out.add(r["key"])
         elif mode == "ma":
             # fallback for results lacking cfg/close_hist: the naive

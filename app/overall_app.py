@@ -5176,14 +5176,27 @@ with tab_bt:
                    "sleeves than Balanced inside a −22% drawdown budget.")
     st.markdown("")
 
-    m = st.columns(4)
+    # net-of-cost estimate: 5 bp of every unit of notional traded (IBKR Pro
+    # commission + spread), charged on the replay's own daily weight changes
+    _bt_cost_bps = 5.0
+    _bt_traded = (_wf_bt["weights"].diff().abs().sum(axis=1)
+                  + _wf_bt["sata"].diff().abs()).fillna(0.0)
+    _bt_net_ret = _wf_bt["ret"] - _bt_traded.reindex(_wf_bt["ret"].index).fillna(0.0) * _bt_cost_bps / 1e4
+    _bt_net = ov.curve_metrics(ov._equity(_bt_net_ret))
+    m = st.columns(5)
     m[0].metric("Overall strategy — total return", f"{_wfm['total_ret']*100:,.0f}%",
                 delta=f"CAGR {_wfm['cagr']*100:.0f}%")
-    m[1].metric("Max drawdown", f"{_wfm['mdd']*100:.0f}%",
+    m[1].metric(f"Net of {_bt_cost_bps:.0f} bp/trade (est.)", f"{_bt_net['total_ret']*100:,.0f}%",
+                delta=f"Sharpe {_bt_net['sharpe']:.2f}", delta_color="off",
+                help="The same replay with 5 bp of every unit of notional traded "
+                     "deducted each day (an IBKR Pro commission + spread estimate) "
+                     "— the gross figure to its left charges nothing. The 📈 P&L "
+                     "section's 🏦 toggle runs the exact per-order IBKR schedule.")
+    m[2].metric("Max drawdown", f"{_wfm['mdd']*100:.0f}%",
                 delta=f"vs {bm['bh_equal']['mdd']*100:.0f}% buy&hold", delta_color="inverse")
-    m[2].metric("Sharpe", f"{_wfm['sharpe']:.2f}",
+    m[3].metric("Sharpe", f"{_wfm['sharpe']:.2f}",
                 delta=f"vs {bm['bh_equal']['sharpe']:.2f} buy&hold")
-    m[3].metric("Volatility (ann.)", f"{_wfm['vol']*100:.0f}%")
+    m[4].metric("Volatility (ann.)", f"{_wfm['vol']*100:.0f}%")
 
     st.markdown("#### Today's anchor weights (live book)")
     wc = st.columns([2, 1])

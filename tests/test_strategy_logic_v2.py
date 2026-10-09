@@ -437,3 +437,18 @@ def test_health_view_paths():
     assert bsh.view_paths(out, hist, "v1") == (Path("x/strategy_health_v1.json"),
                                                Path("x/health_history_v1.csv"))
     assert bsh.VIEWS == ["combined", "v1", "v2"]
+
+
+# ── live-price mirrors of the V2 rules ────────────────────────────────────
+def test_live_exit_flags_a_breached_trailing_stop_and_entry_respects_the_gate():
+    cfg = tcfg.get_config("GRID")               # any trend config; the trail is on the result
+    held = dict(key="UGL", parent="GLDM", mode="dual_ma", cfg=None, close_hist=None,
+                decision=dict(tone="hold"), pos=dict(in_pos=True, trail_px=45.0),
+                last_close=46.0, bar_close=46.0, version="v2")
+    assert oc.live_exit_keys([held], {"GLDM": {"price": 44.5}}) == {"UGL"}
+    assert oc.live_exit_keys([held], {"GLDM": {"price": 45.5}}) == set()
+    flat = dict(key="WGMI", parent="WGMI", mode="ma_vol", cfg=cfg,
+                close_hist=[10.0, 10.0, 10.0], decision=dict(tone="flat"),
+                pos=dict(in_pos=False), last_close=10.0, bar_close=10.0,
+                version="v2", gate_ok=False)
+    assert oc.live_entry_keys([flat], {"WGMI": {"price": 50.0}}) == set()
