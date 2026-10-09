@@ -19,6 +19,14 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 ```
 
+> ⚙️ **Strategy Logic V2** has traded since **2026-10-09**: rising-SMA gate
+> and trailing stops on the gold dual-MA sleeves, a BTC-above-SMA50 entry gate
+> on WGMI, a SMA20>SMA100 hold rule on REMX, an **adds-only** allocator (held
+> sleeves are never trimmed by the daily tilt) and stop hits that publish a
+> CLOSE.  Every P&L / back-test / historical / health view offers a
+> **Strategy V1 · Strategy V2 · Combined** selector.  See
+> [`OVERALL_STRATEGY.md` §0](OVERALL_STRATEGY.md) and `app/strategy_version.py`.
+
 **Contents:** [Apps](#whats-inside--the-apps) · [Architecture](#application-architecture) · [Strategy](#trading-strategy) · [Methodology](#methodology) · [Results](#results-summary) · [Quick start](#quick-start) · [Live execution](#live-execution-interactive-brokers) · [Repo structure](#repository-structure) · [Docs map](#documentation-map)
 
 ---

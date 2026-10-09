@@ -431,10 +431,19 @@ def _load_daily(cfg: TickerConfig) -> pd.DataFrame:
 
 def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
                   last_close: float, ma_val: float | None,
-                  long_now: bool | None = None) -> dict:
+                  long_now: bool | None = None, gate_ok: bool | None = None,
+                  stopped: str | None = None) -> dict:
     """Resolve a single actionable state for the PARENT signal, reconciling the
     instantaneous read with the strategy's actual executed position.
-    tone ∈ {buy, hold, exit, watch, flat}."""
+    tone ∈ {buy, hold, exit, watch, flat}.
+
+    Strategy Logic V2 extras (trend family): ``stopped`` is the exit reason
+    when the engine's stop/trail fired AT THE LATEST CLOSE — the sim is flat
+    because of the stop, so the instruction is CLOSE (tone exit; the book
+    drops the sleeve and the executor sells; a later re-entry is a fresh
+    OPEN) instead of the V1 "ENTER" that left the position quietly held.
+    ``gate_ok=False`` (the V2 entry gate not satisfied) turns a fresh entry
+    into a WATCH rather than a buy."""
     if cfg.is_trend:
         # ``long_now`` is the engine's actual trend signal for this bar (the one
         # source of truth across ma / dual_ma / macd / ma_vol); fall back to the
@@ -453,7 +462,15 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
                 return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
             return dict(state="EXIT", label="EXIT NEXT BAR — BELOW TREND",
                         ico="🔴", tone="exit", exits_next_bar=True)
+        if stopped:
+            return dict(state="EXIT",
+                        label=f"CLOSE — {str(stopped).upper()} HIT "
+                              "(re-enters only if the trend holds)",
+                        ico="🔴", tone="exit", stopped=True)
         if above:
+            if gate_ok is False:
+                return dict(state="WATCH", label="WATCH — ABOVE TREND, GATE PENDING",
+                            ico="🟡", tone="watch")
             return dict(state="ENTRY", label="ENTER — ABOVE TREND", ico="🟢", tone="buy")
         return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
     # Divergence — replicate the backtest's exit-overrides-entry precedence
@@ -521,12 +538,18 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
         if _stop < 0.999:
             pos["stop_px"] = e_px * (1 - _stop)
             pos["dist_stop"] = (last_px / pos["stop_px"] - 1) * 100
+        elif r.get("trail_px"):            # V2 trailing stop = the live stop level
+            pos["stop_px"] = float(r["trail_px"])
+            pos["dist_stop"] = (last_px / pos["stop_px"] - 1) * 100
+            pos["trail_px"] = float(r["trail_px"])
     last_trade = r["trade_log"][-1] if r.get("trade_log") else None
 
     meta = ASSET_META.get(label, dict(name=label, kind="core"))
     m = bt._metrics(strat, r["dates"]); bh = bt._metrics(r["bh"], r["dates"])
     wr = float((r["trades"] > 0).mean() * 100) if len(r["trades"]) else 0.0
+    _ver = str(r.get("version") or bt.active_version())
     return dict(
+        version=_ver, rules=cfg.rules_label(_ver), gate_ok=r.get("gate_ok"),
         key=label, parent=cfg.key, name=meta["name"], kind=meta["kind"],
         emoji=cfg.emoji, kemoji=KIND_EMOJI[meta["kind"]], accent=cfg.accent,
         cap=CAP_BY_KEY.get(label, 0.30),
@@ -548,9 +571,14 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     )
 
 
-def run_asset(cfg: TickerConfig) -> list[dict]:
+def run_asset(cfg: TickerConfig, version: str | None = None) -> list[dict]:
     """Run every instrument this app trades. Returns one result dict per traded
-    asset (primary + siblings), all sharing the parent's signal/decision."""
+    asset (primary + siblings), all sharing the parent's signal/decision.
+
+    ``version`` — the strategy-logic generation to run (``"v1"`` / ``"v2"``;
+    default the active one).  Use :func:`run_universe` with
+    ``version="combined"`` for the spliced live-history view."""
+    ver = bt.active_version(version)
     daily = _load_daily(cfg)
     if daily is None or daily.empty or "px_close" not in daily.columns:
         return []
@@ -577,7 +605,10 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
     # both on the completed frame (decisions are made at the close; the naive
     # partial-bar read would flicker intraday)
     ma_val = bt.trend_line_value(cfg, hist) if cfg.is_trend else None
-    long_now = bt.trend_long_now(cfg, hist) if cfg.is_trend else None
+    long_now = bt.trend_long_now(cfg, hist, version=ver) if cfg.is_trend else None
+    # V2 entry gate on the latest completed bar (None = no gate / V1)
+    gate_now = (bt.trend_entry_gate_now(cfg, hist, version=ver)
+                if cfg.is_trend and hasattr(bt, "trend_entry_gate_now") else None)
     # common momentum read (distance above a 50-day SMA) for cross-asset priority
     ref_ma = float(daily["px_close"].tail(50).mean())
     mom = (last_close / ref_ma - 1) if ref_ma else 0.0
@@ -602,14 +633,17 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
         valid = preds.loc[preds[col].notna(), "target_date"]
         start = max(pd.Timestamp(cfg.oos_start), pd.Timestamp(valid.iloc[0]))
         try:
-            r = bt.run_strategy(cfg, preds, sig, col, oos_start=str(start.date()))
+            r = bt.run_strategy(cfg, preds, sig, col, oos_start=str(start.date()),
+                                version=ver)
         except Exception:
             continue
         if len(r["dates"]) < 30:
             continue
+        r["gate_ok"] = gate_now
         # each traded instrument shares the parent decision but has its own pos
         dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val,
-                            long_now=long_now)
+                            long_now=long_now, gate_ok=gate_now,
+                            stopped=(_stopped_last_bar(r) if ver == "v2" else None))
         res = _asset_result(cfg, label, col, r, daily, dec, alert, bull,
                             sent, ma_val, dchg, mom, hist=hist)
         if cfg.strategy_mode == "divergence":
@@ -628,15 +662,25 @@ def run_asset(cfg: TickerConfig) -> list[dict]:
     return out
 
 
-def run_universe() -> list[dict]:
+def run_universe(version: str | None = None) -> list[dict]:
     """Run every instrument across all apps; skip any that fail.
 
     BTC/MSTR/MSTU are run through the BTC app's ACTUAL CT-model engine
     (``btc_ct_engine``); every other app is run through the shared daily engine
     with its own tuned config, which is the exact engine those apps use.
+
+    ``version`` selects the strategy-logic generation: ``"v1"`` / ``"v2"`` run
+    that generation's rules over the whole history (default: the active
+    version, i.e. what the live book trades); ``"combined"`` splices V1 before
+    the cut-over and V2 from it — each day under the logic actually in
+    effect that day (see :func:`combine_results`).
     """
     from concurrent.futures import ThreadPoolExecutor
     import traceback
+
+    ver = str(version).lower() if version else bt.active_version()
+    if ver == "combined":
+        return combine_results(run_universe("v1"), run_universe("v2"))
 
     _warmup_imports()   # ensure heavy imports are cached before threading
 
@@ -644,14 +688,17 @@ def run_universe() -> list[dict]:
         try:
             if cfg.key == "BTC":
                 import btc_ct_engine
-                return cfg.key, btc_ct_engine.run_btc_ct(), None
+                out = btc_ct_engine.run_btc_ct()      # identical in V1 and V2
+                for r in out:
+                    r.setdefault("version", ver)
+                return cfg.key, out, None
             if cfg.key == "GLDM":
                 import gldm_engine
-                return cfg.key, gldm_engine.run_gldm_trend(), None
+                return cfg.key, gldm_engine.run_gldm_trend(ver), None
             if cfg.key == "GDXM":
                 import gldm_engine
-                return cfg.key, gldm_engine.run_gldm_miners(), None
-            return cfg.key, run_asset(cfg), None
+                return cfg.key, gldm_engine.run_gldm_miners(ver), None
+            return cfg.key, run_asset(cfg, version=ver), None
         except Exception:
             return cfg.key, [], traceback.format_exc().strip().splitlines()[-1]
 
@@ -680,6 +727,98 @@ def run_universe() -> list[dict]:
 # per-app load errors from the most recent run_universe() (best-effort; the app
 # surfaces these so a silently-dropped sleeve is visible, not hidden).
 _LAST_ERRORS: dict[str, str] = {}
+
+
+def _stopped_last_bar(r: dict) -> str | None:
+    """The stop/trail reason when a sim's last closed trade exited ON ITS FINAL
+    BAR by a stop or trail — the sleeve is flat because of the stop, not the
+    signal — else ``None``.  Drives the V2 stop-day CLOSE."""
+    log = r.get("trade_log") or []
+    if r.get("in_pos_now") or not log:
+        return None
+    last = log[-1]
+    if not isinstance(last, dict):
+        return None
+    reason = str(last.get("reason") or "")
+    if not (reason.startswith("stop") or reason.startswith("trail")):
+        return None
+    dates = r.get("dates")
+    if dates is None or not len(dates):
+        return None
+    try:
+        if pd.Timestamp(last.get("exit_date")) != pd.Timestamp(dates[-1]):
+            return None
+    except Exception:
+        return None
+    return reason
+
+
+def _run_of(res: dict) -> dict:
+    """A result dict's engine run in ``simulate_regime`` shape (the gold / CT
+    engines keep ``pos``/``strat`` on the result, not inside ``r``)."""
+    r = dict(res.get("r") or {})
+    r.setdefault("dates", list(pd.DatetimeIndex(pd.Series(res["dates"]))))
+    r.setdefault("strat", np.asarray(res["strat"], float))
+    if "pos" not in r:
+        r["pos"] = np.asarray(res["pos_series"], float)
+    r.setdefault("bh", np.asarray(res["r"]["bh"], float))
+    r.setdefault("trades", res["r"].get("trades", np.array([])))
+    r.setdefault("trade_log", res["r"].get("trade_log") or [])
+    p = res.get("pos") or {}
+    r.setdefault("in_pos_now", bool(p.get("in_pos")))
+    r.setdefault("entry_px", p.get("entry_px"))
+    r.setdefault("entry_date", p.get("entry_date"))
+    r.setdefault("trail_px", p.get("trail_px"))
+    return r
+
+
+def combine_results(res_v1: list[dict], res_v2: list[dict],
+                    cutover=None) -> list[dict]:
+    """Splice two universes into the COMBINED view: for every sleeve, bars
+    before ``cutover`` (default the V1 → V2 cut-over) carry the V1 engine's
+    return/position and bars from it carry V2's — each day under the logic
+    that was actually in effect that day.  Live fields (decision, position,
+    prices) are the current generation's; curve metrics, trade counts and
+    the win rate are recomputed on the spliced stream; ``version_series``
+    (per-bar generation tag) is attached for the UI."""
+    cut = pd.Timestamp(cutover or STRATEGY_VERSION_START)
+    v1 = {r["key"]: r for r in res_v1}
+    out = []
+    for r2 in res_v2:
+        r1 = v1.get(r2["key"])
+        if r1 is None:
+            out.append(dict(r2, version="combined"))
+            continue
+        rr = bt.combine_runs(_run_of(r1), _run_of(r2), cut)
+        dates = pd.to_datetime(pd.Series(rr["dates"]))
+        strat = np.asarray(rr["strat"], float)
+        ret = pd.Series(np.diff(strat) / strat[:-1], index=dates.iloc[1:]).rename(r2["key"])
+        pos_series = pd.Series(np.asarray(rr["pos"], float), index=dates).rename(r2["key"])
+        eq = pd.Series(strat, index=dates)
+        res = dict(r2)
+        res.update(ret=ret, pos_series=pos_series, strat=strat, dates=dates,
+                   metrics=curve_metrics(eq),
+                   bh_metrics=curve_metrics(pd.Series(rr["bh"], index=dates)),
+                   n_trades=int(len(rr["trades"])),
+                   win_rate=(float((rr["trades"] > 0).mean() * 100)
+                             if len(rr["trades"]) else 0.0),
+                   version="combined", version_series=rr["version_series"])
+        rdict = dict(r2["r"])
+        rdict.update(bh=rr["bh"], dates=list(dates), trades=rr["trades"],
+                     trade_log=rr["trade_log"], in_pos_now=rr["in_pos_now"],
+                     version_series=rr["version_series"])
+        res["r"] = rdict
+        out.append(res)
+    return out
+
+
+def version_of_results(results: list[dict]) -> str:
+    """The generation tag a universe was run under (``v1`` / ``v2`` /
+    ``combined``), read off its result dicts."""
+    tags = {str(r.get("version") or "") for r in results}
+    if "combined" in tags:
+        return "combined"
+    return next(iter(t for t in tags if t), bt.active_version())
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1753,11 +1892,57 @@ def _waterfill(raw: dict[str, float], caps: dict) -> dict[str, float]:
     return {k: float(v) for k, v in zip(keys, w)}
 
 
+# Strategy Logic V2 allocator rule — "adds-only": a sleeve the book already
+# holds is NEVER trimmed by the daily priority tilt (only its own signal exit
+# or stop closes it) and is only ADDED TO when its tilted target rises by at
+# least this fraction of the book.  Fresh entries and exits are unchanged.
+# Measured on the walk-forward replay (OVERALL_STRATEGY.md §V2): resize days
+# halved, max drawdown −24.6% → −17.0%, Sharpe 1.60 → 1.87 at level net-of-
+# cost return.  V1 (``adds_only=0`` / ``None``) re-sizes every held sleeve
+# every day.
+ADDS_ONLY_BAND = 0.08
+
+
+def adds_only_band(version: str | None = None) -> float:
+    """The adds-only band in force under ``version`` (0 = V1 behaviour)."""
+    return ADDS_ONLY_BAND if bt.active_version(version) == "v2" else 0.0
+
+
+def _apply_adds_only(target: dict, prev: dict | None, held: set,
+                     band: float) -> dict:
+    """Hold every ``held`` sleeve at its previous weight unless its new target
+    exceeds it by ≥ ``band``; new entries keep their targets; the whole book
+    is scaled down only if the kept weights overflow 100%."""
+    if not band or not prev:
+        return target
+    out = dict(target)
+    for k in held:
+        pw = float(prev.get(k, 0.0) or 0.0)
+        if pw <= 0:
+            continue
+        tw = float(out.get(k, 0.0))
+        if tw < pw or (tw - pw) < band:
+            out[k] = pw
+    tot = sum(out.values())
+    if tot > 1 + 1e-9:
+        out = {k: v / tot for k, v in out.items()}
+    return out
+
+
 def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             caps: dict | None = None,
                             force_exit: set | None = None,
-                            force_entry: set | None = None) -> dict:
+                            force_entry: set | None = None,
+                            prev_weights: dict[str, float] | None = None,
+                            adds_only: float | None = None) -> dict:
     """Today's actionable allocation.
+
+    ``prev_weights`` — the risk weights of the book currently held (the last
+    published Targetbook).  With it, Strategy Logic V2's **adds-only** rule
+    applies (``adds_only`` band, default :func:`adds_only_band` for the
+    results' version): a held sleeve keeps its previous weight unless its
+    tilted target rises by at least the band; it is never trimmed by the
+    tilt.  Pass ``adds_only=0`` for the V1 daily re-sizing.
 
     Capital is deployed only to instruments the strategy is long (or opening a
     fresh entry).  Among those, the size of each slice is the historically
@@ -1815,6 +2000,11 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     # priority-tilted raw weights: optimal anchor × (0.5 + priority) ∈ [0.5,1.5]×
     raw = {k: _b(k) * (0.5 + prio.get(k, {}).get("score", 0.5)) for k in target_keys}
     target = _waterfill(raw, caps)
+    if adds_only is None:
+        adds_only = adds_only_band(version_of_results(results))
+    tilt_target = dict(target)
+    target = _apply_adds_only(target, prev_weights, {res["key"] for res in keep},
+                              adds_only)
     sata = max(1.0 - sum(target.values()), 0.0)
 
     # current book (what we hold now) — optimal weights, no forward tilt
@@ -1882,7 +2072,12 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     return dict(target=target, sata=sata, current=current, sata_now=sata_now,
                 actions=actions, priorities=prio, priority_rank=[k for k, _ in ranked],
                 n_active=len(in_pos), n_open=len(opens), n_close=len(closing),
-                sata_info=SATA)
+                sata_info=SATA, tilt_target=tilt_target,
+                adds_only=float(adds_only or 0.0),
+                held_pinned=sorted(k for k in target
+                                   if prev_weights and k in {r["key"] for r in keep}
+                                   and abs(target[k] - float(prev_weights.get(k, 0.0))) < 1e-12
+                                   and abs(tilt_target.get(k, 0.0) - target[k]) > 1e-12))
 
 
 def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
@@ -2496,10 +2691,19 @@ def replay_gated_allocation(results: list[dict],
                             anchors: list[tuple] | None = None,
                             wr_window: int | None = None,
                             sharpe_window: int | None = None,
-                            penalty: dict | None = None) -> dict:
+                            penalty: dict | None = None,
+                            adds_only: float | None = None,
+                            adds_only_from=None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
+
+    Strategy Logic V2: ``adds_only`` (band, fraction of the book) applies the
+    adds-only rule — a sleeve held the previous day keeps its weight unless
+    the tilted target rises by ≥ the band, and is never trimmed by the tilt;
+    ``adds_only_from`` (a date) switches the rule on only from that day (the
+    Combined view: V1 re-sizing before the cut-over, V2 from it).  ``None``
+    / ``0`` reproduces the V1 daily re-sizing exactly.
 
     Construction, mirroring the live gate:
       * the funded set on day *t* is the sleeves the engines hold IN THE
@@ -2589,6 +2793,10 @@ def replay_gated_allocation(results: list[dict],
     port = np.zeros(len(idx))
     W = np.zeros((len(idx), len(keys)))
     sata_w = np.zeros(len(idx))
+    ao_band = float(adds_only or 0.0)
+    ao_from = (pd.Timestamp(adds_only_from).to_datetime64()
+               if adds_only_from is not None else None)
+    idx_vals = idx.values
     for t in range(len(idx)):
         act = [j for j in range(len(keys)) if P[t, j] > 0]
         if not act:
@@ -2617,6 +2825,18 @@ def replay_gated_allocation(results: list[dict],
                 if v == v and v < p_floor:
                     raw[j] *= p_mult
         target = _waterfill(raw, {j: caps.get(keys[j], 0.30) for j in raw})
+        if ao_band > 0 and t > 0 and (ao_from is None or idx_vals[t] >= ao_from):
+            # adds-only: a sleeve held yesterday keeps its weight unless the
+            # tilted target rose by ≥ the band (never trimmed by the tilt)
+            prevW = W[t - 1]
+            held = [j for j in act if prevW[j] > 0]
+            for j in held:
+                tw = target.get(j, 0.0)
+                if tw < prevW[j] or (tw - prevW[j]) < ao_band:
+                    target[j] = float(prevW[j])
+            tot = sum(target.values())
+            if tot > 1 + 1e-9:
+                target = {j: v / tot for j, v in target.items()}
         dep = 0.0
         for j, w in target.items():
             W[t, j] = w
@@ -2651,9 +2871,17 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              fit_window: int | None = None,
                              wr_window: int | None = None,
                              sharpe_window: int | None = None,
-                             penalty: dict | None = None) -> dict:
+                             penalty: dict | None = None,
+                             version: str | None = None,
+                             adds_only: float | None = None,
+                             adds_only_from=None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
-    on a ``walkforward_anchors`` schedule.  Every input to a given day's book —
+    on a ``walkforward_anchors`` schedule.
+
+    ``version`` (default: the results' own generation tag) sets the allocator
+    rules: ``v1`` re-sizes daily, ``v2`` applies the adds-only band over the
+    whole history, ``combined`` applies it from the V1 → V2 cut-over only.
+    ``adds_only`` / ``adds_only_from`` override that explicitly.  Every input to a given day's book —
     anchor weights, funded set, priority components — is computable from data
     available at the previous close.  This is what the app publishes as the
     combined back-test; the full-sample optimiser weights remain in use only
@@ -2667,6 +2895,11 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     ``scripts/eval_adaptive_variants.py`` for the comparison harness)."""
     rets = returns_matrix(results)
     pos = position_matrix(results, rets.index)
+    ver = str(version).lower() if version else version_of_results(results)
+    if adds_only is None:
+        adds_only = ADDS_ONLY_BAND if ver in ("v2", "combined") else 0.0
+        if ver == "combined" and adds_only_from is None:
+            adds_only_from = STRATEGY_VERSION_START
     anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
                                   objective=objective, sata_daily=sata_daily,
                                   min_hist=min_hist, n_samples=n_samples, seed=seed,
@@ -2674,8 +2907,11 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     rep = replay_gated_allocation(results, caps=caps, sata_daily=sata_daily,
                                   tilt=tilt, anchors=anchors,
                                   wr_window=wr_window, sharpe_window=sharpe_window,
-                                  penalty=penalty)
+                                  penalty=penalty, adds_only=adds_only,
+                                  adds_only_from=adds_only_from)
     rep["anchors"] = anchors
+    rep["version"] = ver
+    rep["adds_only"] = float(adds_only or 0.0)
     return rep
 
 
@@ -2794,6 +3030,83 @@ C2_PNL_DEFAULT_START = "2026-10-07"
 from strategy_version import (STRATEGY_VERSION,        # noqa: E402,F401
                               STRATEGY_VERSION_START)  # noqa: E402,F401
 BOOK_VERSIONS_JSON = _REPO_ROOT / "data" / "overall" / "book_versions.json"
+PUBLISHED_BOOK_JSON = _REPO_ROOT / "data" / "overall" / "target_book.json"
+
+
+EXECUTED_BOOK_JSON = _REPO_ROOT / "data" / "overall" / "executed_book.json"
+C2_POSITIONS_JSON = _REPO_ROOT / "data" / "overall" / "c2_positions.json"
+
+
+def unexecuted_closes(prev_book: dict | None, executed: dict | None = None,
+                      c2_snapshot: dict | None = None) -> list[dict]:
+    """Execution alerts for the book that should ALREADY have been traded
+    (the previously published Targetbook): every sleeve it instructed to
+    CLOSE (action CLOSE, or dropped from the weights) that an account record
+    still holds afterwards, or a CLOSE with no execution run recorded since
+    that book's signal bar at all.  Each alert: ``key`` / ``account`` /
+    ``as_of`` / ``reason``.  Empty when nothing is outstanding or there is
+    no previous book.  The 2026-09 WGMI case — exit published Sep 25, filled
+    Oct 1 — is exactly what this surfaces the next morning."""
+    if not prev_book:
+        return []
+    as_of = str(prev_book.get("as_of") or "")
+    closes = {a.get("key") for a in (prev_book.get("actions") or [])
+              if a.get("action") == "CLOSE" and a.get("key")}
+    if not closes:
+        return []
+    out = []
+    for name, rec, held_keys, rec_as_of in (
+            ("IBKR", executed,
+             {p.get("key") or p.get("symbol") for p in ((executed or {}).get("positions") or [])
+              if float(p.get("shares") or 0) > 0},
+             str((executed or {}).get("as_of") or "")),
+            ("Collective2", c2_snapshot,
+             {p.get("key") or p.get("symbol") for p in ((c2_snapshot or {}).get("positions") or [])
+              if float(p.get("shares") or 0) > 0},
+             str((c2_snapshot or {}).get("book_as_of") or ""))):
+        if rec is None:
+            continue
+        if rec_as_of < as_of:
+            for k in sorted(closes):
+                out.append(dict(key=k, account=name, as_of=as_of,
+                                reason=f"no {name} execution recorded since the "
+                                       f"{as_of} book (last run: {rec_as_of or '—'})"))
+            continue
+        for k in sorted(closes & held_keys):
+            out.append(dict(key=k, account=name, as_of=as_of,
+                            reason=f"CLOSE published for the {as_of} bar but "
+                                   f"{name} still holds it after its run"))
+    return out
+
+
+def execution_alerts(prev_book_path: Path | None = None) -> list[dict]:
+    """``unexecuted_closes`` read off the committed artifacts (previous
+    published paper book vs the IBKR executed book and the C2 snapshot).
+    Best-effort: unreadable files count as absent."""
+    import json
+    prev_path = Path(prev_book_path) if prev_book_path else \
+        PUBLISHED_BOOK_JSON.with_name("target_book_prev.json")
+    def _rd(p):
+        try:
+            return json.loads(Path(p).read_text())
+        except Exception:
+            return None
+    return unexecuted_closes(_rd(prev_path), _rd(EXECUTED_BOOK_JSON),
+                             _rd(C2_POSITIONS_JSON))
+
+
+def load_published_book_weights(path: Path | None = None) -> dict[str, float]:
+    """Risk weights of the currently published (paper) Targetbook — the book
+    the account holds, i.e. the ``prev_weights`` the V2 adds-only rule pins
+    held sleeves to.  SATA/cash legs are dropped.  ``{}`` when no book."""
+    import json
+    try:
+        payload = json.loads(Path(path or PUBLISHED_BOOK_JSON).read_text())
+        w = payload.get("weights") or {}
+        return {k: float(v) for k, v in w.items()
+                if k != "SATA" and v and float(v) > 0}
+    except Exception:
+        return {}
 
 
 def data_vintage() -> dict:
@@ -3187,7 +3500,9 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
             continue
     parsed.sort(key=lambda r: r["as_of"])
     if only_version is not None:
-        parsed = [r for r in parsed if r["version"] == only_version]
+        _ok = ({only_version} if isinstance(only_version, str)
+               else set(only_version))
+        parsed = [r for r in parsed if r["version"] in _ok]
     if min_as_of is not None:
         parsed = [r for r in parsed if r["as_of"] >= pd.Timestamp(min_as_of)]
     if not parsed or returns is None or returns.empty:

@@ -440,10 +440,17 @@ def ma_state(d_df):
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
-def strategy_position(col, end=None):
+# Engine version the live/historical renderers run.  None = the active
+# (published) logic; the 🕒 Historical replay sets it to the generation that
+# was actually in effect on the replayed date (V1 before the cut-over).
+_ENGINE_VERSION = None
+
+
+def strategy_position(col, end=None, version=None):
     if col not in preds:
         return None
-    r = bt.run_strategy(cfg, preds, sig, col, end=end)
+    r = bt.run_strategy(cfg, preds, sig, col, end=end,
+                        version=(version or _ENGINE_VERSION))
     r["metrics"] = bt._metrics(r["strat"], r["dates"])
     r["bh_metrics"] = bt._metrics(r["bh"], r["dates"])
     return r
@@ -1851,7 +1858,7 @@ def _trade_log_table(r, label, col):
                    "P&L at execution prices; costs/slippage not modelled.")
 
 
-def _metrics_table_html(label, col):
+def _metrics_table_html(label, col, version=None):
     def cell(txt, good=None, bold=False):
         color = "#16a34a" if good is True else "#dc2626" if good is False else "#334155"
         w = "700" if (bold or good is not None) else "500"
@@ -1860,7 +1867,7 @@ def _metrics_table_html(label, col):
                    ("Sharpe", "sharpe"), ("Win Rate", "wr"), ("Trades", "n")]
     per = []
     for lbl, s, e in cfg.periods:
-        r = bt.run_strategy(cfg, preds, sig, col, oos_start=s, end=e)
+        r = bt.run_strategy(cfg, preds, sig, col, oos_start=s, end=e, version=version)
         sm = bt._metrics(r["strat"], r["dates"]); bm = bt._metrics(r["bh"], r["dates"])
         wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
         per.append((lbl, sm, bm, wr, len(r["trades"])))
@@ -1910,6 +1917,18 @@ def _metrics_table_html(label, col):
 
 def render_backtest_dashboard(label, col):
     st.markdown(f"## 📊 {label} — {cfg.key} Signal-Driven Backtesting")
+    # ── strategy-logic selector: V1 / V2 rules over the whole window, or the
+    # Combined splice (V1 before the cut-over, V2 from it) ──────────────────
+    _choice = _sv.render_view_radio(
+        f"{cfg.key}_{col}_bt_view", default=_sv.VIEW_V2, what="back-test figures",
+        note=(f"**{cfg.key} is identical under V1 and V2** — its rules did not "
+              "change in Strategy Logic V2, so all three views coincide."
+              if not cfg.has_v2_rules else
+              f"**V2 change for {cfg.key}:** {cfg.v2_note}"))
+    _ver = _sv.VIEW_TO_VERSION[_choice]
+    st.caption(f"⚙️ Rules in force under **{_choice}**: "
+               f"{cfg.rules_label('v1' if _ver == 'v1' else 'v2')}"
+               + (" (V1 before the cut-over, V2 from it)" if _ver == "combined" else ""))
     render_strategy_card()
     # read the per-asset stop from the data field (not the stop_for method) so a
     # stale/hot-reloaded TickerConfig instance without the method can't crash.
@@ -1927,11 +1946,11 @@ def render_backtest_dashboard(label, col):
                "predictions. Divergence fills are post-signal (decide at close i−1, fill at "
                "close i) since the 2026-07-25 look-ahead fix. NAV starts at $100k; "
                "costs/slippage not modelled.")
-    st.markdown(_metrics_table_html(label, col), unsafe_allow_html=True)
+    st.markdown(_metrics_table_html(label, col, _ver), unsafe_allow_html=True)
     period_tabs = st.tabs([lbl for lbl, _, _ in cfg.periods])
     for (lbl, s, e), tb in zip(cfg.periods, period_tabs):
         with tb:
-            r = bt.run_strategy(cfg, preds, sig, col, oos_start=s, end=e)
+            r = bt.run_strategy(cfg, preds, sig, col, oos_start=s, end=e, version=_ver)
             if len(r["strat"]) < 2:
                 st.info("Not enough bars in this window.")
                 continue
@@ -2135,7 +2154,17 @@ with tab_hist:
             snapped = avail_le.max()
             if snapped.date() != picked.date():
                 st.caption(f"⚠️ Snapped to last completed bar: **{snapped.date()}**")
-            render_live_dashboard(as_of_date=snapped, is_live=False)
+            # replay under the strategy logic that was actually in effect
+            # on that date (V1 before the cut-over, V2 from it)
+            _hv = _sv.version_for_date(snapped)
+            _sv.render_version_pill(_hv, note=f"strategy logic in effect on {snapped.date()}"
+                                    + ("" if cfg.has_v2_rules else
+                                       f" · {cfg.key} rules identical in V1 and V2"))
+            _ENGINE_VERSION = _hv if _hv in ("v1", "v2") else None
+            try:
+                render_live_dashboard(as_of_date=snapped, is_live=False)
+            finally:
+                _ENGINE_VERSION = None
 
 
 for (lbl, col), tb in zip(TRADED, tab_bt):

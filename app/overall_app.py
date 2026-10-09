@@ -206,11 +206,11 @@ def _bucket() -> str:
     return f"{now.date()}-{now.hour}-{now.minute // 30}"
 
 
-@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…", max_entries=2)
-def get_results(bucket: str):
+@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…", max_entries=6)
+def get_results(bucket: str, version: str = "v2"):
     # computed_at is cached alongside the results, so it records when the
     # signals were actually (re)generated — not when the page last rendered.
-    return dict(results=ov.run_universe(), computed_at=pd.Timestamp.utcnow())
+    return dict(results=ov.run_universe(version), computed_at=pd.Timestamp.utcnow())
 
 
 @st.cache_data(ttl=60, show_spinner=False, max_entries=2)
@@ -276,8 +276,8 @@ def get_book_version_map(bucket: str):
     return ov.load_book_version_map()
 
 
-@st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…", max_entries=2)
-def get_all_profiles(bucket: str):
+@st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…", max_entries=6)
+def get_all_profiles(bucket: str, version: str = "v2"):
     """Compute the full portfolio for every UI risk profile once, so switching
     profiles (and rendering the comparison table) is instant — no recompute.
 
@@ -288,10 +288,14 @@ def get_all_profiles(bucket: str):
     comes from the walk-forward gated replay: daily gate/tilt/water-fill with
     expanding-window anchor refits and as-of priority inputs — no look-ahead
     anywhere in the history."""
-    res = get_results(bucket)
+    # ``version``: "v2" (the live logic — what the Live tab trades), "v1" or
+    # "combined" (each day under the logic in effect) — the P&L / Backtesting
+    # / Historical views pick theirs; everything else reads the live one.
+    res = get_results(bucket, version)
     results, computed_at = res["results"], res["computed_at"]
     if not results:
         return None
+    _prev_w = ov.load_published_book_weights() if version == "v2" else None
     rets = ov.returns_matrix(results)
     pos = ov.position_matrix(results, rets.index)
     sata = ov.SATA_DAILY
@@ -309,14 +313,16 @@ def get_all_profiles(bucket: str):
         wf = ov.walkforward_gated_replay(results, caps=caps,
                                          mdd_floor=prof["mdd_floor"],
                                          objective=prof["objective"],
-                                         sata_daily=sata, tilt=True)
+                                         sata_daily=sata, tilt=True,
+                                         version=version)
         per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
         curves = {STRAT_CURVE: wf["equity"], **base_curves}
-        gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps)
+        gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
+                                          prev_weights=_prev_w)
         profiles[name] = dict(opt=opt, per=per, curves=curves, gate=gate,
                               w_opt=w_opt, wf=wf)
     return dict(results=results, computed_at=computed_at, rets=rets, bm=bm,
-                profiles=profiles)
+                profiles=profiles, version=version)
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
@@ -333,13 +339,14 @@ def get_bh_replay(bucket: str):
     return ov.equal_weight_bh_replay(allp["results"], index=allp["rets"].index)
 
 
-def get_portfolio(bucket: str, profile: str):
-    allp = get_all_profiles(bucket)
+def get_portfolio(bucket: str, profile: str, version: str = "v2"):
+    allp = get_all_profiles(bucket, version)
     if not allp:
         return None
     p = allp["profiles"][profile]
     return dict(results=allp["results"], computed_at=allp["computed_at"],
-                rets=allp["rets"], bm=allp["bm"], profile=profile, **p)
+                rets=allp["rets"], bm=allp["bm"], profile=profile,
+                version=version, **p)
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
@@ -360,9 +367,9 @@ def get_sleeve_prices(bucket: str):
     return pd.DataFrame(cols).reindex(allp["rets"].index) if cols else None
 
 
-def get_profile_comparison(bucket: str):
+def get_profile_comparison(bucket: str, version: str = "v2"):
     """Headline metrics for every UI risk profile (reads the shared computation)."""
-    allp = get_all_profiles(bucket)
+    allp = get_all_profiles(bucket, version)
     if not allp:
         return []
     rows = []
@@ -442,6 +449,37 @@ for pk in ov.PARENT_KEYS:
     grp = [r for r in results if r["parent"] == pk]
     if grp:
         parents.append((pk, grp))
+
+
+def _add_version_markers(fig, x0, x1, *, combined: bool, y_label_pos: float = 1.0):
+    """Mark every strategy-logic transition inside [x0, x1] on a growth chart:
+    a dashed vertical line at the cut-over plus a shaded, labelled band per
+    generation (V1 in effect / V2 in effect).  Only the Combined view carries
+    transitions — a V1-only or V2-only curve runs one logic throughout, so it
+    gets a single band label instead."""
+    x0, x1 = pd.Timestamp(x0), pd.Timestamp(x1)
+    cuts = [pd.Timestamp(c) for c in _sv.cutover_dates()] if combined else []
+    cuts = [c for c in cuts if x0 < c <= x1]
+    if not combined or not cuts:
+        return fig
+    edges = [x0] + cuts + [x1]
+    for i in range(len(edges) - 1):
+        a, b = edges[i], edges[i + 1]
+        ver = _sv.version_for_date(b - pd.Timedelta(days=1)) if i < len(edges) - 2 \
+            else _sv.version_for_date(b)
+        col = _sv.VERSION_COLORS.get(ver, _sv.BADGE_COLOR)
+        fig.add_vrect(x0=a, x1=b, fillcolor=col, opacity=0.05, line_width=0,
+                      annotation_text=f"{_sv.version_label(ver)} in effect",
+                      annotation_position="top left",
+                      annotation_font=dict(size=10, color=col))
+    for c in cuts:
+        ver = _sv.version_for_date(c)
+        fig.add_vline(x=c, line_dash="dash", line_width=2,
+                      line_color=_sv.VERSION_COLORS.get(ver, _sv.BADGE_COLOR),
+                      annotation_text=f"▶ {_sv.version_label(ver)} from {c:%b %d, %Y}",
+                      annotation_position="bottom right",
+                      annotation_font=dict(size=11, color=_sv.VERSION_COLORS.get(ver)))
+    return fig
 
 
 def _alloc_area_fig(weights: pd.DataFrame, sata: pd.Series, title: str):
@@ -1050,7 +1088,8 @@ with tab_live:
     try:
         gate_live = ov.signal_gated_allocation(
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
-            force_exit=_live_exits, force_entry=_live_entries)
+            force_exit=_live_exits, force_entry=_live_entries,
+            prev_weights=ov.load_published_book_weights())
         # weekend / holiday guard: on days the US market is closed, the daily
         # tilt must not re-size sleeves whose signal apps got no new bar (the
         # cross-set priority normalisation would let the crypto sleeves' fresh
@@ -2267,17 +2306,31 @@ with tab_live:
         # capital as plain cash, so the cash leg earns nothing (no SATA).
         _books = get_c2_books(_bucket())
         _vmap = get_book_version_map(_bucket())
+        # ── strategy-logic selector — drives BOTH sources below: the
+        # as-published record admits only books stamped with the chosen
+        # generation(s); the walk-forward replay re-runs the universe and the
+        # allocator under that generation (Combined = V1 before the cut-over,
+        # V2 from it, with the transition marked on the growth chart)
+        _pnl_view = _sv.render_view_radio(
+            "overall_pnl_strategy_view", default=_sv.VIEW_COMBINED, what="P&L figures")
+        _pnl_ver = _sv.VIEW_TO_VERSION[_pnl_view]
+        try:
+            _PFV = get_portfolio(_bucket(), _profile, _pnl_ver) or _PF
+        except Exception as _exc:
+            st.warning(f"Could not build the {_pnl_view} replay ({_exc}); showing "
+                       "the live-logic replay instead.")
+            _PFV = _PF
         _c2_start = pd.Timestamp(ov.C2_RECORD_START).strftime("%b %d, %Y")
         _bookrep = (ov.published_book_replay(
-                        _PF["rets"], _books, sata_daily=0.0, version_map=_vmap,
-                        only_version=ov.STRATEGY_VERSION,
+                        _PFV["rets"], _books, sata_daily=0.0, version_map=_vmap,
+                        only_version=_sv.versions_for_view(_pnl_ver),
                         min_as_of=ov.C2_RECORD_START,
                         fill_on_sessions=True,   # C2 trades US sessions only
                         fill_on_publish=True)    # …and the session AFTER as_of
                     if _books else None)
         _n_c2 = sum(1 for b in _books
                     if str(b.get("as_of")) >= ov.C2_RECORD_START)
-        _ver_up = ov.STRATEGY_VERSION.upper()
+        _ver_up = _pnl_view.upper()
         _SRC_ACTUAL = "🎯 As-published record (actual books)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
         _SRC_BH = "⚖️ Equal-weight buy & hold"
@@ -2381,9 +2434,9 @@ with tab_live:
             # keep the as-published record alongside the strategy curves so
             # "what did trading actually add?" is one glance
             _curves_view = ({STRAT_CURVE_ACTUAL: _bookrep["equity"],
-                             **_PF["curves"]} if _bookrep is not None
-                            else dict(_PF["curves"]))
-            _curve_all = _PF["curves"][BH_CURVE]
+                             **_PFV["curves"]} if _bookrep is not None
+                            else dict(_PFV["curves"]))
+            _curve_all = _PFV["curves"][BH_CURVE]
         elif _actual:
             _n_books = len(_bookrep["books"])
             st.caption(f"P&L, performance and risk of the **as-published "
@@ -2410,7 +2463,7 @@ with tab_live:
                    "active": None}
             _strat_label = STRAT_CURVE_ACTUAL
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
-                            **_PF["curves"]}
+                            **_PFV["curves"]}
             _curve_all = _bookrep["equity"]
             _render_c2_account(portfolio_value)
             _fx_taxes, _fx_income = _tax_controls()
@@ -2428,10 +2481,10 @@ with tab_live:
                            f"**`{_profile}`**). Change the profile or the date and "
                            "every figure recomputes. Dollar figures scale the 💼 "
                            "portfolio value entered above.")
-            _wf = _PF["wf"]
+            _wf = _PFV["wf"]
             _strat_label = STRAT_CURVE
-            _curves_view = _PF["curves"]
-            _curve_all = _PF["curves"][STRAT_CURVE]
+            _curves_view = _PFV["curves"]
+            _curve_all = _PFV["curves"][STRAT_CURVE]
             # ── realism toggles: IBKR Pro costs and capital-gains taxes ──
             _fx_cols = st.columns(2)
             with _fx_cols[0]:
@@ -2525,7 +2578,7 @@ with tab_live:
         # buy & hold earns the UNDERLYINGS' returns, not the sleeves' strategy
         # returns — the attribution/daily-P&L helpers must be fed that matrix
         # or the parts stop summing to the curve
-        _rets_win = (_bhrep["rets"] if _bh_src else _PF["rets"]).loc[:_end_ts]
+        _rets_win = (_bhrep["rets"] if _bh_src else _PFV["rets"]).loc[:_end_ts]
         # sleeve-inclusion gate + per-trade notionals under a daily-weight book
         _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
         # buy & hold reads the share each name actually carried INSIDE the
@@ -2542,7 +2595,7 @@ with tab_live:
                   and (_fx_costs or _fx_taxes))
         if _fx_on:
             _fx_sim = fx.simulate_frictions(
-                _PF["rets"], _wf["weights"], _wf["sata"],
+                _PFV["rets"], _wf["weights"], _wf["sata"],
                 get_sleeve_prices(_bucket()), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
@@ -2937,6 +2990,8 @@ with tab_live:
             _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
+            _add_version_markers(_fig_pnl, _sm["start"], _sm["end"],
+                                 combined=(_pnl_ver == "combined"))
             _src_title = (f"as-published books ({_ver_up})" if _actual
                           else ("equal-weight buy & hold" if _bh_src
                                 else f"`{_profile}` profile"))
@@ -4638,7 +4693,17 @@ with tab_hist:
                f"risk profile (currently **`{_profile}`**) selected on the "
                "Live tab.")
 
-    _h_curve = _PF["curves"][STRAT_CURVE]
+    # the Historical view replays each day under the strategy logic that was
+    # ACTUALLY in effect on it (V1 before the cut-over, V2 from it) and names
+    # that generation beside the bar
+    try:
+        _PFH = get_portfolio(_bucket(), _profile, "combined") or _PF
+    except Exception as _exc:
+        st.warning(f"Could not build the Combined replay ({_exc}); showing the "
+                   "live-logic replay instead.")
+        _PFH = _PF
+    _h_results = _PFH["results"]
+    _h_curve = _PFH["curves"][STRAT_CURVE]
     _h_d0, _h_d1 = _h_curve.index[0].date(), _h_curve.index[-1].date()
     _h_top = st.columns([1, 1, 2])
     with _h_top[0]:
@@ -4655,7 +4720,7 @@ with tab_hist:
             step=1000.0, format="%.0f", key="overall_hist_pv",
             help="Book $ per instrument = book % × this value.")
 
-    _snap = ov.snapshot_asof(results, _h_sel)
+    _snap = ov.snapshot_asof(_h_results, _h_sel)
     if _snap is None:
         st.warning(f"No instrument has any strategy history on or before "
                    f"**{_h_sel}** — pick a later date (data runs "
@@ -4665,7 +4730,7 @@ with tab_hist:
         # the replayed book ON that bar — walk-forward anchors + as-of priority
         # tilt (falls back to the untilted water-fill for a bar the replay
         # doesn't cover, e.g. an instrument-only calendar day)
-        _h_wf = _PF["wf"]
+        _h_wf = _PFH["wf"]
         if _h_bar in _h_wf["weights"].index:
             _h_wrow = _h_wf["weights"].loc[_h_bar]
             _h_book = {k: float(v) for k, v in _h_wrow.items() if v > 0.0005}
@@ -4680,6 +4745,10 @@ with tab_hist:
                 f"Signals bar used: <b>{_h_bar.strftime('%b %d, %Y')}</b> (daily "
                 f"close) · {len(_snap['rows'])} instruments live · profile "
                 f"<code>{_profile}</code></div>", unsafe_allow_html=True)
+        _h_ver = _sv.version_for_date(_h_bar)
+        _sv.render_version_pill(
+            _h_ver, note=f"strategy logic in effect on {_h_bar:%b %d, %Y} — the "
+                         "positions, book and record below are replayed under it")
         if _snap["not_live"]:
             st.caption("⏳ Not yet live on that date (history starts later): "
                        + ", ".join(sorted(_snap["not_live"])) +
@@ -4743,7 +4812,7 @@ with tab_hist:
             _h_styles = {STRAT_CURVE: ("#111827", 3),
                          "Equal-weight strategies": ("#0ea5e9", 1.5),
                          "Equal-weight Buy & Hold": ("#94a3b8", 1.5)}
-            for _h_nm, _h_cv in _PF["curves"].items():
+            for _h_nm, _h_cv in _PFH["curves"].items():
                 _h_sub = _h_cv.loc[:_h_bar]
                 if len(_h_sub) < 2:
                     continue
@@ -4751,6 +4820,7 @@ with tab_hist:
                 _h_fig.add_trace(go.Scatter(x=_h_sub.index, y=_h_sub.to_numpy() * 100000,
                                             name=_h_nm, line=dict(color=_h_c, width=_h_w)))
             _h_fig.add_vline(x=_h_bar, line_dash="dot", line_color="#dc2626")
+            _add_version_markers(_h_fig, _h_curve.index[0], _h_bar, combined=True)
             _h_fig.update_layout(
                 height=300, margin=dict(t=30, b=10, l=10, r=10),
                 yaxis_title="Growth of $100k", yaxis_type="log",
@@ -5036,7 +5106,28 @@ with tab_hist:
 # ══════════════════════════════════════════════════════════════════════════
 with tab_bt:
     o = opt["optimal"]
-    _wf_bt = _PF["wf"]
+    # ── strategy-logic selector: V1 / V2 rules over the whole history, or
+    # the Combined splice (V1 before the cut-over, V2 from it) ──────────────
+    _bt_view = _sv.render_view_radio(
+        "overall_bt_strategy_view", default=_sv.VIEW_V2, what="back-test figures")
+    _bt_ver = _sv.VIEW_TO_VERSION[_bt_view]
+    try:
+        _PFB = get_portfolio(_bucket(), _profile, _bt_ver) or _PF
+    except Exception as _exc:
+        st.warning(f"Could not build the {_bt_view} replay ({_exc}); showing the "
+                   "live-logic replay instead.")
+        _PFB = _PF
+    _parents_b = []
+    for _pk in ov.PARENT_KEYS:
+        _grp = [r for r in _PFB["results"] if r["parent"] == _pk]
+        if _grp:
+            _parents_b.append((_pk, _grp))
+    st.caption(f"Showing **{_bt_view}** — "
+               + ("each day under the strategy logic actually in effect "
+                  "(V1 before the cut-over, V2 from it)." if _bt_ver == "combined" else
+                  f"the {_sv.version_label(_bt_ver)} rules replayed over the whole history"
+                  + (" (what-if before the cut-over)." if _bt_ver == "v2" else ".")))
+    _wf_bt = _PFB["wf"]
     _wfm = _wf_bt["metrics"]
     _oos_lo, _oos_hi = ov.oos_start_span()
     _oos_span = _oos_lo if _oos_lo == _oos_hi else f"{_oos_lo}–{_oos_hi}"
@@ -5057,7 +5148,7 @@ with tab_bt:
     st.markdown(f"**Risk profile: `{_profile}`** — "
                 f"{ov.RISK_PROFILES[_profile]['blurb']} "
                 f"_(change it in the sidebar.)_")
-    comp = get_profile_comparison(_bucket())
+    comp = get_profile_comparison(_bucket(), _bt_ver)
     if comp:
         ch = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
               "<th style='padding:6px 10px'>Profile</th>"
@@ -5138,13 +5229,16 @@ with tab_bt:
     styles = {STRAT_CURVE: ("#111827", 3),
               "Equal-weight strategies": ("#0ea5e9", 1.7),
               "Equal-weight Buy & Hold": ("#94a3b8", 1.7)}
-    for name, curve in _PF["curves"].items():
+    for name, curve in _PFB["curves"].items():
         cc2, wdt = styles.get(name, ("#888", 1.5))
         fig.add_trace(go.Scatter(x=curve.index, y=curve.to_numpy() * 100000,
                                  name=name, line=dict(color=cc2, width=wdt)))
     fig.update_layout(height=440, margin=dict(t=20, b=10, l=10, r=10),
                       yaxis_title="Portfolio value ($)", yaxis_type="log",
                       legend=dict(orientation="h", y=1.08), hovermode="x unified")
+    _add_version_markers(fig, _PFB["curves"][STRAT_CURVE].index[0],
+                         _PFB["curves"][STRAT_CURVE].index[-1],
+                         combined=(_bt_ver == "combined"))
     st.plotly_chart(fig, use_container_width=True)
 
     # ── daily % allocation through time — the replayed book, day by day ────
@@ -5163,7 +5257,7 @@ with tab_bt:
                    "daily as priorities move — even when no Action signal "
                    "changes — exactly like the live book.")
 
-    opt_curve = _PF["curves"][STRAT_CURVE]
+    opt_curve = _PFB["curves"][STRAT_CURVE]
     dd = opt_curve / opt_curve.cummax() - 1
     figd = go.Figure(go.Scatter(x=dd.index, y=dd.to_numpy() * 100, fill="tozeroy",
                                 line=dict(color=C_EXIT, width=1)))
@@ -5177,7 +5271,7 @@ with tab_bt:
           "<th style='text-align:right'>Return</th><th style='text-align:right'>CAGR</th>"
           "<th style='text-align:right'>Max DD</th><th style='text-align:right'>Sharpe</th></tr>")
     pr = []
-    for row in _PF["per"]:
+    for row in _PFB["per"]:
         pr.append(f"<tr style='border-bottom:1px solid #eef2f7'>"
                   f"<td style='padding:6px 10px'>{row['label']}</td>"
                   f"<td style='text-align:right;font-weight:600'>{row['total_ret']*100:,.0f}%</td>"
@@ -5208,7 +5302,7 @@ with tab_bt:
           "<th style='text-align:right'>Sharpe</th><th style='text-align:right'>Win%</th>"
           "<th style='text-align:right'>Anchor wt</th></tr>")
     ar = []
-    for pk, grp in parents:
+    for pk, grp in _parents_b:
         for res in grp:
             mm = res["metrics"]; bb = res["bh_metrics"]
             beat = mm["total_ret"] >= bb["total_ret"]

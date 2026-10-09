@@ -114,9 +114,51 @@ class TickerConfig:
     results_note: str = ""
     eval_note: str = ""            # optional extra analysis (e.g. XLE vs OIH)
 
+    # ── Strategy Logic V2 rules (2026-10 loss review) — all optional; a config
+    # that sets none of them is IDENTICAL under V1 and V2.  See
+    # app/strategy_version.py for the generation history.
+    v2_hold_ma_fast: int = 0       # hold condition: fast SMA (0 = none) …
+    v2_hold_ma_slow: int = 0       # … must sit above this slow SMA to stay long
+    v2_gate_col: str = ""          # entry gate: macro close column (e.g. "btc_close") …
+    v2_gate_ma: int = 0            # … must be above its N-day SMA at the deciding close
+    v2_trail_stop: float = 0.0     # trailing stop off the highest close (0 = none)
+    v2_trail_by_asset: dict = field(default_factory=dict)   # per-column override
+    v2_note: str = ""              # one-line description of what changed in V2
+
     def stop_for(self, col: str) -> float:
         """Fixed stop for a traded price column, honouring ``stop_by_asset``."""
         return self.stop_by_asset.get(col, self.fixed_stop)
+
+    def trail_for(self, col: str, version: str | None = None) -> float:
+        """Trailing stop (fraction of the highest close, 0 = none) for a traded
+        column under ``version`` — V1 has no trailing stops."""
+        if str(version or "v2").lower() != "v2":
+            return 0.0
+        return float(self.v2_trail_by_asset.get(col, self.v2_trail_stop) or 0.0)
+
+    @property
+    def has_v2_rules(self) -> bool:
+        """Does this sleeve's logic differ between V1 and V2 at all?"""
+        return bool((self.v2_hold_ma_fast and self.v2_hold_ma_slow)
+                    or (self.v2_gate_col and self.v2_gate_ma)
+                    or self.v2_trail_stop or self.v2_trail_by_asset)
+
+    def rules_label(self, version: str | None = None) -> str:
+        """Short human description of the entry/hold/exit rules in force under
+        ``version`` (default V2) — captions and strategy cards read this."""
+        ver = str(version or "v2").lower()
+        bits = [self.engine_label()]
+        if ver == "v2":
+            if self.v2_hold_ma_fast and self.v2_hold_ma_slow:
+                bits.append(f"hold while SMA{self.v2_hold_ma_fast} > "
+                            f"SMA{self.v2_hold_ma_slow}")
+            if self.v2_gate_col and self.v2_gate_ma:
+                bits.append(f"enter only while {self.v2_gate_col.split('_')[0].upper()} "
+                            f"> its SMA{self.v2_gate_ma}")
+            if self.v2_trail_stop:
+                bits.append(f"{self.v2_trail_stop*100:.0f}% trailing stop")
+        bits.append(self.stop_label)
+        return " · ".join(bits)
 
     def has_stop_for(self, col: str) -> bool:
         return self.stop_for(col) < 0.999
@@ -449,6 +491,15 @@ CONFIGS["REMX"] = TickerConfig(
     ma_window=200, ma_fast=50, ma_slow=200, fixed_stop=0.05,
     u1_errhi_min=0.16, d2_errhi_max=-0.18, d1_errlo_min=0.10, v_errlo_min=0.50,
     hl_band_pct=0.016,
+    # Strategy Logic V2 (2026-10): the 50/200 golden cross still opens the
+    # trade, but the sleeve stays long only while the 20-day SMA is above the
+    # 100-day — a fading up-cycle exits months before the slow death cross
+    # (the 2026 May→Aug slide gave back 35% from the peak under V1).  OOS
+    # 2021→now: +97%/−41%/0.55 → +155%/−27%/0.73, still only ~4 trades.
+    v2_hold_ma_fast=20, v2_hold_ma_slow=100,
+    v2_note=("V2: hold the golden cross only while the 20-day SMA is above "
+             "the 100-day (re-enter when both conditions hold again); the "
+             "−5% fixed stop is unchanged."),
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.012, day_down_thresh=-0.012,
     results_note=("Full history 2015→now (bull + bear): a 50/200-day dual-MA "
@@ -497,6 +548,15 @@ CONFIGS["WGMI"] = TickerConfig(
     strategy_mode="ma_vol", strategy_name="Miner MA + Vol-Filter Trend",
     ma_window=50, vol_win=10, vol_med_win=189, vol_k=0.95, fixed_stop=1.0,
     hl_band_pct=0.020,
+    # Strategy Logic V2 (2026-10): a fresh entry also needs spot Bitcoin above
+    # its own 50-day SMA at the deciding close — the miners are a 2–3× BTC
+    # beta, so a WGMI cross-up while BTC is still below trend is the bounce
+    # the vol filter cannot see.  OOS 2024→now the gate lifts the sleeve
+    # from +333%/−38%/1.62 to +395%/−17%/1.88 (2026 YTD −5% → +36%).
+    v2_gate_col="btc_close", v2_gate_ma=50,
+    v2_note=("V2: enter only while Bitcoin sits above its 50-day SMA (parent "
+             "gate, same idea as MSTR off the BTC signal); hold/exit rules "
+             "and the no-stop setting are unchanged."),
     # WGMI launched Feb-2022; its 52-week features don't warm up until ~Feb-2023,
     # so fetch from inception but hold the OOS start to 2024 — that leaves ~11
     # months of feature-complete pre-OOS training for the daily H/L signal model.

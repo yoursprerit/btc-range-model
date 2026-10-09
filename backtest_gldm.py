@@ -226,13 +226,43 @@ def dual_ma_long_array(preds, fast: int | None = None, slow: int | None = None):
     return f > s
 
 
+def dual_ma_gate_array(preds, rising_bars: int | None = None,
+                       slow: int | None = None):
+    """Strategy Logic V2 ENTRY gate for the dual-MA sleeves: True while the
+    slow SMA of the GLDM close is higher than it was ``rising_bars`` bars ago
+    (a rising 100-day SMA — the cross is taken only inside an established
+    up-trend, never on a bear-market bounce).  ``rising_bars`` ≤ 0 → no gate
+    (all True, the V1 behaviour)."""
+    rising_bars = gc.gate_rising_bars() if rising_bars is None else rising_bars
+    slow = gc.DUAL_MA_SLOW if slow is None else slow
+    gcl = preds["gldm_close"].to_numpy(float)
+    n = len(gcl)
+    if not rising_bars or rising_bars <= 0:
+        return np.ones(n, bool)
+    s = np.array([np.mean(gcl[max(0, i - slow + 1):i + 1]) for i in range(n)])
+    out = np.zeros(n, bool)
+    out[rising_bars:] = s[rising_bars:] > s[:-rising_bars]
+    return out
+
+
 def simulate_dual(preds, price_col, stop_pct, oos_start=OOS_START, end=None,
-                  fast: int | None = None, slow: int | None = None):
+                  fast: int | None = None, slow: int | None = None,
+                  gate_bars: int = 0, trail_pct: float = 0.0,
+                  version: str | None = None):
     """Middle-path trend engine for the smooth gold trenders (GLDM, UGL):
     long into bar i+1 while the GLDM 25/100 dual-MA is bullish at bar i's
     close, exit on the cross-down or the fixed stop.  Returns the same schema
-    as ``simulate`` (equity curves, pos series, dated trade log)."""
+    as ``simulate`` (equity curves, pos series, dated trade log).
+
+    Strategy Logic V2 adds an ENTRY gate (``gate_bars`` > 0: the slow SMA must
+    be rising over that many bars at the deciding close — see
+    ``dual_ma_gate_array``) and a TRAILING stop (``trail_pct`` > 0: exit when
+    the close falls that far below the position's highest close).  A stop or
+    trail hit leaves the sleeve flat for the bar; it re-enters later only if
+    the cross and the gate both hold."""
     long_at_close = dual_ma_long_array(preds, fast, slow)
+    gate = dual_ma_gate_array(preds, gate_bars, slow) if gate_bars else None
+    trail_pct = float(trail_pct or 0.0)
     price = preds[price_col].to_numpy(float)
     dates = preds["target_date"].to_numpy()
     n = len(price)
@@ -244,7 +274,7 @@ def simulate_dual(preds, price_col, stop_pct, oos_start=OOS_START, end=None,
         dates, np.datetime64(pd.Timestamp(end)), side="right"))
 
     in_pos = False
-    entry_px = np.nan; entry_date = None
+    entry_px = np.nan; entry_date = None; peak_px = np.nan; last_reason = None
     eq = 1.0
     strat_eq = []; bh_eq = []; used_dates = []; pos_series = []
     trades = []; trade_log = []
@@ -255,39 +285,59 @@ def simulate_dual(preds, price_col, stop_pct, oos_start=OOS_START, end=None,
         strat_eq.append(eq); bh_eq.append(price[i] / bh0); used_dates.append(dates[i])
         want_long = bool(long_at_close[i - 1])
         if in_pos:
+            peak_px = max(peak_px, price[i]) if np.isfinite(peak_px) else price[i]
             stop_hit = price[i] <= entry_px * (1 - stop_pct)
-            if (not want_long) or stop_hit:
+            trail_hit = trail_pct > 0 and price[i] <= peak_px * (1 - trail_pct)
+            if (not want_long) or stop_hit or trail_hit:
                 ret = price[i] / entry_px - 1
                 reason = ("stop −%.0f%%" % (stop_pct * 100) if stop_hit
+                          else "trail −%.0f%%" % (trail_pct * 100) if trail_hit
                           else "MA cross-down")
                 trades.append(ret)
                 trade_log.append(dict(entry_date=entry_date, exit_date=dates[i],
                                       entry_px=float(entry_px), exit_px=float(price[i]),
                                       ret=float(ret), reason=reason))
-                in_pos = False; entry_px = np.nan; entry_date = None
-        elif want_long:
-            in_pos = True; entry_px = price[i]; entry_date = dates[i]
+                in_pos = False; entry_px = np.nan; entry_date = None; peak_px = np.nan
+                last_reason = reason
+        elif want_long and (gate is None or bool(gate[i - 1])):
+            in_pos = True; entry_px = price[i]; entry_date = dates[i]; peak_px = price[i]
         pos_series.append(1 if in_pos else 0)
 
     return dict(dates=used_dates, strat=np.array(strat_eq), bh=np.array(bh_eq),
                 pos=np.array(pos_series), trades=np.array(trades),
                 trade_log=trade_log, in_pos_now=in_pos,
                 entry_px=(float(entry_px) if in_pos else None),
-                entry_date=entry_date)
+                entry_date=entry_date,
+                trail_px=(float(peak_px * (1 - trail_pct))
+                          if in_pos and trail_pct > 0 and np.isfinite(peak_px) else None),
+                last_exit_reason=last_reason,
+                version=gc._active_version(version))
 
 
-def run_asset_sim(preds, sig, asset, oos_start=OOS_START, end=None):
+def run_asset_sim(preds, sig, asset, oos_start=OOS_START, end=None,
+                  version: str | None = None):
     """Middle-path dispatcher — run ``asset`` through ITS engine
     (gc.engine_for): dual-MA 25/100 for GLDM & UGL, Divergence Pure-Regime
     for GDX & NUGT.  Single entry point for the app, the gold engine and the
     backtest main, so every consumer stays bar-for-bar consistent."""
     col = "gldm_close" if asset == "GLDM" else f"{asset.lower()}_close"
+    ver = gc._active_version(version)
+    if ver == "combined":
+        import backtest_ticker as _bt      # the generic splicer (same schema)
+        import strategy_version as _sv
+        r1 = run_asset_sim(preds, sig, asset, oos_start=oos_start, end=end, version="v1")
+        r2 = run_asset_sim(preds, sig, asset, oos_start=oos_start, end=end, version="v2")
+        return _bt.combine_runs(r1, r2, _sv.STRATEGY_VERSION_START)
     if gc.engine_for(asset) == "dual_ma":
-        return simulate_dual(preds, col, gc.stop_for(asset),
-                             oos_start=oos_start, end=end)
-    return simulate(preds, sig, col, gc.stop_for(asset), gc.U1_ERRHI_MIN,
-                    gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN,
-                    oos_start=oos_start, end=end)
+        return simulate_dual(preds, col, gc.stop_for(asset, ver),
+                             oos_start=oos_start, end=end,
+                             gate_bars=gc.gate_rising_bars(ver),
+                             trail_pct=gc.trail_for(asset, ver), version=ver)
+    r = simulate(preds, sig, col, gc.stop_for(asset, ver), gc.U1_ERRHI_MIN,
+                 gc.D2_ERRHI_MAX, gc.D1_ERRLO_MIN,
+                 oos_start=oos_start, end=end)
+    r.setdefault("version", ver)
+    return r
 
 
 def _clean_flags(sig, i, U1, D2, D1):

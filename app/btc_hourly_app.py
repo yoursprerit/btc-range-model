@@ -17229,6 +17229,15 @@ with tab_retrain:
 
 with tab_btc:
     st.markdown("## ₿ BTC — Signal-Driven Backtesting")
+    # Strategy-logic selector — the BTC-signal sleeves are IDENTICAL under
+    # V1 and V2 (the 2026-10 review changed gold, WGMI, REMX and the
+    # allocator only), so every view shows the same figures here.
+    _sv.render_view_radio("btc_tab_btc_bt_view", default=_sv.VIEW_V2,
+                          what="back-test figures",
+                          note="**This sleeve is identical under V1 and V2** — "
+                               "Strategy Logic V2 changed the gold, WGMI and REMX "
+                               "rules and the allocator; the BTC-signal engines are "
+                               "unchanged, so all three views coincide.")
     st.markdown(
         "Runs the **TF2 + V-Gate strategy** directly on **BTC spot** — signals and execution "
         "are both in Bitcoin. Entry/exit signals come from the same BTC CT model predictions. "
@@ -17300,6 +17309,15 @@ with tab_btc:
 
 with tab_mstr:
     st.markdown("## 📊 MSTR — BTC Signal-Driven Backtesting")
+    # Strategy-logic selector — the BTC-signal sleeves are IDENTICAL under
+    # V1 and V2 (the 2026-10 review changed gold, WGMI, REMX and the
+    # allocator only), so every view shows the same figures here.
+    _sv.render_view_radio("btc_tab_mstr_bt_view", default=_sv.VIEW_V2,
+                          what="back-test figures",
+                          note="**This sleeve is identical under V1 and V2** — "
+                               "Strategy Logic V2 changed the gold, WGMI and REMX "
+                               "rules and the allocator; the BTC-signal engines are "
+                               "unchanged, so all three views coincide.")
     st.markdown(
         "Trades in **MSTR (MicroStrategy) stock**, driven by BTC CT-model signals. "
         "**⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) — on the "
@@ -17379,6 +17397,15 @@ with tab_mstr:
 
 with tab_mstu:
     st.markdown("## 📈 MSTU — BTC Signal-Driven Backtesting")
+    # Strategy-logic selector — the BTC-signal sleeves are IDENTICAL under
+    # V1 and V2 (the 2026-10 review changed gold, WGMI, REMX and the
+    # allocator only), so every view shows the same figures here.
+    _sv.render_view_radio("btc_tab_mstu_bt_view", default=_sv.VIEW_V2,
+                          what="back-test figures",
+                          note="**This sleeve is identical under V1 and V2** — "
+                               "Strategy Logic V2 changed the gold, WGMI and REMX "
+                               "rules and the allocator; the BTC-signal engines are "
+                               "unchanged, so all three views coincide.")
     st.markdown(
         "Trades in **MSTU (T-Rex 2× Long MSTR Daily Target ETF)**, driven by BTC CT-model "
         "signals. **⭐ Default strategy: 📊 Standard MA** entry gate (above rising MA30) "
@@ -17465,6 +17492,15 @@ with tab_mstr_mstu:
 
 with tab_eth:
     st.markdown("## 🔹 ETH — BTC Signal-Driven Backtesting")
+    # Strategy-logic selector — the BTC-signal sleeves are IDENTICAL under
+    # V1 and V2 (the 2026-10 review changed gold, WGMI, REMX and the
+    # allocator only), so every view shows the same figures here.
+    _sv.render_view_radio("btc_tab_eth_bt_view", default=_sv.VIEW_V2,
+                          what="back-test figures",
+                          note="**This sleeve is identical under V1 and V2** — "
+                               "Strategy Logic V2 changed the gold, WGMI and REMX "
+                               "rules and the allocator; the BTC-signal engines are "
+                               "unchanged, so all three views coincide.")
     st.markdown(
         "Trades **spot ETH (Ethereum)** off the BTC CT-model signals, on BTC's own "
         "**12:00-UTC bar boundary** — so the sleeve's same-bar fill lands exactly when the "

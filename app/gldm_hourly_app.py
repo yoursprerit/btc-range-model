@@ -339,14 +339,21 @@ def signatures_asof(target_date):
     return gc.compute_trend_signatures(sub)
 
 
-def strategy_position(asset, end=None):
+# Engine version the live/historical renderers run.  None = the active
+# (published) logic; the 🕒 Historical replay sets it to the generation that
+# was actually in effect on the replayed date (V1 before the cut-over).
+_ENGINE_VERSION = None
+
+
+def strategy_position(asset, end=None, version=None):
     """Run `asset` through ITS middle-path engine (gc.engine_for: dual-MA for
     GLDM/UGL, divergence for GDX/NUGT) up to `end`; return current state,
     metrics, equity curve, drawdown and trade log."""
     col = f"{asset.lower()}_close"
     if col not in preds:
         return None
-    r = btg.run_asset_sim(preds, sig, asset, end=end)
+    r = btg.run_asset_sim(preds, sig, asset, end=end,
+                          version=(version or _ENGINE_VERSION))
     r["metrics"] = btg._metrics(r["strat"], r["dates"])
     r["bh_metrics"] = btg._metrics(r["bh"], r["dates"])
     return r
@@ -444,24 +451,35 @@ def render_trend_signatures(dm, end=None):
         "Decided at each close, executed the next bar."), unsafe_allow_html=True)
 
     in_pos_any = bool((r_gldm and r_gldm.get("in_pos_now")) or (r_ugl and r_ugl.get("in_pos_now")))
+    _ver_now = str((r_gldm or r_ugl or {}).get("version") or _ENGINE_VERSION or _sv.STRATEGY_VERSION)
+    _trail_mode = _ver_now == "v2"
+    _stop_title = ("Stop Guard — trailing stop (GLDM 10% · UGL 12%)" if _trail_mode
+                   else "Stop-Loss Guard — −3% fixed stop (both sleeves)")
     if in_pos_any and r_gldm and r_gldm.get("in_pos_now") and r_gldm.get("entry_px"):
-        e_px = float(r_gldm["entry_px"]); stop_px = e_px * (1 - gc.stop_for("GLDM"))
+        e_px = float(r_gldm["entry_px"])
+        stop_px = (float(r_gldm["trail_px"]) if _trail_mode and r_gldm.get("trail_px")
+                   else e_px * (1 - gc.stop_for("GLDM", _ver_now)))
         cushion = (dm["close"] / stop_px - 1) * 100
         c2.markdown(_sig_card(
-            "Stop-Loss Guard — −3% fixed stop (both sleeves)", "🛑", "#dc2626",
-            cushion < 3.0,
+            _stop_title, "🛑", "#dc2626", cushion < 3.0,
             [("GLDM stop level", f"${stop_px:,.2f}", "hold above", dm["close"] > stop_px),
              ("cushion to stop", f"{cushion:+.2f}%", "> 0%", cushion > 0)],
-            "Each sleeve carries a hard −3% stop from its own entry price, capping "
-            "the single-trade loss if price gaps down faster than the cross can "
-            "flip."), unsafe_allow_html=True)
+            ("Each sleeve exits when its close falls the trailing distance below "
+             "the highest close since entry (V2) — the level ratchets up, never "
+             "down, and a hit CLOSES the sleeve (it re-enters only if the cross "
+             "and the rising-SMA gate hold)." if _trail_mode else
+             "Each sleeve carries a hard −3% stop from its own entry price, capping "
+             "the single-trade loss if price gaps down faster than the cross can "
+             "flip.")), unsafe_allow_html=True)
     else:
         c2.markdown(_sig_card(
-            "Stop-Loss Guard — −3% fixed stop (both sleeves)", "🛑", "#94a3b8", False,
+            _stop_title, "🛑", "#94a3b8", False,
             [("status", "inactive (flat)", "opens with a position", False)],
-            "Inactive while in cash. On entry each sleeve carries a hard −3% stop "
-            "from its own fill, protecting against a fast breakdown before the "
-            "cross can react."), unsafe_allow_html=True)
+            ("Inactive while in cash. On entry each sleeve carries a trailing stop "
+             "off its highest close (GLDM 10%, UGL 12%)." if _trail_mode else
+             "Inactive while in cash. On entry each sleeve carries a hard −3% stop "
+             "from its own fill, protecting against a fast breakdown before the "
+             "cross can react.")), unsafe_allow_html=True)
 
     rows = []
     for lbl, r in (("GLDM", r_gldm), ("UGL", r_ugl)):
@@ -1087,13 +1105,17 @@ def position_panel(asset, col_container, end=None):
         days = (as_of - e_date).days
         # per-asset stop: UGL (2× gold) trades signal-only (no fixed stop), so show
         # that instead of a −3%/$0.00 that doesn't apply to it.
-        _stop = gc.stop_for(asset)
+        _rver = str(r.get("version") or _ENGINE_VERSION or _sv.STRATEGY_VERSION)
+        _stop = gc.stop_for(asset, _rver)
         _rows = [("Entry", f"{e_date.strftime('%b %d, %Y')} @ ${e_px:,.2f}"),
                  ("Trigger", "U1 + Pure-Regime gate"),
                  ("Live price", f"${px:,.2f}"),
                  ("Unrealized P&amp;L", f"<b style='color:{col_pnl}'>{upnl:+.2f}%</b>")]
         if _stop < 0.999:
             _rows.append(("Stop (−%.0f%%)" % (_stop * 100), f"${e_px * (1 - _stop):,.2f}"))
+        elif r.get("trail_px"):
+            _rows.append(("Trailing stop (−%.0f%%)" % (gc.trail_for(asset, _rver) * 100),
+                          f"${float(r['trail_px']):,.2f}"))
         else:
             _rows.append(("Exit", "signal-only — <b>no fixed stop</b>"))
         _rows.append(("Days held", f"{days}d"))
@@ -1721,7 +1743,7 @@ def _trade_log_table(r, asset):
                    "P&L at execution prices; entry/exit from the GLDM signal.")
 
 
-def _metrics_table_html(asset):
+def _metrics_table_html(asset, version=None):
     """BTC-style colored metrics table: periods × (Strategy / Buy&Hold), with the
     Strategy cell green when it beats B&H on that metric, red when worse."""
     col = f"{asset.lower()}_close"
@@ -1736,7 +1758,7 @@ def _metrics_table_html(asset):
                    ("Win Rate", "wr", None), ("Trades", "n", None)]
     per = []
     for lbl, s, e in _PERIODS:
-        r = btg.run_asset_sim(preds, sig, asset, oos_start=s, end=e)
+        r = btg.run_asset_sim(preds, sig, asset, oos_start=s, end=e, version=version)
         sm = btg._metrics(r["strat"], r["dates"]); bm = btg._metrics(r["bh"], r["dates"])
         wr = (r["trades"] > 0).mean() * 100 if len(r["trades"]) else 0
         per.append((lbl, sm, bm, wr, len(r["trades"])))
@@ -1793,11 +1815,23 @@ def render_backtest_dashboard(asset):
     col = f"{asset.lower()}_close"
     st.markdown(f"## {_BT_TAB_EMOJI.get(asset, '📊')} {ASSET_LABELS[asset]} — "
                 "Gold Signal-Driven Backtesting")
-    render_strategy_card()
     eng = gc.engine_for(asset)
-    st.caption(f"⚙️ Engine for this sleeve: **{_ENGINE_LABEL[eng]}** "
-               f"(stop {'—' if gc.stop_for(asset) >= 0.999 else f'−{gc.stop_for(asset)*100:.0f}%'}) "
-               "— middle-path split: dual-MA for the smooth trenders GLDM & UGL, "
+    # ── strategy-logic selector (V1 / V2 / Combined) ─────────────────────
+    _choice = _sv.render_view_radio(
+        f"gldm_{asset}_bt_view", default=_sv.VIEW_V2, what="back-test figures",
+        note=(f"**{asset} is identical under V1 and V2** — the divergence miners "
+              "engine did not change in Strategy Logic V2." if eng != "dual_ma" else
+              f"**V2 change for {asset}:** the 25/100 cross is taken only while "
+              f"the {gc.DUAL_MA_SLOW}-day SMA is rising ({gc.V2_GATE_RISING_BARS} "
+              f"bars) and a {gc.trail_for(asset, 'v2')*100:.0f}% trailing stop "
+              "replaces the −3% fixed stop."))
+    _ver = _sv.VIEW_TO_VERSION[_choice]
+    _rv = "v1" if _ver == "v1" else "v2"
+    render_strategy_card()
+    st.caption(f"⚙️ Engine for this sleeve: **{_ENGINE_LABEL[eng]}** · rules under "
+               f"**{_choice}**: {gc.rules_label(asset, _rv)}"
+               + (" (V1 before the cut-over, V2 from it)" if _ver == "combined" else "")
+               + " — middle-path split: dual-MA for the smooth trenders GLDM & UGL, "
                "divergence for the miners GDX & NUGT.")
     if asset == "GLDM":
         st.info("ℹ️ **GLDM is both the signal source and the core traded sleeve.** "
@@ -1814,13 +1848,13 @@ def render_backtest_dashboard(asset):
                "costs/slippage not modelled.")
 
     # ── colored period × Strategy/B&H metrics table (BTC-style) ──
-    st.markdown(_metrics_table_html(asset), unsafe_allow_html=True)
+    st.markdown(_metrics_table_html(asset, _ver), unsafe_allow_html=True)
 
     # ── one chart+log tab per period (mirrors the BTC/MSTR period tabs) ──
     period_tabs = st.tabs([lbl for lbl, _, _ in _PERIODS])
     for (lbl, s, e), tb in zip(_PERIODS, period_tabs):
         with tb:
-            r = btg.run_asset_sim(preds, sig, asset, oos_start=s, end=e)
+            r = btg.run_asset_sim(preds, sig, asset, oos_start=s, end=e, version=_ver)
             if len(r["strat"]) < 2:
                 st.info("Not enough bars in this window.")
                 continue
@@ -2025,7 +2059,15 @@ with tab_hist:
         snapped = avail_le.max()
         if snapped.date() != picked.date():
             st.caption(f"⚠️ Snapped to last completed bar: **{snapped.date()}**")
-        render_live_dashboard(as_of_date=snapped, is_live=False)
+        # replay under the strategy logic that was actually in effect on
+        # that date (V1 before the cut-over, V2 from it)
+        _hv = _sv.version_for_date(snapped)
+        _sv.render_version_pill(_hv, note=f"strategy logic in effect on {snapped.date()}")
+        _ENGINE_VERSION = _hv if _hv in ("v1", "v2") else None
+        try:
+            render_live_dashboard(as_of_date=snapped, is_live=False)
+        finally:
+            _ENGINE_VERSION = None
 
 
 # ═════════════════════════ BACKTESTING TABS ══════════════════════════════

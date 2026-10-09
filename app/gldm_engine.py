@@ -62,8 +62,15 @@ def _curve_metrics(equity: pd.Series) -> dict:
     return dict(total_ret=float(total), cagr=float(cagr), mdd=mdd, sharpe=sharpe, vol=vol)
 
 
-def _trend_decision(long_now: bool, in_pos: bool):
+def _trend_decision(long_now: bool, in_pos: bool, gate_ok=None,
+                    stopped: str | None = None):
     """Dual-MA sleeve decision (GLDM & UGL): long/flat off the 25/100 cross.
+
+    Strategy Logic V2 extras: ``stopped`` (the exit reason) means the engine's
+    stop/trail fired AT THE LATEST CLOSE — the sleeve is flat in the sim, so
+    the book must CLOSE it now (it re-enters on a later bar only if the cross
+    and the gate hold); ``gate_ok=False`` blocks a fresh entry while the slow
+    SMA is still falling (WATCH, not ENTER).
 
     The cross decides at the close and acts on the NEXT bar, so an in-position
     EXIT here means "still open today, closes next bar" — the flag lets the
@@ -74,9 +81,41 @@ def _trend_decision(long_now: bool, in_pos: bool):
             return dict(state="HOLD", label="LONG — HOLDING", ico="🟢", tone="hold")
         return dict(state="EXIT", label="EXIT NEXT BAR — MA CROSS-DOWN",
                     ico="🔴", tone="exit", exits_next_bar=True)
+    if stopped:
+        return dict(state="EXIT", label=f"CLOSE — {str(stopped).upper()} HIT "
+                                        "(re-enters only if the trend holds)",
+                    ico="🔴", tone="exit", stopped=True)
     if long_now:
+        if gate_ok is False:
+            return dict(state="WATCH",
+                        label="WATCH — CROSS UP, GATE PENDING (SMA100 falling)",
+                        ico="🟡", tone="watch")
         return dict(state="ENTRY", label="ENTER — DUAL-MA CROSS-UP", ico="🟢", tone="buy")
     return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
+
+
+def stopped_last_bar(r: dict) -> str | None:
+    """The stop/trail reason when the sim's last closed trade exited ON ITS
+    FINAL BAR by a stop or trail (the sleeve is flat because of the stop, not
+    the signal) — else ``None``.  Shared by every engine family."""
+    log = r.get("trade_log") or []
+    if r.get("in_pos_now") or not log:
+        return None
+    last = log[-1]
+    if not isinstance(last, dict):
+        return None
+    reason = str(last.get("reason") or "")
+    if not (reason.startswith("stop") or reason.startswith("trail")):
+        return None
+    dates = r.get("dates")
+    if dates is None or not len(dates):
+        return None
+    try:
+        if pd.Timestamp(last.get("exit_date")) != pd.Timestamp(dates[-1]):
+            return None
+    except Exception:
+        return None
+    return reason
 
 
 def _decision(sigs, in_pos):
@@ -198,29 +237,32 @@ _RUN_CACHE: dict = {}
 _RUN_LOCK = threading.Lock()
 
 
-def run_gldm_cached() -> list[dict]:
-    """One shared engine run per process/day — the two gold parent apps
-    (🥇 Gold Trend and ⛏️ Gold Miners) both consume it, so the Overall
-    universe doesn't fetch/simulate the gold stack twice."""
-    key = pd.Timestamp.utcnow().strftime("%Y-%m-%d-%H")   # hourly freshness
+def run_gldm_cached(version: str | None = None) -> list[dict]:
+    """One shared engine run per process/hour AND strategy-logic version — the
+    two gold parent apps (🥇 Gold Trend and ⛏️ Gold Miners) both consume it,
+    so the Overall universe doesn't fetch/simulate the gold stack twice."""
+    ver = gc._active_version(version)
+    key = (pd.Timestamp.utcnow().strftime("%Y-%m-%d-%H"), ver)   # hourly freshness
     with _RUN_LOCK:
-        if _RUN_CACHE.get("key") != key:
-            _RUN_CACHE["key"] = key
-            _RUN_CACHE["out"] = run_gldm()
-        return _RUN_CACHE["out"]
+        ent = _RUN_CACHE.get(ver)
+        if not ent or ent.get("key") != key:
+            ent = dict(key=key, out=run_gldm(version=ver))
+            _RUN_CACHE[ver] = ent
+        return ent["out"]
 
 
-def run_gldm_trend() -> list[dict]:
+def run_gldm_trend(version: str | None = None) -> list[dict]:
     """🥇 Gold Trend sleeves (GLDM & UGL · dual-MA 25/100)."""
-    return [r for r in run_gldm_cached() if r["parent"] == "GLDM"]
+    return [r for r in run_gldm_cached(version) if r["parent"] == "GLDM"]
 
 
-def run_gldm_miners() -> list[dict]:
+def run_gldm_miners(version: str | None = None) -> list[dict]:
     """⛏️ Gold Miners sleeves (GDX & NUGT · Divergence Pure-Regime)."""
-    return [r for r in run_gldm_cached() if r["parent"] == "GDXM"]
+    return [r for r in run_gldm_cached(version) if r["parent"] == "GDXM"]
 
 
-def run_gldm() -> list[dict]:
+def run_gldm(version: str | None = None) -> list[dict]:
+    ver = gc._active_version(version)
     daily = _load_daily()
     if daily is None or daily.empty or "gldm_close" not in daily.columns:
         return []
@@ -259,15 +301,19 @@ def run_gldm() -> list[dict]:
     mom = (gcl[-1] / ref - 1) if ref else 0.0
 
     dual_long_now = bool(bg.dual_ma_long_array(preds)[-1])
+    # V2 entry gate (slow SMA rising); None under V1 (= always admitted)
+    _gb = gc.gate_rising_bars(ver)
+    gate_now = bool(bg.dual_ma_gate_array(preds, _gb)[-1]) if _gb else None
     out = []
     for key, meta in _META.items():
         col = meta["col"]
         if col not in preds.columns:
             continue
-        stop = gc.STOP_BY_ASSET.get(key, gc.FIXED_STOP)
+        stop = gc.stop_for(key, ver)
+        trail = gc.trail_for(key, ver) if gc.engine_for(key) == "dual_ma" else 0.0
         # middle-path dispatch: dual-MA 25/100 for GLDM & UGL, divergence for
         # GDX & NUGT — the same bg.run_asset_sim path the Gold app trades.
-        r = bg.run_asset_sim(preds, sig, key, oos_start=OOS)
+        r = bg.run_asset_sim(preds, sig, key, oos_start=OOS, version=ver)
         dates = pd.to_datetime(pd.Series(r["dates"]))
         strat = np.asarray(r["strat"], float)
         eq = pd.Series(strat, index=dates)
@@ -285,7 +331,9 @@ def run_gldm() -> list[dict]:
         # Chg % may use.  See freshness.completed_bar.
         bar_close, bar_date = _frs.completed_bar(hist, col)
         if gc.engine_for(key) == "dual_ma":
-            dec = _trend_decision(dual_long_now, bool(r.get("in_pos_now")))
+            dec = _trend_decision(dual_long_now, bool(r.get("in_pos_now")),
+                                  gate_ok=gate_now,
+                                  stopped=(stopped_last_bar(r) if ver == "v2" else None))
         else:
             dec = _decision(sigs, bool(r.get("in_pos_now")))
         m = _curve_metrics(eq)
@@ -301,6 +349,10 @@ def run_gldm() -> list[dict]:
             if stop < 0.999:                       # no stop_px for a stop-less sibling (UGL)
                 pos.update(stop_px=e_px * (1 - stop),
                            dist_stop=(last_px / (e_px * (1 - stop)) - 1) * 100)
+            elif r.get("trail_px"):                # V2: the trailing stop is the live stop level
+                _tp = float(r["trail_px"])
+                pos.update(stop_px=_tp, dist_stop=(last_px / _tp - 1) * 100,
+                           trail_px=_tp, trail_pct=trail)
         last_trade = r["trade_log"][-1] if r.get("trade_log") else None
         out.append(dict(
             key=key, parent=meta["parent"], name=meta["name"], kind=meta["kind"],
@@ -318,6 +370,7 @@ def run_gldm() -> list[dict]:
             as_of=as_of, mode=gc.engine_for(key),
             ma_window=(gc.DUAL_MA_SLOW if gc.engine_for(key) == "dual_ma"
                        else gc.MA_WINDOW_BY_ASSET.get(key, 50)),
-            stop=stop, engine="gldm",
+            stop=stop, trail=trail, engine="gldm", version=ver,
+            gate_ok=gate_now, rules=gc.rules_label(key, ver),
         ))
     return out

@@ -184,3 +184,26 @@ The **GLDM**, **GDX**, **UGL** and **NUGT** Backtesting tabs show each sleeve
 under ITS engine — the full/chop/bull breakdown, equity & drawdown curves and
 the complete trade log — and the **Live** / **Historical replay** tabs show the
 live per-engine signal state and open position for each asset.
+
+
+## Strategy Logic V2 (2026-10) — GLDM & UGL
+
+The Sep-2026 25/100 golden cross fired 19 % below gold's peak with the slow SMA
+still falling, and the −3 % fixed stop then stopped UGL out five times in a
+month (re-entering the next bar each time).  V2 (`gldm_core`):
+
+* **Entry gate** — the cross is taken only while the 100-day SMA is **rising
+  over the last 20 bars** (`V2_GATE_RISING_BARS`, `backtest_gldm.dual_ma_gate_array`).
+* **Trailing stop** replaces the fixed −3 %: GLDM exits 10 % and UGL 12 % below
+  the position's highest close (`V2_TRAIL_BY_ASSET`); no fixed stop
+  (`V2_STOP_BY_ASSET`).  `stop_for(asset, version)` / `trail_for(asset, version)`
+  / `gate_rising_bars(version)` are the single source of truth per generation.
+* OOS 2021→now: GLDM +115 % / −22 % / 0.94 → **+162 % / −16 % / 1.19**;
+  UGL +215 % / −44 % / 0.80 → **+366 % / −30 % / 1.04**; the 2026-09 whipsaw
+  is skipped entirely.  GDX / NUGT (divergence engine) are unchanged.
+* A trail hit at the latest close publishes **CLOSE**; the sleeve re-enters
+  only if the cross and the gate both hold on a later bar.
+
+`backtest_gldm.run_asset_sim(…, version=…)` runs either generation (or the
+Combined splice); the Gold app's Backtesting tabs carry the selector and its
+Historical replay runs the generation in effect on the replayed date.

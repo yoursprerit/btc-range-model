@@ -215,3 +215,25 @@ and the whole pipeline stays transparent and reproducible — exactly like Gold.
 assets (as it is for BTC and gold); the hourly model's value is a tight,
 well-calibrated confidence interval, not a directional bet. The edge lives in the
 **trend regime** and **risk control**, quantified in each app's Backtesting tabs.
+
+
+## Strategy Logic V2 (2026-10)
+
+Two ETF sleeves changed in V2 (`app/strategy_version.py`); every other ticker
+app's rules are identical in V1 and V2 (its Backtesting tab's selector shows
+the same figures for all three views):
+
+* **WGMI** — the SMA50 + vol-filter entry additionally needs **spot Bitcoin
+  above its own 50-day SMA** at the deciding close (`v2_gate_col="btc_close"`,
+  `v2_gate_ma=50`).  An open position is not closed by the gate turning off.
+* **REMX** — the 50/200 golden cross still opens the trade, but the sleeve
+  stays long only while the **20-day SMA is above the 100-day**
+  (`v2_hold_ma_fast=20`, `v2_hold_ma_slow=100`); it re-enters when both hold.
+
+The engine carries both generations: `backtest_ticker.run_strategy(…,
+version="v1"|"v2"|"combined")`, `trend_long_array(cfg, close, version)`,
+`trend_entry_gate_array(cfg, daily, version)`; `build_predictions` stores
+`trend_long_v1`, `trend_long_v2` and `trend_gate_v2` columns.  A stop/trail
+hit at the latest close is published as **CLOSE** (not ENTER).  The 🕒
+Historical replay runs the generation that was in effect on the replayed date
+and names it; the 📊 Backtesting tabs carry a V1 / V2 / Combined selector.

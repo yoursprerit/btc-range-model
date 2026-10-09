@@ -249,6 +249,8 @@ jobs:
                    data/overall/target_book_prev.json data/overall/target_book_live_prev.json \
                    data/overall/book_archive/ \
                    data/overall/strategy_health.json data/overall/health_history.csv \
+                   data/overall/strategy_health_v1.json data/overall/health_history_v1.csv \
+                   data/overall/strategy_health_v2.json data/overall/health_history_v2.csv \
                    data/overall/daily_audit.json data/backtest/ \
                    data/arty data/gldm data/grid data/pbw data/remx data/soxx \
                    data/wgmi data/xle; do
