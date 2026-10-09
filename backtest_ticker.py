@@ -478,6 +478,10 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
     if trail_pct is None and ver == "v2":
         trail_pct = cfg.trail_for(price_col, ver) if hasattr(cfg, "trail_for") else 0.0
     trail_pct = float(trail_pct or 0.0)
+    # V2 post-stop cooldown: bars the sleeve must stay flat after a stop/trail
+    # exit before the trend may re-admit it (V1: 0 — re-enter next bar)
+    cooldown = int(cfg.stop_cooldown_for(ver)) if hasattr(cfg, "stop_cooldown_for") else 0
+    block_until = -1
     i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
     # Never start at bar 0: long_at_close[i-1] would wrap to the LAST bar's
     # signal (future data deciding the first bar) — reachable on the
@@ -512,16 +516,22 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
                                       ret=float(ret), reason=reason))
                 in_pos = False; entry_px = np.nan; entry_date = None; peak_px = np.nan
                 last_reason = reason
-        elif want_long and (gate is None or bool(gate[i - 1])):
+                if (stop_hit or trail_hit) and cooldown > 0:
+                    block_until = i + cooldown        # flat through bar i+cooldown
+        elif want_long and (gate is None or bool(gate[i - 1])) and i > block_until:
             in_pos = True; entry_px = price[i]; entry_date = dates[i]; peak_px = price[i]
         pos_series.append(1 if in_pos else 0)
+    last_i = i1 - 1
     return dict(dates=used_dates, strat=np.array(strat_eq), bh=np.array(bh_eq),
                 pos=np.array(pos_series), trades=np.array(trades),
                 trade_log=trade_log, in_pos_now=in_pos,
                 entry_px=(float(entry_px) if in_pos else None), entry_date=entry_date,
                 trail_px=(float(peak_px * (1 - trail_pct))
                           if in_pos and trail_pct > 0 and np.isfinite(peak_px) else None),
-                last_exit_reason=last_reason, version=ver)
+                last_exit_reason=last_reason, version=ver,
+                # bars of post-stop cooldown still to serve after the last bar
+                # (0 when none) — the live decision shows WATCH, not ENTER
+                cooldown_left=(max(block_until - last_i, 0) if not in_pos else 0))
 
 
 def _clean_flags(sig, i, D2, D1):

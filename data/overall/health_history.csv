@@ -1457,8 +1457,8 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-08,sleeve,GDX,green,-0.0069,43.1,41.0,99.0
 2026-10-08,sleeve,GLDM,red,-0.2145,2.28,,11.0
 2026-10-08,sleeve,GRID,yellow,-0.1241,-1.85,46.4,59.0
-2026-10-08,sleeve,MSTR,yellow,-0.0378,-25.76,,8.0
-2026-10-08,sleeve,MSTU,yellow,-0.0713,-11.73,,8.0
+2026-10-08,sleeve,MSTR,yellow,-0.0378,-28.36,,8.0
+2026-10-08,sleeve,MSTU,yellow,-0.0713,-18.93,,8.0
 2026-10-08,sleeve,NUGT,green,-0.0163,100.31,37.8,99.0
 2026-10-08,sleeve,OIH,warming,-0.1486,0.0,,3.0
 2026-10-08,sleeve,PBW,green,-0.0555,31.75,89.4,80.0

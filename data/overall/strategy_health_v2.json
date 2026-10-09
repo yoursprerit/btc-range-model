@@ -1,6 +1,6 @@
 {
  "schema": "strategy-health/v1",
- "generated_at_utc": "2026-10-09T17:54:18+00:00",
+ "generated_at_utc": "2026-10-09T19:38:09+00:00",
  "as_of": "2026-10-08",
  "live_anchor": "2026-07-16",
  "thresholds": {
@@ -25,42 +25,42 @@
  "verdict": {
   "status": "red",
   "n_red": 1,
-  "n_yellow": 7,
+  "n_yellow": 8,
   "n_warming": 7,
   "n_sleeves": 18,
-  "headline": "1 alarm \u00b7 7 warnings"
+  "headline": "1 alarm \u00b7 8 warnings"
  },
  "portfolio": {
   "profiles": {
    "Balanced": {
     "metrics": {
-     "total_ret": 12.2239,
-     "cagr": 0.5662,
+     "total_ret": 9.5855,
+     "cagr": 0.5068,
      "mdd": -0.171,
-     "sharpe": 1.9266,
-     "vol": 0.2049
+     "sharpe": 1.7782,
+     "vol": 0.2037
     },
-    "status": "green",
-    "value": -0.0321,
+    "status": "yellow",
+    "value": -0.0602,
     "ref_mdd": -0.171,
-    "cur_uw_days": 36,
+    "cur_uw_days": 128,
     "ref_max_uw_days": 144,
-    "first_breach_date": null,
+    "first_breach_date": "2026-10-09",
     "need": null
    },
    "Growth": {
     "metrics": {
-     "total_ret": 13.9838,
-     "cagr": 0.6006,
+     "total_ret": 14.2296,
+     "cagr": 0.6051,
      "mdd": -0.2382,
-     "sharpe": 1.6225,
-     "vol": 0.2629
+     "sharpe": 1.6414,
+     "vol": 0.261
     },
     "status": "green",
-    "value": -0.0863,
+    "value": -0.0519,
     "ref_mdd": -0.2382,
     "cur_uw_days": 108,
-    "ref_max_uw_days": 212,
+    "ref_max_uw_days": 205,
     "first_breach_date": null,
     "need": null
    }
@@ -3197,7 +3197,7 @@
    },
    "edge": {
     "status": "yellow",
-    "value_pp": -25.76,
+    "value_pp": -28.36,
     "first_breach_date": "2026-10-09",
     "need": null
    },
@@ -4729,7 +4729,7 @@
      -20.92,
      -21.19,
      -17.08,
-     -25.76
+     -28.36
     ]
    }
   },
@@ -4752,7 +4752,7 @@
    },
    "edge": {
     "status": "yellow",
-    "value_pp": -11.73,
+    "value_pp": -18.93,
     "first_breach_date": "2026-10-09",
     "need": null
    },
@@ -6284,7 +6284,7 @@
      -4.57,
      -5.69,
      3.54,
-     -11.73
+     -18.93
     ]
    }
   },
@@ -6295,13 +6295,13 @@
    "kind": "core",
    "emoji": "\ud83d\udda5\ufe0f",
    "as_of": "2026-10-08",
-   "n_trades": 9,
+   "n_trades": 8,
    "dd": {
     "status": "yellow",
     "value": -0.2235,
-    "ref_mdd": -0.2671,
+    "ref_mdd": -0.2494,
     "cur_uw_days": 108,
-    "ref_max_uw_days": 514,
+    "ref_max_uw_days": 400,
     "first_breach_date": "2026-10-09",
     "need": null
    },
@@ -6315,9 +6315,9 @@
     "status": "warming",
     "pctl": null,
     "window_mean": null,
-    "n_trades": 9,
+    "n_trades": 8,
     "first_breach_date": null,
-    "need": "31 more closed trades"
+    "need": "32 more closed trades"
    },
    "status": "yellow",
    "series": {
@@ -7654,7 +7654,15 @@
      -0.0,
      -0.0,
      -0.0,
-     0.0,
+     -0.0,
+     -0.0,
+     -0.0,
+     -0.0,
+     -0.0,
+     -0.0,
+     -0.0,
+     -0.0,
+     -0.0,
      0.0,
      0.0,
      0.0,
@@ -7786,17 +7794,9 @@
      0.0,
      0.0,
      -0.0,
-     0.0,
-     0.0,
-     0.0,
-     0.0,
-     0.0,
-     0.0,
-     0.0,
-     0.0,
-     0.0,
      -0.0,
-     0.0,
+     -0.0,
+     -0.0,
      -0.0,
      -0.0,
      -0.0,

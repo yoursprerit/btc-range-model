@@ -432,7 +432,7 @@ def _load_daily(cfg: TickerConfig) -> pd.DataFrame:
 def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
                   last_close: float, ma_val: float | None,
                   long_now: bool | None = None, gate_ok: bool | None = None,
-                  stopped: str | None = None) -> dict:
+                  stopped: str | None = None, cooldown_left: int = 0) -> dict:
     """Resolve a single actionable state for the PARENT signal, reconciling the
     instantaneous read with the strategy's actual executed position.
     tone ∈ {buy, hold, exit, watch, flat}.
@@ -443,7 +443,8 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
     drops the sleeve and the executor sells; a later re-entry is a fresh
     OPEN) instead of the V1 "ENTER" that left the position quietly held.
     ``gate_ok=False`` (the V2 entry gate not satisfied) turns a fresh entry
-    into a WATCH rather than a buy."""
+    into a WATCH rather than a buy; so does ``cooldown_left`` > 0 (bars of
+    post-stop cooldown still to serve)."""
     if cfg.is_trend:
         # ``long_now`` is the engine's actual trend signal for this bar (the one
         # source of truth across ma / dual_ma / macd / ma_vol); fall back to the
@@ -471,6 +472,11 @@ def _net_decision(cfg: TickerConfig, sigs: dict | None, in_pos: bool,
             if gate_ok is False:
                 return dict(state="WATCH", label="WATCH — ABOVE TREND, GATE PENDING",
                             ico="🟡", tone="watch")
+            if cooldown_left and cooldown_left > 0:
+                return dict(state="WATCH",
+                            label=f"WATCH — ABOVE TREND, STOP COOLDOWN ({int(cooldown_left)} bar"
+                                  f"{'s' if int(cooldown_left) != 1 else ''} left)",
+                            ico="🟡", tone="watch", cooldown_left=int(cooldown_left))
             return dict(state="ENTRY", label="ENTER — ABOVE TREND", ico="🟢", tone="buy")
         return dict(state="FLAT", label="FLAT — BELOW TREND", ico="⬜", tone="flat")
     # Divergence — replicate the backtest's exit-overrides-entry precedence
@@ -550,6 +556,7 @@ def _asset_result(cfg, label, col, r, daily, dec, alert, bull, sent, ma_val, dch
     _ver = str(r.get("version") or bt.active_version())
     return dict(
         version=_ver, rules=cfg.rules_label(_ver), gate_ok=r.get("gate_ok"),
+        cooldown_left=int(r.get("cooldown_left") or 0),
         key=label, parent=cfg.key, name=meta["name"], kind=meta["kind"],
         emoji=cfg.emoji, kemoji=KIND_EMOJI[meta["kind"]], accent=cfg.accent,
         cap=CAP_BY_KEY.get(label, 0.30),
@@ -643,7 +650,8 @@ def run_asset(cfg: TickerConfig, version: str | None = None) -> list[dict]:
         # each traded instrument shares the parent decision but has its own pos
         dec = _net_decision(cfg, sigs, bool(r.get("in_pos_now")), last_close, ma_val,
                             long_now=long_now, gate_ok=gate_now,
-                            stopped=(_stopped_last_bar(r) if ver == "v2" else None))
+                            stopped=(_stopped_last_bar(r) if ver == "v2" else None),
+                            cooldown_left=int(r.get("cooldown_left") or 0))
         res = _asset_result(cfg, label, col, r, daily, dec, alert, bull,
                             sent, ma_val, dchg, mom, hist=hist)
         if cfg.strategy_mode == "divergence":
@@ -4424,6 +4432,8 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
             continue                    # committed entry — not a live "likely"
         if r.get("gate_ok") is False:
             continue                    # V2 entry gate not met on the last bar
+        if int(r.get("cooldown_left") or 0) > 0:
+            continue                    # V2 post-stop cooldown still running
         plive = (spot.get(r.get("parent")) or {}).get("price")
         if plive is None:
             continue

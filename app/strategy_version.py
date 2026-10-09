@@ -20,9 +20,11 @@ Version history
   gold (GLDM/UGL) takes the 25/100 cross only while the 100-day SMA is rising
   and trades a 10%/12% trailing stop instead of the −3% fixed stop; WGMI
   enters only while BTC sits above its 50-day SMA; REMX holds only while its
-  20-day SMA is above the 100-day; the allocator never trims a held sleeve
+  20-day SMA is above the 100-day; SOXX stays flat for 5 bars after its −5 %
+  stop fires before the 25/100 cross may re-admit it (added 2026-10-09,
+  before the first V2 publish); the allocator never trims a held sleeve
   except on its signal exit and only adds when the target rises by ≥ 8 pp
-  ("adds-only" band); a stop/trail hit publishes a CLOSE.  GRID, SOXX, XLE,
+  ("adds-only" band); a stop/trail hit publishes a CLOSE.  GRID, SOXL, XLE,
   BTC, PBW, ARTY, GDX/NUGT sleeves are identical in V1 and V2.
 
 Kept dependency-light (stdlib only) so the read-only artifact apps

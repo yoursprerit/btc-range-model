@@ -123,6 +123,7 @@ class TickerConfig:
     v2_gate_ma: int = 0            # … must be above its N-day SMA at the deciding close
     v2_trail_stop: float = 0.0     # trailing stop off the highest close (0 = none)
     v2_trail_by_asset: dict = field(default_factory=dict)   # per-column override
+    v2_stop_cooldown: int = 0      # bars a sleeve stays flat after a stop/trail hit (0 = re-enter at once)
     v2_note: str = ""              # one-line description of what changed in V2
 
     def stop_for(self, col: str) -> float:
@@ -141,7 +142,15 @@ class TickerConfig:
         """Does this sleeve's logic differ between V1 and V2 at all?"""
         return bool((self.v2_hold_ma_fast and self.v2_hold_ma_slow)
                     or (self.v2_gate_col and self.v2_gate_ma)
-                    or self.v2_trail_stop or self.v2_trail_by_asset)
+                    or self.v2_trail_stop or self.v2_trail_by_asset
+                    or self.v2_stop_cooldown)
+
+    def stop_cooldown_for(self, version: str | None = None) -> int:
+        """Bars a sleeve stays flat after a stop/trail exit under ``version``
+        (V1: none — it re-enters the very next bar the trend allows)."""
+        if str(version or "v2").lower() != "v2":
+            return 0
+        return int(self.v2_stop_cooldown or 0)
 
     def rules_label(self, version: str | None = None) -> str:
         """Short human description of the entry/hold/exit rules in force under
@@ -157,6 +166,8 @@ class TickerConfig:
                             f"> its SMA{self.v2_gate_ma}")
             if self.v2_trail_stop:
                 bits.append(f"{self.v2_trail_stop*100:.0f}% trailing stop")
+            if self.v2_stop_cooldown:
+                bits.append(f"{self.v2_stop_cooldown}-bar cooldown after a stop")
         bits.append(self.stop_label)
         return " · ".join(bits)
 
@@ -322,6 +333,15 @@ CONFIGS["SOXX"] = TickerConfig(
     # a similar return (see SOXL_ERX_ADDITION_EVAL.md).  SOXX itself keeps −5%.
     stop_by_asset={"soxl_close": 1.0},
     strategy_mode="dual_ma", strategy_name="Semis Dual-MA Trend",
+    # Strategy Logic V2 (2026-10, added before the first V2 publish): after the
+    # −5% stop fires, SOXX stays flat for 5 bars instead of re-entering the
+    # very next bar the 25/100 cross still allows — the stop-and-re-enter loop
+    # sold the dip and bought the bounce.  OOS 2021→now +382%/−29%/1.08 →
+    # +435%/−29%/1.15 (pre-2026 +186% → +217%, 2026 identical).  SOXL trades
+    # the same signal stop-less, so it is untouched.
+    v2_stop_cooldown=5,
+    v2_note=("V2: after the −5% stop fires, stay flat for 5 bars before the "
+             "25/100 cross may re-enter (SOXL, stop-less, is unchanged)."),
     ma_window=100, ma_fast=25, ma_slow=100, fixed_stop=0.05,
     hl_band_pct=0.012,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,

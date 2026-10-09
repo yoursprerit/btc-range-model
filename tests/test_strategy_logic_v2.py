@@ -452,3 +452,41 @@ def test_live_exit_flags_a_breached_trailing_stop_and_entry_respects_the_gate():
                 pos=dict(in_pos=False), last_close=10.0, bar_close=10.0,
                 version="v2", gate_ok=False)
     assert oc.live_entry_keys([flat], {"WGMI": {"price": 50.0}}) == set()
+
+
+# ── V2 post-stop cooldown (SOXX) ──────────────────────────────────────────
+def test_stop_cooldown_keeps_the_sleeve_flat_then_readmits():
+    # rally, a −5% stop hit, then the trend keeps saying long: V1 re-enters the
+    # next bar, V2 (cooldown 3) stays flat for three bars first
+    cfg = _cfg(fixed_stop=0.05)
+    cfg.v2_stop_cooldown = 3
+    cfg.stop_cooldown_for = lambda version=None: (3 if str(version or "v2") == "v2" else 0)
+    # entry at 100 on bar 1; bar 4 closes at 94 (−6%) → the −5% stop fires
+    px = np.array([100, 104, 108, 112, 94, 100, 104, 108, 112, 116, 118.0])
+    p = _preds(px)
+    v1 = bt.simulate_regime(cfg, p, None, "px_close", stop_pct=0.05, version="v1")
+    v2 = bt.simulate_regime(cfg, p, None, "px_close", stop_pct=0.05, version="v2")
+    assert v1["trade_log"][0]["reason"] == "stop −5%"
+    # sim pos[k] is bar k+1: stop on bar 4 → pos[3]=0; V1 back in on bar 5 (pos[4]=1);
+    # V2 stays flat through bar 7 (pos[4..6]=0) and re-enters on bar 8 (pos[7]=1)
+    assert list(v1["pos"][3:5]) == [0, 1]
+    assert list(v2["pos"][3:8]) == [0, 0, 0, 0, 1]
+    assert v2["cooldown_left"] == 0 and v2["in_pos_now"]
+    # cut the series right after the stop: cooldown still running → reported
+    v2s = bt.simulate_regime(cfg, _preds(px[:6]), None, "px_close", stop_pct=0.05, version="v2")
+    assert not v2s["in_pos_now"] and v2s["cooldown_left"] == 2
+    # the live decision turns that into a WATCH, never an ENTER
+    dec = oc._net_decision(SimpleNamespace(is_trend=True), None, in_pos=False, last_close=1.0,
+                           ma_val=None, long_now=True, cooldown_left=2)
+    assert dec["state"] == "WATCH" and "COOLDOWN" in dec["label"]
+    flat = dict(key="SOXX", parent="SOXX", mode="dual_ma", cfg=tcfg.get_config("SOXX"),
+                close_hist=[1.0, 1.0, 1.0], decision=dict(tone="watch"), pos=dict(in_pos=False),
+                last_close=1.0, bar_close=1.0, version="v2", cooldown_left=2)
+    assert oc.live_entry_keys([flat], {"SOXX": {"price": 50.0}}) == set()
+
+
+def test_soxx_config_carries_the_cooldown_and_soxl_is_untouched():
+    soxx = tcfg.get_config("SOXX")
+    assert soxx.has_v2_rules and soxx.stop_cooldown_for("v2") == 5 and soxx.stop_cooldown_for("v1") == 0
+    assert "5-bar cooldown" in soxx.rules_label("v2") and "cooldown" not in soxx.rules_label("v1")
+    assert soxx.stop_for("soxl_close") >= 0.999            # SOXL is stop-less → cooldown never fires

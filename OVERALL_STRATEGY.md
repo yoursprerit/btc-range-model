@@ -19,7 +19,7 @@ holds the version history) found three separate drains — slow trend sleeves
 whipsawed after the gold, rare-earth and Bitcoin-miner up-trends broke, a
 daily priority tilt that re-sized every held sleeve, and stops that the
 publisher never turned into a CLOSE.  **Strategy Logic V2** changes exactly
-these, and nothing else (GRID, SOXX, XLE, PBW, ARTY, GDX/NUGT and the BTC
+these, and nothing else (GRID, SOXL, XLE, PBW, ARTY, GDX/NUGT and the BTC
 sleeves are identical in V1 and V2):
 
 | Sleeve | V1 rule | V2 rule | OOS (V1 → V2) |
@@ -28,6 +28,7 @@ sleeves are identical in V1 and V2):
 | **UGL** | same signal, −3 % fixed stop | same gate; **12 % trailing stop** | +215 % / −44 % / 0.80 → **+366 % / −30 % / 1.04** |
 | **WGMI** | SMA50 + vol filter, no stop | entry only while **BTC > its 50-day SMA** (parent gate) | +333 % / −38 % / 1.62 → **+395 % / −17 % / 1.88** (2024→) |
 | **REMX** | 50/200 golden cross, −5 % | entry unchanged; **hold only while SMA20 > SMA100** | +97 % / −41 % / 0.55 → **+155 % / −27 % / 0.73** |
+| **SOXX** | dual-MA 25/100, −5 % fixed stop, re-enters the next bar after a stop | same signal and stop; **stays flat 5 bars after a stop** before the cross may re-admit it (added 2026-10-09, before the first V2 publish; SOXL is stop-less and unchanged) | +382 % / −29 % / 1.08 → **+435 % / −29 % / 1.15** (pre-2026 +186 % → +217 %, 2026 identical) |
 
 **Allocator — adds-only.** A sleeve the book already holds is never trimmed
 by the daily tilt (only its own signal exit or stop closes it) and is added
