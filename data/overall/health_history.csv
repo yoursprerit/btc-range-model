@@ -1462,10 +1462,10 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-08,sleeve,NUGT,green,-0.0163,100.31,37.8,99.0
 2026-10-08,sleeve,OIH,warming,-0.1486,0.0,,3.0
 2026-10-08,sleeve,PBW,green,-0.0555,31.75,89.4,80.0
-2026-10-08,sleeve,REMX,red,-0.347,11.74,,4.0
+2026-10-08,sleeve,REMX,yellow,-0.347,11.74,,4.0
 2026-10-08,sleeve,SOXL,yellow,-0.6298,-43.32,,6.0
 2026-10-08,sleeve,SOXX,yellow,-0.2235,-14.44,,9.0
 2026-10-08,sleeve,UGL,red,-0.4429,4.13,,16.0
 2026-10-08,sleeve,WGMI,red,-0.3783,-7.47,,19.0
 2026-10-08,sleeve,XLE,warming,-0.0105,0.0,,3.0
-2026-10-08,tracking,book_vs_replay,yellow,,-2.6,,84.0
+2026-10-08,tracking,book_vs_replay,yellow,,-2.6,,69.0

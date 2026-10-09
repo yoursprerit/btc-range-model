@@ -118,3 +118,20 @@ A health-build failure never blocks or unpublishes the day's book
 
 No automatic action is taken in any case — that is a deliberate design
 decision backed by the V4 penalty-box result.
+
+
+## 6. Strategy-logic views (V1 / V2 / Combined)
+
+Since Strategy Logic V2 (2026-10-09) the nightly build writes one snapshot
+per view — `scripts/build_strategy_health.py --views combined v1 v2`:
+
+| View | Files | What it monitors |
+|---|---|---|
+| **Combined** (headline) | `strategy_health.json`, `health_history.csv` | each sleeve and the book under the logic actually in effect each day (V1 before the cut-over, V2 from it) — the live record |
+| **V1** | `strategy_health_v1.json`, `health_history_v1.csv` | the V1 rules replayed over the whole history |
+| **V2** | `strategy_health_v2.json`, `health_history_v2.csv` | the V2 rules replayed over the whole history |
+
+The M1 tracking leg admits only the published books stamped with the view's
+generation(s).  The 🩺 app's **Strategy logic** radio switches between the
+three so a decayed V1 sleeve can be compared with its V2 replacement on the
+same monitors.  Breach persistence (`first_breach_date`) is carried per view.

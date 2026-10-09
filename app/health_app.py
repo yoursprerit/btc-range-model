@@ -76,10 +76,20 @@ _HEALTH_JSON = _REPO_ROOT / "data" / "overall" / "strategy_health.json"
 _HEALTH_CSV = _REPO_ROOT / "data" / "overall" / "health_history.csv"
 
 
-@st.cache_data(ttl=300, show_spinner=False, max_entries=4)
-def _load(mtime: float, hist_mtime: float):
-    snap = json.loads(_HEALTH_JSON.read_text())
-    hist = pd.read_csv(_HEALTH_CSV) if _HEALTH_CSV.exists() else pd.DataFrame()
+def _view_paths(view: str):
+    """Artifacts for a strategy-logic view: the headline files hold the
+    Combined (live-record) view; V1 / V2 live beside them with a suffix."""
+    if view == "combined":
+        return _HEALTH_JSON, _HEALTH_CSV
+    return (_HEALTH_JSON.with_name(f"strategy_health_{view}.json"),
+            _HEALTH_CSV.with_name(f"health_history_{view}.csv"))
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=8)
+def _load(view: str, mtime: float, hist_mtime: float):
+    jp, cp = _view_paths(view)
+    snap = json.loads(jp.read_text())
+    hist = pd.read_csv(cp) if cp.exists() else pd.DataFrame()
     return snap, hist
 
 
@@ -98,10 +108,28 @@ if not _HEALTH_JSON.exists():
             "```bash\npython scripts/build_strategy_health.py\n```")
     st.stop()
 
-snap, hist = _load(_HEALTH_JSON.stat().st_mtime,
-                   _HEALTH_CSV.stat().st_mtime if _HEALTH_CSV.exists() else 0.0)
+# ── strategy-logic view: compare the live record (Combined) with the V1 and
+# V2 rules each run over the whole history — one snapshot per view, built by
+# the same nightly job (strategy_health[_v1|_v2].json)
+_view_choice = _sv.render_view_radio(
+    "health_strategy_view", default=_sv.VIEW_COMBINED, what="health monitors",
+    note="Combined = each sleeve and the book under the logic actually in "
+         "effect each day (the live record). V1 / V2 = that generation's rules "
+         "over the full history, so a decayed V1 sleeve can be compared with "
+         "its V2 replacement on the same monitors.")
+_view = _sv.VIEW_TO_VERSION[_view_choice]
+_vj, _vc = _view_paths(_view)
+if not _vj.exists():
+    st.warning(f"No **{_view_choice}** health snapshot yet — the nightly build "
+               f"writes `{_vj.name}` (run `python scripts/build_strategy_health.py "
+               f"--views {_view}`). Showing the Combined view meanwhile.")
+    _view, (_vj, _vc) = "combined", _view_paths("combined")
+snap, hist = _load(_view, _vj.stat().st_mtime,
+                   _vc.stat().st_mtime if _vc.exists() else 0.0)
 v = snap["verdict"]
 th = snap.get("thresholds", hc.THRESHOLDS)
+st.caption(f"Showing **{_sv.VERSION_TO_VIEW.get(_view, _view)}** "
+           f"(`{_vj.name}`, built {str(snap.get('generated_at_utc', ''))[:16]} UTC).")
 
 # ════════════════════════════════════════════════════════════════════════════
 # Tier 1 · The verdict

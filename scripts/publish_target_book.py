@@ -121,6 +121,17 @@ def _withheld_streak(path: Path, published: bool, now) -> tuple:
     return str(since_d), int((today - since_d).days) + 1
 
 
+def _execution_alerts(audit_path: Path) -> list[dict]:
+    try:
+        prev = tb.prev_path(Path(DEFAULT_OUT))
+        alerts = oc.execution_alerts(prev)
+        for a in alerts:
+            print(f"  ⚠️ execution alert: {a['account']} {a['key']} — {a['reason']}")
+        return alerts
+    except Exception:
+        return []
+
+
 def _write_audit(path: Path, *, audit: dict, results: list, profile: str,
                  book_published: bool, book_info: dict | None,
                  skip_reason: str | None) -> None:
@@ -143,6 +154,11 @@ def _write_audit(path: Path, *, audit: dict, results: list, profile: str,
                          withheld_since_ct=withheld_since,
                          consecutive_withheld_days=withheld_days,
                          **(book_info or {})),
+        strategy_version=oc.STRATEGY_VERSION,
+        # CLOSE instructions of the previously published book that no
+        # account record shows executed — the daily audit surfaces these so
+        # a missed exit is never silent (see overall_core.unexecuted_closes)
+        execution=dict(alerts=_execution_alerts(path)),
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=1, default=str))
@@ -262,7 +278,14 @@ def main() -> int:
     # app's action plan and stays reproducible for the whole frozen day.
     print(f"\nAudit {'PASSED' if audit['passed'] else 'overridden (--allow-stale)'}"
           " — computing target book (committed close signals)…", flush=True)
-    book = compute_target_book(args.profile, results=results, live_adjust=False)
+    # The book the account currently holds (the outgoing paper book, read
+    # BEFORE it is rotated to *_prev below) anchors the V2 adds-only rule.
+    _prev_w = oc.load_published_book_weights(Path(args.out))
+    book = compute_target_book(args.profile, results=results, live_adjust=False,
+                               prev_weights=_prev_w)
+    if _prev_w:
+        print(f"Adds-only band {oc.adds_only_band()*100:.0f} pp vs the held book "
+              f"({len(_prev_w)} sleeves) — strategy logic {oc.STRATEGY_VERSION}.")
 
     if not secret:
         print("WARNING: OVERALL_BOOK_SECRET not set — writing UNSIGNED books. "

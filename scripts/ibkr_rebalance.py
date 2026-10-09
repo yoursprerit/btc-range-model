@@ -80,7 +80,8 @@ class TargetBook:
 
 
 def compute_target_book(profile: str = None, results: list | None = None,
-                        live_adjust: bool = True) -> TargetBook:
+                        live_adjust: bool = True,
+                        prev_weights: dict | None = None) -> TargetBook:
     """Run the full engine and return today's target weights.
 
     With ``live_adjust=True`` (default — the interactive rebalancer) this
@@ -99,6 +100,11 @@ def compute_target_book(profile: str = None, results: list | None = None,
     in (the publisher runs the universe once, audits its freshness, and only
     then builds the book from the SAME audited results — no second run that
     could silently differ from what was audited).
+
+    ``prev_weights`` — the risk weights of the book currently held (default:
+    the published paper Targetbook).  Strategy Logic V2's adds-only rule pins
+    every held sleeve to that weight unless its target rises by ≥ 8 pp, so
+    the daily tilt never trims a position the signal has not closed.
     """
     profile = profile or oc.DEFAULT_PROFILE
     prof = oc.RISK_PROFILES.get(profile) or oc.RISK_PROFILES[oc.DEFAULT_PROFILE]
@@ -108,6 +114,8 @@ def compute_target_book(profile: str = None, results: list | None = None,
         results = oc.run_universe()
     if not results:
         raise RuntimeError("run_universe() returned no instruments — check data feeds")
+    if prev_weights is None:
+        prev_weights = oc.load_published_book_weights()
 
     rets = oc.returns_matrix(results)
     pos = oc.position_matrix(results, rets.index)
@@ -124,11 +132,12 @@ def compute_target_book(profile: str = None, results: list | None = None,
         oc.apply_spot(results, spot)
         live_exits = oc.live_exit_keys(results, spot, include_entries=True)
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
-                                          caps=caps, force_exit=live_exits)
+                                          caps=caps, force_exit=live_exits,
+                                          prev_weights=prev_weights)
     else:
         # committed signals only — the frozen published book.
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
-                                          caps=caps)
+                                          caps=caps, prev_weights=prev_weights)
 
     targets = {k: float(w) for k, w in gate["target"].items() if w and w > 0}
 

@@ -162,15 +162,72 @@ MA_WINDOW_BY_ASSET = {"GLDM": 50, "UGL": 40, "GDX": 100}
 STOP_BY_ASSET = {"GLDM": FIXED_STOP, "GDX": 0.05, "UGL": FIXED_STOP, "NUGT": 0.08}
 
 
-def stop_for(asset: str) -> float:
+def _active_version(version=None) -> str:
+    if version:
+        return str(version).lower()
+    try:
+        import strategy_version as _sv
+        return _sv.STRATEGY_VERSION
+    except Exception:                       # pragma: no cover
+        return "v1"
+
+
+# ── STRATEGY LOGIC V2 (2026-10 loss review) — GLDM & UGL dual-MA sleeves ──
+# The Sep-2026 25/100 golden cross fired 19% below gold's peak with the slow
+# SMA still falling (a bear-market bounce) and the −3% fixed stop then
+# stopped UGL out five times in a month, re-entering the next bar each time.
+#   • ENTRY GATE: take the cross only while the 100-day SMA is RISING over
+#     the last V2_GATE_RISING_BARS bars.  OOS 2021→now GLDM +115%→+150%,
+#     UGL +215%→+356%; pre-2026 also better; the 2026-09 whipsaw is skipped.
+#   • TRAILING STOP replaces the fixed −3%: exit when the close falls
+#     V2_TRAIL_BY_ASSET below the position's highest close (GLDM 10%, UGL 12%)
+#     — UGL MDD −44% → −30%.  No fixed stop under V2 (V2_STOP_BY_ASSET).
+# GDX / NUGT (divergence engine) are unchanged in V2.
+V2_GATE_RISING_BARS = 20
+V2_TRAIL_BY_ASSET = {"GLDM": 0.10, "UGL": 0.12}
+V2_STOP_BY_ASSET = {"GLDM": 1.0, "UGL": 1.0}
+
+
+def stop_for(asset: str, version=None) -> float:
     """Per-asset fixed stop (fraction; 1.0 = no fixed stop, signal-only exits).
     Single source of truth for the Gold app and the Gold engine so a leveraged
-    sibling's looser/absent stop is never rendered or back-tested as the −3%."""
+    sibling's looser/absent stop is never rendered or back-tested as the −3%.
+    Under Strategy Logic V2 the dual-MA sleeves (GLDM/UGL) trade a trailing
+    stop instead (``trail_for``) and carry no fixed stop."""
+    if _active_version(version) == "v2" and asset in V2_STOP_BY_ASSET:
+        return V2_STOP_BY_ASSET[asset]
     return STOP_BY_ASSET.get(asset, FIXED_STOP)
 
 
-def has_stop_for(asset: str) -> bool:
-    return stop_for(asset) < 0.999
+def has_stop_for(asset: str, version=None) -> bool:
+    return stop_for(asset, version) < 0.999
+
+
+def trail_for(asset: str, version=None) -> float:
+    """Trailing stop (fraction below the highest close; 0 = none).  V2 only."""
+    if _active_version(version) != "v2":
+        return 0.0
+    return float(V2_TRAIL_BY_ASSET.get(asset, 0.0))
+
+
+def gate_rising_bars(version=None) -> int:
+    """V2 entry gate: the slow SMA must be rising over this many bars (0 =
+    no gate, i.e. V1)."""
+    return V2_GATE_RISING_BARS if _active_version(version) == "v2" else 0
+
+
+def rules_label(asset: str, version=None) -> str:
+    """Human description of the dual-MA sleeve's rules under ``version``."""
+    ver = _active_version(version)
+    base = f"dual-MA {DUAL_MA_FAST}/{DUAL_MA_SLOW} cross"
+    if engine_for(asset) != "dual_ma":
+        s = stop_for(asset, ver)
+        return f"divergence · {'no fixed stop' if s >= 0.999 else f'−{s*100:.0f}% stop'}"
+    if ver == "v2":
+        return (f"{base} · enter only while SMA{DUAL_MA_SLOW} rising "
+                f"({V2_GATE_RISING_BARS} bars) · {trail_for(asset, ver)*100:.0f}% "
+                "trailing stop · no fixed stop")
+    return f"{base} · −{stop_for(asset, ver)*100:.0f}% fixed stop"
 
 # Day-type classifier return bands (gold-scaled): next-day close-to-close.
 DAY_UP_THRESH   =  0.004    # ≥ +0.4% → Trend Up

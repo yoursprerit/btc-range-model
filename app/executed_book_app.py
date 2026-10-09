@@ -448,6 +448,7 @@ def _history_index(recs: list[dict]) -> pd.DataFrame:
         filled = [t for t in trades if float(t.get("filled") or 0.0) > 0]
         rows.append(dict(
             Executed=r["executed_on"], Signal_bar=r["as_of"],
+            Strategy=_sv.version_label(_sv.version_for_date(r["as_of"])),
             Account=("🔴 live" if (pl.get("account_mode") or "paper").lower() == "live"
                      else "🧪 paper"),
             Mode=("executed" if (pl.get("mode") or "").lower() == "execute"
@@ -486,6 +487,19 @@ def _render_history(report_path: Path) -> None:
                    f"**{reset.get('cutoff_as_of')}** were a previous account's and "
                    "are not shown.")
 
+    # ── strategy-logic view: which generation's runs to browse ──────────────
+    _view = _sv.render_view_radio(
+        "exec_strategy_view", default=_sv.VIEW_COMBINED, what="archived runs",
+        note="Each run is labelled with the strategy logic in effect for the "
+             "signal bar it executed (V1 before "
+             f"{_sv.STRATEGY_VERSION_START}, V2 from it). Combined shows every run.")
+    _admit = set(_sv.versions_for_view(_view))
+    recs = [r for r in recs if _sv.version_for_date(r["as_of"]) in _admit]
+    if not recs:
+        st.info(f"No archived runs under **{_view}** yet — the first "
+                f"{_sv.version_label(_sv.VIEW_TO_VERSION.get(_view, 'v2'))} run "
+                "appears here after the next execution.")
+        return
     dates = sorted(r["executed_on"] for r in recs)          # ascending
     first, last = pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[-1]).date()
 
@@ -520,6 +534,8 @@ def _render_history(report_path: Path) -> None:
 
     st.markdown(f"#### 🕰️ Run of {rec['executed_on']} "
                 f"(signal bar {rec['as_of']})")
+    _sv.render_version_pill(_sv.version_for_date(rec["as_of"]),
+                            note=f"strategy logic in effect for signal bar {rec['as_of']}")
     _render(rec["payload"], source=f"`{rec['path'].relative_to(_REPO_ROOT)}`",
             historical=True)
 
@@ -746,6 +762,16 @@ def _render_c2_history() -> None:
                 "dated copy (`data/overall/c2_positions_archive/<date>.json`) each "
                 "time the holdings change, so this fills in from its next run.")
         return
+    _view = _sv.render_view_radio(
+        "exec_c2_strategy_view", default=_sv.VIEW_COMBINED, what="archived snapshots",
+        note="Each snapshot is labelled with the strategy logic in effect for "
+             "the book it holds (V1 before "
+             f"{_sv.STRATEGY_VERSION_START}, V2 from it). Combined shows every day.")
+    _admit = set(_sv.versions_for_view(_view))
+    recs = [r for r in recs if _sv.version_for_date(r["as_of"] or r["executed_on"]) in _admit]
+    if not recs:
+        st.info(f"No archived C2 snapshots under **{_view}** yet.")
+        return
     dates = sorted(r["executed_on"] for r in recs)
     first, last = pd.Timestamp(dates[0]).date(), pd.Timestamp(dates[-1]).date()
     st.markdown("### 📅 Pick a past day")
@@ -768,6 +794,8 @@ def _render_c2_history() -> None:
         st.caption(f"No snapshot on **{picked}** — showing **{rec['executed_on']}**.")
     st.markdown(f"#### 🕰️ C2 holdings on {rec['executed_on']}"
                 + (f" (book for signal bar {rec['as_of']})" if rec["as_of"] else ""))
+    _sv.render_version_pill(_sv.version_for_date(rec["as_of"] or rec["executed_on"]),
+                            note="strategy logic in effect for that book")
     _render_c2(rec["payload"], historical=True,
                source=f"`{rec['path'].relative_to(_REPO_ROOT)}`")
 
@@ -798,6 +826,9 @@ if _broker == _BROKER_C2:
     with _c2_now:
         _snap = _read_json(C2_SNAPSHOT_PATH)
         if _snap and _snap.get("schema") == eb.C2_SNAPSHOT_SCHEMA:
+            _sv.render_version_pill(
+                _sv.version_for_date(_snap.get("book_as_of") or _sv.STRATEGY_VERSION_START),
+                note=f"strategy logic in effect for book {_snap.get('book_as_of', '—')}")
             _render_c2(_snap, source=f"`{C2_SNAPSHOT_PATH.relative_to(_REPO_ROOT)}`")
         else:
             st.warning("No C2 positions snapshot yet "
@@ -832,6 +863,9 @@ with _tab_now:
     if _path.exists():
         try:
             payload = tb.loads(_path.read_text())
+            _sv.render_version_pill(
+                _sv.version_for_date(payload.get("as_of") or _sv.STRATEGY_VERSION_START),
+                note=f"strategy logic in effect for signal bar {payload.get('as_of', '—')}")
             _render(payload, source=f"`{_path.relative_to(_REPO_ROOT)}`")
         except Exception as e:
             st.error(f"Could not read the execution report: {e}")

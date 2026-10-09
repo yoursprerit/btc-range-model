@@ -316,6 +316,23 @@ for (_lbl, _p), _col in zip(_books, bc):
             st.markdown(f"**{_lbl}** — _not published yet_")
 st.caption("_Open the 📋 Target Book app for the full allocation, signature "
            "verification and downloads._")
+# ── execution alerts: CLOSEs of the previous book no account shows executed ──
+try:
+    _ex_alerts = ((_DA or {}).get("execution") or {}).get("alerts")
+    if _ex_alerts is None:
+        import overall_core as _oc_alerts          # live fallback (no artifact yet)
+        _ex_alerts = _oc_alerts.execution_alerts()
+except Exception:
+    _ex_alerts = []
+if _ex_alerts:
+    st.error("🚨 **Unexecuted CLOSE** — the previous Targetbook told the "
+             "executor to sell, but an account record still shows the "
+             "position (or no run since that book):\n\n" +
+             "\n".join(f"- **{a['key']}** ({a['account']}) — {a['reason']}"
+                       for a in _ex_alerts))
+else:
+    st.caption("✅ No unexecuted CLOSE instructions outstanding from the "
+               "previous Targetbook (IBKR executed book and C2 snapshot checked).")
 
 # ════════════════════════════════════════════════════════════════════════════
 # 5 · Strategy Health — the decay monitor's verdict (cross-link)

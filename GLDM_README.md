@@ -125,3 +125,9 @@ streamlit run streamlit_app.py           # launch, pick GLDM in the sidebar
 
 The models are deliberately lightweight (ridge / logistic) so they retrain in
 seconds and the whole pipeline is transparent and reproducible.
+
+
+> ⚙️ **Strategy Logic V2 (2026-10):** GLDM / UGL take the 25/100 cross only
+> while the 100-day SMA is rising and trade 10 % / 12 % trailing stops instead
+> of the −3 % fixed stop.  Details: `GLDM_TRADING_STRATEGY.md` → *Strategy
+> Logic V2*; the Backtesting tabs offer a V1 / V2 / Combined selector.

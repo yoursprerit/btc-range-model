@@ -30,8 +30,65 @@ sys.path.insert(0, str(_ROOT / "app"))
 sys.path.insert(0, str(_ROOT))
 import ticker_core as tc            # noqa: E402
 from ticker_config import get_config, TickerConfig  # noqa: E402
+try:                                # dependency-light version constants
+    import strategy_version as _sv  # noqa: E402
+except Exception:                   # pragma: no cover — engine-only contexts
+    _sv = None
 
 TRADING_DAYS = 252
+
+
+# ── strategy-logic version plumbing ───────────────────────────────────────
+def active_version(version: str | None = None) -> str:
+    """Resolve the engine version to run: an explicit ``version`` (``"v1"`` /
+    ``"v2"``) wins, else the deliberate current version from
+    ``app/strategy_version.py``."""
+    if version:
+        return str(version).lower()
+    return _sv.STRATEGY_VERSION if _sv is not None else "v1"
+
+
+def version_cutover() -> str:
+    """First signal day of the current version (the V1 → V2 cut-over)."""
+    return _sv.STRATEGY_VERSION_START if _sv is not None else "2099-01-01"
+
+
+def combine_runs(r1: dict, r2: dict, cutover) -> dict:
+    """Splice two same-shape strategy runs at ``cutover``: bars before it earn
+    ``r1``'s daily return (and carry its position), bars on/after it earn
+    ``r2``'s — i.e. each day under the logic that was actually in effect
+    that day.  The equity curve is re-compounded from the spliced daily
+    returns; the trade log keeps ``r1``'s trades closed before the cut-over
+    and ``r2``'s trades closed on/after it; open-position state is ``r2``'s.
+    Returns the same schema as ``simulate_regime`` / ``simulate``."""
+    cut = pd.Timestamp(cutover)
+    d1 = pd.DatetimeIndex(pd.Series(r1["dates"])); d2 = pd.DatetimeIndex(pd.Series(r2["dates"]))
+    s1 = np.asarray(r1["strat"], float); s2 = np.asarray(r2["strat"], float)
+    p1 = np.asarray(r1["pos"], float); p2 = np.asarray(r2["pos"], float)
+    ret1 = pd.Series(np.r_[0.0, np.diff(s1) / s1[:-1]] if len(s1) else [], index=d1)
+    ret2 = pd.Series(np.r_[0.0, np.diff(s2) / s2[:-1]] if len(s2) else [], index=d2)
+    pos1 = pd.Series(p1, index=d1); pos2 = pd.Series(p2, index=d2)
+    ret = pd.concat([ret1.loc[ret1.index < cut], ret2.loc[ret2.index >= cut]])
+    pos = pd.concat([pos1.loc[pos1.index < cut], pos2.loc[pos2.index >= cut]])
+    dates = ret.index
+    strat = np.cumprod(1.0 + ret.to_numpy(float)) if len(ret) else np.array([])
+    bh_src = r1 if len(d1) >= len(d2) else r2
+    bh = pd.Series(np.asarray(bh_src["bh"], float),
+                   index=pd.DatetimeIndex(pd.Series(bh_src["dates"]))).reindex(dates).ffill()
+    log = [t for t in (r1.get("trade_log") or [])
+           if pd.Timestamp(t["exit_date"]) < cut] + \
+          [t for t in (r2.get("trade_log") or [])
+           if pd.Timestamp(t["exit_date"]) >= cut]
+    trades = np.array([float(t["ret"]) for t in log])
+    version_series = pd.Series(np.where(dates < cut, "v1", "v2"), index=dates)
+    # open-position state belongs to whichever generation governs the LAST bar
+    tail = r2 if (len(dates) and dates[-1] >= cut) else r1
+    return dict(dates=list(dates.to_numpy()), strat=strat, bh=bh.to_numpy(float),
+                pos=pos.to_numpy(float), trades=trades, trade_log=log,
+                in_pos_now=bool(tail.get("in_pos_now")), entry_px=tail.get("entry_px"),
+                entry_date=tail.get("entry_date"), version_series=version_series,
+                trail_px=tail.get("trail_px"), last_exit_reason=tail.get("last_exit_reason"),
+                version="combined")
 
 
 # ── build out-of-sample daily H/L predictions ────────────────────────────
@@ -119,13 +176,23 @@ def build_predictions(cfg: TickerConfig, daily: pd.DataFrame, oos_start: str | N
     # metadata, so it survives the slicing and copying downstream.
     if cfg.is_trend and "px_close" in daily:
         _full = daily["px_close"].astype(float)
-        _long = pd.Series(np.asarray(trend_long_array(cfg, _full.to_numpy(float)),
-                                     dtype=bool), index=_full.index)
-        df["trend_long"] = _long.reindex(df.index).fillna(False).astype(bool)
+        # one column per strategy-logic version (V1 / V2 long conditions can
+        # differ — REMX's V2 hold rule), plus the V2 entry gate; ``trend_long``
+        # stays the ACTIVE version's array for every existing consumer.
+        for _ver in ("v1", "v2"):
+            _long = pd.Series(np.asarray(trend_long_array(cfg, _full.to_numpy(float),
+                                                          version=_ver),
+                                         dtype=bool), index=_full.index)
+            df[f"trend_long_{_ver}"] = _long.reindex(df.index).fillna(False).astype(bool)
+        df["trend_long"] = df[f"trend_long_{active_version()}"]
+        _gate = trend_entry_gate_array(cfg, daily, version="v2")
+        if _gate is not None:
+            df["trend_gate_v2"] = pd.Series(_gate, index=daily.index).reindex(
+                df.index).fillna(False).astype(bool)
     keep = ["close_asof", "pred_high", "pred_low", "actual_high", "actual_low",
             "target_date", "px_close"] + [c for c in keep_price if c in df and c != "px_close"]
-    if "trend_long" in df:
-        keep.append("trend_long")
+    keep += [c for c in ("trend_long", "trend_long_v1", "trend_long_v2",
+                         "trend_gate_v2") if c in df]
     out = df[keep].copy()
     # Model H/L bands for the PENDING next bar — the one after the last
     # completed bar — predicted from features known at the last close only
@@ -217,7 +284,7 @@ def macd_hist_array(cfg, gcl):
     return (macd - macd.ewm(span=cfg.macd_signal, adjust=False).mean()).to_numpy()
 
 
-def trend_long_array(cfg, gcl):
+def trend_long_array(cfg, gcl, version: str | None = None):
     """Boolean long-at-close signal for the config's trend mode, computed on the
     PRIMARY close array ``gcl`` (decision at each close → executed next bar).
 
@@ -232,7 +299,24 @@ def trend_long_array(cfg, gcl):
                 above the ``dd_reentry_ma``-day SMA.  A stateful hysteresis
                 loop — the disaster gate for assets whose OOS edge IS being
                 long (see the XLE 2026-07 causal retune).
+
+    Strategy Logic V2 (``version="v2"``) additionally ANDs the config's
+    ``v2_hold_ma_fast``/``v2_hold_ma_slow`` hold condition into the signal
+    (REMX: hold the 50/200 golden cross only while the 20-day SMA is above the
+    100-day), so the sleeve exits a fading up-cycle months before the slow
+    death cross.  Configs without a hold rule are identical in V1 and V2.
     """
+    base = _trend_long_base(cfg, gcl)
+    if active_version(version) == "v2" and getattr(cfg, "v2_hold_ma_fast", 0) \
+            and getattr(cfg, "v2_hold_ma_slow", 0):
+        hold = (_rolling_mean(gcl, cfg.v2_hold_ma_fast)
+                > _rolling_mean(gcl, cfg.v2_hold_ma_slow))
+        return np.asarray(base, bool) & np.asarray(hold, bool)
+    return base
+
+
+def _trend_long_base(cfg, gcl):
+    """The version-independent long condition (see ``trend_long_array``)."""
     m = cfg.strategy_mode
     if m == "dual_ma":
         return _rolling_mean(gcl, cfg.ma_fast) > _rolling_mean(gcl, cfg.ma_slow)
@@ -262,13 +346,13 @@ def trend_long_array(cfg, gcl):
     return gcl > _rolling_mean(gcl, cfg.ma_window)          # "ma"
 
 
-def trend_long_now(cfg, daily):
+def trend_long_now(cfg, daily, version: str | None = None):
     """The trend signal's boolean state on the latest available bar."""
     gcl = daily["px_close"].to_numpy(float)
-    return bool(trend_long_array(cfg, gcl)[-1]) if len(gcl) else False
+    return bool(trend_long_array(cfg, gcl, version)[-1]) if len(gcl) else False
 
 
-def trend_long_now_live(cfg, close_hist, live_px):
+def trend_long_now_live(cfg, close_hist, live_px, version: str | None = None):
     """The trend signal's boolean state if ``live_px`` is taken as the newest
     close.  Appends the live price as a provisional latest bar and re-evaluates
     the mode's ACTUAL long condition (via ``trend_long_array``), so dual_ma
@@ -281,7 +365,34 @@ def trend_long_now_live(cfg, close_hist, live_px):
     if not len(arr) or not np.isfinite(live_px):
         return None
     arr = np.append(arr, float(live_px))
-    return bool(trend_long_array(cfg, arr)[-1])
+    return bool(trend_long_array(cfg, arr, version)[-1])
+
+
+def trend_entry_gate_array(cfg, daily, version: str | None = None):
+    """Strategy Logic V2 ENTRY gate on the config's ``v2_gate_col`` macro
+    series (WGMI: Bitcoin above its 50-day SMA) — a fresh entry needs the gate
+    True at the deciding close; an open position is NOT closed when the gate
+    later turns False (the long condition does that).  Returns a bool array
+    aligned with ``daily``'s rows, or ``None`` when the version/config has no
+    gate (V1, or any sleeve without one) or the column is missing."""
+    col = getattr(cfg, "v2_gate_col", "") or ""
+    win = int(getattr(cfg, "v2_gate_ma", 0) or 0)
+    if active_version(version) != "v2" or not col or win <= 0:
+        return None
+    if daily is None or col not in getattr(daily, "columns", []):
+        return None
+    s = pd.Series(daily[col]).astype(float).ffill()
+    sma = s.rolling(win, min_periods=win).mean()
+    return (s > sma).fillna(False).to_numpy(bool)
+
+
+def trend_entry_gate_now(cfg, daily, version: str | None = None):
+    """The V2 entry gate's state on the latest bar: True / False, or ``None``
+    when no gate applies (then every entry is admitted, as in V1)."""
+    g = trend_entry_gate_array(cfg, daily, version)
+    if g is None or not len(g):
+        return None
+    return bool(g[-1])
 
 
 def trend_line_value(cfg, daily):
@@ -323,13 +434,26 @@ def vol_filter_state(cfg, daily):
 
 # ── MA / trend-filter strategy ────────────────────────────────────────────
 def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
-                    oos_start=None, end=None):
+                    oos_start=None, end=None, version: str | None = None,
+                    trail_pct: float | None = None):
     """Long into bar i+1 when the PRIMARY trend signal is bullish at bar i
     (decision at that close → no look-ahead); flat otherwise.  Signal derived
     from the primary via ``trend_long_array``, executed on ``price_col``.  When
     ``ma_window`` is passed explicitly (the sweep) a plain close>SMA filter with
     that window is used regardless of mode.  Optional fixed stop.  Returns equity
-    curves + trade log (schema matches ``simulate``)."""
+    curves + trade log (schema matches ``simulate``).
+
+    ``version`` selects the strategy-logic generation (default: the active
+    one).  Under V2 a fresh entry also needs the config's entry gate
+    (``trend_gate_v2`` — WGMI's BTC-above-SMA50 rule) True at the deciding
+    close, and an optional trailing stop (``trail_pct``, default the config's
+    ``v2_trail_stop`` / ``v2_trail_by_asset``) exits when the close falls that
+    far below the position's highest close.  A stop or trail hit leaves the
+    sleeve flat for the bar; it re-enters on a later bar only if the long
+    condition (and gate) still hold.  ``last_exit_reason`` / ``trail_px`` on
+    the result let the live surfaces label a stop-day CLOSE and show the
+    current trail level."""
+    ver = active_version(version)
     oos_start = oos_start or cfg.oos_start
     price = preds[price_col].to_numpy(float)
     gcl = preds["px_close"].to_numpy(float)
@@ -337,15 +461,23 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
     n = len(price)
     if ma_window is not None:                               # explicit MA (sweep)
         long_at_close = gcl > _rolling_mean(gcl, ma_window)
-    elif "trend_long" in preds.columns:
+    elif f"trend_long_{ver}" in preds.columns:
         # Precomputed by build_predictions on the CONTIGUOUS close history, so
         # the rolling windows can't be slid by rows the feature dropna removed
         # (see the note there).  This is the SAME array trend_long_now reads,
         # which is what keeps the simulated position and the displayed decision
         # from disagreeing — an "exits next bar" that never actually exits.
+        long_at_close = preds[f"trend_long_{ver}"].to_numpy(bool)
+    elif "trend_long" in preds.columns and ver == active_version():
         long_at_close = preds["trend_long"].to_numpy(bool)
     else:
-        long_at_close = trend_long_array(cfg, gcl)
+        long_at_close = trend_long_array(cfg, gcl, version=ver)
+    gate = None
+    if ver == "v2" and ma_window is None and "trend_gate_v2" in preds.columns:
+        gate = preds["trend_gate_v2"].to_numpy(bool)
+    if trail_pct is None and ver == "v2":
+        trail_pct = cfg.trail_for(price_col, ver) if hasattr(cfg, "trail_for") else 0.0
+    trail_pct = float(trail_pct or 0.0)
     i0 = int(np.searchsorted(dates, np.datetime64(pd.Timestamp(oos_start))))
     # Never start at bar 0: long_at_close[i-1] would wrap to the LAST bar's
     # signal (future data deciding the first bar) — reachable on the
@@ -357,7 +489,8 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
     eq = 1.0
     strat_eq = []; bh_eq = []; used_dates = []; pos_series = []
     trades = []; trade_log = []
-    entry_px = np.nan; entry_date = None; in_pos = False
+    entry_px = np.nan; entry_date = None; in_pos = False; peak_px = np.nan
+    last_reason = None
     bh0 = price[i0]
     for i in range(i0, i1):
         if in_pos:
@@ -365,22 +498,30 @@ def simulate_regime(cfg, preds, sig, price_col, ma_window=None, stop_pct=1.0,
         strat_eq.append(eq); bh_eq.append(price[i] / bh0); used_dates.append(dates[i])
         want_long = bool(long_at_close[i - 1])
         if in_pos:
+            peak_px = max(peak_px, price[i]) if np.isfinite(peak_px) else price[i]
             stop_hit = price[i] <= entry_px * (1 - stop_pct)
-            if (not want_long) or stop_hit:
+            trail_hit = trail_pct > 0 and price[i] <= peak_px * (1 - trail_pct)
+            if (not want_long) or stop_hit or trail_hit:
                 ret = price[i] / entry_px - 1
-                reason = ("stop −%.0f%%" % (stop_pct * 100) if stop_hit else "MA cross-down")
+                reason = ("stop −%.0f%%" % (stop_pct * 100) if stop_hit else
+                          "trail −%.0f%%" % (trail_pct * 100) if trail_hit else
+                          "MA cross-down")
                 trades.append(ret)
                 trade_log.append(dict(entry_date=entry_date, exit_date=dates[i],
                                       entry_px=float(entry_px), exit_px=float(price[i]),
                                       ret=float(ret), reason=reason))
-                in_pos = False; entry_px = np.nan; entry_date = None
-        elif want_long:
-            in_pos = True; entry_px = price[i]; entry_date = dates[i]
+                in_pos = False; entry_px = np.nan; entry_date = None; peak_px = np.nan
+                last_reason = reason
+        elif want_long and (gate is None or bool(gate[i - 1])):
+            in_pos = True; entry_px = price[i]; entry_date = dates[i]; peak_px = price[i]
         pos_series.append(1 if in_pos else 0)
     return dict(dates=used_dates, strat=np.array(strat_eq), bh=np.array(bh_eq),
                 pos=np.array(pos_series), trades=np.array(trades),
                 trade_log=trade_log, in_pos_now=in_pos,
-                entry_px=(float(entry_px) if in_pos else None), entry_date=entry_date)
+                entry_px=(float(entry_px) if in_pos else None), entry_date=entry_date,
+                trail_px=(float(peak_px * (1 - trail_pct))
+                          if in_pos and trail_pct > 0 and np.isfinite(peak_px) else None),
+                last_exit_reason=last_reason, version=ver)
 
 
 def _clean_flags(sig, i, D2, D1):
@@ -471,20 +612,34 @@ def simulate(cfg, preds, sig, price_col, stop_pct=None, U1=None, D2=None, D1=Non
                 entry_px=(float(entry_px) if in_pos else None), entry_date=entry_date)
 
 
-def run_strategy(cfg, preds, sig, price_col, oos_start=None, end=None, stop_pct=None, **kw):
+def run_strategy(cfg, preds, sig, price_col, oos_start=None, end=None, stop_pct=None,
+                 version: str | None = None, **kw):
     """Dispatch to the config's chosen strategy engine.
 
     ``stop_pct`` defaults to the per-asset stop (``cfg.stop_by_asset`` keyed by
     ``price_col``, falling back to ``cfg.fixed_stop``), so a high-beta sibling can
-    trade a different stop than its 1× parent off the same signal."""
+    trade a different stop than its 1× parent off the same signal.
+
+    ``version`` — ``"v1"`` / ``"v2"`` run that strategy-logic generation
+    (default: the active one); ``"combined"`` splices V1 before the cut-over
+    and V2 from it (``combine_runs``) — each day under the logic in effect."""
+    ver = str(version).lower() if version else active_version()
+    if ver == "combined":
+        r1 = run_strategy(cfg, preds, sig, price_col, oos_start=oos_start, end=end,
+                          stop_pct=stop_pct, version="v1", **kw)
+        r2 = run_strategy(cfg, preds, sig, price_col, oos_start=oos_start, end=end,
+                          stop_pct=stop_pct, version="v2", **kw)
+        return combine_runs(r1, r2, version_cutover())
     if stop_pct is None:
         stop_pct = getattr(cfg, "stop_by_asset", {}).get(price_col, cfg.fixed_stop)
     if cfg.strategy_mode == "divergence":
         kw.setdefault("use_d1_exit", getattr(cfg, "use_d1_exit", False))
-        return simulate(cfg, preds, sig, price_col, stop_pct=stop_pct,
-                        oos_start=oos_start, end=end, **kw)
+        r = simulate(cfg, preds, sig, price_col, stop_pct=stop_pct,
+                     oos_start=oos_start, end=end, **kw)
+        r.setdefault("version", ver)
+        return r
     return simulate_regime(cfg, preds, sig, price_col, stop_pct=stop_pct,
-                           oos_start=oos_start, end=end, **kw)
+                           oos_start=oos_start, end=end, version=ver, **kw)
 
 
 def drawdown_series(eq):

@@ -11,6 +11,54 @@ and rule below is read from that code — no separate implementation.
 
 ---
 
+## 0. Strategy Logic V2 (trading since 2026-10-09)
+
+The 2026-10 review of the REMX / WGMI / UGL / GLDM / GRID losses
+(`tests/test_strategy_logic_v2.py` pins every rule; `app/strategy_version.py`
+holds the version history) found three separate drains — slow trend sleeves
+whipsawed after the gold, rare-earth and Bitcoin-miner up-trends broke, a
+daily priority tilt that re-sized every held sleeve, and stops that the
+publisher never turned into a CLOSE.  **Strategy Logic V2** changes exactly
+these, and nothing else (GRID, SOXX, XLE, PBW, ARTY, GDX/NUGT and the BTC
+sleeves are identical in V1 and V2):
+
+| Sleeve | V1 rule | V2 rule | OOS (V1 → V2) |
+|---|---|---|---|
+| **GLDM** | dual-MA 25/100, −3 % fixed stop | cross taken only while the 100-day SMA is **rising** (20 bars); **10 % trailing stop**, no fixed stop | +115 % / −22 % / 0.94 → **+162 % / −16 % / 1.19** |
+| **UGL** | same signal, −3 % fixed stop | same gate; **12 % trailing stop** | +215 % / −44 % / 0.80 → **+366 % / −30 % / 1.04** |
+| **WGMI** | SMA50 + vol filter, no stop | entry only while **BTC > its 50-day SMA** (parent gate) | +333 % / −38 % / 1.62 → **+395 % / −17 % / 1.88** (2024→) |
+| **REMX** | 50/200 golden cross, −5 % | entry unchanged; **hold only while SMA20 > SMA100** | +97 % / −41 % / 0.55 → **+155 % / −27 % / 0.73** |
+
+**Allocator — adds-only.** A sleeve the book already holds is never trimmed
+by the daily tilt (only its own signal exit or stop closes it) and is added
+to only when its tilted target rises by **≥ 8 pp** of the book
+(`overall_core.ADDS_ONLY_BAND`; `signal_gated_allocation(prev_weights=…)` on
+the live book, `replay_gated_allocation(adds_only=…)` in the back-test).
+Fresh entries and exits are unchanged.  On the Balanced walk-forward replay
+(2021→2026-10-08): V1 **+1,179 % / −24.6 % / Sharpe 1.60** at 9.3 %/day
+turnover → V2 **+1,222 % / −17.1 % / 1.93** at 8.0 %/day; 2026 YTD
++86 % / −22.7 % → +92 % / −12.2 %.  No transaction costs in either figure
+(at 5 bp per unit traded the gap widens in V2's favour).
+
+**Execution.** A stop or trail that fires at the latest close now publishes
+**CLOSE** for the sleeve (`_net_decision(stopped=…)`), so the account sells
+exactly where the back-test went flat (V1 published ENTER and the position
+was silently kept — UGL's −3 % stop became a −15 % hold).  The daily audit
+(`overall_core.unexecuted_closes`) flags any CLOSE instruction an account
+record still shows held, or a book with no execution run since its bar.
+
+**Views.** Every P&L, back-test, historical and health surface carries a
+**Strategy V1 / Strategy V2 / Combined** selector: V1 and V2 replay that
+generation's rules over the whole history (V2 before the cut-over is a
+what-if); **Combined** is each day under the logic actually in effect (V1 to
+2026-10-08, V2 from 2026-10-09), with the transition marked on every growth
+chart and the version in effect named on every historical replay and
+executed run.  The nightly health build writes one snapshot per view
+(`strategy_health.json` = Combined, `strategy_health_v1.json`,
+`strategy_health_v2.json`).
+
+---
+
 ## 1. The idea
 
 Every other app trades **one** signal. *Overall Trading* runs all of them — each
