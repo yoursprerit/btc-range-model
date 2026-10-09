@@ -1,7 +1,7 @@
 {
   "version": "v3",
   "pull_date": "2026-10-09",
-  "pull_ts_utc": "2026-10-09T00:15:14Z",
+  "pull_ts_utc": "2026-10-09T12:16:48Z",
   "generated_by": "scripts/pull_backtest_data.py",
   "qc_all_passed": true,
   "btc_bar_anchor": "12:00 UTC (7am CT) \u2014 BTC OHLCV rebucketed from Binance hourly to match the daily model and live view. Macro/on-chain remain calendar-date joined. Equities (MSTR/MSTU) remain exchange-session daily.",
@@ -36,38 +36,38 @@
         "cb_premium_ma3",
         "cb_premium_z7"
       ],
-      "rows": 1072,
+      "rows": 1073,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-07",
-      "checksum_sha256": "dc1f5a999c7bdd76",
+      "date_to": "2026-10-08",
+      "checksum_sha256": "67c9cf7fb29313d0",
       "qc_passed": true
     },
     "btc_usd_daily": {
       "file": "btc_usd_daily.csv",
       "ticker": "BTC-USD (Binance BTCUSDT, 12:00-UTC bars)",
       "note": "volume is in BTC (base asset); all volume features are scale-invariant",
-      "rows": 1072,
+      "rows": 1073,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-07",
-      "checksum_sha256": "c6b4a8c0f2ddf953",
+      "date_to": "2026-10-08",
+      "checksum_sha256": "b7efd16769a800a4",
       "qc_passed": true
     },
     "mstr_daily": {
       "file": "mstr_daily.csv",
       "ticker": "MSTR",
-      "rows": 735,
+      "rows": 736,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-07",
-      "checksum_sha256": "c0920464df236bac",
+      "date_to": "2026-10-08",
+      "checksum_sha256": "059fa9bc0c136795",
       "qc_passed": true
     },
     "mstu_daily": {
       "file": "mstu_daily.csv",
       "ticker": "MSTU",
-      "rows": 515,
+      "rows": 516,
       "date_from": "2024-09-18",
-      "date_to": "2026-10-07",
-      "checksum_sha256": "0f0869d7282f618a",
+      "date_to": "2026-10-08",
+      "checksum_sha256": "0c09d81a5b4b3502",
       "qc_passed": true
     },
     "mstu_synthetic_daily": {
@@ -83,10 +83,10 @@
       "file": "eth_usd_daily.csv",
       "ticker": "ETH-USD (Binance ETHUSDT, 12:00-UTC bars)",
       "note": "spot-ETH sleeve traded off the BTC CT signal; same bar anchor as BTC so the fill lands on the signal bar's close. Live execution is via the ETHA ETF (cf. BTC\u2192IBIT). Volume is in ETH (base asset); volume features are scale-invariant.",
-      "rows": 1072,
+      "rows": 1073,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-07",
-      "checksum_sha256": "1b796f033456a775",
+      "date_to": "2026-10-08",
+      "checksum_sha256": "36ef21b65fc0f8b6",
       "qc_passed": true
     }
   }
