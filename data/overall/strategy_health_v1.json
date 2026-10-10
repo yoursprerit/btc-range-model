@@ -1,6 +1,6 @@
 {
  "schema": "strategy-health/v1",
- "generated_at_utc": "2026-10-10T03:22:52+00:00",
+ "generated_at_utc": "2026-10-10T04:47:59+00:00",
  "as_of": "2026-10-09",
  "live_anchor": "2026-07-31",
  "thresholds": {
@@ -34,33 +34,33 @@
   "profiles": {
    "Balanced": {
     "metrics": {
-     "total_ret": 11.8397,
-     "cagr": 0.5579,
-     "mdd": -0.2461,
-     "sharpe": 1.6035,
-     "vol": 0.2498
+     "total_ret": 13.6922,
+     "cagr": 0.5948,
+     "mdd": -0.2403,
+     "sharpe": 1.6582,
+     "vol": 0.254
     },
     "status": "green",
     "value": -0.1101,
-    "ref_mdd": -0.2461,
+    "ref_mdd": -0.2403,
     "cur_uw_days": 109,
-    "ref_max_uw_days": 238,
+    "ref_max_uw_days": 219,
     "first_breach_date": null,
     "need": null
    },
    "Growth": {
     "metrics": {
-     "total_ret": 16.3589,
-     "cagr": 0.6417,
-     "mdd": -0.2965,
-     "sharpe": 1.496,
-     "vol": 0.3078
+     "total_ret": 18.8001,
+     "cagr": 0.6796,
+     "mdd": -0.2942,
+     "sharpe": 1.5719,
+     "vol": 0.3044
     },
     "status": "green",
     "value": -0.1525,
-    "ref_mdd": -0.2965,
+    "ref_mdd": -0.2942,
     "cur_uw_days": 109,
-    "ref_max_uw_days": 367,
+    "ref_max_uw_days": 227,
     "first_breach_date": null,
     "need": null
    }

@@ -550,3 +550,114 @@ def test_replay_cluster_cap_binds_every_day_and_switches_on_from_a_date():
     pd.testing.assert_series_equal(cl_mix.loc[:cut - pd.Timedelta(days=1)],
                                    cl_free.loc[:cut - pd.Timedelta(days=1)])
     assert (cl_mix.loc[cut:] <= 0.30 + 1e-9).all()
+
+
+# ── universe changes by version (OIH → XOP) ───────────────────────────────
+def test_universe_membership_follows_the_version():
+    assert oc.sleeve_in_universe("OIH", "v1") and not oc.sleeve_in_universe("XOP", "v1")
+    assert oc.sleeve_in_universe("XOP", "v2") and not oc.sleeve_in_universe("OIH", "v2")
+    assert oc.sleeve_in_universe("OIH", "combined") and oc.sleeve_in_universe("XOP", "combined")
+    assert oc.sleeve_in_universe("XLE", "v1") and oc.sleeve_in_universe("XLE", "v2")
+    v1, v2 = oc.universe_keys("v1"), oc.universe_keys("v2")
+    assert "OIH" in v1 and "XOP" not in v1 and "XOP" in v2 and "OIH" not in v2
+    assert len(v1) == len(v2) == 18
+    assert oc.CAP_BY_KEY["XOP"] == oc.CAP_BY_KIND["beta"]
+    assert "XOP" in dict(tcfg.get_config("XLE").traded_assets)
+    assert "OIH" in dict(tcfg.get_config("XLE").traded_assets)   # the XLE app keeps the tab
+
+
+def _sleeve(key, parent, idx, rng, in_pos=True):
+    n = len(idx)
+    px = 100.0 * np.cumprod(1 + rng.normal(0.0005, 0.01, n)); px[0] = 100.0
+    pos = np.ones(n)
+    strat = 100.0 * np.cumprod(1 + np.r_[0.0, np.diff(px) / px[:-1]] * pos)
+    ret = pd.Series(np.diff(strat) / strat[:-1], index=idx[1:]).rename(key)
+    log = [dict(entry_date=idx[5], exit_date=idx[40], ret=0.05),
+           dict(entry_date=idx[50], exit_date=idx[-5], ret=-0.02)]
+    return dict(key=key, name=key, kind="beta", parent=parent, accent="#000", emoji="•",
+                dates=idx, ret=ret, strat=strat, version="v2",
+                pos_series=pd.Series(pos, index=idx), pos=dict(in_pos=in_pos, upnl=1.0),
+                decision=dict(state="HOLD", label="LONG", ico="", tone="hold"),
+                metrics=dict(sharpe=1.0), win_rate=50.0, n_trades=2,
+                r=dict(bh=px, dates=list(idx), strat=strat, pos=pos, trade_log=log,
+                       trades=np.array([0.05, -0.02]), in_pos_now=in_pos))
+
+
+def test_combine_results_splices_a_universe_change_at_the_cutover():
+    rng = np.random.default_rng(5)
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    idx = pd.bdate_range(cut - pd.Timedelta(days=120), periods=120)
+    assert idx[0] < cut < idx[-1]
+    xle1, xle2 = _sleeve("XLE", "XLE", idx, rng), _sleeve("XLE", "XLE", idx, rng)
+    oih = _sleeve("OIH", "XLE", idx, rng)                 # V1 only
+    xop = _sleeve("XOP", "XLE", idx, rng)                 # V2 only
+    grid1, grid2 = _sleeve("GRID", "GRID", idx, rng), _sleeve("GRID", "GRID", idx, rng)
+    out = oc.combine_results([xle1, oih, grid1], [xle2, xop, grid2])
+    by = {r["key"]: r for r in out}
+    assert list(by) == ["XLE", "XOP", "OIH", "GRID"]       # retired OIH sits after its parent group
+    assert all(r["version"] == "combined" for r in out)
+    # OIH: V1 stream before the cut-over, flat (no position, no return) from it
+    assert (by["OIH"]["pos_series"].loc[:cut - pd.Timedelta(days=1)] == 1).all()
+    assert (by["OIH"]["pos_series"].loc[cut:] == 0).all()
+    assert (by["OIH"]["ret"].loc[cut:] == 0).all()
+    assert by["OIH"]["ret"].loc[:cut - pd.Timedelta(days=1)].abs().sum() > 0
+    assert by["OIH"]["pos"]["in_pos"] is False and by["OIH"]["decision"]["tone"] == "flat"
+    assert all(pd.Timestamp(t["exit_date"]) < cut for t in by["OIH"]["r"]["trade_log"])
+    # XOP: flat before the cut-over, V2 stream from it, live state V2's
+    assert (by["XOP"]["pos_series"].loc[:cut - pd.Timedelta(days=1)] == 0).all()
+    assert (by["XOP"]["pos_series"].loc[cut:] == 1).all()
+    assert (by["XOP"]["ret"].loc[:cut - pd.Timedelta(days=1)] == 0).all()
+    assert by["XOP"]["ret"].loc[cut:].abs().sum() > 0
+    assert by["XOP"]["pos"]["in_pos"] is True
+    # the replay sees both: OIH funded only before the cut-over, XOP only from it
+    bw = {"XLE": 0.3, "OIH": 0.3, "XOP": 0.3, "GRID": 0.3}
+    rep = oc.replay_gated_allocation(out, base_weights=bw, adds_only=0, cluster_cap=0)
+    W = rep["weights"]
+    assert (W["OIH"].loc[cut:] == 0).all() and W["OIH"].loc[:cut - pd.Timedelta(days=1)].max() > 0
+    assert (W["XOP"].loc[:cut - pd.Timedelta(days=1)] == 0).all() and W["XOP"].loc[cut:].max() > 0
+
+
+def test_priority_history_tolerates_a_sleeve_with_no_closed_trades():
+    rng = np.random.default_rng(9)
+    idx = pd.bdate_range("2024-01-01", periods=80)
+    a = _sleeve("AAA", "AAA", idx, rng)
+    b = _sleeve("BBB", "BBB", idx, rng)
+    b["r"]["trade_log"] = []                      # no closed trade yet …
+    b["r"]["trades"] = np.array([])               # … and an EMPTY ndarray of trade returns
+    comp = oc.priority_component_history([a, b], idx)
+    assert set(comp) == {"AAA", "BBB"}
+    assert (comp["BBB"]["wr"] == 0.5).all()       # neutral win rate, no crash
+    rep = oc.replay_gated_allocation([a, b], base_weights={"AAA": 0.5, "BBB": 0.5}, adds_only=0)
+    assert rep["weights"]["BBB"].max() > 0
+
+
+def test_walkforward_anchors_skip_a_sleeve_with_no_history_in_the_window():
+    rng = np.random.default_rng(21)
+    idx = pd.bdate_range("2023-01-02", periods=400)
+    rets = pd.DataFrame({k: rng.normal(0.0005, 0.01, len(idx)) for k in ("AAA", "BBB", "CCC")}, index=idx)
+    pos = pd.DataFrame(1.0, index=idx, columns=rets.columns)
+    # DDD joins the universe only in the last quarter: zero before that
+    joined = pd.Timestamp("2024-04-01")
+    rets["DDD"] = np.where(idx >= joined, rng.normal(0.0005, 0.01, len(idx)), 0.0)
+    pos["DDD"] = (idx >= joined).astype(float)
+    with_ddd = oc.walkforward_anchors(rets, pos=pos, n_samples=300, min_hist=60, seed=3)
+    without = oc.walkforward_anchors(rets[["AAA", "BBB", "CCC"]], pos=pos[["AAA", "BBB", "CCC"]],
+                                     n_samples=300, min_hist=60, seed=3)
+    assert len(with_ddd) == len(without) > 2
+    ew = with_ddd[0][1]["DDD"]                       # the warm-up equal-weight constant
+    # entry 0 is the warm-up constant (cap-normalised 1/n, so it depends on n);
+    # every REFIT entry must match the universe-without-DDD fit exactly
+    for (d1, w1), (d2, w2) in zip(with_ddd[1:], without[1:]):
+        assert d1 == d2
+        if d1 <= joined:                              # DDD had no history → others fitted as if absent
+            assert w1["DDD"] == pytest.approx(ew)
+            for k in ("AAA", "BBB", "CCC"):
+                assert w1[k] == pytest.approx(w2[k])
+    # once DDD trades inside the window, the refit is the plain four-sleeve fit
+    last_d, last_w = with_ddd[-1]
+    assert last_d > joined
+    fit_r = rets.loc[:idx[idx < last_d][-1]]
+    o = oc.optimize_weights(fit_r, caps=oc.CAP_BY_KEY, n_samples=300, seed=3, mdd_floor=-0.35,
+                            pos=pos.loc[fit_r.index], sata_daily=oc.SATA_DAILY,
+                            objective="balanced", fundamental=False)
+    assert last_w == pytest.approx(o["optimal"]["weights"])

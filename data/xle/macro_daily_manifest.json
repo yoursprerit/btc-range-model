@@ -1,7 +1,7 @@
 {
  "key": "XLE",
  "source": "yahoo-live",
- "saved_at_utc": "2026-10-10T03:20:19+00:00",
+ "saved_at_utc": "2026-10-10T04:05:06+00:00",
  "rows": 2960,
  "date_from": "2015-01-02",
  "date_to": "2026-10-09",
@@ -16,6 +16,11 @@
   "oih_low",
   "oih_close",
   "oih_volume",
+  "xop_open",
+  "xop_high",
+  "xop_low",
+  "xop_close",
+  "xop_volume",
   "erx_open",
   "erx_high",
   "erx_low",
@@ -52,7 +57,7 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "b2c3b84286418e5e",
+ "checksum_sha256": "2fc1545a6968a993",
  "qc_passed": true,
  "qc_checks": [
   {
@@ -88,12 +93,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "2960 rows vs snapshot 2959"
+   "detail": "2960 rows vs snapshot 2960"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-10-09 vs snapshot 2026-10-08"
+   "detail": "last 2026-10-09 vs snapshot 2026-10-09"
   },
   {
    "name": "no_missing_recent_sessions",
@@ -104,11 +109,6 @@
    "name": "history_agreement",
    "passed": true,
    "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
-  },
-  {
-   "name": "nasdaq_crosscheck",
-   "passed": true,
-   "detail": "3 new-session close(s) verified against Nasdaq"
   }
  ]
 }

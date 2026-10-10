@@ -3,7 +3,7 @@
 One screen that fuses the live signals, positions and back-tests of every other
 app into a single portfolio view built for one question: *where do I put money to
 work today?*  Each signal app trades its 1× primary plus higher-beta / leveraged
-siblings (BTC→MSTR/MSTU/ETH, Gold→GDX/UGL, XLE→OIH), all steered off the parent
+siblings (BTC→MSTR/MSTU/ETH, Gold→GDX/UGL, XLE→XOP/ERX), all steered off the parent
 signal, so the combined book spans every instrument across all apps.
 
   🔴 Live — Decision Cockpit   what to CLOSE / OPEN / HOLD today, the optimal %
@@ -435,6 +435,21 @@ if not _PF:
 
 results = _PF["results"]
 by_key = {r["key"]: r for r in results}
+
+
+def _meta_of(k):
+    """Result dict for a sleeve key, or a display stand-in for a key the live
+    universe no longer runs (a sleeve retired by ``ov.UNIVERSE_CHANGES`` —
+    e.g. OIH under V2 — can still appear in a published book, the frozen
+    weekend live book or the as-published P&L)."""
+    r = by_key.get(k)
+    if r is not None:
+        return r
+    m = ov.ASSET_META.get(k, {})
+    kind = m.get("kind", "core")
+    return dict(key=k, name=f"{m.get('name', k)} (retired)", kind=kind,
+                kemoji=ov.KIND_EMOJI.get(kind, ""), emoji="🗃️", accent="#94a3b8",
+                parent=k, mode=None, last_close=None, ma_val=None, retired=True)
 opt = _PF["opt"]; gate = _PF["gate"]; bm = _PF["bm"]
 as_of = max(r["as_of"] for r in results)
 # when the signals were last (re)generated — the cached run_universe() time,
@@ -1251,7 +1266,7 @@ with tab_live:
         _clw = sorted(((c, w) for c, w in (gate_live.get("clusters") or {}).items()
                        if w > 0.0005), key=lambda x: -x[1])
         st.caption(f"⚙️ **Strategy Logic V2 parent-cluster cap {_cc*100:.0f}%** — "
-                   "sleeves that trade one parent signal (XLE → OIH/ERX, GLDM → UGL, "
+                   "sleeves that trade one parent signal (XLE → XOP/ERX, GLDM → UGL, "
                    "SOXX → SOXL, GDX → NUGT, BTC → MSTR/MSTU/ETH) never exceed it "
                    "combined, so one signal's exit can never be most of the book. "
                    "Live book by cluster: "
@@ -1394,7 +1409,7 @@ with tab_live:
             st.caption("Untick a position to drop it; its weight moves to **SATA** "
                        "(idle cash), not to the other names.")
             _sel_df = pd.DataFrame([
-                dict(Include=True, Signal=kk, Instrument=by_key[kk]["name"],
+                dict(Include=True, Signal=kk, Instrument=_meta_of(kk)["name"],
                      Weight=_lt[kk] * 100)
                 for kk in sorted(_lt, key=lambda x: -_lt[x])])
             _edited = st.data_editor(
@@ -1625,9 +1640,9 @@ with tab_live:
             tgt_s = f"{tgt*100:.1f}%" if tgt > 0.0005 else "—"
             pnl = _pct(a["upnl"]) if a["in_pos"] else "—"
             pnl_col = (C_BUY if (a["upnl"] or 0) >= 0 else C_EXIT) if a["in_pos"] else "#94a3b8"
-            _r = by_key[a["key"]]
+            _r = _meta_of(a["key"])
             off = "" if a["kind"] == "core" else f" · off {a['parent']} signal"
-            if _r["mode"] in ("ma", "dual_ma", "ma_vol") and _r.get("ma_val"):
+            if _r.get("mode") in ("ma", "dual_ma", "ma_vol") and _r.get("ma_val"):
                 dist = (_r["last_close"] / _r["ma_val"] - 1) * 100
                 sub = f"{a['parent']} close {dist:+.1f}% vs {_r.get('engine_label', 'trend')}{off}"
             else:
@@ -4455,7 +4470,7 @@ with tab_live:
                     # hide sleeves that contributed nothing (zero-weight);
                     # totals above already include their (≈ $0) share
                     _pnl_by = {k: v for k, v in _pnl_by.items() if abs(v) >= 0.5}
-                    _bars = [(f"{by_key[k]['emoji']} {k}", v,
+                    _bars = [(f"{_meta_of(k)['emoji']} {k}", v,
                               C_BUY if v >= 0 else C_EXIT,
                               ("bought at the start & held · avg weight "
                                f"{_bh_w.get(k, 0)*100:.1f}%" if _bh_src else
@@ -5317,7 +5332,7 @@ with tab_bt:
                "anchor weight in today's live book. Grouped by signal — β = high-beta "
                "sibling, 2× = leveraged. **Siblings (↳) are traded off their "
                "parent's signal**, not their own: MSTR/MSTU/ETH enter and exit on "
-               "BTC's divergence signal, GDX/UGL on gold's, OIH on XLE's — the "
+               "BTC's divergence signal, GDX/UGL on gold's, XOP/ERX on XLE's — the "
                "higher-beta name executes on its own price but is steered by the "
                "cleaner parent read. Every asset here runs its **own app's actual "
                "engine** — BTC/MSTR/MSTU/ETH via the BTC app's trained CT model, "
@@ -5361,7 +5376,7 @@ with tab_bt:
 
     st.success(
         f"**Bottom line.** Replaying the daily gate/tilt book across "
-        f"{N_ALL} instruments — including the higher-beta MSTR/MSTU, GDX/UGL and OIH "
+        f"{N_ALL} instruments — including the higher-beta MSTR/MSTU, GDX/UGL and XOP "
         f"sleeves, used only when they earn their capped slots — the strategy "
         f"returned **{_wfm['total_ret']*100:,.0f}%** at **{_wfm['mdd']*100:.0f}%** "
         f"max drawdown (Sharpe **{_wfm['sharpe']:.2f}**), versus an equal-weight "
@@ -5401,7 +5416,7 @@ are summarised per app (all decided on **completed daily closes**):
 | ⛏️ **Gold Miners (GDXM)** | GDX (β) · NUGT (2×) | Divergence Pure-Regime | U1 divergence on the GLDM signal (err_hi 3d-avg > +0.10% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.20%) or D3 exhaustion; GDX −5%, NUGT −8% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
 | ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
-| 🛢️ **XLE** | XLE · OIH (β) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |
+| 🛢️ **XLE** | XLE · XOP (β; OIH under V1) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |
 | 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
 | ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
 | ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.42% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.18%) or D3 exhaustion; −10% stop |
@@ -5447,14 +5462,14 @@ signals, positions and back-tests match each source app:
   `ticker_config`** entries through the same `backtest_ticker` engine their apps
   use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,
   WGMI 50-day SMA + vol-filter, REMX 50/200 golden cross, and XLE / PBW / ARTY
-  divergence Pure-Regime — XLE's signal also driving OIH and the stop-less 2×
+  divergence Pure-Regime — XLE's signal also driving XOP and the stop-less 2×
   ERX). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert
 level, whether we're long, entry price/date, unrealised P&L, stop (or a
 signal-only exit for the no-stop sleeves — **BTC, ARTY, the XLE sleeve
-(XLE · OIH · ERX), the 3× SOXL** and **WGMI** carry no fixed stop, where the
+(XLE · XOP · ERX), the 3× SOXL** and **WGMI** carry no fixed stop, where the
 stop sweeps showed a fixed stop only whipsaws) and days held —
 for the primary **and** each sibling (which shares the parent's entry/exit timing
 but has its own fill price and P&L). That drives the **action plan** and the
@@ -5489,11 +5504,14 @@ weights × (0.5 + entry-priority) and water-filled to the profile caps, with the
 remainder in SATA — and, under **Strategy Logic V2**, the **adds-only** rule (a
 held sleeve is never trimmed by the tilt; added to only when its target rises
 ≥ 8 pp) and the **parent-cluster cap** (the sleeves sharing one parent signal,
-e.g. XLE → OIH/ERX, never exceed 30% of the book combined) apply from the
+e.g. XLE → XOP/ERX, never exceed 30% of the book combined) apply from the
 cut-over. Anchor weights are **re-fit at every quarter start
 (Jan/Apr/Jul/Oct 1) on the data before that date** (cap-normalised equal
-weight before enough history exists — quarterly refits were adopted after the
-adaptivity eval showed they beat annual on both return and Sharpe), the
+weight before enough history exists, and a sleeve with no return inside the
+fit window — e.g. the BTC/ETH sleeves before 2024-03, XOP before the V2
+cut-over in Combined — is left out of that fit and carries the equal-weight
+constant; quarterly refits were adopted after the adaptivity eval showed they
+beat annual on both return and Sharpe), the
 priority inputs are their as-of analogues (momentum vs the 50-day SMA, the
 rolling sentiment gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime
 rule) lagged one bar, and the fundamental overlay is excluded throughout.
@@ -5514,7 +5532,7 @@ optimiser objective and a drawdown budget:
 β / 2× exposure rises Balanced → Growth: more return, deeper drawdowns, lower
 Sharpe. Every number on the Live and Backtesting tabs follows the selected
 profile. Under **Strategy Logic V2** the per-kind caps are bounded by a
-**parent-cluster cap of 30%** in every profile: XLE + OIH + ERX, GLDM + UGL,
+**parent-cluster cap of 30%** in every profile: XLE + XOP + ERX, GLDM + UGL,
 SOXX + SOXL, GDX + NUGT and BTC + MSTR + MSTU + ETH each trade one parent
 signal, and the per-kind caps alone would let one signal own up to 58% of the
 book (the energy crash-shield exits 30% below XLE's 52-week high, so that book

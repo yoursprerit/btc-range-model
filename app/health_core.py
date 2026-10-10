@@ -233,6 +233,14 @@ def dd_health(daily_ret: pd.Series, anchor: pd.Timestamp,
                     cur_uw_days=None, ref_max_uw_days=None,
                     first_breach_date=None,
                     need=f"{th['dd_min_ref_bars'] - len(ref_eq)} more reference bars")
+    if not bool((daily_ret.loc[:anchor].fillna(0.0) != 0.0).any()):
+        # a reference with no activity at all (a sleeve that joined the
+        # universe at the anchor — e.g. XOP in the Combined view) has no
+        # drawdown to compare against: its first dip is not a breach
+        return dict(status="warming", value=None, ref_mdd=None,
+                    cur_uw_days=None, ref_max_uw_days=None,
+                    first_breach_date=None,
+                    need="no reference history before the anchor")
     ref_dd = drawdown_series(ref_eq)
     ref_mdd = float(ref_dd.min())
     ref_uw = underwater_stats(ref_dd)["max_days"]
