@@ -402,19 +402,24 @@ def get_portfolio(bucket: str, profile: str, version: str = "v2"):
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
 def get_sleeve_prices(bucket: str):
     """Daily close per sleeve (share-price scale for the IBKR commission
-    schedule), aligned to the strategy returns calendar."""
-    allp = get_all_profiles(bucket)
-    if not allp:
+    schedule), aligned to the strategy returns calendar.  Built from the
+    COMBINED universe — the superset of every generation's sleeves — so an
+    archived book that holds a sleeve the live universe has retired (OIH
+    under V2) still sizes its orders off that sleeve's real price, not the
+    simulator's placeholder."""
+    res = get_results(bucket, "combined")
+    results = res["results"] if res else None
+    if not results:
         return None
     cols = {}
-    for r in allp["results"]:
+    for r in results:
         try:
             ser = ov.asset_close_series(r)
         except Exception:
             ser = None
         if ser is not None:
             cols[r["key"]] = ser[~ser.index.duplicated()]
-    return pd.DataFrame(cols).reindex(allp["rets"].index) if cols else None
+    return pd.DataFrame(cols).reindex(ov.returns_matrix(results).index) if cols else None
 
 
 def get_profile_comparison(bucket: str, version: str = "v2"):
@@ -2461,6 +2466,24 @@ with tab_live:
         if _c2_pending:
             _actual = False
         _fx_costs, _fx_taxes, _fx_income = False, False, fx.INCOME_DEFAULT
+        def _cost_controls() -> bool:
+            """Brokerage-costs radio shared by the replay and as-published
+            views — on the as-published record every order is a real
+            publish-to-publish trim of the C2 book."""
+            return st.radio(
+                "🏦 Brokerage costs", ["Without brokerage costs",
+                                      "With IBKR Pro costs"],
+                index=0, horizontal=True, key="overall_pnl_costs",
+                help="**IBKR Pro Fixed** pricing for US stocks/ETFs on "
+                     "every order the book places: $0.005/share, $1.00 "
+                     "minimum, capped at 1% of trade value, plus the SEC "
+                     "fee and FINRA TAF on sales. Shares are sized off "
+                     "each sleeve's own price. Resizes under 0.25% of the "
+                     "portfolio are skipped. All metrics, the growth "
+                     "curve and portfolio value below become net of these "
+                     "costs. On the as-published record the orders are the "
+                     "actual publish-to-publish changes of each archived "
+                     "book.") == "With IBKR Pro costs"
         def _tax_controls():
             """Taxes radio (+ income) shared by the replay and as-published views."""
             _t = st.radio(
@@ -2551,7 +2574,12 @@ with tab_live:
                             **_PFV["curves"]}
             _curve_all = _bookrep["equity"]
             _render_c2_account(portfolio_value)
-            _fx_taxes, _fx_income = _tax_controls()
+            # ── realism toggles: IBKR Pro costs and capital-gains taxes ──
+            _fx_cols = st.columns(2)
+            with _fx_cols[0]:
+                _fx_costs = _cost_controls()
+            with _fx_cols[1]:
+                _fx_taxes, _fx_income = _tax_controls()
             if _bookrep["dropped"]:
                 st.caption("⚠️ Book keys not in today's universe (weight "
                            "earns nothing): "
@@ -2573,18 +2601,7 @@ with tab_live:
             # ── realism toggles: IBKR Pro costs and capital-gains taxes ──
             _fx_cols = st.columns(2)
             with _fx_cols[0]:
-                _fx_costs = st.radio(
-                    "🏦 Brokerage costs", ["Without brokerage costs",
-                                          "With IBKR Pro costs"],
-                    index=0, horizontal=True, key="overall_pnl_costs",
-                    help="**IBKR Pro Fixed** pricing for US stocks/ETFs on "
-                         "every order the book places: $0.005/share, $1.00 "
-                         "minimum, capped at 1% of trade value, plus the SEC "
-                         "fee and FINRA TAF on sales. Shares are sized off "
-                         "each sleeve's own price. Resizes under 0.25% of the "
-                         "portfolio are skipped. All metrics, the growth "
-                         "curve and portfolio value below become net of these "
-                         "costs.") == "With IBKR Pro costs"
+                _fx_costs = _cost_controls()
             with _fx_cols[1]:
                 _fx_taxes, _fx_income = _tax_controls()
         _d0, _d1 = _curve_all.index[0].date(), _curve_all.index[-1].date()
