@@ -1469,8 +1469,8 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-08,sleeve,WGMI,red,-0.3783,-7.47,,19.0
 2026-10-08,sleeve,XLE,warming,-0.0105,0.0,,3.0
 2026-10-08,tracking,book_vs_replay,yellow,,-2.6,,69.0
-2026-10-09,profile,Balanced,green,-0.1026,,,
-2026-10-09,profile,Growth,green,-0.1066,,,
+2026-10-09,profile,Balanced,green,-0.1111,,,
+2026-10-09,profile,Growth,green,-0.1533,,,
 2026-10-09,sleeve,ARTY,red,-0.0786,-27.46,75.8,90.0
 2026-10-09,sleeve,BTC,yellow,-0.0197,-34.3,,8.0
 2026-10-09,sleeve,ERX,warming,-0.0234,0.0,,3.0
@@ -1490,4 +1490,4 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-09,sleeve,WGMI,red,-0.3783,-5.58,,19.0
 2026-10-09,sleeve,XLE,warming,-0.0129,0.0,,3.0
 2026-10-09,sleeve,XOP,yellow,,-14.71,,0.0
-2026-10-09,tracking,book_vs_replay,yellow,,-2.48,,70.0
+2026-10-09,tracking,book_vs_replay,yellow,,-2.58,,70.0

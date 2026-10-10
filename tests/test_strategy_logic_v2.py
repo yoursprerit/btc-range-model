@@ -690,3 +690,48 @@ def test_as_published_pricing_basis_is_version_independent():
     pd.testing.assert_series_equal(rep_px["ret"].loc[cut:], px_c["OIH"].loc[cut:],
                                    check_names=False)              # price basis: the real move
     assert (rep_px["weights"]["OIH"].loc[cut:] > 0).all()
+
+
+def test_replay_start_and_init_weights_continue_a_held_book():
+    res = _universe(n_days=100)
+    bw = {k: 0.25 for k in ("AAA", "BBB", "CCC", "DDD")}
+    full = oc.replay_gated_allocation(res, base_weights=bw, adds_only=0.08)
+    cut = res[0]["dates"][60]
+    held = {k: float(v) for k, v in full["weights"].loc[:cut - pd.Timedelta(days=1)].iloc[-1].items() if v > 0}
+    part = oc.replay_gated_allocation(res, base_weights=bw, adds_only=0.08, start=cut, init_weights=held)
+    assert part["weights"].index[0] == cut and len(part["ret"]) == int((full["ret"].index >= cut).sum())
+    # continuing from the same held book reproduces the full replay from the cut
+    pd.testing.assert_frame_equal(part["weights"], full["weights"].loc[cut:])
+    pd.testing.assert_series_equal(part["ret"], full["ret"].loc[cut:])
+
+
+def test_combined_walkforward_is_a_splice_of_the_two_generations():
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    rng = np.random.default_rng(4)
+    idx = pd.bdate_range(cut - pd.Timedelta(days=400), periods=330)
+    assert idx[0] < cut < idx[-1]
+    def gen(keys, seed):
+        r = np.random.default_rng(seed); out = []
+        for k in keys:
+            s_ = _sleeve(k, k, idx, r); out.append(s_)
+        return out
+    v1 = gen(("AAA", "BBB", "CCC", "OLD"), 1)      # 4 sleeves: 4 × 30 % cap ≥ 100 %
+    v2 = gen(("AAA", "BBB", "CCC", "NEW"), 2)
+    comb = oc.combine_results(v1, v2)
+    kw = dict(n_samples=200, min_hist=40)
+    w1 = oc.walkforward_gated_replay(v1, version="v1", **kw)
+    w2 = oc.walkforward_gated_replay(v2, version="v2", **kw)
+    wc = oc.walkforward_gated_replay(comb, version="combined", gens=(v1, v2), **kw)
+    assert wc.get("spliced") and wc["version"] == "combined"
+    pre = lambda s: s.loc[:cut - pd.Timedelta(days=1)]
+    pd.testing.assert_series_equal(pre(wc["ret"]), pre(w1["ret"]))            # V1 exactly before
+    assert (wc["weights"]["NEW"].loc[:cut - pd.Timedelta(days=1)] == 0).all()
+    assert (wc["weights"]["OLD"].loc[cut:] == 0).all()                         # OLD retired from the cut
+    assert wc["weights"]["NEW"].loc[cut:].max() > 0
+    assert wc["adds_only"] == pytest.approx(oc.ADDS_ONLY_BAND) and wc["cluster_cap"] == pytest.approx(oc.CLUSTER_CAP)
+    # V2's own anchors govern the post-cut book (its anchor in force at the cut-over)
+    a2 = [w for d, w in w2["anchors"] if pd.Timestamp(d) <= cut][-1]
+    ac = [w for d, w in wc["anchors"] if pd.Timestamp(d) == cut][0]
+    assert ac == a2
+    assert (wc["version_series"].loc[:cut - pd.Timedelta(days=1)] == "v1").all()
+    assert (wc["version_series"].loc[cut:] == "v2").all()

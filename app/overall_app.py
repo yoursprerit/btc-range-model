@@ -335,11 +335,15 @@ def get_profile_pack(bucket: str, version: str, name: str):
                               mdd_floor=prof["mdd_floor"], objective=prof["objective"],
                               fundamental=False)
     w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
+    # Combined = V1's replay to the cut-over, then V2's logic continuing from
+    # the book V1 last held — spliced from the two cached generations
+    _gens = ((get_results(bucket, "v1")["results"], get_results(bucket, "v2")["results"])
+             if str(version).lower() == "combined" else None)
     wf = ov.walkforward_gated_replay(results, caps=caps,
                                      mdd_floor=prof["mdd_floor"],
                                      objective=prof["objective"],
                                      sata_daily=sata, tilt=True,
-                                     version=version)
+                                     version=version, gens=_gens)
     per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
     curves = {STRAT_CURVE: wf["equity"], **base_curves}
     gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
@@ -647,7 +651,10 @@ if not _AUDIT["passed"]:
     if not st.session_state.get(_retry_flag):
         st.session_state[_retry_flag] = True
         get_results.clear()
-        get_all_profiles.clear()
+        # the per-generation / per-profile caches built on the universe
+        get_universe_pack.clear()
+        get_profile_pack.clear()
+        get_price_returns.clear()
         st.rerun()                      # recompute the whole universe fresh
 if not _AUDIT["passed"]:
     _stale_rows = [r for r in _AUDIT["rows"] if not r["fresh"]]
