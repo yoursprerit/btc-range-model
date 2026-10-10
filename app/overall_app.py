@@ -4782,6 +4782,225 @@ with tab_live:
                                    font_size=13))
                     st.plotly_chart(fig_pe, use_container_width=True)
 
+            # ── daily edge by sleeve & cluster — the headline edge, split ────
+            # (every source: buy & hold holds each instrument every day, so
+            # its lines are each equal slice × the underlying's mean return)
+            if st.toggle(
+                    f"⚡ Daily edge by sleeve & cluster {_win_lbl} — each "
+                    "sleeve's and parent cluster's share of the mean "
+                    "invested-day return (toggle to show)",
+                    key="overall_daily_edge_split"):
+                _de_hl = "Daily edge" if _bh_src else "Daily edge (invested)"
+                st.caption(
+                    f"The headline **{_de_hl}** metric above — the "
+                    + ("book's mean daily return" if _bh_src else
+                       "book's mean return over the days it held any "
+                       "position") +
+                    " — **split into each sleeve's and each parent cluster's "
+                    "contribution**. Every "
+                    + ("" if _bh_src else "invested ") +
+                    "day's blend return is the sum over the sleeves of "
+                    "*weight × that sleeve's return*"
+                    + ("" if (_bh_src or _actual) else
+                       " (plus the SATA yield on idle capital)") +
+                    ", so averaging each sleeve's term over the same days "
+                    "gives contributions that **sum exactly to the headline "
+                    "edge**. A **cluster** is the sleeves that trade off one "
+                    "parent signal (XLE → XOP/ERX, GLDM → UGL, SOXX → SOXL, "
+                    "GDX → NUGT, BTC → MSTR/MSTU/ETH) — one bet, so its line "
+                    "is its members' sum. "
+                    + ("" if _bh_src else
+                       "A day the book was deployed elsewhere counts as zero "
+                       "for a sleeve, so **Edge** is its share of the "
+                       "headline; **per held day** is what it added on the "
+                       "days it actually had weight, with that held-day "
+                       "win/loss split beside it. ") +
+                    "Gross of brokerage costs and taxes, like the "
+                    "attribution tables; the percentages are independent of "
+                    "the 💼 portfolio value.")
+                # the record holds idle capital as plain cash (no SATA) —
+                # match the headline, which is measured on that curve
+                _de = ov.daily_edge_by_sleeve(
+                    _rets_win, _wf["weights"], _wf["sata"], _start_sel,
+                    cluster_of={k: (_meta_of(k).get("parent") or k)
+                                for k in _wf["weights"].columns},
+                    sata_daily=0.0 if _actual else ov.SATA_DAILY)
+                if _de is None:
+                    st.info("No day with risk deployed in this window — the "
+                            "book sat fully in cash, so there is no edge to "
+                            "split.")
+                else:
+                    _de_n = _de["n_active"]
+
+                    def _de_hov(s):
+                        """Held-day read behind one bar / table row."""
+                        if not s["n_held"]:
+                            return "never held in this window"
+                        return (f"held {s['n_held']}/{_de_n} "
+                                + ("" if _bh_src else "invested ")
+                                + f"days · won {s['wins']}/{s['n_held']} "
+                                f"({s['win_rate']*100:.0f}%) · W "
+                                f"{s['avg_win']*100:+.3f}% · L "
+                                f"{s['avg_loss']*100:+.3f}% · "
+                                f"{s['edge_held']*100:+.3f}% per held day")
+
+                    def _de_chart(bars, title):
+                        """Horizontal bars, best line on top, SATA in grey;
+                        the bars sum to the headline edge."""
+                        bars = sorted(bars, key=lambda b: b[1])
+                        fig = go.Figure(go.Bar(
+                            y=[b[0] for b in bars], x=[b[1] * 100 for b in bars],
+                            orientation="h",
+                            marker_color=[b[2] for b in bars],
+                            text=[f"{b[1]*100:+.3f}%" for b in bars],
+                            textposition="outside", cliponaxis=False,
+                            customdata=[[b[3]] for b in bars],
+                            hovertemplate="%{y}: <b>%{x:+.3f}%</b> of the "
+                                          "daily edge<br>%{customdata[0]}"
+                                          "<extra></extra>"))
+                        fig.add_vline(x=0, line_color="#94a3b8", line_width=1)
+                        fig.update_layout(
+                            height=max(220, 26 * len(bars) + 80),
+                            margin=dict(t=40, b=10, l=10, r=90),
+                            xaxis_title="share of the daily edge (% per "
+                                        + ("day" if _bh_src else "invested day")
+                                        + ")",
+                            title=dict(text=title, font_size=13))
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    def _de_col(v):
+                        return "#94a3b8" if v == 0 else (C_BUY if v > 0 else C_EXIT)
+
+                    _de_sata = _de["sata"]
+                    _de_sata_bar = ([("💵 SATA (idle cash)", _de_sata["edge"],
+                                      "#94a3b8",
+                                      f"{_de_sata['n_held']}/{_de_n} invested "
+                                      "days with idle capital accruing")]
+                                    if _de_sata["n_held"] else [])
+                    # ── clusters: parent order of the rest of the app, then any
+                    # cluster the live universe no longer runs (retired sleeves)
+                    _de_pc = _de["per_cluster"]
+                    _de_pk = _de["per_key"]
+                    _de_corder = ([pk for pk, _ in parents if pk in _de_pc]
+                                  + sorted(c for c in _de_pc
+                                           if c not in dict(parents)))
+                    _de_held_c = [c for c in _de_corder if _de_pc[c]["n_held"]]
+                    _de_held_k = [k for k in _wf["weights"].columns
+                                  if _de_pk[k]["n_held"]]
+                    _de_sum_k = sum(_de_pk[k]["edge"] for k in _de_held_k)
+                    st.caption(f"**{_de_hl} {_de['expectancy']*100:+.3f}%** "
+                               f"over {_de_n} "
+                               + ("" if _bh_src else "invested ")
+                               + f"days = {len(_de_held_k)} sleeve"
+                               f"{'s' if len(_de_held_k) != 1 else ''} "
+                               f"({_de_sum_k*100:+.3f}%)"
+                               + (f" + SATA ({_de_sata['edge']*100:+.3f}%)"
+                                  if _de_sata["n_held"] else "")
+                               + f" across {len(_de_held_c)} cluster"
+                               f"{'s' if len(_de_held_c) != 1 else ''}.")
+
+                    def _de_clabel(c):
+                        _m = _meta_of(c)
+                        _held = [k for k in _de_pc[c]["members"] if _de_pk[k]["n_held"]]
+                        return (f"{_m.get('emoji', '')} {c}"
+                                + (" cluster" if len(_held) > 1 else "")).strip()
+
+                    _de_chart(
+                        [(_de_clabel(c), _de_pc[c]["edge"],
+                          _de_col(_de_pc[c]["edge"]),
+                          " · ".join(f"{_meta_of(k).get('emoji', '')} {k}".strip()
+                                     for k in _de_pc[c]["members"]
+                                     if _de_pk[k]["n_held"])
+                          + "<br>" + _de_hov(_de_pc[c]))
+                         for c in _de_held_c] + _de_sata_bar,
+                        f"Daily edge by parent cluster — bars sum to the "
+                        f"headline {_de['expectancy']*100:+.3f}%")
+                    _de_chart(
+                        [(f"{_meta_of(k).get('emoji', '')} {k}".strip(),
+                          _de_pk[k]["edge"], _de_col(_de_pk[k]["edge"]),
+                          _de_hov(_de_pk[k]))
+                         for k in _de_held_k] + _de_sata_bar,
+                        f"Daily edge by sleeve — bars sum to the headline "
+                        f"{_de['expectancy']*100:+.3f}%")
+
+                    # ── detail table, grouped by parent cluster with a
+                    # subtotal row per cluster, then SATA and the headline
+                    def _de_pct(v, digits=3):
+                        return "—" if v is None else f"{v*100:+.{digits}f}%"
+
+                    def _de_cell(v, *, bold=False):
+                        _c = "#94a3b8" if v is None or v == 0 else (C_BUY if v > 0 else C_EXIT)
+                        return (f"<td style='text-align:right;color:{_c};"
+                                f"font-variant-numeric:tabular-nums"
+                                f"{';font-weight:700' if bold else ''}'>"
+                                f"{_de_pct(v)}</td>")
+
+                    def _de_row(label, s, *, bold=False, bg="", pad=10):
+                        _wr = ("—" if s["win_rate"] is None
+                               else f"{s['win_rate']*100:.0f}%"
+                                    f" <span style='color:#94a3b8;font-size:10px'>"
+                                    f"({s['wins']}/{s['n_held']})</span>")
+                        _fw = "font-weight:700;" if bold else ""
+                        return (f"<tr style='border-bottom:1px solid #eef2f7;{bg}'>"
+                                f"<td style='padding:6px 10px 6px {pad}px;{_fw}'>{label}</td>"
+                                f"<td style='text-align:right'>{s['n_held']}</td>"
+                                f"<td style='text-align:right'>{_wr}</td>"
+                                f"{_de_cell(s['avg_win'] if s['n_held'] else None)}"
+                                f"{_de_cell(s['avg_loss'] if s['n_held'] else None)}"
+                                f"{_de_cell(s['edge_held'])}"
+                                f"{_de_cell(s['edge'], bold=True)}"
+                                f"{_de_cell(s['total'])}</tr>")
+
+                    _de_days = "Days" if _bh_src else "Days held"
+                    deh = ("<tr style='background:#f1f5f9;font-size:12px;text-align:left'>"
+                           "<th style='padding:6px 10px'>Cluster / sleeve</th>"
+                           f"<th style='text-align:right'>{_de_days}</th>"
+                           "<th style='text-align:right'>Win days</th>"
+                           "<th style='text-align:right'>Avg win</th>"
+                           "<th style='text-align:right'>Avg loss</th>"
+                           "<th style='text-align:right'>Per held day</th>"
+                           "<th style='text-align:right'>Edge</th>"
+                           "<th style='text-align:right'>Σ return pts</th></tr>")
+                    der = []
+                    for c in _de_held_c:
+                        _mem = [k for k in _de_pc[c]["members"] if _de_pk[k]["n_held"]]
+                        if len(_mem) > 1:
+                            der.append(_de_row(_de_clabel(c), _de_pc[c], bold=True,
+                                               bg="background:#f8fafc;"))
+                            for k in _mem:
+                                _m = _meta_of(k)
+                                der.append(_de_row(
+                                    f"{_m.get('emoji', '')} {k}{_kind_badge(_m.get('kind'))}",
+                                    _de_pk[k], pad=28))
+                        else:
+                            _m = _meta_of(_mem[0])
+                            der.append(_de_row(
+                                f"{_m.get('emoji', '')} {_mem[0]}"
+                                f"{_kind_badge(_m.get('kind'))}",
+                                _de_pk[_mem[0]], bold=True,
+                                bg="background:#f8fafc;"))
+                    if _de_sata["n_held"]:
+                        der.append(_de_row("💵 SATA (idle cash)", _de_sata))
+                    _de_tot = dict(n_held=_de_n, wins=None, win_rate=None,
+                                   avg_win=None, avg_loss=None, edge_held=None,
+                                   edge=_de["expectancy"],
+                                   total=_de["expectancy"] * _de_n)
+                    der.append(_de_row(f"<b>{_de_hl}</b> — headline", _de_tot,
+                                       bold=True, bg="background:#f1f5f9;"))
+                    st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
+                                f"<table style='width:100%;border-collapse:collapse;"
+                                f"font-size:13px'>{deh}{''.join(der)}</table></div>",
+                                unsafe_allow_html=True)
+                    st.caption("**Edge** = mean of *weight × return* over every "
+                               + ("" if _bh_src else "invested ")
+                               + "day (zero on days the line had no weight) — "
+                               "the column sums to the headline. **Per held "
+                               "day** = the same mean over the line's own held "
+                               "days only; **Win days**, **Avg win** and **Avg "
+                               "loss** are judged on those held days. **Σ "
+                               "return pts** = the plain sum of the line's daily "
+                               "contributions (un-compounded return points).")
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # TAB 2 — HISTORICAL VIEW (the strategy as it stood on a chosen date)

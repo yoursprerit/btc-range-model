@@ -3318,6 +3318,92 @@ def pnl_daily_replay(returns: pd.DataFrame, weights: pd.DataFrame,
                 ret=pd.Series(port, index=sub.index))
 
 
+def _edge_stats(c: np.ndarray, held: np.ndarray) -> dict:
+    """First-order read on one contribution series ``c`` (one value per
+    invested day of the book) given ``held`` (True on the days the sleeve /
+    cluster actually carried weight).  ``edge`` averages over EVERY invested
+    day — a day the book was deployed elsewhere counts as a zero for this
+    line, so the edges of all lines (plus SATA) sum to the book's own
+    invested-day edge.  The win / loss split is judged on held days only."""
+    n_act = int(len(c))
+    h = c[held]
+    n_held = int(len(h))
+    up, dn = h[h > 0], h[h < 0]
+    wins = int(len(up))
+    return dict(
+        edge=float(c.mean()) if n_act else 0.0,
+        edge_held=float(h.mean()) if n_held else None,
+        n_held=n_held, wins=wins,
+        win_rate=(wins / n_held) if n_held else None,
+        avg_win=float(up.mean()) if len(up) else 0.0,
+        avg_loss=float(dn.mean()) if len(dn) else 0.0,
+        total=float(c.sum()))
+
+
+def daily_edge_by_sleeve(returns: pd.DataFrame, weights: pd.DataFrame,
+                         sata_w: pd.Series, start,
+                         cluster_of: dict | None = None,
+                         sata_daily: float = SATA_DAILY) -> dict | None:
+    """Split the book's **daily edge (invested)** — the mean blend return over
+    the days it held any position (``daily_win_stats``' ``expectancy``) — into
+    each sleeve's and each parent cluster's **contribution**.
+
+    Same daily maths as ``pnl_daily_replay`` (weight × sleeve return per day,
+    business-day-only SATA accrual, the anchor bar is the cost basis and is
+    not counted) but kept in **return space** (no compounding by the blend's
+    value) and averaged over the book's *invested* days only — days with no
+    weight anywhere (fully in SATA) are left out of the denominator exactly as
+    the headline metric leaves them out.  So for every line::
+
+        edge = mean over invested days of (weight_k × r_k)
+
+    and ``Σ per_key edge + sata.edge == expectancy`` to float precision —
+    the per-sleeve edges are the headline, split.  A cluster's contribution
+    is the sum of its members' (``cluster_of`` maps ``key → parent``; a key
+    absent from it is its own cluster).  Each line also carries a held-days
+    read: ``n_held`` (invested days on which it had weight > 0), ``wins`` /
+    ``win_rate`` (held days its contribution was > 0), ``avg_win`` /
+    ``avg_loss`` (mean positive / negative held-day contribution) and
+    ``edge_held`` (mean contribution per held day — what it added on the
+    days it was in the book, ``None`` if never held).  ``total`` is the
+    plain sum of its contributions (simple, un-compounded return points).
+
+    Returns ``None`` with <2 bars on/after ``start`` or no invested day."""
+    sub = returns.loc[pd.Timestamp(start):]
+    if len(sub) < 2:
+        return None
+    W = weights.reindex(sub.index).fillna(0.0).to_numpy(float)
+    contrib = W * np.nan_to_num(sub.to_numpy(float))
+    biz = np.asarray(sub.index.dayofweek < 5)
+    sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float)
+                 * sata_daily * biz)
+    # anchor bar = cost basis: drop it, as pct_change() drops the first bar
+    W, contrib, sata_term = W[1:], contrib[1:], sata_term[1:]
+    on = W.sum(axis=1) > 0                       # the headline's active mask
+    if not on.any():
+        return None
+    W, contrib, sata_term = W[on], contrib[on], sata_term[on]
+    n_active = int(on.sum())
+    keys = list(sub.columns)
+    per_key = {k: _edge_stats(contrib[:, j], W[:, j] > 0)
+               for j, k in enumerate(keys)}
+    cl = cluster_of or {}
+    members: dict = {}
+    for k in keys:
+        members.setdefault(cl.get(k, k), []).append(k)
+    per_cluster = {}
+    for c, ks in members.items():
+        js = [keys.index(k) for k in ks]
+        per_cluster[c] = dict(_edge_stats(contrib[:, js].sum(axis=1),
+                                          W[:, js].sum(axis=1) > 0),
+                              members=list(ks))
+    sata = _edge_stats(sata_term, sata_term != 0)
+    port = contrib.sum(axis=1) + sata_term
+    return dict(per_key=per_key, per_cluster=per_cluster, sata=sata,
+                n_active=n_active, expectancy=float(port.mean()),
+                start=sub.index[0], end=sub.index[-1])
+
+
 # ── as-published record — the books that ACTUALLY traded ────────────────────
 # The publisher archives every daily target book it commits (one JSON per
 # signal day, ``data/overall/book_archive/<as_of>.json`` — see
