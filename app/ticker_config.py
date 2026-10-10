@@ -395,9 +395,11 @@ CONFIGS["XLE"] = TickerConfig(
     key="XLE",
     name="Energy Select Sector SPDR",
     blurb=("XLE is the large-cap US energy sector (XOM, CVX, COP…). It is driven "
-           "by crude oil and is deeply cyclical. OIH (oil-services) and ERX (2× "
-           "energy) are its higher-beta siblings — the strategy trades ALL THREE "
-           "off the XLE signal, the way the Gold app trades GDX & UGL off gold."),
+           "by crude oil and is deeply cyclical. OIH (oil-services), XOP (oil & "
+           "gas E&P) and ERX (2× energy) are its higher-beta siblings — the app "
+           "trades ALL of them off the XLE signal, the way the Gold app trades "
+           "GDX & UGL off gold. The Overall book trades XOP in the β slot under "
+           "Strategy Logic V2 (OIH under V1); OIH stays here for its record."),
     emoji="🛢️",
     accent="#ea580c", accent_dark="#9a3412", accent_bg="#fff7ed", accent_bg2="#ffedd5",
     primary_symbol="XLE",
@@ -409,13 +411,14 @@ CONFIGS["XLE"] = TickerConfig(
         "spx": "^GSPC",        # equity risk backdrop
         "vix": "^VIX",         # equity vol
     },
-    extra_syms={"oih": "OIH", "erx": "ERX"},   # OIH oil-services + ERX 2× energy siblings (traded)
+    extra_syms={"oih": "OIH", "xop": "XOP", "erx": "ERX"},   # OIH oil-services, XOP E&P, ERX 2× energy siblings (traded)
     sentiment=[("cl_close", "mom", +1.0), ("dxy_close", "mom", -1.0),
                ("vix_close", "lvl", -1.0), ("px_close", "mom", +1.0)],
     sentiment_label="Energy macro sentiment",
-    traded_assets=[("XLE", "px_close"), ("OIH", "oih_close"), ("ERX", "erx_close")],
+    traded_assets=[("XLE", "px_close"), ("OIH", "oih_close"), ("XOP", "xop_close"),
+                   ("ERX", "erx_close")],
     asset_labels={"px_close": "XLE · Energy", "oih_close": "OIH · Oil Services",
-                  "erx_close": "ERX · 2× Energy"},
+                  "xop_close": "XOP · Oil & Gas E&P", "erx_close": "ERX · 2× Energy"},
     # 2026-07 strategy change (after the causal-H/L retune): on the honest
     # signal the energy divergence system kept only +23% of a +207% B&H OOS —
     # a drawdown-limiter, not a return engine — and no train-selected trend
@@ -447,8 +450,14 @@ CONFIGS["XLE"] = TickerConfig(
                   "family) gave up most of the bull. This config concedes ~4% "
                   "of B&H's OOS return as the cost of full-cycle disaster "
                   "insurance."),
-    eval_note=("**Sibling execution (OIH / ERX).** Both trade the XLE-parent "
-               "crash-shield signal, no fixed stop. OOS 2021→now: OIH +138% at "
+    eval_note=("**Sibling execution (OIH / XOP / ERX).** All trade the XLE-parent "
+               "crash-shield signal, no fixed stop. **XOP** (SPDR S&P Oil & Gas "
+               "E&P) replaced OIH in the Overall book's β slot under Strategy "
+               "Logic V2 (2026-10-10): on the same signal, OOS 2021→now XOP "
+               "+234% / −35% MDD / Sharpe 0.78 (B&H +270% / −35%) vs OIH +145% / "
+               "−44% / 0.61 — OIH's beta to XLE (1.24) without its oil-services "
+               "drawdowns; XOP's correlation to XLE is 0.93 vs OIH's 0.87. OIH "
+               "stays in this app for its history and the V1 record. OIH +138% at "
                "−46% MDD (B&H +145% / −46%) and ERX +499% at −47% (B&H +533% / "
                "−47%) — ~95% upside capture at the same drawdown. Full-cycle "
                "the shield is what makes them holdable at all: ERX +60% vs B&H "

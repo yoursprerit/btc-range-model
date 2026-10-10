@@ -215,3 +215,13 @@ def test_build_snapshot_end_to_end_shape_and_history():
         for mon in ("dd", "edge", "expectancy"):
             if s1[mon]["first_breach_date"]:
                 assert s2[mon]["first_breach_date"] == s1[mon]["first_breach_date"]
+
+
+def test_dd_health_warming_when_the_reference_has_no_activity():
+    # a sleeve that joined the universe at the anchor: flat before it, one
+    # losing day after — no reference drawdown exists, so it is not a breach
+    idx = pd.bdate_range("2025-01-01", periods=400)
+    ret = pd.Series(0.0, index=idx)
+    ret.iloc[-1] = -0.01
+    out = hc.dd_health(ret, idx[-2], {}, "XOP", str(idx[-1].date()))
+    assert out["status"] == "warming" and out["ref_mdd"] is None

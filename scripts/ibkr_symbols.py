@@ -2,7 +2,7 @@
 
 The Overall engine (``app/overall_core.py``) keys every traded instrument by a
 short signal key (``ASSET_META``): BTC, MSTR, MSTU, ETH, GLDM, GDX, UGL, NUGT,
-SOXX, SOXL, GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.  Every one of these is a
+SOXX, SOXL, GRID, XLE, OIH, XOP, ERX, REMX, WGMI, PBW, ARTY.  Every one of these is a
 US-listed ETF / equity that Interactive Brokers can trade **except the two spot
 crypto sleeves** — IBKR has no spot-Bitcoin or spot-Ether product, so the BTC
 signal sleeve is traded via the **IBIT** spot-Bitcoin ETF and the ETH sleeve via
@@ -37,6 +37,7 @@ TRADE_SYMBOL: dict[str, str] = {
     "GRID": "GRID",
     "XLE":  "XLE",
     "OIH":  "OIH",
+    "XOP":  "XOP",
     "ERX":  "ERX",
     "REMX": "REMX",
     "WGMI": "WGMI",

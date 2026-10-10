@@ -28,6 +28,7 @@ sleeves are identical in V1 and V2):
 | **UGL** | same signal, −3 % fixed stop | same gate; **12 % trailing stop** | +215 % / −44 % / 0.80 → **+366 % / −30 % / 1.04** |
 | **WGMI** | SMA50 + vol filter, no stop | entry only while **BTC > its 50-day SMA** (parent gate) | +333 % / −38 % / 1.62 → **+395 % / −17 % / 1.88** (2024→) |
 | **REMX** | 50/200 golden cross, −5 % | entry unchanged; **hold only while SMA20 > SMA100** | +97 % / −41 % / 0.55 → **+155 % / −27 % / 0.73** |
+| **Energy β slot** | **OIH** (oil services) traded off the XLE crash-shield | **XOP** (SPDR S&P Oil & Gas E&P) in OIH's β slot, same XLE signal, no stop — `overall_core.UNIVERSE_CHANGES` (2026-10-10) | OIH +127 % / −46 % / 0.57 → **XOP +200 % / −40 % / 0.73** |
 
 **Allocator — adds-only.** A sleeve the book already holds is never trimmed
 by the daily tilt (only its own signal exit or stop closes it) and is added
@@ -35,15 +36,18 @@ to only when its tilted target rises by **≥ 8 pp** of the book
 (`overall_core.ADDS_ONLY_BAND`; `signal_gated_allocation(prev_weights=…)` on
 the live book, `replay_gated_allocation(adds_only=…)` in the back-test).
 Fresh entries and exits are unchanged.  On the Balanced walk-forward replay
-(2021→2026-10-09): V1 **+1,227 % / −24.6 % / Sharpe 1.62** at 9.4 %/day
-turnover → V2 with adds-only alone +1,272 % / −17.1 % / 1.95 → V2 as traded
-(adds-only **and** the parent-cluster cap below) **+1,194 % / −13.7 % /
-2.12** at 8.5 %/day; 2026 YTD +87 % / −22.7 % → +94 % / −10.8 %; H2-2026
-−5 % / −12.7 % → +6 % / −4.8 %.  No transaction costs in any figure (at 5 bp
-per unit traded the gap widens in V2's favour).
+(2021→2026-10-09, anchors fitted on live sleeves only — see §4): V1
+**+1,419 % / −24.0 % / Sharpe 1.67** at 9.2 %/day turnover → V2 as traded
+(adds-only, the parent-cluster cap and the XOP β slot below) **+1,299 % /
+−11.4 % / 2.21** at 8.4 %/day; 2026 YTD +87 % / −22.7 % → +96 % / −9.0 %;
+H2-2026 −5 % / −12.7 % → +7 % / −4.5 %.  (On the pre-2026-10-10 anchor fit
+the same comparison read V1 +1,227 % / −24.6 % / 1.62 → adds-only alone
++1,272 % / −17.1 % / 1.95 → with the cap +1,194 % / −13.7 % / 2.12.)  No
+transaction costs in any figure (at 5 bp per unit traded the gap widens in
+V2's favour).
 
 **Allocator — parent-cluster cap (added 2026-10-10, before the first V2
-publish).** Sleeves that trade off **one parent signal** — XLE → OIH / ERX,
+publish).** Sleeves that trade off **one parent signal** — XLE → XOP / ERX (OIH under V1),
 GLDM → UGL, SOXX → SOXL, GDX → NUGT, BTC → MSTR / MSTU / ETH — are one bet,
 but their per-kind caps (30 % core + 18 % β + 10 % 2×) let a single signal own
 up to **58 %** of the book, and the energy crash-shield's exit sits 30 % below
@@ -63,10 +67,32 @@ replay, three optimiser seeds (2021 → 2026-10-09): max drawdown **−18.7 % �
 −13.5 %**, Sharpe **1.8 → 2.1**, return +1,091 % → +1,061 % (the cost is
 2022, when the un-capped book averaged 41 % energy and the freed capital
 had nowhere but SATA to go); 2026 YTD +93 % → +94 % at −12.2 % → −10.8 %
-max drawdown.  On the production seed the full V2 replay reads
-**+1,194 % / −13.7 % / 2.12** against +1,272 % / −17.1 % / 1.95 without the
-cap.  The cap binds energy on 57 % of replay days, gold and semis on ~15 %
+max drawdown.  On the production seed (pre-2026-10-10 anchor fit) the full
+V2 replay read **+1,194 % / −13.7 % / 2.12** against +1,272 % / −17.1 % /
+1.95 without the cap; on today's fit, with XOP in the β slot, **+1,299 % /
+−11.4 % / 2.21** (OIH in the slot: +1,329 % / −11.5 % / 2.21).  The cap binds energy on 57 % of replay days, gold and semis on ~15 %
 each (their 2024–25 runs), crypto on 3 %, miners never.
+
+**Universe — OIH → XOP (added 2026-10-10, before the first V2 publish).**
+The energy β slot trades **XOP** (SPDR S&P Oil & Gas Exploration & Production)
+instead of **OIH** (VanEck Oil Services) under V2.  Both trade the same XLE
+crash-shield signal with no stop; XOP keeps OIH's beta to XLE (1.22 vs 1.24)
+without oil-services' deeper drawdowns and correlates 0.93 with XLE against
+OIH's 0.87.  On the XLE engine (OOS 2021→2026-10-09) OIH +127 % / −46 % / 0.57
+→ XOP +200 % / −40 % / 0.73.  On the Balanced V2 replay (three optimiser
+seeds, today's anchor fit) the swap is neutral on the full window — OIH
++1,110 % / −12.9 % / 2.09 → XOP +1,072 % / −13.4 % / 2.07 on average, well
+inside the ±200-point seed spread — and better on the recent windows: 2025→
++247 % / −9.6 % → +255 % / −9.0 %, 2026 YTD +76 % / −9.5 % → +80 % / −9.0 %;
+on the production seed +1,329 % / −11.5 % / 2.21 → +1,299 % / −11.4 % /
+2.21 with 2026 YTD +94 % / −10.8 % → +96 % / −9.0 %.  The alternatives IXC,
+XES, IEZ and dropping the slot were all weaker in the screening replay.  The change
+is registered in `overall_core.UNIVERSE_CHANGES`: `run_universe("v1")` keeps
+OIH, `run_universe("v2")` trades XOP, and the Combined view's
+`combine_results` runs OIH flat from the cut-over and XOP flat before it.
+The 🛢️ XLE app keeps its OIH tab (history and the V1 record) and gains an
+XOP tab; the executor and the Collective2 publisher close any held name the
+new book no longer carries, so the first XOP book sells OIH.
 
 **Execution.** A stop or trail that fires at the latest close now publishes
 **CLOSE** for the sleeve (`_net_decision(stopped=…)`), so the account sells
@@ -113,7 +139,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | ₿ **BTC** | BTC `core` · MSTR `beta` · MSTU `lev` · ETH `core` | CT-model Divergence · BTC signal-exit-only; MSTR −3% · MSTU −6% · ETH −8% (2026-07-25 honest-fill re-sweep) |
 | 🥇 **Gold Trend (GLDM)** | GLDM `core` · UGL `lev` | Dual-MA 25/100 on the GLDM close · −3% stops |
 | ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −5% / NUGT −8% (2026-07-25 re-sweep) |
-| 🛢️ **XLE** | XLE `core` · OIH `beta` · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
+| 🛢️ **XLE** | XLE `core` · XOP `beta` (OIH `beta` under V1) · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
 | ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
 | 🧲 **REMX** | REMX `core` | Dual-MA 50/200 golden cross, −5% |
@@ -213,8 +239,11 @@ in which
   bar and water-filled to the profile caps,
 * the **anchor weights are re-fit at each quarter start (Jan/Apr/Jul/Oct 1) on
   data strictly before that date** (cap-normalised equal weight during the
-  first-year warm-up), with the (now fully retired) fundamental overlay
-  excluded — quarterly replaced the original annual cadence after the
+  first-year warm-up; a sleeve with no return inside the fit window — the
+  BTC/ETH CT sleeves before 2024-03, WGMI before 2024-05, XOP before the V2
+  cut-over in the Combined view — is left out of that fit and carries the
+  equal-weight constant, since 2026-10-10), with the (now fully retired)
+  fundamental overlay excluded — quarterly replaced the original annual cadence after the
   adaptivity study (`OVERALL_ADAPTIVE_EVAL.md`) showed it wins on both return
   and Sharpe while every other candidate (rolling-window anchors, rolling
   priority stats, penalty box) was neutral-to-negative,

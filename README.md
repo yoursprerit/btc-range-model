@@ -23,8 +23,10 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 > and trailing stops on the gold dual-MA sleeves, a BTC-above-SMA50 entry gate
 > on WGMI, a SMA20>SMA100 hold rule on REMX, an **adds-only** allocator (held
 > sleeves are never trimmed by the daily tilt), a **30 % parent-cluster cap**
-> (sleeves sharing one parent signal — e.g. XLE → OIH/ERX — never exceed 30 %
-> of the book combined) and stop hits that publish a CLOSE.  Every P&L / back-test / historical / health view offers a
+> (sleeves sharing one parent signal — e.g. XLE → XOP/ERX — never exceed 30 %
+> of the book combined), **XOP in place of OIH** in the energy β slot (same XLE
+> signal; OIH stays in the XLE app and the V1 record) and stop hits that
+> publish a CLOSE.  Every P&L / back-test / historical / health view offers a
 > **Strategy V1 · Strategy V2 · Combined** selector.  See
 > [`OVERALL_STRATEGY.md` §0](OVERALL_STRATEGY.md) and `app/strategy_version.py`.
 
@@ -59,7 +61,7 @@ would trade a view through proxies:
 | BTC | BTC | MSTR (proxy) · MSTU (2×) |
 | Gold Trend | GLDM | UGL (2×) |
 | Gold Miners (GLDM signal) | GDX | NUGT (2× miners) |
-| Energy | XLE | OIH (oil services) · ERX (2×) |
+| Energy | XLE | XOP (oil & gas E&P; OIH under V1) · ERX (2×) |
 | Semis | SOXX | SOXL (3×) |
 | Grid · Rare-earth · Miners · Clean-energy · AI/Tech | GRID · REMX · WGMI · PBW · ARTY | — |
 
@@ -136,14 +138,14 @@ out-of-sample over multiple periods **and** the full bull+bear cycle.
 - **Trend filters** (SOXX & Gold Trend dual-MA 25/100 · GRID MACD 10/20/9 ·
   REMX dual-MA 50/200 golden cross · WGMI 50-day SMA + volatility filter) —
   long only while the trend holds, flat otherwise.
-- **Crash-shield quasi-B&H** (XLE · OIH · ERX) — long by default; exit only
+- **Crash-shield quasi-B&H** (XLE · XOP · ERX; OIH in the XLE app) — long by default; exit only
   while the close sits >30 % below its 52-week high, re-enter above the
   50-day SMA.
 
 **Common rules across every app:**
 
 - The signal is executed in **higher-beta / leveraged proxies**, not always the
-  1× underlying (BTC→MSTR/MSTU/ETH, Gold→UGL & GDX/NUGT, XLE→OIH/ERX, SOXX→SOXL).
+  1× underlying (BTC→MSTR/MSTU/ETH, Gold→UGL & GDX/NUGT, XLE→XOP/ERX, SOXX→SOXL).
 - Strategies are **long/flat** — when flat, idle capital is parked in **SATA**
   (a ~13 %-yield preferred), not dead cash.
 - **Portfolio blend (Overall):** a Monte-Carlo optimiser searches long-only
@@ -166,7 +168,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 | Gold middle path (dual-MA + divergence) | GLDM · UGL & GDX · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
 | Semis Dual-MA 25/100 | SOXX · SOXL | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
 | Grid MACD 10/20/9 | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
-| Energy Divergence Pure-Regime | XLE · OIH · ERX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) (ERX) |
+| Energy Divergence Pure-Regime | XLE · OIH · XOP · ERX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) (ERX) |
 | Metals Dual-MA 50/200 golden cross | REMX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Miner MA-50 + volatility filter | WGMI | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Clean-energy / AI-Tech Divergence | PBW · ARTY | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy |

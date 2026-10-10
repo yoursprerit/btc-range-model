@@ -59,7 +59,7 @@ overall_core.run_universe()                       every strategy, live
   sells-first** so freed capital funds the buys.
 
 The full universe: BTC(→IBIT), ETH(→ETHA), MSTR, MSTU, GLDM, GDX, UGL, NUGT, SOXX, SOXL,
-GRID, XLE, OIH, ERX, REMX, WGMI, PBW, ARTY.
+GRID, XLE, OIH (V1 record), XOP, ERX, REMX, WGMI, PBW, ARTY.
 
 ---
 

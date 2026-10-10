@@ -20,7 +20,7 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 |---|---|---|---|
 | 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | Dual-MA 25/100 crossover |
 | ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 |
-| 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH sibling) | Crash-shield quasi-B&H |
+| 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH · XOP · ERX siblings) | Crash-shield quasi-B&H |
 | 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Dual-MA 50/200 golden cross |
 | ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 50-day SMA + volatility filter |
 
@@ -68,7 +68,7 @@ plus a purpose-built **0–100 macro-sentiment** composite (each driver signed s
 |---|---|---|
 | SOXX | SMH, ^SOX, QQQ, NVDA, ^TNX, DXY, ^VIX, ^GSPC | +QQQ mom − yields − VIX + own mom |
 | GRID | XLU, ICLN, TAN, CPER, ^TNX, ^GSPC, ^VIX | +SPX mom + copper − yields + own mom |
-| XLE | CL=F, BZ=F, XOM, DXY, ^GSPC, ^VIX (+OIH) | +crude − USD − VIX + own mom |
+| XLE | CL=F, BZ=F, XOM, DXY, ^GSPC, ^VIX (+OIH, XOP, ERX) | +crude − USD − VIX + own mom |
 | REMX | LIT, CPER, FXI, SLV, DXY, ^GSPC, ^VIX | +copper + lithium − USD + own mom |
 | WGMI | BTC-USD, MARA, RIOT, COIN, ETH-USD, QQQ, ^VIX | +BTC mom + QQQ mom − VIX + own mom |
 
@@ -152,6 +152,18 @@ leverage or shorting, both excluded here.
 
 ---
 
+## XOP — the energy β slot under Strategy Logic V2
+
+From 2026-10-10 the Overall book trades **XOP** (SPDR S&P Oil & Gas Exploration
+& Production) in the energy β slot that OIH held under V1
+(`overall_core.UNIVERSE_CHANGES`).  Both trade the XLE crash-shield signal with
+no stop; on the XLE engine OOS 2021→2026-10-09 XOP made +200 % at −40 % max
+drawdown (Sharpe 0.73) against OIH's +127 % / −46 % / 0.57, keeping OIH's beta
+to XLE (1.22) without oil-services' deeper drawdowns.  The XLE app keeps the
+OIH tab (its history and the V1 record) and adds an XOP tab; the Overall
+Backtesting tab's **Strategy V1** view still trades OIH, **Strategy V2** trades
+XOP, and **Combined** switches at the cut-over.  See `OVERALL_STRATEGY.md` §0.
+
 ## XLE vs OIH — which signal should drive OIH?
 
 The brief asks whether OIH (VanEck Oil Services, the high-beta energy sibling) is
@@ -203,7 +215,7 @@ uncorrelated to the tech-heavy book. Full analysis in `SOXL_ERX_ADDITION_EVAL.md
 ```bash
 python src/tickers/train_ticker.py ALL        # fetch + train all six model suites
 python backtest_ticker.py SOXX --sweep        # per-ticker strategy/threshold sweep
-python backtest_ticker.py XLE                 # per-period backtest (XLE + OIH)
+python backtest_ticker.py XLE                 # per-period backtest (XLE + OIH + XOP + ERX)
 streamlit run streamlit_app.py                # launch, pick a ticker in the sidebar
 # add --cached to the scripts to use the committed data/<key> snapshots
 ```

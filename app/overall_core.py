@@ -13,7 +13,7 @@ primary plus higher-beta / leveraged siblings — exactly as the dedicated apps 
     ─────   ──────     ────────────────────────────────────────────
     BTC     BTC        BTC (1×) · MSTR (BTC-proxy) · MSTU (2× MSTR) · ETH (spot ETH)
     Gold    GLDM       GLDM (1×) · GDX (miners) · UGL (2× gold)
-    XLE     XLE        XLE (1×) · OIH (oil services, high-beta)
+    XLE     XLE        XLE (1×) · XOP (oil & gas E&P, β; OIH under V1) · ERX (2×)
     SOXX    SOXX       SOXX
     GRID    GRID       GRID
     REMX    REMX       REMX
@@ -53,6 +53,7 @@ for _p in (str(_APP_DIR), str(_REPO_ROOT)):
 
 import ticker_core as tc                     # noqa: E402
 import backtest_ticker as bt                 # noqa: E402
+import strategy_version as _sv  # noqa: E402
 import ticker_config                         # noqa: E402
 import freshness as _frs                     # noqa: E402
 from ticker_config import TickerConfig, get_config, _STD_PERIODS   # noqa: E402
@@ -259,7 +260,8 @@ ASSET_META = {
     "SOXL": dict(name="3× Semiconductors", kind="lev"),
     "GRID": dict(name="Grid Infra",     kind="core"),
     "XLE":  dict(name="Energy",         kind="core"),
-    "OIH":  dict(name="Oil Services",   kind="beta"),
+    "OIH":  dict(name="Oil Services",   kind="beta"),   # V1 universe only (→ XOP under V2)
+    "XOP":  dict(name="Oil & Gas E&P",  kind="beta"),   # V2 universe (OIH's β slot)
     "ERX":  dict(name="2× Energy",      kind="lev"),
     "REMX": dict(name="Rare-Earth Metals", kind="core"),
     "WGMI": dict(name="Bitcoin Miners", kind="beta"),
@@ -267,6 +269,43 @@ ASSET_META = {
     "ARTY": dict(name="AI & Tech",      kind="core"),
 }
 KIND_EMOJI = {"core": "", "beta": "⚡", "lev": "🔺"}
+
+# ── universe changes by strategy-logic generation ─────────────────────────
+# A sleeve listed under ``retired`` is no longer traded from that version's
+# first signal day; one under ``added`` is traded from it.  V1 replays keep
+# the V1 universe, V2 replays the V2 one, and the Combined view switches at
+# the cut-over (``combine_results``: the retired sleeve's stream goes flat
+# from it, the added sleeve's is flat before it).  The XLE app itself keeps
+# every sibling tab.  2026-10-10 (before the first V2 publish): XOP (SPDR S&P
+# Oil & Gas E&P) replaces OIH in the energy β slot — same XLE crash-shield
+# signal, OOS 2021→ +234 % / −35 % / 0.78 vs OIH +145 % / −44 % / 0.61; on
+# the Balanced V2 replay (two optimiser seeds) +1,152 % → +1,194 %, max
+# drawdown −13.2 % → −13.0 %, 2026 max drawdown −10.0 % → −8.4 %.
+UNIVERSE_CHANGES = {
+    "v2": dict(retired=("OIH",), added=("XOP",)),
+}
+
+
+def sleeve_in_universe(key: str, version: str | None = None) -> bool:
+    """Whether ``key`` is traded under ``version`` (``combined`` admits every
+    sleeve that was traded under any generation)."""
+    ver = bt.active_version(version)
+    if ver == "combined":
+        return True
+    order = [v for v, _ in _sv.VERSION_HISTORY]
+    idx = order.index(ver) if ver in order else len(order) - 1
+    for i, v in enumerate(order):
+        ch = UNIVERSE_CHANGES.get(v) or {}
+        if i <= idx and key in ch.get("retired", ()):
+            return False
+        if i > idx and key in ch.get("added", ()):
+            return False
+    return True
+
+
+def universe_keys(version: str | None = None) -> list[str]:
+    """The registry keys traded under ``version``, in registry order."""
+    return [k for k in ASSET_META if sleeve_in_universe(k, version)]
 CAP_BY_KIND = {"core": 0.30, "beta": 0.18, "lev": 0.10}
 CAP_BY_KEY = {k: CAP_BY_KIND[m["kind"]] for k, m in ASSET_META.items()}
 
@@ -285,7 +324,7 @@ FUNDAMENTAL_VIEW = {
     "GRID": 1.40,                                # electrification / grid capex
     "WGMI": 1.30,                                # miners' AI/HPC pivot
     "REMX": 1.10,                                # rare-earth supply squeeze
-    "XLE": 1.00, "ERX": 1.00,                    # energy — gas ok, oil soft (ERX = 2× energy)
+    "XLE": 1.00, "ERX": 1.00, "XOP": 1.00,       # energy — gas ok, oil soft (ERX = 2× energy)
     "OIH": 0.50, "PBW": 0.40,                    # no catalyst / policy headwinds
 }
 FUNDAMENTAL_VIEW_NOTE = (
@@ -721,7 +760,10 @@ def run_universe(version: str | None = None) -> list[dict]:
         if err or not g:
             _LAST_ERRORS[key] = err or "no instruments returned"
         out.extend(g or [])
-    return out
+    # version-aware universe: a sleeve retired under ``ver`` (or not yet
+    # added) is dropped here, so every consumer sees only what that
+    # generation trades (the XLE app still runs every sibling tab)
+    return [r for r in out if sleeve_in_universe(r["key"], ver)]
 
 
 # per-app load errors from the most recent run_universe() (best-effort; the app
@@ -783,12 +825,22 @@ def combine_results(res_v1: list[dict], res_v2: list[dict],
     (per-bar generation tag) is attached for the UI."""
     cut = pd.Timestamp(cutover or STRATEGY_VERSION_START)
     v1 = {r["key"]: r for r in res_v1}
-    out = []
-    for r2 in res_v2:
-        r1 = v1.get(r2["key"])
-        if r1 is None:
-            out.append(dict(r2, version="combined"))
+    v2 = {r["key"]: r for r in res_v2}
+    # universe order: the V2 order, with a sleeve only V1 traded (retired at
+    # the cut-over) placed right after the last member of its parent group
+    order = [r["key"] for r in res_v2]
+    for r1 in res_v1:
+        if r1["key"] in v2:
             continue
+        sib = [i for i, k in enumerate(order) if v2[k].get("parent") == r1.get("parent")]
+        order.insert((sib[-1] + 1) if sib else len(order), r1["key"])
+    out = []
+    for key in order:
+        r1, r2 = v1.get(key), v2.get(key)
+        if r1 is None:                   # added under V2: flat before the cut-over
+            r1 = _flat_result(r2)
+        elif r2 is None:                 # retired under V2: flat from the cut-over
+            r2 = _flat_result(r1)
         rr = bt.combine_runs(_run_of(r1), _run_of(r2), cut)
         dates = pd.to_datetime(pd.Series(rr["dates"]))
         strat = np.asarray(rr["strat"], float)
@@ -809,6 +861,30 @@ def combine_results(res_v1: list[dict], res_v2: list[dict],
                      version_series=rr["version_series"])
         res["r"] = rdict
         out.append(res)
+    return out
+
+
+def _flat_result(res: dict) -> dict:
+    """A copy of ``res`` whose engine run never held a position (flat equity,
+    no trades) and whose live state is flat — the stand-in for a sleeve
+    outside a generation's universe (retired, or not yet added) when the
+    Combined view splices the two generations."""
+    run = _run_of(res)
+    n = len(run["dates"])
+    flat = dict(run, strat=np.ones(n), pos=np.zeros(n), trades=np.array([]),
+                trade_log=[], in_pos_now=False, entry_px=None, entry_date=None,
+                trail_px=None, last_exit_reason=None)
+    out = dict(res)
+    out["r"] = flat
+    out["strat"] = flat["strat"]
+    out["pos_series"] = pd.Series(np.zeros(n), index=pd.DatetimeIndex(pd.Series(res["dates"])))
+    out["ret"] = pd.Series(0.0, index=pd.DatetimeIndex(pd.Series(res["dates"]))[1:]).rename(res["key"])
+    out["pos"] = dict(res.get("pos") or {}, in_pos=False, upnl=0.0)
+    out["decision"] = dict(res.get("decision") or {}, state="FLAT",
+                           label="NOT IN THIS VERSION'S UNIVERSE", ico="⚪",
+                           tone="flat", exits_next_bar=False)
+    out["n_trades"] = 0
+    out["win_rate"] = 0.0
     return out
 
 
@@ -1909,7 +1985,7 @@ def adds_only_band(version: str | None = None) -> float:
 
 
 # Strategy Logic V2 allocator rule — "parent-cluster cap": sleeves that trade
-# off ONE parent signal (XLE → OIH/ERX, GLDM → UGL, SOXX → SOXL, GDX → NUGT,
+# off ONE parent signal (XLE → XOP/ERX, GLDM → UGL, SOXX → SOXL, GDX → NUGT,
 # BTC → MSTR/MSTU/ETH) are one bet, but their per-kind caps (30 % core +
 # 18 % beta + 10 % lev) let a single signal own up to 58 % of the book — and
 # the energy crash-shield's exit sits 30 % below XLE's 52-week high, so the
@@ -2685,7 +2761,14 @@ def priority_component_history(results: list[dict], index: pd.Index,
     for res in results:
         pc = parent_comp[res["parent"]]
         # expanding win rate stepped at each closed trade's exit bar
-        log = [t for t in (res["r"].get("trade_log") or res["r"].get("trades") or [])
+        # ``trade_log`` (dated dicts) first; fall back to ``trades`` only when
+        # the log is absent.  Never ``or`` these: an empty ndarray of trade
+        # returns is not falsy, it raises — a sleeve with no closed trade
+        # (e.g. XOP spliced in at the cut-over) would crash the replay.
+        _log = res["r"].get("trade_log")
+        if _log is None:
+            _log = res["r"].get("trades")
+        log = [t for t in (list(_log) if _log is not None else [])
                if isinstance(t, dict) and t.get("exit_date") is not None]
         if log:
             ex = pd.Series([float(t["ret"]) > 0 for t in log],
@@ -2741,10 +2824,14 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
         those weights anchor the book until the next refit.
 
     Returns ``[(effective_date, weights_dict), …]`` sorted ascending; entry 0
-    covers the warm-up.  A sleeve with little or no data inside a fit window
-    may carry an arbitrary anchor — harmless, since the replay water-fills
-    over the sleeves actually in the market and the anchor only sets relative
-    size once the sleeve is live.
+    covers the warm-up.  A sleeve with NO return inside a fit window (not yet
+    in the universe, or an engine whose history starts later — the BTC/ETH
+    CT sleeves trade from 2024-03, WGMI from 2024-05) is left OUT of that
+    fit and carries the warm-up equal-weight constant: before 2026-10-10 it
+    was fitted as an all-zero column, and the Dirichlet mass the search spent
+    on dead columns distorted the live sleeves' anchors (Balanced V1 replay
+    +1,227 % → +1,419 % on the same data; Combined no longer drifts from V1
+    before the cut-over when V2 adds a sleeve).  Strictly as-of either way.
 
     Adaptivity experiments (defaults reproduce the published behaviour):
     ``refit="A"`` reverts to the pre-V3 annual (each Jan 1) cadence;
@@ -2772,12 +2859,25 @@ def walkforward_anchors(rets: pd.DataFrame, pos: pd.DataFrame | None = None,
         fit_r = rets.loc[:prior[-1]]
         if fit_window:
             fit_r = fit_r.iloc[-fit_window:]
-        o = optimize_weights(fit_r, caps=caps, n_samples=n_samples,
+        # A sleeve with NO return inside the fit window (not yet in the
+        # universe — e.g. XOP before the V2 cut-over in the Combined view)
+        # cannot be fitted: it is left out of the Monte-Carlo so the other
+        # sleeves' anchors are exactly what the same universe without it
+        # would give (Combined stays identical to V1 before the cut-over),
+        # and it carries the warm-up equal-weight constant until a refit
+        # sees it trade.  Strictly as-of: the test uses only the window.
+        live = [c for c in cols if bool((fit_r[c].fillna(0.0) != 0.0).any())]
+        if not live:
+            continue
+        o = optimize_weights(fit_r[live], caps=caps, n_samples=n_samples,
                              seed=seed, mdd_floor=mdd_floor,
-                             pos=(pos.loc[fit_r.index] if pos is not None else None),
+                             pos=(pos.loc[fit_r.index, live] if pos is not None else None),
                              sata_daily=sata_daily, objective=objective,
                              fundamental=False)
-        sched.append((d, o["optimal"]["weights"]))
+        w = dict(o["optimal"]["weights"])
+        for c, e in zip(cols, ew):
+            w.setdefault(c, float(e))
+        sched.append((d, w))
     return sched
 
 
