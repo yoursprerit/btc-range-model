@@ -12,7 +12,8 @@ This ONE file serves TWO gold apps (selected by the router key in
 driven by the shared GLDM signal/forecast models:
 
   "GLDM" → 🥇 Gold Trend  — GLDM (1x core) & UGL (2x gold) on a SOXX-style
-            dual-MA 25/100 crossover of the GLDM close, −3% stops
+            dual-MA 25/100 crossover of the GLDM close — V2: taken only while
+            the 100-day SMA is rising, 10 % / 12 % trailing stops (V1: −3 % stops)
   "GDXM" → ⛏️ Gold Miners — GDX (miners) & NUGT (2x miners) on the Divergence
             Pure-Regime signatures (U1/D2/D3/V) from GLDM's causal H/L model
 
@@ -142,8 +143,13 @@ else:
         "log-returns (hourly close), ridge H/L bands & close cones, logistic "
         "day-type — driven by gold's real macro factors. The smooth trenders "
         f"**GLDM & UGL** trade a SOXX-style **dual-MA {gc.DUAL_MA_FAST}/"
-        f"{gc.DUAL_MA_SLOW}** crossover on the gold close (−3% stops). The "
-        "sibling ⛏️ Gold Miners app trades GDX & NUGT on the divergence signal."
+        f"{gc.DUAL_MA_SLOW}** crossover on the gold close — under **Strategy "
+        f"Logic V2** the cross is taken only while the {gc.DUAL_MA_SLOW}-day SMA "
+        f"is rising and each sleeve exits on a trailing stop (GLDM "
+        f"{gc.V2_TRAIL_BY_ASSET['GLDM']*100:.0f}% · UGL "
+        f"{gc.V2_TRAIL_BY_ASSET['UGL']*100:.0f}% off its highest close), no fixed "
+        "stop (V1 traded −3% fixed stops). The sibling ⛏️ Gold Miners app trades "
+        "GDX & NUGT on the divergence signal, unchanged in V2."
     )
 import strategy_version as _sv                 # noqa: E402
 if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
@@ -418,7 +424,8 @@ def net_signal_trend(dm, pos=None):
 def render_trend_signatures(dm, end=None):
     """SOXX-style signal block for the Gold Trend app: the net-decision banner
     plus three cards — the dual-MA Trend Filter (the ONLY entry/exit signal),
-    the −3% Stop-Loss Guard, and the live position summary for both sleeves."""
+    the Stop Guard (V2 trailing stop / V1 −3% fixed stop), and the live position
+    summary for both sleeves."""
     r_gldm = strategy_position("GLDM", end=end)
     r_ugl = strategy_position("UGL", end=end)
     ns = net_signal_trend(dm, r_gldm)
@@ -750,17 +757,67 @@ def net_signal(sigs, pos=None):
                 reason="Flat — awaiting a Pure-Regime entry")
 
 
-def _stops_line() -> str:
-    """Per-asset fixed-stop summary for THIS app's traded sleeves."""
+def _rules_version(version=None) -> str:
+    """The strategy-logic generation whose RULES a description should show:
+    an explicit ``version`` (a back-test radio), else the engine version in
+    effect for the bar on screen (``_ENGINE_VERSION``, set by the historical
+    replay), else the live version.  ``combined`` renders the current rules."""
+    v = str(version or _ENGINE_VERSION or _sv.STRATEGY_VERSION).lower()
+    return "v1" if v == "v1" else "v2"
+
+
+def _stops_line(version=None) -> str:
+    """Per-asset exit-stop summary for THIS app's traded sleeves under the
+    rules of ``version``: V2 dual-MA sleeves carry a trailing stop and no
+    fixed stop; everything else its fixed stop (or signal-only)."""
+    ver = _rules_version(version)
     parts = []
     for a in APP_ASSETS:
-        s = gc.stop_for(a)
-        parts.append(f"<b>{a}</b> " + ("signal-only" if s >= 0.999 else f"−{s * 100:.0f}%"))
+        tr = gc.trail_for(a, ver) if hasattr(gc, "trail_for") else 0.0
+        s = gc.stop_for(a, ver)
+        if tr:
+            parts.append(f"<b>{a}</b> {tr * 100:.0f}% trailing")
+        else:
+            parts.append(f"<b>{a}</b> " + ("signal-only" if s >= 0.999 else f"−{s * 100:.0f}%"))
     return " · ".join(parts)
 
 
-def _trend_strategy_card():
-    """Gold Trend app card: the dual-MA 25/100 engine for GLDM & UGL."""
+def _version_banner_html(version=None) -> str:
+    """One-line pill naming the rules generation a strategy card describes."""
+    ver = _rules_version(version)
+    if ver == "v2":
+        note = (f"Strategy Logic V2 rules (trading since {_sv.STRATEGY_VERSION_START}): "
+                f"the cross is taken only while the {gc.DUAL_MA_SLOW}-day SMA is rising "
+                f"({gc.V2_GATE_RISING_BARS} bars) and each sleeve exits on a trailing stop "
+                f"(GLDM {gc.V2_TRAIL_BY_ASSET['GLDM']*100:.0f}% · UGL "
+                f"{gc.V2_TRAIL_BY_ASSET['UGL']*100:.0f}% below its highest close since "
+                "entry) — no fixed stop. V1 traded the bare cross with −3% fixed stops.")
+    else:
+        note = ("Strategy Logic V1 rules (traded 2026-07-31 → 2026-10-08): the bare "
+                "25/100 cross with a −3% fixed stop per sleeve. V2 (live) adds the "
+                "rising-SMA gate and trailing stops.")
+    return _sv.version_pill_html(ver, note)
+
+
+def _trend_strategy_card(version=None):
+    """Gold Trend app card: the dual-MA 25/100 engine for GLDM & UGL, described
+    under the rules of ``version`` (see ``_rules_version``)."""
+    ver = _rules_version(version)
+    _v2 = ver == "v2"
+    _gate_row = (f"<br>② the <b>{gc.DUAL_MA_SLOW}-day SMA is rising</b> — higher than "
+                 f"{gc.V2_GATE_RISING_BARS} bars ago (V2 gate: no entries on a "
+                 "bear-market bounce)" if _v2 else "")
+    _exit_row = (f"② <b>trailing stop</b> (per asset, off the highest close since entry) — "
+                 f"{_stops_line(ver)} · no fixed stop" if _v2 else
+                 f"② <b>fixed stop</b> (per asset) — {_stops_line(ver)}")
+    _oos = (("GLDM <b>+162%</b> · MDD −16% · Sharpe 1.19 (V1 +115% / −22% / 0.94) "
+             "&nbsp;|&nbsp; UGL <b>+366%</b> · MDD −30% · Sharpe 1.04 (V1 +215% / −44% / "
+             "0.80) — the 2026-10 V2 review on the honest-fill engine; see the "
+             "Backtesting tabs for today's vintage.") if _v2 else
+            ("GLDM <b>+137%</b> · MDD −19% · Sharpe 1.08 (B&amp;H +108% / −26% / 0.83) "
+             "&nbsp;|&nbsp; UGL <b>+302%</b> · MDD −38% · Sharpe 0.96 (B&amp;H +151% / −50% / "
+             "0.64). 9–11 trades per sleeve; the 25/100 pair matches SOXX's config and "
+             "sits on the /100 plateau (20–50/100 all similar)."))
     st.markdown(f"""
 <div style='background:#fffaf0; border:2px solid #b8860b; border-radius:12px;
      padding:16px 20px; margin:4px 0 14px 0; font-family:sans-serif;'>
@@ -778,6 +835,7 @@ def _trend_strategy_card():
     choppier miners (GDX &amp; NUGT) trade the divergence signal in the sibling
     ⛏️ <b>Gold Miners</b> app; together they form the gold middle path.
   </div>
+  <div style='margin:0 0 12px 0;'>{_version_banner_html(ver)}</div>
   <div style='display:flex; gap:14px; flex-wrap:wrap;'>
     <div style='flex:1; min-width:230px;'>
       <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
@@ -785,7 +843,7 @@ def _trend_strategy_card():
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① the <b>{gc.DUAL_MA_FAST}-day SMA</b> of the GLDM close crosses
         <b>above</b> the <b>{gc.DUAL_MA_SLOW}-day SMA</b> (decided at the close,
-        executed next bar)
+        executed next bar){_gate_row}
       </div>
     </div>
     <div style='flex:1; min-width:230px;'>
@@ -794,24 +852,22 @@ def _trend_strategy_card():
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① the {gc.DUAL_MA_FAST}-day SMA crosses <b>back below</b> the
         {gc.DUAL_MA_SLOW}-day SMA<br>
-        ② <b>fixed stop</b> (per asset) — {_stops_line()}
+        {_exit_row}
       </div>
     </div>
   </div>
   <div style='margin-top:12px; font-size:11.5px; color:#7a5901;'>
-    📈 <b>Out-of-sample 2021→now:</b>
-    GLDM <b>+137%</b> · MDD −19% · Sharpe 1.08 (B&amp;H +108% / −26% / 0.83) &nbsp;|&nbsp;
-    UGL <b>+302%</b> · MDD −38% · Sharpe 0.96 (B&amp;H +151% / −50% / 0.64).
-    9–11 trades per sleeve; the 25/100 pair matches SOXX's config and sits on the
-    /100 plateau (20–50/100 all similar).
+    📈 <b>Out-of-sample 2021→now ({_sv.version_label(ver)}):</b> {_oos}
   </div>
 </div>""", unsafe_allow_html=True)
 
 
-def render_strategy_card():
-    """Static BTC-style strategy-description card (gold theme), per app mode."""
+def render_strategy_card(version=None):
+    """Static BTC-style strategy-description card (gold theme), per app mode —
+    the Gold Trend card describes the rules of ``version`` (default: the
+    generation in effect for the bar on screen)."""
     if not IS_MINERS:
-        _trend_strategy_card()
+        _trend_strategy_card(version)
         return
     st.markdown(f"""
 <div style='background:#fffaf0; border:2px solid #b8860b; border-radius:12px;
@@ -831,6 +887,8 @@ def render_strategy_card():
     <b>net positive (+12%/+11%) through the 2021-22 chop</b>.  The smooth
     trenders (GLDM &amp; UGL) ride a dual-MA crossover in the sibling
     🥇 <b>Gold Trend</b> app; together they form the gold middle path.
+    <span style='font-weight:500;'>This engine is identical under Strategy Logic
+    V1 and V2 — the 2026-10 V2 changes touched the dual-MA sleeves only.</span>
   </div>
   <div style='background:#fdf0d5; border:1px solid #b8860b; border-radius:7px;
        padding:8px 13px; margin-bottom:12px; font-size:12px; color:#5c4400;'>
@@ -853,7 +911,7 @@ def render_strategy_card():
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① <b>D2 fade</b> — err_hi 3d-avg &lt; {gc.D2_ERRHI_MAX:+.2f}%<br>
         ② <b>D3 exhaustion</b> — first low-break after a ≥3 high-break streak<br>
-        ③ <b>fixed stop</b> (per asset) — {_stops_line()}
+        ③ <b>fixed stop</b> (per asset) — {_stops_line("v1")}
       </div>
     </div>
   </div>
@@ -893,11 +951,26 @@ def render_conditions_box(sigs, d_df=None, pos=None):
             long_now, f"{gc.DUAL_MA_FAST}d SMA &gt; {gc.DUAL_MA_SLOW}d SMA",
             f"${dm['fast']:,.2f} vs ${dm['slow']:,.2f} — gap {dm['gap']:+.2f}% "
             f"(need &gt; 0%)") + "</table>"
+        _rv = _rules_version()
+        if _rv == "v2":
+            _gate_ok = (pos or {}).get("gate_ok") if isinstance(pos, dict) else None
+            _gate_ok = bool(dm.get("slow_rising")) if _gate_ok is None else bool(_gate_ok)
+            entry_html = entry_html[:-len("</table>")] + rowm(
+                _gate_ok, f"{gc.DUAL_MA_SLOW}d SMA rising ({gc.V2_GATE_RISING_BARS} bars)",
+                "V2 entry gate — the cross is taken only inside an established "
+                "up-trend (a held position is never closed by this gate)") + "</table>"
+            _stop_row = rowm(
+                False, f"Trailing stop (GLDM {gc.V2_TRAIL_BY_ASSET['GLDM']*100:.0f}% · "
+                f"UGL {gc.V2_TRAIL_BY_ASSET['UGL']*100:.0f}%)",
+                "V2 — exit when a sleeve's close falls that far below its highest "
+                "close since entry; the level ratchets up, never down; no fixed stop")
+        else:
+            _stop_row = rowm(
+                False, "Fixed stop −3% (per sleeve)",
+                "V1 — position-level, checked per open trade from each sleeve's own entry")
         exit_html = "<table style='border-collapse:collapse;'>" + rowm(
             not long_now, f"{gc.DUAL_MA_FAST}d SMA &lt; {gc.DUAL_MA_SLOW}d SMA",
-            "cross-down → move both sleeves to cash at the next close") + rowm(
-            False, "Fixed stop −3% (per sleeve)",
-            "position-level — checked per open trade from each sleeve's own entry") + \
+            "cross-down → move both sleeves to cash at the next close") + _stop_row + \
             "</table>"
         st.markdown(f"""
 <div style='display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 6px 0;'>
@@ -1827,7 +1900,7 @@ def render_backtest_dashboard(asset):
               "replaces the −3% fixed stop."))
     _ver = _sv.VIEW_TO_VERSION[_choice]
     _rv = "v1" if _ver == "v1" else "v2"
-    render_strategy_card()
+    render_strategy_card(_rv)
     st.caption(f"⚙️ Engine for this sleeve: **{_ENGINE_LABEL[eng]}** · rules under "
                f"**{_choice}**: {gc.rules_label(asset, _rv)}"
                + (" (V1 before the cut-over, V2 from it)" if _ver == "combined" else "")
@@ -2106,7 +2179,12 @@ daily High/Low (calibrated ridge bands), 7-day & 14-day close cones, and a
 **Strategy — {gc.STRATEGY_NAME} (middle-path engine split).** The two engines
 are regime-complementary, so each sleeve trades the one that suits it:
 **GLDM & UGL** (smooth gold trenders) ride a SOXX-style **dual-MA
-{gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}** crossover on the GLDM close (−3% stop);
+{gc.DUAL_MA_FAST}/{gc.DUAL_MA_SLOW}** crossover on the GLDM close — under
+**Strategy Logic V2** (since {_sv.STRATEGY_VERSION_START}) the cross is taken only
+while the {gc.DUAL_MA_SLOW}-day SMA is rising ({gc.V2_GATE_RISING_BARS} bars) and
+each sleeve exits on a trailing stop (GLDM {gc.V2_TRAIL_BY_ASSET['GLDM']*100:.0f}% ·
+UGL {gc.V2_TRAIL_BY_ASSET['UGL']*100:.0f}% off its highest close, no fixed stop;
+V1 traded −3% fixed stops);
 **GDX & NUGT** (miners) trade the **Divergence Pure-Regime** — entry when U1
 bullish divergence (3-day centered `err_hi` > +{gc.U1_ERRHI_MIN:.2f}% with ≥2
 high-breaks) confirms inside the Pure-Regime gate, exit on D2

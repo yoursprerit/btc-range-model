@@ -661,3 +661,32 @@ def test_walkforward_anchors_skip_a_sleeve_with_no_history_in_the_window():
                             pos=pos.loc[fit_r.index], sata_daily=oc.SATA_DAILY,
                             objective="balanced", fundamental=False)
     assert last_w == pytest.approx(o["optimal"]["weights"])
+
+
+def test_as_published_pricing_basis_is_version_independent():
+    """The as-published record compounds PRICE returns (``bh_returns_matrix``):
+    identical across V1 / V2 / Combined, and untouched by a sleeve going flat
+    or being retired in one generation (whose strategy stream would drop the
+    move of a position the book still held)."""
+    rng = np.random.default_rng(11)
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    idx = pd.bdate_range(cut - pd.Timedelta(days=60), periods=60)
+    xle1, xle2 = _sleeve("XLE", "XLE", idx, rng), _sleeve("XLE", "XLE", idx, rng)
+    oih = _sleeve("OIH", "XLE", idx, rng)
+    comb = oc.combine_results([xle1, oih], [xle2])
+    px_v1 = oc.bh_returns_matrix([xle1, oih])
+    px_c = oc.bh_returns_matrix(comb)
+    pd.testing.assert_frame_equal(px_v1[["XLE", "OIH"]].fillna(0), px_c[["XLE", "OIH"]].fillna(0))
+    # the strategy stream of the retired sleeve IS flat after the cut-over …
+    assert (oc.returns_matrix(comb)["OIH"].loc[cut:].fillna(0) == 0).all()
+    # … but a book that held it keeps earning its price move on that basis
+    books = [dict(as_of=str(idx[5].date()), weights={"OIH": 1.0}, cash_weight=0.0,
+                  strategy_version="v1")]
+    rep_px = oc.published_book_replay(px_c, books, sata_daily=0.0, only_version={"v1", "v2"})
+    rep_strat = oc.published_book_replay(oc.returns_matrix(comb), books, sata_daily=0.0,
+                                         only_version={"v1", "v2"})
+    assert rep_px is not None and rep_strat is not None
+    assert (rep_strat["ret"].loc[cut:] == 0).all()                 # strategy basis: nothing
+    pd.testing.assert_series_equal(rep_px["ret"].loc[cut:], px_c["OIH"].loc[cut:],
+                                   check_names=False)              # price basis: the real move
+    assert (rep_px["weights"]["OIH"].loc[cut:] > 0).all()
