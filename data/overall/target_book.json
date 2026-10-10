@@ -1,48 +1,48 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-09T19:48:04+00:00",
- "as_of": "2026-10-08",
+ "generated_at_utc": "2026-10-10T12:17:33+00:00",
+ "as_of": "2026-10-09",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
   "GRID": 0.3,
-  "XLE": 0.3,
-  "OIH": 0.18,
-  "ERX": 0.1
+  "XLE": 0.1825174825174825,
+  "XOP": 0.056643356643356645,
+  "ERX": 0.06083916083916084
  },
- "cash_weight": 0.12,
+ "cash_weight": 0.4,
  "exec_price": {
-  "GRID": 180.855,
-  "XLE": 64.995,
-  "OIH": 388.69,
-  "ERX": 111.767
+  "GRID": 180.89,
+  "XLE": 65.08,
+  "XOP": 191.52,
+  "ERX": 112.11
  },
  "actions": [
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
+   "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.6375434978076214,
+   "priority": 0.6123034257557872,
    "exits_next_bar": false
   },
   {
    "key": "ERX",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.1,
+   "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.6357408168806005,
+   "priority": 0.6097111121629868,
    "exits_next_bar": false
   },
   {
-   "key": "OIH",
+   "key": "XOP",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
-   "target": 0.18,
+   "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.5114285714285715,
+   "priority": 0.5190476190476191,
    "exits_next_bar": false
   },
   {
@@ -51,7 +51,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.3,
    "in_pos": true,
-   "priority": 0.47556093623890233,
+   "priority": 0.38317998385794994,
    "exits_next_bar": false
   },
   {
@@ -111,7 +111,7 @@
   {
    "key": "GDX",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -120,7 +120,7 @@
   {
    "key": "NUGT",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -183,18 +183,18 @@
  ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-09T19:48:03+00:00",
+  "checked_at_utc": "2026-10-10T12:17:32+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Oct 9, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-10-08",
-  "btc_bar_close_utc": "2026-10-09T12:00:00+00:00"
+  "anchor_ct": "Oct 10, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-10-09",
+  "btc_bar_close_utc": "2026-10-10T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "9947cfff6cef",
+ "code_sha": "f37529671113",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "9cde46708aa5427a4f4d7fff0d7302693b646de2ad6bc00605d0d2422577991c"
+  "value": "282bef03c4112d44bbf6ba3f5fcf9ee9ea1fed7fa079e7aa91134291bfda6050"
  }
 }
