@@ -286,6 +286,10 @@ def main() -> int:
     if _prev_w:
         print(f"Adds-only band {oc.adds_only_band()*100:.0f} pp vs the held book "
               f"({len(_prev_w)} sleeves) — strategy logic {oc.STRATEGY_VERSION}.")
+    if oc.cluster_cap_for():
+        _cl = oc.cluster_weights(book.weights, oc.cluster_map(results))
+        print(f"Parent-cluster cap {oc.cluster_cap_for()*100:.0f} % — book by cluster: "
+              + ", ".join(f"{c} {w*100:.1f}%" for c, w in sorted(_cl.items(), key=lambda x: -x[1]) if w > 0.0005))
 
     if not secret:
         print("WARNING: OVERALL_BOOK_SECRET not set — writing UNSIGNED books. "

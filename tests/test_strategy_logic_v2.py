@@ -265,10 +265,11 @@ def test_gold_engine_decision_mirrors_the_convention():
     assert ge._trend_decision(True, False) ["state"] == "ENTRY"
 
 
-def _res(key, in_pos=False, tone="flat", state=None, label="FLAT", version="v2"):
+def _res(key, in_pos=False, tone="flat", state=None, label="FLAT", version="v2",
+         parent=None):
     dec = dict(state=(state or ("HOLD" if in_pos else "FLAT")), label=label,
                ico="", tone=tone)
-    return dict(key=key, parent=key, name=key, kind="core", emoji="", kemoji="",
+    return dict(key=key, parent=parent or key, name=key, kind="core", emoji="", kemoji="",
                 accent="#000", cap=0.30, last_close=100.0, dchg=0.0, ma_val=None,
                 sentiment=50.0, decision=dec, alert="NEUTRAL", bull_regime=True,
                 mom=0.05, win_rate=60.0, metrics=dict(sharpe=1.0),
@@ -318,7 +319,8 @@ def test_adds_only_band_is_a_version_property():
     assert oc.signal_gated_allocation(r, _W, prev_weights={"AAA": 0.1})["adds_only"] == 0.0
 
 
-def _universe(n_days=120, seed=3):
+def _universe(n_days=120, seed=3, parents=None):
+    parents = parents or {}
     rng = np.random.default_rng(seed)
     idx = pd.bdate_range("2024-01-01", periods=n_days)
     out = []
@@ -329,7 +331,7 @@ def _universe(n_days=120, seed=3):
         pos = (rng.random(n_days) > 0.08).astype(float)
         strat = 100.0 * np.cumprod(1 + np.r_[0.0, np.diff(bh) / bh[:-1]] * pos)
         ret = pd.Series(np.diff(strat) / strat[:-1], index=idx[1:]).rename(key)
-        out.append(dict(key=key, name=key, kind="core", parent=key, accent="#000",
+        out.append(dict(key=key, name=key, kind="core", parent=parents.get(key, key), accent="#000",
                         emoji="•", dates=idx, ret=ret, version="v2",
                         pos_series=pd.Series(pos, index=idx), pos=dict(in_pos=True),
                         r=dict(bh=bh, dates=list(idx), trade_log=[])))
@@ -386,6 +388,7 @@ def test_walkforward_version_selects_the_adds_only_rule():
     wf_v1 = oc.walkforward_gated_replay(res, version="v1", n_samples=200, min_hist=40)
     wf_v2 = oc.walkforward_gated_replay(res, version="v2", n_samples=200, min_hist=40)
     assert wf_v1["adds_only"] == 0.0 and wf_v2["adds_only"] == pytest.approx(0.08)
+    assert wf_v1["cluster_cap"] == 0.0 and wf_v2["cluster_cap"] == pytest.approx(oc.CLUSTER_CAP)
     assert wf_v1["version"] == "v1" and wf_v2["version"] == "v2"
     assert wf_v2["turnover"]["mean"] <= wf_v1["turnover"]["mean"]
 
@@ -452,3 +455,98 @@ def test_live_exit_flags_a_breached_trailing_stop_and_entry_respects_the_gate():
                 pos=dict(in_pos=False), last_close=10.0, bar_close=10.0,
                 version="v2", gate_ok=False)
     assert oc.live_entry_keys([flat], {"WGMI": {"price": 50.0}}) == set()
+
+
+# ── parent-cluster cap ────────────────────────────────────────────────────
+_ENERGY_CAPS = {"XLE": 0.30, "OIH": 0.18, "ERX": 0.10, "GRID": 0.30}
+_ENERGY_CL = {"XLE": "XLE", "OIH": "XLE", "ERX": "XLE", "GRID": "GRID"}
+
+
+def test_cluster_cap_is_a_version_property():
+    assert oc.cluster_cap_for("v1") == 0.0
+    assert oc.cluster_cap_for("v2") == pytest.approx(0.30)
+    assert oc.cluster_cap_for() == pytest.approx(oc.CLUSTER_CAP)
+    assert oc.cluster_map([_res("OIH", parent="XLE"), _res("GRID")]) == {"OIH": "XLE", "GRID": "GRID"}
+
+
+def test_apply_cluster_cap_binds_the_cluster_and_respreads_the_freed_weight():
+    raw = {"XLE": 0.3, "OIH": 0.18, "ERX": 0.1, "GRID": 0.05}
+    plain = oc._apply_cluster_cap(raw, _ENERGY_CAPS, _ENERGY_CL, 0.0)
+    assert oc.cluster_weights(plain, _ENERGY_CL)["XLE"] > 0.30 + 1e-9
+    capped = oc._apply_cluster_cap(raw, _ENERGY_CAPS, _ENERGY_CL, 0.30)
+    cw = oc.cluster_weights(capped, _ENERGY_CL)
+    assert cw["XLE"] == pytest.approx(0.30)
+    assert capped["GRID"] == pytest.approx(0.30)          # freed weight re-spread up to GRID's cap
+    assert sum(capped.values()) == pytest.approx(0.60)    # what nobody can absorb is left for SATA
+    # the cluster keeps its pro-rata shape
+    assert capped["XLE"] / capped["OIH"] == pytest.approx(plain["XLE"] / plain["OIH"])
+    for k, v in capped.items():
+        assert v <= _ENERGY_CAPS[k] + 1e-9
+
+
+def test_bind_cluster_cap_scales_a_pinned_cluster_without_respreading():
+    t = {"XLE": 0.3, "OIH": 0.18, "ERX": 0.1, "GRID": 0.2}
+    out = oc._bind_cluster_cap(t, _ENERGY_CL, 0.30)
+    assert oc.cluster_weights(out, _ENERGY_CL)["XLE"] == pytest.approx(0.30)
+    assert out["XLE"] / out["ERX"] == pytest.approx(3.0)
+    assert out["GRID"] == pytest.approx(0.20)             # untouched, no re-spread
+    assert oc._bind_cluster_cap(t, _ENERGY_CL, 0.0) == t
+
+
+def test_signal_gated_allocation_binds_parent_clusters():
+    sleeves = [_res("XLE", in_pos=True, tone="hold"),
+               _res("OIH", in_pos=True, tone="hold", parent="XLE"),
+               _res("ERX", in_pos=True, tone="hold", parent="XLE"),
+               _res("GRID", in_pos=True, tone="hold")]
+    w = {"XLE": 0.3, "OIH": 0.3, "ERX": 0.3, "GRID": 0.1}
+    free = oc.signal_gated_allocation(sleeves, w, caps=_ENERGY_CAPS, adds_only=0, cluster_cap=0)
+    assert free["cluster_cap"] == 0.0 and free["clusters"]["XLE"] > 0.30 + 1e-9
+    v2 = oc.signal_gated_allocation(sleeves, w, caps=_ENERGY_CAPS)
+    assert v2["cluster_cap"] == pytest.approx(oc.CLUSTER_CAP)
+    assert v2["clusters"]["XLE"] == pytest.approx(0.30)
+    assert v2["clusters"]["GRID"] == pytest.approx(0.30)
+    assert v2["tilt_target"] == v2["target"]              # no prev book → nothing pinned
+    # a book the adds-only pin holds above the cap is scaled down to it (freed → SATA)
+    prev = {"XLE": 0.30, "OIH": 0.18, "ERX": 0.10, "GRID": 0.30}
+    v3 = oc.signal_gated_allocation(sleeves, w, caps=_ENERGY_CAPS, prev_weights=prev)
+    assert v3["clusters"]["XLE"] == pytest.approx(0.30)
+    assert v3["target"]["XLE"] / v3["target"]["OIH"] == pytest.approx(0.30 / 0.18)
+    assert v3["target"]["GRID"] == pytest.approx(0.30)
+    assert v3["sata"] == pytest.approx(0.40)
+    # V1-stamped results carry no cluster cap
+    v1 = oc.signal_gated_allocation([dict(r, version="v1") for r in sleeves], w, caps=_ENERGY_CAPS)
+    assert v1["cluster_cap"] == 0.0 and v1["clusters"]["XLE"] > 0.30 + 1e-9
+
+
+def test_historical_allocation_takes_the_cluster_cap():
+    snap = dict(rows=[dict(key="XLE", parent="XLE", in_pos=True),
+                      dict(key="OIH", parent="XLE", in_pos=True),
+                      dict(key="ERX", parent="XLE", in_pos=True),
+                      dict(key="GRID", parent="GRID", in_pos=False)])
+    w = {"XLE": 0.3, "OIH": 0.3, "ERX": 0.3, "GRID": 0.1}
+    free = oc.historical_allocation(snap, w, caps=_ENERGY_CAPS)
+    assert sum(free["book"].values()) == pytest.approx(0.58)
+    capped = oc.historical_allocation(snap, w, caps=_ENERGY_CAPS, cluster_cap=0.30)
+    assert sum(capped["book"].values()) == pytest.approx(0.30)
+    assert capped["sata"] == pytest.approx(0.70)
+
+
+def test_replay_cluster_cap_binds_every_day_and_switches_on_from_a_date():
+    res = _universe(parents={"BBB": "AAA", "CCC": "AAA"})
+    bw = {k: 0.25 for k in ("AAA", "BBB", "CCC", "DDD")}
+    free = oc.replay_gated_allocation(res, base_weights=bw, adds_only=0.08, cluster_cap=0)
+    capped = oc.replay_gated_allocation(res, base_weights=bw, adds_only=0.08, cluster_cap=0.30)
+    cl_free = free["weights"][["AAA", "BBB", "CCC"]].sum(axis=1)
+    cl_cap = capped["weights"][["AAA", "BBB", "CCC"]].sum(axis=1)
+    assert (cl_free > 0.30 + 1e-9).any()
+    assert (cl_cap <= 0.30 + 1e-9).all()
+    assert (capped["weights"]["DDD"] <= 0.30 + 1e-9).all()
+    assert (capped["weights"].sum(axis=1) + capped["sata"]).round(9).eq(1.0).all()
+    assert capped["cluster_cap"] == pytest.approx(0.30) and free["cluster_cap"] == 0.0
+    cut = res[0]["dates"][60]
+    mix = oc.replay_gated_allocation(res, base_weights=bw, adds_only=0.08,
+                                     cluster_cap=0.30, cluster_cap_from=cut)
+    cl_mix = mix["weights"][["AAA", "BBB", "CCC"]].sum(axis=1)
+    pd.testing.assert_series_equal(cl_mix.loc[:cut - pd.Timedelta(days=1)],
+                                   cl_free.loc[:cut - pd.Timedelta(days=1)])
+    assert (cl_mix.loc[cut:] <= 0.30 + 1e-9).all()

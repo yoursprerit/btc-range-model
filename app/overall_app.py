@@ -1246,6 +1246,17 @@ with tab_live:
                    + (" **Likely live entries funded:** "
                       + ", ".join(sorted(_live_entries)) + "."
                       if _live_entries else ""))
+    _cc = float(gate_live.get("cluster_cap") or 0.0)
+    if _cc:
+        _clw = sorted(((c, w) for c, w in (gate_live.get("clusters") or {}).items()
+                       if w > 0.0005), key=lambda x: -x[1])
+        st.caption(f"⚙️ **Strategy Logic V2 parent-cluster cap {_cc*100:.0f}%** — "
+                   "sleeves that trade one parent signal (XLE → OIH/ERX, GLDM → UGL, "
+                   "SOXX → SOXL, GDX → NUGT, BTC → MSTR/MSTU/ETH) never exceed it "
+                   "combined, so one signal's exit can never be most of the book. "
+                   "Live book by cluster: "
+                   + (" · ".join(f"**{c}** {w*100:.0f}%" for c, w in _clw) if _clw
+                      else "all SATA") + ".")
     _frz = gate_live.get("freeze")
     if _frz:
         st.info("🧊 **US market closed today** (weekend/holiday) — the "
@@ -1476,7 +1487,11 @@ with tab_live:
                        "blend tilted by that morning's **entry-priority** score "
                        "(live momentum · macro sentiment · back-tested win-rate "
                        "· risk-adjusted edge), then **water-filled** to the "
-                       "per-instrument caps, with the undeployable residual "
+                       "per-instrument caps — under Strategy Logic V2 a held "
+                       "sleeve is never trimmed by that tilt (adds-only) and "
+                       "the sleeves sharing one parent signal never exceed "
+                       f"**{ov.CLUSTER_CAP*100:.0f}%** of the book combined "
+                       "(parent-cluster cap) — with the undeployable residual "
                        "parked in **SATA**. So a weight only moves between two "
                        "publishes because a **signal fired** (fresh entry), a "
                        "**signal died** (exit / trend break / retired from the "
@@ -4736,8 +4751,9 @@ with tab_hist:
             _h_book = {k: float(v) for k, v in _h_wrow.items() if v > 0.0005}
             _h_sata = float(_h_wf["sata"].loc[_h_bar])
         else:
-            _h_alloc = ov.historical_allocation(_snap, opt["optimal"]["weights"],
-                                                caps=ov.caps_for(_profile))
+            _h_alloc = ov.historical_allocation(
+                _snap, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
+                cluster_cap=ov.cluster_cap_for(_sv.version_for_date(_h_bar)))
             _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
         with _h_top[2]:
             st.markdown(
@@ -5470,7 +5486,11 @@ is NOT a fixed-weight blend. Every day of the back-test rebuilds the book the
 live logic would have held **using only information available at the previous
 close**: the sleeves in the market that day get capital, sized by anchor
 weights × (0.5 + entry-priority) and water-filled to the profile caps, with the
-remainder in SATA. Anchor weights are **re-fit at every quarter start
+remainder in SATA — and, under **Strategy Logic V2**, the **adds-only** rule (a
+held sleeve is never trimmed by the tilt; added to only when its target rises
+≥ 8 pp) and the **parent-cluster cap** (the sleeves sharing one parent signal,
+e.g. XLE → OIH/ERX, never exceed 30% of the book combined) apply from the
+cut-over. Anchor weights are **re-fit at every quarter start
 (Jan/Apr/Jul/Oct 1) on the data before that date** (cap-normalised equal
 weight before enough history exists — quarterly refits were adopted after the
 adaptivity eval showed they beat annual on both return and Sharpe), the
@@ -5493,7 +5513,16 @@ optimiser objective and a drawdown budget:
 
 β / 2× exposure rises Balanced → Growth: more return, deeper drawdowns, lower
 Sharpe. Every number on the Live and Backtesting tabs follows the selected
-profile. (An *Aggressive* profile — 35/40/35 caps, −38% budget — exists in
+profile. Under **Strategy Logic V2** the per-kind caps are bounded by a
+**parent-cluster cap of 30%** in every profile: XLE + OIH + ERX, GLDM + UGL,
+SOXX + SOXL, GDX + NUGT and BTC + MSTR + MSTU + ETH each trade one parent
+signal, and the per-kind caps alone would let one signal own up to 58% of the
+book (the energy crash-shield exits 30% below XLE's 52-week high, so that book
+could lose ~19% before the signal fired). Balanced replay, 3 optimiser seeds:
+max drawdown −18.7% → −13.5%, Sharpe 1.8 → 2.1, return within 3% of the
+un-capped book (the cost sits in 2022's energy bull).
+
+(An *Aggressive* profile — 35/40/35 caps, −38% budget — exists in
 `overall_core` for the CLI tools but is retired from this UI: its drawdown
 budget was judged too deep to publish.)
 
@@ -5511,8 +5540,9 @@ across the competing candidates: **momentum** (0.28, distance above the 50-day
 SMA), **macro sentiment** (0.24, the app's 0–100 gauge), the strategy's
 **back-tested win-rate** (0.20), its **risk-adjusted edge** (0.18, OOS Sharpe)
 and **regime** (0.10, bull vs bear). Each instrument's target = its optimal
-weight × (0.5 + priority), water-filled to the caps — so the highest-priority
-signals in today's tape get the largest slices.
+weight × (0.5 + priority), water-filled to the caps (and, under V2, bound by the
+parent-cluster cap) — so the highest-priority signals in today's tape get the
+largest slices.
 
 **Today's book & SATA.** Capital is deployed only to instruments currently
 signalling long (or firing a fresh entry); the held/opened **risk assets total
