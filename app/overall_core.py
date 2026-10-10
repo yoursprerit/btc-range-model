@@ -1894,7 +1894,13 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
         sel = pool[int(np.argmax(shp[pool]))]
     else:  # "balanced" — highest return among near-max-Sharpe blends
         best_sharpe = float(shp[pool].max())
-        near = pool[shp[pool] >= 0.92 * best_sharpe]
+        # within 8 % of the best Sharpe — measured as a band BELOW the best
+        # (``best − 8 %·|best|``), so a negative best Sharpe (a fit window
+        # that is all drawdown) still admits the best candidate itself
+        # instead of an empty pool (0.92 × a negative best lies ABOVE it)
+        near = pool[shp[pool] >= best_sharpe - 0.08 * abs(best_sharpe)]
+        if not near.size:
+            near = pool
         sel = near[int(np.argmax(tot[near]))]
     w_opt = cand[sel]
     m_opt = dict(total_ret=float(tot[sel]), cagr=float(cag[sel]), mdd=float(mdd_a[sel]),
@@ -2893,7 +2899,9 @@ def replay_gated_allocation(results: list[dict],
                             adds_only: float | None = None,
                             adds_only_from=None,
                             cluster_cap: float | None = None,
-                            cluster_cap_from=None) -> dict:
+                            cluster_cap_from=None,
+                            start=None,
+                            init_weights: dict | None = None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -2907,6 +2915,10 @@ def replay_gated_allocation(results: list[dict],
     ``cluster_cap_from`` apply V2's parent-cluster cap the same way (the
     sleeves sharing one parent signal never exceed the cap combined; the
     adds-only pin respects it).  ``None`` / ``0`` → no cluster cap (V1).
+    ``start`` replays only bars on/after that date, and ``init_weights`` is
+    the book held going into the first replayed bar (the adds-only pin and
+    the cluster cap read it as the previous day) — how the Combined view
+    continues V2's logic from the book V1 last held (``splice_replays``).
 
     Construction, mirroring the live gate:
       * the funded set on day *t* is the sleeves the engines hold IN THE
@@ -3005,7 +3017,14 @@ def replay_gated_allocation(results: list[dict],
     _cm = cluster_map(results)
     cl_j = {j: _cm.get(keys[j], keys[j]) for j in range(len(keys))}
     idx_vals = idx.values
-    for t in range(len(idx)):
+    t0 = (int(np.searchsorted(idx_vals, pd.Timestamp(start).to_datetime64()))
+          if start is not None else 0)
+    init_vec = np.zeros(len(keys))
+    for k, w in (init_weights or {}).items():
+        if k in keys:
+            init_vec[keys.index(k)] = float(w)
+    has_init = init_weights is not None
+    for t in range(t0, len(idx)):
         act = [j for j in range(len(keys)) if P[t, j] > 0]
         if not act:
             port[t] = sata_daily if biz[t] else 0.0
@@ -3035,10 +3054,10 @@ def replay_gated_allocation(results: list[dict],
         cc_t = cc_band if (cc_band > 0 and (cc_from is None or idx_vals[t] >= cc_from)) else 0.0
         target = _apply_cluster_cap(raw, {j: caps.get(keys[j], 0.30) for j in raw},
                                     cl_j, cc_t)
-        if ao_band > 0 and t > 0 and (ao_from is None or idx_vals[t] >= ao_from):
+        if ao_band > 0 and (t > t0 or has_init) and (ao_from is None or idx_vals[t] >= ao_from):
             # adds-only: a sleeve held yesterday keeps its weight unless the
             # tilted target rose by ≥ the band (never trimmed by the tilt)
-            prevW = W[t - 1]
+            prevW = W[t - 1] if t > t0 else init_vec
             held = [j for j in act if prevW[j] > 0]
             for j in held:
                 tw = target.get(j, 0.0)
@@ -3057,6 +3076,8 @@ def replay_gated_allocation(results: list[dict],
         port[t] = float(np.dot(W[t], R[t])) + \
             (sata_w[t] * sata_daily if biz[t] else 0.0)
 
+    if t0:                                     # only the replayed bars are returned
+        idx, port, W, sata_w, P = idx[t0:], port[t0:], W[t0:], sata_w[t0:], P[t0:]
     daily = pd.Series(port, index=idx)
     eq = _equity(daily)
     full = np.column_stack([W, sata_w])
@@ -3088,9 +3109,20 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              adds_only: float | None = None,
                              adds_only_from=None,
                              cluster_cap: float | None = None,
-                             cluster_cap_from=None) -> dict:
+                             cluster_cap_from=None,
+                             gens: tuple | None = None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
     on a ``walkforward_anchors`` schedule.
+
+    ``version="combined"`` with ``gens=(results_v1, results_v2)`` — the two
+    generations' own universes — is the EXACT Combined replay: V1's replay
+    to the day before the cut-over, then V2's logic (its own anchors, fitted
+    on the V2 universe, adds-only and the cluster cap) continuing from the
+    book V1 last held (``splice_replays``).  Without ``gens`` the spliced
+    universe is replayed under the cut-over switches — an approximation
+    whose anchors are fitted on the spliced universe (a different column set
+    from either generation), so it is used only when the generations are not
+    at hand.
 
     ``version`` (default: the results' own generation tag) sets the allocator
     rules: ``v1`` re-sizes daily, ``v2`` applies the adds-only band over the
@@ -3107,9 +3139,35 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     ``walkforward_anchors`` / ``replay_gated_allocation``; the defaults
     reproduce the published strategy exactly (see
     ``scripts/eval_adaptive_variants.py`` for the comparison harness)."""
+    ver = str(version).lower() if version else version_of_results(results)
+    if ver == "combined" and gens and len(gens) == 2 and gens[0] and gens[1]:
+        kw = dict(caps=caps, mdd_floor=mdd_floor, objective=objective,
+                  sata_daily=sata_daily, tilt=tilt, min_hist=min_hist,
+                  n_samples=n_samples, seed=seed, refit=refit,
+                  fit_window=fit_window, wr_window=wr_window,
+                  sharpe_window=sharpe_window, penalty=penalty)
+        rep1 = walkforward_gated_replay(gens[0], version="v1", **kw)
+        res2 = gens[1]
+        rets2 = returns_matrix(res2)
+        pos2 = position_matrix(res2, rets2.index)
+        anchors2 = walkforward_anchors(rets2, pos=pos2, caps=caps, mdd_floor=mdd_floor,
+                                       objective=objective, sata_daily=sata_daily,
+                                       min_hist=min_hist, n_samples=n_samples,
+                                       seed=seed, refit=refit, fit_window=fit_window)
+        cut = pd.Timestamp(STRATEGY_VERSION_START)
+        w1 = rep1["weights"].loc[:cut - pd.Timedelta(days=1)]
+        init = ({k: float(v) for k, v in w1.iloc[-1].items() if v > 0}
+                if len(w1) else {})
+        rep2 = replay_gated_allocation(
+            res2, caps=caps, sata_daily=sata_daily, tilt=tilt, anchors=anchors2,
+            wr_window=wr_window, sharpe_window=sharpe_window, penalty=penalty,
+            adds_only=(ADDS_ONLY_BAND if adds_only is None else adds_only),
+            cluster_cap=(CLUSTER_CAP if cluster_cap is None else cluster_cap),
+            start=cut, init_weights=init)
+        rep2["anchors"] = anchors2
+        return splice_replays(rep1, rep2, cut)
     rets = returns_matrix(results)
     pos = position_matrix(results, rets.index)
-    ver = str(version).lower() if version else version_of_results(results)
     if adds_only is None:
         adds_only = ADDS_ONLY_BAND if ver in ("v2", "combined") else 0.0
         if ver == "combined" and adds_only_from is None:
@@ -3134,6 +3192,49 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     rep["adds_only"] = float(adds_only or 0.0)
     rep["cluster_cap"] = float(cluster_cap or 0.0)
     return rep
+
+
+def splice_replays(rep1: dict, rep2: dict, cutover=None) -> dict:
+    """The Combined replay from the two generations' replays: ``rep1``'s
+    bars before ``cutover`` (default the V1 → V2 cut-over), ``rep2``'s from
+    it — each day's book under the logic actually in effect that day.  The
+    equity curve is re-compounded from the spliced returns; weights / SATA /
+    active matrices are concatenated over the union of sleeves (a sleeve one
+    generation never traded is 0 on the other's bars); turnover is measured
+    across the join, so the hand-over from V1's last book to V2's first is
+    counted; the anchor schedule carries V1's entries before the cut-over
+    and V2's from it (with V2's anchor in force at the cut-over)."""
+    cut = pd.Timestamp(cutover or STRATEGY_VERSION_START)
+    before = lambda s: s.loc[s.index < cut]
+    after = lambda s: s.loc[s.index >= cut]
+    ret = pd.concat([before(rep1["ret"]), after(rep2["ret"])])
+    cols = list(dict.fromkeys(list(rep1["weights"].columns) + list(rep2["weights"].columns)))
+    W = pd.concat([before(rep1["weights"]).reindex(columns=cols),
+                   after(rep2["weights"]).reindex(columns=cols)]).fillna(0.0)
+    sata = pd.concat([before(rep1["sata"]), after(rep2["sata"])])
+    act = None
+    if rep1.get("active") is not None and rep2.get("active") is not None:
+        act = pd.concat([before(rep1["active"]).reindex(columns=cols),
+                         after(rep2["active"]).reindex(columns=cols)]).fillna(False)
+    eq = _equity(ret)
+    full = np.column_stack([W.to_numpy(float), sata.to_numpy(float)])
+    turno = 0.5 * np.abs(np.diff(full, axis=0)).sum(axis=1)
+    a1 = [(d, w) for d, w in (rep1.get("anchors") or []) if pd.Timestamp(d) < cut]
+    a2 = [(d, w) for d, w in (rep2.get("anchors") or [])]
+    cur2 = [w for d, w in a2 if pd.Timestamp(d) <= cut]
+    anchors = a1 + ([(cut, cur2[-1])] if cur2 else []) + \
+        [(d, w) for d, w in a2 if pd.Timestamp(d) > cut]
+    return dict(
+        ret=ret, equity=eq, metrics=curve_metrics(eq), weights=W, sata=sata,
+        active=act,
+        turnover=dict(mean=float(turno.mean()) if len(turno) else 0.0,
+                      p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
+                      days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
+        tilt=rep1.get("tilt", True), anchors=anchors, version="combined",
+        adds_only=float(rep2.get("adds_only") or 0.0),
+        cluster_cap=float(rep2.get("cluster_cap") or 0.0),
+        version_series=pd.Series(np.where(ret.index < cut, "v1", "v2"), index=ret.index),
+        spliced=True)
 
 
 def period_metrics_from_ret(daily_ret: pd.Series, periods: list[tuple]) -> list[dict]:

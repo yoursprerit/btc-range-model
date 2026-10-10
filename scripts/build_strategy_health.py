@@ -71,10 +71,23 @@ def main() -> int:
     import strategy_version as sv
     all_books = hc.load_books(ARCHIVE_DIR)
     print(f"Loaded {len(all_books)} archived books from {ARCHIVE_DIR}.")
+    _gen_cache: dict = {}            # each generation's universe is run once
     for view in (args.views or VIEWS):
         print(f"\n=== Strategy-logic view: {view} ===")
         print("Running the universe (all sleeves)…")
-        results = oc.run_universe(view)
+        gens = None
+        if view == "combined":
+            # the exact Combined replay splices the two generations' own
+            # replays (V1 to the cut-over, V2 from it) — run both universes
+            # once and splice the results for the sleeve-level reads
+            res_v1 = _gen_cache.get("v1") or oc.run_universe("v1")
+            res_v2 = _gen_cache.get("v2") or oc.run_universe("v2")
+            _gen_cache.update(v1=res_v1, v2=res_v2)
+            results = oc.combine_results(res_v1, res_v2)
+            gens = (res_v1, res_v2)
+        else:
+            results = _gen_cache.get(view) or oc.run_universe(view)
+            _gen_cache[view] = results
         if not results:
             raise RuntimeError("run_universe() returned no instruments — check data feeds")
         print(f"  {len(results)} instruments.")
@@ -87,7 +100,7 @@ def main() -> int:
                 replays[name] = oc.walkforward_gated_replay(
                     results, caps=oc.caps_for(name), mdd_floor=prof["mdd_floor"],
                     objective=prof["objective"], sata_daily=oc.SATA_DAILY, tilt=True,
-                    version=view)
+                    version=view, gens=gens)
             except Exception:
                 traceback.print_exc()
                 replays[name] = None

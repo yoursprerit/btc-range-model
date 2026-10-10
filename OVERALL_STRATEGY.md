@@ -107,7 +107,16 @@ generation's rules over the whole history (V2 before the cut-over is a
 what-if); **Combined** is each day under the logic actually in effect (V1 to
 2026-10-08, V2 from 2026-10-09), with the transition marked on every growth
 chart and the version in effect named on every historical replay and
-executed run.  The nightly health build writes one snapshot per view
+executed run.  The Combined walk-forward replay is a **splice of the two
+generations' own replays** (`overall_core.splice_replays`, built by
+`walkforward_gated_replay(version="combined", gens=(v1, v2))`): V1's replay
+bar-for-bar to the day before the cut-over, then V2's logic — its own
+quarterly anchors fitted on the V2 universe, adds-only and the cluster cap —
+continuing from the book V1 last held (`replay_gated_allocation(start=…,
+init_weights=…)`).  Replaying the spliced *universe* instead (the 2026-10-10
+construction) fitted the anchors on a column set neither generation traded
+and read +28 % since 2026-03-01 against V1's +50.6 %; the splice reads
++50.4 %, identical to V1 before the cut-over.  The nightly health build writes one snapshot per view
 (`strategy_health.json` = Combined, `strategy_health_v1.json`,
 `strategy_health_v2.json`).
 
