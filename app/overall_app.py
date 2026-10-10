@@ -210,7 +210,30 @@ def _bucket() -> str:
 def get_results(bucket: str, version: str = "v2"):
     # computed_at is cached alongside the results, so it records when the
     # signals were actually (re)generated — not when the page last rendered.
+    if str(version).lower() == "combined":
+        # splice the two cached generations instead of re-running both
+        # universes — switching the V1 / V2 / Combined selectors then costs
+        # one universe run per generation in total, not one per view
+        v1, v2 = get_results(bucket, "v1"), get_results(bucket, "v2")
+        return dict(results=ov.combine_results(v1["results"], v2["results"]),
+                    computed_at=max(v1["computed_at"], v2["computed_at"]))
     return dict(results=ov.run_universe(version), computed_at=pd.Timestamp.utcnow())
+
+
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
+def get_price_returns(bucket: str):
+    """Per-sleeve daily PRICE returns (the underlying's bar-to-bar move,
+    ``bh_returns_matrix``) — version-independent, so the as-published record
+    prices every archived book identically under the V1 / V2 / Combined
+    selectors.  A published book HELD its sleeves whatever an engine's
+    position was that day, so this — not a generation's strategy stream — is
+    what its P&L must compound (a strategy stream goes flat on a sleeve the
+    generation has exited or retired, e.g. GLDM/UGL/OIH on 2026-10-09 under
+    V2, and silently dropped the move of a position the account still held)."""
+    res = get_results(bucket, "v2")
+    if not res["results"]:
+        return None
+    return ov.bh_returns_matrix(res["results"])
 
 
 @st.cache_data(ttl=60, show_spinner=False, max_entries=2)
@@ -276,10 +299,58 @@ def get_book_version_map(bucket: str):
     return ov.load_book_version_map()
 
 
-@st.cache_data(ttl=1800, show_spinner="Optimising the combined allocation…", max_entries=6)
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=6)
+def get_universe_pack(bucket: str, version: str = "v2"):
+    """The profile-independent part of a generation's portfolio computation:
+    the universe run, its returns/position matrices and the benchmarks."""
+    res = get_results(bucket, version)
+    results, computed_at = res["results"], res["computed_at"]
+    if not results:
+        return None
+    rets = ov.returns_matrix(results)
+    pos = ov.position_matrix(results, rets.index)
+    bm = ov.benchmarks(rets, results, pos=pos, sata_daily=ov.SATA_DAILY)
+    return dict(results=results, computed_at=computed_at, rets=rets, pos=pos,
+                bm=bm, version=version)
+
+
+@st.cache_data(ttl=1800, show_spinner="Optimising the allocation and replaying the back-test…",
+               max_entries=12)
+def get_profile_pack(bucket: str, version: str, name: str):
+    """ONE risk profile's optimiser + walk-forward replay + live gate for a
+    generation — cached per (generation, profile) so a selector switch
+    replays only the profile on screen (the comparison table assembles the
+    rest on demand)."""
+    up = get_universe_pack(bucket, version)
+    if not up:
+        return None
+    results, rets, pos, bm = up["results"], up["rets"], up["pos"], up["bm"]
+    _prev_w = ov.load_published_book_weights() if version == "v2" else None
+    sata = ov.SATA_DAILY
+    base_curves = {"Equal-weight strategies": bm["strat_equal"]["equity"],
+                   BH_CURVE: bm["bh_equal"]["equity"]}
+    prof = ov.RISK_PROFILES[name]
+    caps = ov.caps_for(name)
+    opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
+                              mdd_floor=prof["mdd_floor"], objective=prof["objective"],
+                              fundamental=False)
+    w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
+    wf = ov.walkforward_gated_replay(results, caps=caps,
+                                     mdd_floor=prof["mdd_floor"],
+                                     objective=prof["objective"],
+                                     sata_daily=sata, tilt=True,
+                                     version=version)
+    per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
+    curves = {STRAT_CURVE: wf["equity"], **base_curves}
+    gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
+                                      prev_weights=_prev_w)
+    return dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt, wf=wf)
+
+
 def get_all_profiles(bucket: str, version: str = "v2"):
-    """Compute the full portfolio for every UI risk profile once, so switching
-    profiles (and rendering the comparison table) is instant — no recompute.
+    """The full portfolio for every UI risk profile (assembled from the
+    per-profile caches, so the comparison table costs nothing extra once each
+    profile has been computed).
 
     ``opt``/``gate`` power TODAY'S live book (full-history optimal weights —
     all data to date is legitimately known when sizing today; the mid-2026
@@ -291,38 +362,14 @@ def get_all_profiles(bucket: str, version: str = "v2"):
     # ``version``: "v2" (the live logic — what the Live tab trades), "v1" or
     # "combined" (each day under the logic in effect) — the P&L / Backtesting
     # / Historical views pick theirs; everything else reads the live one.
-    res = get_results(bucket, version)
-    results, computed_at = res["results"], res["computed_at"]
-    if not results:
+    up = get_universe_pack(bucket, version)
+    if not up:
         return None
-    _prev_w = ov.load_published_book_weights() if version == "v2" else None
-    rets = ov.returns_matrix(results)
-    pos = ov.position_matrix(results, rets.index)
-    sata = ov.SATA_DAILY
-    bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)      # profile-independent
-    base_curves = {"Equal-weight strategies": bm["strat_equal"]["equity"],
-                   BH_CURVE: bm["bh_equal"]["equity"]}
-    profiles = {}
-    for name in UI_PROFILES:
-        prof = ov.RISK_PROFILES[name]
-        caps = ov.caps_for(name)
-        opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
-                                  mdd_floor=prof["mdd_floor"], objective=prof["objective"],
-                                  fundamental=False)
-        w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
-        wf = ov.walkforward_gated_replay(results, caps=caps,
-                                         mdd_floor=prof["mdd_floor"],
-                                         objective=prof["objective"],
-                                         sata_daily=sata, tilt=True,
-                                         version=version)
-        per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
-        curves = {STRAT_CURVE: wf["equity"], **base_curves}
-        gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
-                                          prev_weights=_prev_w)
-        profiles[name] = dict(opt=opt, per=per, curves=curves, gate=gate,
-                              w_opt=w_opt, wf=wf)
-    return dict(results=results, computed_at=computed_at, rets=rets, bm=bm,
-                profiles=profiles, version=version)
+    profiles = {name: get_profile_pack(bucket, version, name) for name in UI_PROFILES}
+    if any(p is None for p in profiles.values()):
+        return None
+    return dict(results=up["results"], computed_at=up["computed_at"], rets=up["rets"],
+                bm=up["bm"], profiles=profiles, version=version)
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
@@ -340,12 +387,15 @@ def get_bh_replay(bucket: str):
 
 
 def get_portfolio(bucket: str, profile: str, version: str = "v2"):
-    allp = get_all_profiles(bucket, version)
-    if not allp:
+    """One profile's portfolio under a generation — only THAT profile is
+    optimised / replayed (per-profile cache), so the P&L section's V1 / V2 /
+    Combined switch costs one replay, not one per profile."""
+    up = get_universe_pack(bucket, version)
+    p = get_profile_pack(bucket, version, profile) if up else None
+    if not up or not p:
         return None
-    p = allp["profiles"][profile]
-    return dict(results=allp["results"], computed_at=allp["computed_at"],
-                rets=allp["rets"], bm=allp["bm"], profile=profile,
+    return dict(results=up["results"], computed_at=up["computed_at"],
+                rets=up["rets"], bm=up["bm"], profile=profile,
                 version=version, **p)
 
 
@@ -2351,8 +2401,13 @@ with tab_live:
                        "the live-logic replay instead.")
             _PFV = _PF
         _c2_start = pd.Timestamp(ov.C2_RECORD_START).strftime("%b %d, %Y")
+        # the record is priced on the sleeves' PRICE returns (version-
+        # independent): a published book held its sleeves whatever a
+        # generation's engine did that day — see get_price_returns
+        _px_rets = get_price_returns(_bucket())
         _bookrep = (ov.published_book_replay(
-                        _PFV["rets"], _books, sata_daily=0.0, version_map=_vmap,
+                        _px_rets if _px_rets is not None else _PFV["rets"],
+                        _books, sata_daily=0.0, version_map=_vmap,
                         only_version=_sv.versions_for_view(_pnl_ver),
                         min_as_of=ov.C2_RECORD_START,
                         fill_on_sessions=True,   # C2 trades US sessions only
@@ -2608,7 +2663,11 @@ with tab_live:
         # buy & hold earns the UNDERLYINGS' returns, not the sleeves' strategy
         # returns — the attribution/daily-P&L helpers must be fed that matrix
         # or the parts stop summing to the curve
-        _rets_win = (_bhrep["rets"] if _bh_src else _PFV["rets"]).loc[:_end_ts]
+        # … and the as-published record earns its sleeves' price returns (the
+        # matrix it was compounded on), so its attribution sums to its curve
+        _src_rets = (_bhrep["rets"] if _bh_src
+                     else (_px_rets if (_actual and _px_rets is not None) else _PFV["rets"]))
+        _rets_win = _src_rets.loc[:_end_ts]
         # sleeve-inclusion gate + per-trade notionals under a daily-weight book
         _wmax = {k: float(_wf["weights"][k].max()) for k in _wf["weights"].columns}
         # buy & hold reads the share each name actually carried INSIDE the
@@ -2625,7 +2684,7 @@ with tab_live:
                   and (_fx_costs or _fx_taxes))
         if _fx_on:
             _fx_sim = fx.simulate_frictions(
-                _PFV["rets"], _wf["weights"], _wf["sata"],
+                _src_rets, _wf["weights"], _wf["sata"],
                 get_sleeve_prices(_bucket()), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
@@ -5407,18 +5466,21 @@ sit side-by-side and blend into a single portfolio.
 
 **The universe.** Each sibling is traded off its **parent's**
 signal (never its own), exactly as the dedicated apps do. Entry and exit rules
-are summarised per app (all decided on **completed daily closes**):
+are summarised per app (all decided on **completed daily closes**). The rules
+below are **Strategy Logic V2**, trading since 2026-10-09; where V1 differed it
+is noted in brackets, and the **Strategy V1 / V2 / Combined** selector on the
+Backtesting tab replays either generation:
 
 | App / signal | Traded instruments | Engine | Entry criteria | Exit criteria |
 |---|---|---|---|---|
 | ₿ **BTC** | BTC · ETH · MSTR (β) · MSTU (2×) | CT-model Divergence · Standard-MA gate | U1 divergence — predicted-high error > +1.3% with ≥2 high-breaks (3d), price above the 30-day MA | Regime-adaptive D2/D3 (err_hi < −1.3%); BTC signal-only, MSTR −3% / MSTU −6% / ETH −8% stops (2026-07-25 honest-fill re-sweep) + post-stop re-entry (5-bar V-reversal, 12-bar U1 override) |
-| 🥇 **Gold Trend (GLDM)** | GLDM · UGL (2×) | Dual-MA 25/100 | 25-day SMA of the GLDM close crosses above the 100-day (decided at the close) | 25-day SMA crosses back below the 100-day; −3% stops |
+| 🥇 **Gold Trend (GLDM)** | GLDM · UGL (2×) | Dual-MA 25/100 + rising-SMA gate | 25-day SMA of the GLDM close crosses above the 100-day **and the 100-day SMA is rising over 20 bars** (V2 gate; decided at the close) | 25-day SMA crosses back below the 100-day, **or the close falls 10% (GLDM) / 12% (UGL) below its highest close since entry** — trailing stop, no fixed stop (V1: bare cross, −3% fixed stops) |
 | ⛏️ **Gold Miners (GDXM)** | GDX (β) · NUGT (2×) | Divergence Pure-Regime | U1 divergence on the GLDM signal (err_hi 3d-avg > +0.10% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.20%) or D3 exhaustion; GDX −5%, NUGT −8% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
 | ⚡ **GRID** | GRID | MACD 10/20/9 | MACD histogram turns positive (MACD above its signal line) | MACD histogram turns negative; −5% stop |
 | 🛢️ **XLE** | XLE · XOP (β; OIH under V1) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |
-| 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross | 50-day SMA crosses above the 200-day SMA | 50-day SMA crosses back below the 200-day; −5% stop |
-| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median | Close below the 50-day SMA or vol spikes above the filter; no fixed stop |
+| 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross + hold rule | 50-day SMA crosses above the 200-day SMA (and, under V2, the 20-day SMA is above the 100-day) | 50-day SMA crosses back below the 200-day, **or the 20-day SMA drops below the 100-day** (V2 hold rule); −5% stop (V1: cross-down or stop only) |
+| ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter + BTC gate | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median **AND Bitcoin above its own 50-day SMA** (V2 parent gate, entries only) | Close below the 50-day SMA or vol spikes above the filter; no fixed stop (unchanged in V2) |
 | ☀️ **PBW** | PBW | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.42% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.18%) or D3 exhaustion; −10% stop |
 | 🤖 **ARTY** | ARTY | Divergence Pure-Regime | U1 divergence (err_hi 3d-avg > +0.32% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.46%) or D3 exhaustion; signal-only (no fixed stop) |
 
@@ -5451,19 +5513,25 @@ signals, positions and back-tests match each source app:
   into the displayed period — only bars after its `train_end` are model-blind.
 - **GLDM / GDX / UGL / NUGT** run the **Gold app's `backtest_gldm`** middle-path
   split — dual-MA 25/100 for GLDM/UGL, Divergence Pure-Regime for GDX/NUGT —
-  with per-asset stops (GLDM/UGL −3%, GDX −5%, NUGT −8% after the 2026-07-25
-  re-sweep). Since the 2026-07-25 look-ahead fix the divergence engine decides
-  at close i−1 and fills at close i (its signal needs bar i's realized
-  high/low). Model-OOS 2021→now on the fix-date vintage: **GLDM +137% ·
-  UGL +302% · GDX +110% · NUGT +217%** (strategy thresholds tuned on this
-  window; older LEV_SIBLINGS_STOP_EVAL.md figures pre-date the causal H/L fix
-  and are historical).
+  — under Strategy Logic V2 the dual-MA sleeves take the cross only while the
+  100-day SMA is rising (20 bars) and exit on trailing stops (GLDM 10%, UGL
+  12% below the highest close since entry) with no fixed stop; the miners keep
+  their fixed stops (GDX −5%, NUGT −8% after the 2026-07-25 re-sweep) and are
+  identical in V1 and V2 (V1 traded GLDM/UGL with −3% fixed stops). Since the
+  2026-07-25 look-ahead fix the divergence engine decides at close i−1 and
+  fills at close i (its signal needs bar i's realized high/low). Model-OOS
+  2021→now: V1 **GLDM +137% · UGL +302%**, V2 **GLDM +162% · UGL +366%**, and
+  **GDX +110% · NUGT +217%** on the fix-date vintage (strategy thresholds tuned
+  on this window; older LEV_SIBLINGS_STOP_EVAL.md figures pre-date the causal
+  H/L fix and are historical).
 - **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
   `ticker_config`** entries through the same `backtest_ticker` engine their apps
   use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9,
-  WGMI 50-day SMA + vol-filter, REMX 50/200 golden cross, and XLE / PBW / ARTY
-  divergence Pure-Regime — XLE's signal also driving XOP and the stop-less 2×
-  ERX). These match their apps bar-for-bar.
+  WGMI 50-day SMA + vol-filter — under V2 entering only while Bitcoin is above
+  its 50-day SMA — REMX 50/200 golden cross — under V2 held only while its
+  20-day SMA is above the 100-day — and XLE / PBW / ARTY divergence
+  Pure-Regime — XLE's signal also driving XOP (OIH under V1) and the stop-less
+  2× ERX). These match their apps bar-for-bar.
 
 **Live signals & positions.** For each app we fetch data, fit the H/L band model
 out-of-sample, replay the strategy bar-by-bar, and read off the current alert

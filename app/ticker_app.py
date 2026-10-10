@@ -407,7 +407,24 @@ def ma_state(d_df):
     # threshold rather than a single close-vs-line read.
     ma_fast_val = (float(np.mean(c[-cfg.ma_fast:]))
                    if cfg.strategy_mode == "dual_ma" and len(c) >= 1 else None)
-    above = bt.trend_long_now(cfg, d_df)          # engine truth for this mode
+    # engine truth for this mode under the generation in effect for the bar
+    # on screen (the 🕒 Historical replay sets _ENGINE_VERSION; live = V2)
+    _ver = "v1" if str(_ENGINE_VERSION or "").lower() == "v1" else "v2"
+    above = bt.trend_long_now(cfg, d_df, version=_ver)
+    # Strategy Logic V2 extras, surfaced as their own live rows: the parent
+    # entry gate (WGMI: BTC above its SMA50) and the hold rule (REMX: SMA20
+    # above SMA100).  None = not part of this sleeve's rules under _ver.
+    gate_ok = None
+    if (_ver == "v2" and cfg.v2_gate_col and cfg.v2_gate_ma
+            and hasattr(bt, "trend_entry_gate_now")):
+        try:
+            gate_ok = bool(bt.trend_entry_gate_now(cfg, d_df, version=_ver))
+        except Exception:
+            gate_ok = None
+    hold_ok = None
+    if (_ver == "v2" and cfg.v2_hold_ma_fast and cfg.v2_hold_ma_slow
+            and len(c) >= cfg.v2_hold_ma_slow):
+        hold_ok = bool(np.mean(c[-cfg.v2_hold_ma_fast:]) > np.mean(c[-cfg.v2_hold_ma_slow:]))
     dist = (close / ma - 1) * 100 if ma == ma and ma else 0.0
     # config-driven MACD histogram value on the latest bar (macd mode only)
     macd_hist = None
@@ -437,6 +454,7 @@ def ma_state(d_df):
     return dict(ma=ma, ma_prev=ma_prev, close=close, above=above,
                 slope_pos=ma > ma_prev, window=w, dist=dist, desc=desc,
                 macd_hist=macd_hist, vol_state=vol_state, ma_fast_val=ma_fast_val,
+                gate_ok=gate_ok, hold_ok=hold_ok, version=_ver,
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
@@ -678,8 +696,43 @@ def net_signal_ma(mst, pos=None):
                 reason=f"Strategy is FLAT; {desc} — stand aside in cash.")
 
 
-def render_strategy_card():
+def _rules_version(version=None) -> str:
+    """Which generation's rules a description shows: an explicit ``version``
+    (a back-test radio), else the engine version of the bar on screen
+    (``_ENGINE_VERSION``, set by the historical replay), else the live one."""
+    v = str(version or _ENGINE_VERSION or _sv.STRATEGY_VERSION).lower()
+    return "v1" if v == "v1" else "v2"
+
+
+def _v2_rules_html(version=None) -> str:
+    """The Strategy Logic pill + this sleeve's rules under ``version`` — every
+    strategy card carries it so V1 / V2 differences are never implicit."""
+    ver = _rules_version(version)
+    if cfg.has_v2_rules:
+        note = (f"Strategy Logic V2 rules (trading since {_sv.STRATEGY_VERSION_START}): "
+                f"{cfg.v2_note} Rules in force: {cfg.rules_label('v2')}." if ver == "v2" else
+                f"Strategy Logic V1 rules (traded 2026-07-31 → 2026-10-08): "
+                f"{cfg.rules_label('v1')}. V2 (live): {cfg.v2_note}")
+    else:
+        note = (f"{cfg.key} is identical under Strategy Logic V1 and V2 — the 2026-10 "
+                f"V2 changes did not touch this sleeve. Rules: {cfg.rules_label(ver)}.")
+    return f"<div style='margin:0 0 12px 0;'>{_sv.version_pill_html(ver, note)}</div>"
+
+
+def render_strategy_card(version=None):
     exec_line = (" · ".join(f"<b>{lbl}</b>" for lbl, _ in TRADED))
+    _ver = _rules_version(version)
+    _v2 = _ver == "v2" and cfg.has_v2_rules
+    _gate_row = ((f"<br>③ <b>V2 parent gate</b> — only while "
+                  f"{cfg.v2_gate_col.split('_')[0].upper()} sits above its "
+                  f"{cfg.v2_gate_ma}-day SMA (entries only; never forces an exit)")
+                 if _v2 and cfg.v2_gate_col and cfg.v2_gate_ma else "")
+    _hold_row = ((f"<br>② <b>V2 hold rule</b> — exit when the {cfg.v2_hold_ma_fast}-day SMA "
+                  f"drops below the {cfg.v2_hold_ma_slow}-day (re-enter only when the cross "
+                  "and the hold condition both hold)")
+                 if _v2 and cfg.v2_hold_ma_fast and cfg.v2_hold_ma_slow else "")
+    _trail_row = ((f"<br>② <b>V2 trailing stop</b> — {cfg.v2_trail_stop*100:.0f}% below the "
+                   "highest close since entry") if _v2 and cfg.v2_trail_stop else "")
     if IS_DIV:
         st.markdown(f"""
 <div style='background:{ACCBG}; border:2px solid {ACC}; border-radius:12px;
@@ -695,6 +748,7 @@ def render_strategy_card():
     strategy holds long only while momentum is confirmed inside a trend regime — sitting
     out the deep drawdowns that wreck buy-&-hold on this asset.
   </div>
+  {_v2_rules_html(_ver)}
   <div style='background:{ACCBG2}; border:1px solid {ACC}; border-radius:7px;
        padding:8px 13px; margin-bottom:12px; font-size:12px; color:{ACCD};'>
     🎯 <b>Pure-Regime entry:</b> a U1 bullish-divergence trigger must be confirmed by
@@ -737,20 +791,21 @@ def render_strategy_card():
     trend filter — <b>{TUI['core']}</b> — captures the up-cycles and moves to
     cash for the down-cycles, beating buy-&-hold on risk (and often on return).
   </div>
+  {_v2_rules_html(_ver)}
   <div style='display:flex; gap:14px; flex-wrap:wrap;'>
     <div style='flex:1; min-width:230px;'>
       <div style='font-size:11px; font-weight:700; color:#15803d; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:5px;'>📥 Entry — go long</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
         ① {TUI['entry']} (decided at the close)<br>
-        ② enter on the next bar
+        ② enter on the next bar{_gate_row}
       </div>
     </div>
     <div style='flex:1; min-width:230px;'>
       <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
-        {('① ' + TUI['exit'] + ', or<br>② <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else ('① ' + TUI['exit'])}
+        ① {TUI['exit']}{_hold_row}{_trail_row}{(('<br>' + ('③' if (_hold_row or _trail_row) else '②') + ' <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else '')}
       </div>
     </div>
   </div>
@@ -871,8 +926,21 @@ def render_conditions_box(sigs, mst, pos=None):
         else:
             entry_html = "<table style='border-collapse:collapse;'>" + \
                 rowm(above, mst["cond"], mst["desc"]) + "</table>"
+        _v2g, _v2h = mst.get("gate_ok"), mst.get("hold_ok")
+        if _v2g is not None:
+            entry_html = entry_html[:-len("</table>")] + rowm(
+                bool(_v2g),
+                f"V2 parent gate — {cfg.v2_gate_col.split('_')[0].upper()} &gt; its "
+                f"{cfg.v2_gate_ma}-day SMA",
+                "Strategy Logic V2: entries only — a held position is never closed by "
+                "this gate") + "</table>"
         exit_html = "<table style='border-collapse:collapse;'>" + \
             rowm(not above, mst["cond_short"], "→ move to cash") + \
+            (rowm(not bool(_v2h),
+                  f"V2 hold rule — {cfg.v2_hold_ma_fast}-day SMA &lt; "
+                  f"{cfg.v2_hold_ma_slow}-day SMA",
+                  "Strategy Logic V2: → exit; re-enter only when the cross and this "
+                  "hold condition both hold") if _v2h is not None else "") + \
             (rowm(False, f"Fixed stop {cfg.stop_label}",
                   "position-level — checked per open trade") if cfg.has_stop else "") + "</table>"
         st.markdown(f"""
@@ -1929,7 +1997,7 @@ def render_backtest_dashboard(label, col):
     st.caption(f"⚙️ Rules in force under **{_choice}**: "
                f"{cfg.rules_label('v1' if _ver == 'v1' else 'v2')}"
                + (" (V1 before the cut-over, V2 from it)" if _ver == "combined" else ""))
-    render_strategy_card()
+    render_strategy_card("v1" if _ver == "v1" else "v2")
     # read the per-asset stop from the data field (not the stop_for method) so a
     # stale/hot-reloaded TickerConfig instance without the method can't crash.
     _s = getattr(cfg, "stop_by_asset", {}).get(col, cfg.fixed_stop)
@@ -2197,7 +2265,7 @@ Bollinger width, distance from moving averages / extremes) and seasonality.
 (ridge + 95% CI), daily High/Low (calibrated ridge bands), 7-day & 14-day close
 cones, and a 3-class day-type classifier.
 
-**Strategy — {cfg.strategy_name}.** {('The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%)' + (' / D1 downtrend' if cfg.use_d1_exit else '') + ' / D3 exhaustion' + (' or a fixed ' + cfg.stop_label + ' stop.' if cfg.has_stop else ' (no fixed stop).')) if IS_DIV else ('A ' + TUI['headline'] + ': ' + TUI['core'] + ', otherwise move to cash' + ((' (with a ' + cfg.stop_label + ' fixed stop).') if cfg.has_stop else '.'))} The strategy and its parameters were chosen by a per-asset search over the full price history to maximise risk-adjusted return without a drawdown worse than buy-&-hold.
+**Strategy — {cfg.strategy_name}.** {('The Gold/BTC divergence Pure-Regime system, re-tuned for this asset: enter on a U1 bullish divergence (3-day centered `err_hi` > +' + f'{cfg.u1_errhi_min:.2f}' + '%) confirmed inside the Pure-Regime gate, exit on D2 (< ' + f'{cfg.d2_errhi_max:+.2f}' + '%)' + (' / D1 downtrend' if cfg.use_d1_exit else '') + ' / D3 exhaustion' + (' or a fixed ' + cfg.stop_label + ' stop.' if cfg.has_stop else ' (no fixed stop).')) if IS_DIV else ('A ' + TUI['headline'] + ': ' + TUI['core'] + ', otherwise move to cash' + ((' (with a ' + cfg.stop_label + ' fixed stop).') if cfg.has_stop else '.'))} The strategy and its parameters were chosen by a per-asset search over the full price history to maximise risk-adjusted return without a drawdown worse than buy-&-hold. {('**Strategy Logic V2 (since ' + _sv.STRATEGY_VERSION_START + '):** ' + cfg.v2_note + ' Rules in force: ' + cfg.rules_label('v2') + '. The Backtesting tabs\' **Strategy V1 / V2 / Combined** selector replays either generation.') if cfg.has_v2_rules else ('**Strategy Logic V2:** this sleeve is identical under V1 and V2 — the 2026-10 changes touched GLDM/UGL, WGMI and REMX, the allocator (adds-only, 30% parent-cluster cap) and the energy β slot (XOP in place of OIH).')}
 
 {('**Per-instrument exits.** ' + _sibling_stop_note_md()) if _STOP_SIBLINGS else ''}
 
