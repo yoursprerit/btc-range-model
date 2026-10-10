@@ -22,8 +22,11 @@ Version history
   enters only while BTC sits above its 50-day SMA; REMX holds only while its
   20-day SMA is above the 100-day; the allocator never trims a held sleeve
   except on its signal exit and only adds when the target rises by ≥ 8 pp
-  ("adds-only" band); a stop/trail hit publishes a CLOSE.  GRID, SOXX, XLE,
-  BTC, PBW, ARTY, GDX/NUGT sleeves are identical in V1 and V2.
+  ("adds-only" band); the sleeves sharing one parent signal (XLE → OIH/ERX,
+  GLDM → UGL, SOXX → SOXL, GDX → NUGT, BTC → MSTR/MSTU/ETH) never exceed
+  30 % of the book combined ("parent-cluster cap", added 2026-10-10 before
+  the first V2 publish); a stop/trail hit publishes a CLOSE.  GRID, SOXX,
+  XLE, BTC, PBW, ARTY, GDX/NUGT sleeves are identical in V1 and V2.
 
 Kept dependency-light (stdlib only) so the read-only artifact apps
 (📋 Targetbook, ✅ Executed Book, 🕵️ Daily Audit, 🩺 Strategy Health) can show

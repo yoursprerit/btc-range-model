@@ -35,10 +35,38 @@ to only when its tilted target rises by **≥ 8 pp** of the book
 (`overall_core.ADDS_ONLY_BAND`; `signal_gated_allocation(prev_weights=…)` on
 the live book, `replay_gated_allocation(adds_only=…)` in the back-test).
 Fresh entries and exits are unchanged.  On the Balanced walk-forward replay
-(2021→2026-10-08): V1 **+1,179 % / −24.6 % / Sharpe 1.60** at 9.3 %/day
-turnover → V2 **+1,222 % / −17.1 % / 1.93** at 8.0 %/day; 2026 YTD
-+86 % / −22.7 % → +92 % / −12.2 %.  No transaction costs in either figure
-(at 5 bp per unit traded the gap widens in V2's favour).
+(2021→2026-10-09): V1 **+1,227 % / −24.6 % / Sharpe 1.62** at 9.4 %/day
+turnover → V2 with adds-only alone +1,272 % / −17.1 % / 1.95 → V2 as traded
+(adds-only **and** the parent-cluster cap below) **+1,194 % / −13.7 % /
+2.12** at 8.5 %/day; 2026 YTD +87 % / −22.7 % → +94 % / −10.8 %; H2-2026
+−5 % / −12.7 % → +6 % / −4.8 %.  No transaction costs in any figure (at 5 bp
+per unit traded the gap widens in V2's favour).
+
+**Allocator — parent-cluster cap (added 2026-10-10, before the first V2
+publish).** Sleeves that trade off **one parent signal** — XLE → OIH / ERX,
+GLDM → UGL, SOXX → SOXL, GDX → NUGT, BTC → MSTR / MSTU / ETH — are one bet,
+but their per-kind caps (30 % core + 18 % β + 10 % 2×) let a single signal own
+up to **58 %** of the book, and the energy crash-shield's exit sits 30 % below
+XLE's 52-week high: the 2026-10-08 book (XLE 30 / OIH 18 / ERX 10) would have
+lost ~19 % before that signal ever fired.  Under V2 every parent group is
+bound to **≤ 30 % of the book** (`overall_core.CLUSTER_CAP`): the tilt is
+water-filled to the per-sleeve caps, any cluster above the cap is squeezed to
+it and the freed weight re-spread over the other sleeves (up to their caps,
+remainder → SATA), and a cluster the adds-only pin holds above the cap is
+scaled down to it (`_apply_cluster_cap` / `_bind_cluster_cap`;
+`signal_gated_allocation(cluster_cap=…)` live, `replay_gated_allocation
+(cluster_cap=…)` in the back-test).  Sleeve-level fixes were tested first
+and rejected: a tighter crash shield (15–25 %) or a trailing stop on the
+energy sleeves gives up 40–170 points of XLE's OOS return and mostly
+lowers Sharpe, because energy's edge is being long.  Balanced walk-forward
+replay, three optimiser seeds (2021 → 2026-10-09): max drawdown **−18.7 % →
+−13.5 %**, Sharpe **1.8 → 2.1**, return +1,091 % → +1,061 % (the cost is
+2022, when the un-capped book averaged 41 % energy and the freed capital
+had nowhere but SATA to go); 2026 YTD +93 % → +94 % at −12.2 % → −10.8 %
+max drawdown.  On the production seed the full V2 replay reads
+**+1,194 % / −13.7 % / 2.12** against +1,272 % / −17.1 % / 1.95 without the
+cap.  The cap binds energy on 57 % of replay days, gold and semis on ~15 %
+each (their 2024–25 runs), crypto on 3 %, miners never.
 
 **Execution.** A stop or trail that fires at the latest close now publishes
 **CLOSE** for the sleeve (`_net_decision(stopped=…)`), so the account sells
@@ -411,7 +439,10 @@ historically-optimal weight.
   **opening** a fresh entry. A committed exit (or a caller-forced live exit) drops
   the name.
 - Size the deployed names by `raw_target` above, **water-filled to the caps**; the
-  deployed risk assets total 100 % when the caps allow.
+  deployed risk assets total 100 % when the caps allow.  Under Strategy Logic
+  V2 the **adds-only** rule (a held sleeve is never trimmed by the tilt, added
+  to only on a ≥ 8 pp rise) and the **parent-cluster cap** (the sleeves sharing
+  one parent signal never exceed 30 % combined) are applied on top — see §0.
 - **Whatever can't be deployed is parked in SATA.** With **no open positions the
   entire book sits in SATA**, earning its yield until a signal fires.
 - The Live tab's three donuts are:

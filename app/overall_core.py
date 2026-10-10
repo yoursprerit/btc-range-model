@@ -1908,11 +1908,91 @@ def adds_only_band(version: str | None = None) -> float:
     return ADDS_ONLY_BAND if bt.active_version(version) == "v2" else 0.0
 
 
+# Strategy Logic V2 allocator rule — "parent-cluster cap": sleeves that trade
+# off ONE parent signal (XLE → OIH/ERX, GLDM → UGL, SOXX → SOXL, GDX → NUGT,
+# BTC → MSTR/MSTU/ETH) are one bet, but their per-kind caps (30 % core +
+# 18 % beta + 10 % lev) let a single signal own up to 58 % of the book — and
+# the energy crash-shield's exit sits 30 % below XLE's 52-week high, so the
+# book could lose ~19 % before that signal ever fired.  Every parent group is
+# bound to this fraction of the book: the tilt is water-filled to the
+# per-sleeve caps first, then any cluster above the cap is squeezed to it
+# and the freed weight re-spread over the other sleeves (up to their caps,
+# remainder → SATA); a cluster the adds-only pin holds above the cap is
+# scaled down to it (freed weight → SATA).  Balanced walk-forward replay,
+# three optimiser seeds (2021 → 2026-10-09): max drawdown −18.7 % → −13.5 %,
+# Sharpe 1.8 → 2.1, return +1,091 % → +1,061 % (the cost is 2022, when the
+# un-capped book ran 41 % energy); 2026 YTD unchanged on return, max drawdown
+# −12.2 % → −10.8 %.  V1 (``cluster_cap=0``) has no cluster cap.
+CLUSTER_CAP = 0.30
+
+
+def cluster_cap_for(version: str | None = None) -> float:
+    """The parent-cluster cap in force under ``version`` (0 = V1 behaviour)."""
+    return CLUSTER_CAP if bt.active_version(version) == "v2" else 0.0
+
+
+def cluster_map(results: list[dict]) -> dict[str, str]:
+    """``key → parent signal`` for every result; a sleeve with no parent is
+    its own cluster."""
+    return {r["key"]: (r.get("parent") or r["key"]) for r in results}
+
+
+def cluster_weights(weights: dict, cluster_of: dict) -> dict:
+    """Combined weight per parent cluster (keys absent from ``cluster_of``
+    count as their own cluster)."""
+    out: dict = {}
+    for k, w in weights.items():
+        c = cluster_of.get(k, k)
+        out[c] = out.get(c, 0.0) + float(w)
+    return out
+
+
+def _apply_cluster_cap(raw: dict, caps: dict, cluster_of: dict, cap: float,
+                       target: dict | None = None) -> dict:
+    """Water-fill ``raw`` to ``caps`` and bind every parent cluster to ``cap``
+    of the book: a cluster above the cap has each member's cap shrunk pro
+    rata so the cluster sums to the cap, and the water-fill re-spreads the
+    freed weight over the other sleeves (up to their caps; what they cannot
+    absorb is left for SATA).  ``cap`` ≤ 0 → the plain water-fill (V1)."""
+    target = _waterfill(raw, caps) if target is None else dict(target)
+    if not cap or cap <= 0 or not target:
+        return target
+    capd = {k: caps.get(k, 0.30) for k in raw}
+    for _ in range(4):
+        over = {c: s for c, s in cluster_weights(target, cluster_of).items()
+                if s > cap + 1e-9}
+        if not over:
+            break
+        for k in target:
+            c = cluster_of.get(k, k)
+            if c in over:
+                capd[k] = min(capd[k], target[k] * cap / over[c])
+        target = _waterfill(raw, capd)
+    return target
+
+
+def _bind_cluster_cap(target: dict, cluster_of: dict, cap: float) -> dict:
+    """Scale any cluster above ``cap`` down to it, pro rata across its
+    members, with NO re-spread (the freed weight goes to SATA).  Used after
+    the adds-only pin, which can hold a cluster above the cap."""
+    if not cap or cap <= 0 or not target:
+        return target
+    sums = cluster_weights(target, cluster_of)
+    out = dict(target)
+    for k, w in target.items():
+        s = sums.get(cluster_of.get(k, k), 0.0)
+        if s > cap + 1e-9:
+            out[k] = w * cap / s
+    return out
+
+
 def _apply_adds_only(target: dict, prev: dict | None, held: set,
-                     band: float) -> dict:
+                     band: float, cluster_of: dict | None = None,
+                     cluster_cap: float = 0.0) -> dict:
     """Hold every ``held`` sleeve at its previous weight unless its new target
-    exceeds it by ≥ ``band``; new entries keep their targets; the whole book
-    is scaled down only if the kept weights overflow 100%."""
+    exceeds it by ≥ ``band``; new entries keep their targets; a parent
+    cluster the pin holds above ``cluster_cap`` is scaled down to it; the
+    whole book is scaled down only if the kept weights overflow 100%."""
     if not band or not prev:
         return target
     out = dict(target)
@@ -1923,6 +2003,8 @@ def _apply_adds_only(target: dict, prev: dict | None, held: set,
         tw = float(out.get(k, 0.0))
         if tw < pw or (tw - pw) < band:
             out[k] = pw
+    if cluster_cap and cluster_of is not None:
+        out = _bind_cluster_cap(out, cluster_of, cluster_cap)
     tot = sum(out.values())
     if tot > 1 + 1e-9:
         out = {k: v / tot for k, v in out.items()}
@@ -1934,7 +2016,8 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             force_exit: set | None = None,
                             force_entry: set | None = None,
                             prev_weights: dict[str, float] | None = None,
-                            adds_only: float | None = None) -> dict:
+                            adds_only: float | None = None,
+                            cluster_cap: float | None = None) -> dict:
     """Today's actionable allocation.
 
     ``prev_weights`` — the risk weights of the book currently held (the last
@@ -1943,6 +2026,11 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     results' version): a held sleeve keeps its previous weight unless its
     tilted target rises by at least the band; it is never trimmed by the
     tilt.  Pass ``adds_only=0`` for the V1 daily re-sizing.
+
+    ``cluster_cap`` — Strategy Logic V2's **parent-cluster cap** (default
+    :func:`cluster_cap_for` for the results' version): the sleeves sharing
+    one parent signal never exceed this fraction of the book combined
+    (:func:`_apply_cluster_cap`).  Pass ``cluster_cap=0`` for V1.
 
     Capital is deployed only to instruments the strategy is long (or opening a
     fresh entry).  Among those, the size of each slice is the historically
@@ -1999,16 +2087,22 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     prio = compute_priorities(results, target_keys)
     # priority-tilted raw weights: optimal anchor × (0.5 + priority) ∈ [0.5,1.5]×
     raw = {k: _b(k) * (0.5 + prio.get(k, {}).get("score", 0.5)) for k in target_keys}
-    target = _waterfill(raw, caps)
+    _ver = version_of_results(results)
     if adds_only is None:
-        adds_only = adds_only_band(version_of_results(results))
+        adds_only = adds_only_band(_ver)
+    if cluster_cap is None:
+        cluster_cap = cluster_cap_for(_ver)
+    cluster_cap = float(cluster_cap or 0.0)
+    cl = cluster_map(results)
+    target = _apply_cluster_cap(raw, caps, cl, cluster_cap)
     tilt_target = dict(target)
     target = _apply_adds_only(target, prev_weights, {res["key"] for res in keep},
-                              adds_only)
+                              adds_only, cluster_of=cl, cluster_cap=cluster_cap)
     sata = max(1.0 - sum(target.values()), 0.0)
 
     # current book (what we hold now) — optimal weights, no forward tilt
-    current = _waterfill({res["key"]: _b(res["key"]) for res in in_pos}, caps)
+    current = _apply_cluster_cap({res["key"]: _b(res["key"]) for res in in_pos},
+                                 caps, cl, cluster_cap)
     sata_now = max(1.0 - sum(current.values()), 0.0)
 
     actions = []
@@ -2074,6 +2168,8 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 n_active=len(in_pos), n_open=len(opens), n_close=len(closing),
                 sata_info=SATA, tilt_target=tilt_target,
                 adds_only=float(adds_only or 0.0),
+                cluster_cap=cluster_cap,
+                clusters=cluster_weights(target, cl),
                 held_pinned=sorted(k for k in target
                                    if prev_weights and k in {r["key"] for r in keep}
                                    and abs(target[k] - float(prev_weights.get(k, 0.0))) < 1e-12
@@ -2504,7 +2600,8 @@ def snapshot_asof(results: list[dict], date) -> dict | None:
 
 
 def historical_allocation(snap: dict, base_weights: dict,
-                          caps: dict | None = None) -> dict:
+                          caps: dict | None = None,
+                          cluster_cap: float = 0.0) -> dict:
     """The book the strategy held on the snapshot bar: the blend's optimal
     weights water-filled (to the profile caps) over the sleeves in position on
     that bar, the undeployed remainder parked in SATA — the same construction
@@ -2514,7 +2611,8 @@ def historical_allocation(snap: dict, base_weights: dict,
     caps = caps or CAP_BY_KEY
     held = {r["key"]: max(base_weights.get(r["key"], 0.0), 1e-6)
             for r in snap["rows"] if r["in_pos"]}
-    book = _waterfill(held, caps)
+    cl = {r["key"]: (r.get("parent") or r["key"]) for r in snap["rows"]}
+    book = _apply_cluster_cap(held, caps, cl, cluster_cap)
     return dict(book=book, sata=max(1.0 - sum(book.values()), 0.0))
 
 
@@ -2693,7 +2791,9 @@ def replay_gated_allocation(results: list[dict],
                             sharpe_window: int | None = None,
                             penalty: dict | None = None,
                             adds_only: float | None = None,
-                            adds_only_from=None) -> dict:
+                            adds_only_from=None,
+                            cluster_cap: float | None = None,
+                            cluster_cap_from=None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -2703,7 +2803,10 @@ def replay_gated_allocation(results: list[dict],
     the tilted target rises by ≥ the band, and is never trimmed by the tilt;
     ``adds_only_from`` (a date) switches the rule on only from that day (the
     Combined view: V1 re-sizing before the cut-over, V2 from it).  ``None``
-    / ``0`` reproduces the V1 daily re-sizing exactly.
+    / ``0`` reproduces the V1 daily re-sizing exactly.  ``cluster_cap`` /
+    ``cluster_cap_from`` apply V2's parent-cluster cap the same way (the
+    sleeves sharing one parent signal never exceed the cap combined; the
+    adds-only pin respects it).  ``None`` / ``0`` → no cluster cap (V1).
 
     Construction, mirroring the live gate:
       * the funded set on day *t* is the sleeves the engines hold IN THE
@@ -2796,6 +2899,11 @@ def replay_gated_allocation(results: list[dict],
     ao_band = float(adds_only or 0.0)
     ao_from = (pd.Timestamp(adds_only_from).to_datetime64()
                if adds_only_from is not None else None)
+    cc_band = float(cluster_cap or 0.0)
+    cc_from = (pd.Timestamp(cluster_cap_from).to_datetime64()
+               if cluster_cap_from is not None else None)
+    _cm = cluster_map(results)
+    cl_j = {j: _cm.get(keys[j], keys[j]) for j in range(len(keys))}
     idx_vals = idx.values
     for t in range(len(idx)):
         act = [j for j in range(len(keys)) if P[t, j] > 0]
@@ -2824,7 +2932,9 @@ def replay_gated_allocation(results: list[dict],
                 v = pen_m[t, j]
                 if v == v and v < p_floor:
                     raw[j] *= p_mult
-        target = _waterfill(raw, {j: caps.get(keys[j], 0.30) for j in raw})
+        cc_t = cc_band if (cc_band > 0 and (cc_from is None or idx_vals[t] >= cc_from)) else 0.0
+        target = _apply_cluster_cap(raw, {j: caps.get(keys[j], 0.30) for j in raw},
+                                    cl_j, cc_t)
         if ao_band > 0 and t > 0 and (ao_from is None or idx_vals[t] >= ao_from):
             # adds-only: a sleeve held yesterday keeps its weight unless the
             # tilted target rose by ≥ the band (never trimmed by the tilt)
@@ -2834,6 +2944,8 @@ def replay_gated_allocation(results: list[dict],
                 tw = target.get(j, 0.0)
                 if tw < prevW[j] or (tw - prevW[j]) < ao_band:
                     target[j] = float(prevW[j])
+            if cc_t:                              # a pinned cluster still respects the cap
+                target = _bind_cluster_cap(target, cl_j, cc_t)
             tot = sum(target.values())
             if tot > 1 + 1e-9:
                 target = {j: v / tot for j, v in target.items()}
@@ -2859,7 +2971,7 @@ def replay_gated_allocation(results: list[dict],
         turnover=dict(mean=float(turno.mean()) if len(turno) else 0.0,
                       p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
                       days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
-        tilt=tilt)
+        tilt=tilt, adds_only=ao_band, cluster_cap=cc_band)
 
 
 def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
@@ -2874,7 +2986,9 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              penalty: dict | None = None,
                              version: str | None = None,
                              adds_only: float | None = None,
-                             adds_only_from=None) -> dict:
+                             adds_only_from=None,
+                             cluster_cap: float | None = None,
+                             cluster_cap_from=None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
     on a ``walkforward_anchors`` schedule.
 
@@ -2900,6 +3014,10 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
         adds_only = ADDS_ONLY_BAND if ver in ("v2", "combined") else 0.0
         if ver == "combined" and adds_only_from is None:
             adds_only_from = STRATEGY_VERSION_START
+    if cluster_cap is None:
+        cluster_cap = CLUSTER_CAP if ver in ("v2", "combined") else 0.0
+        if ver == "combined" and cluster_cap_from is None:
+            cluster_cap_from = STRATEGY_VERSION_START
     anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
                                   objective=objective, sata_daily=sata_daily,
                                   min_hist=min_hist, n_samples=n_samples, seed=seed,
@@ -2908,10 +3026,13 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                                   tilt=tilt, anchors=anchors,
                                   wr_window=wr_window, sharpe_window=sharpe_window,
                                   penalty=penalty, adds_only=adds_only,
-                                  adds_only_from=adds_only_from)
+                                  adds_only_from=adds_only_from,
+                                  cluster_cap=cluster_cap,
+                                  cluster_cap_from=cluster_cap_from)
     rep["anchors"] = anchors
     rep["version"] = ver
     rep["adds_only"] = float(adds_only or 0.0)
+    rep["cluster_cap"] = float(cluster_cap or 0.0)
     return rep
 
 
