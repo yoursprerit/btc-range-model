@@ -73,6 +73,51 @@ V2 replay read **+1,194 % / −13.7 % / 2.12** against +1,272 % / −17.1 % /
 −11.4 % / 2.21** (OIH in the slot: +1,329 % / −11.5 % / 2.21).  The cap binds energy on 57 % of replay days, gold and semis on ~15 %
 each (their 2024–25 runs), crypto on 3 %, miners never.
 
+**Allocator — fixed crypto-cluster split (added 2026-10-11, Balanced profile
+only; still Strategy Logic V2 — no version bump).**  BTC · MSTR · MSTU · ETH
+are one parent cluster: the four sleeves enter and exit together on ~98 % of
+days, so how the cluster's weight is *divided* is a pure vehicle-mix choice,
+not a timing one — and the anchor × priority tilt divided it erratically (one
+day 29 % of the book in BTC, another 25 % in ETH, the weakest sleeve).  Under
+V2 the **Balanced** profile sizes the cluster exactly as before (tilt →
+water-fill to the per-sleeve caps → 30 % cluster cap) and then divides the
+cluster's combined weight by the fixed ordered split
+**MSTR 45 % · MSTU 30 % · BTC 20 % · ETH 5 %**
+(`overall_core.CLUSTER_MIX_BALANCED`; `cluster_mix_for(profile, version)`;
+`_apply_cluster_mix`).  Shares are renormalised over the members actually
+funded and each member is held to its per-sleeve cap (a full 30 % cluster is
+MSTR 13.5 % ≤ 18 %, MSTU 9 % ≤ 10 %, BTC 6 %, ETH 1.5 %; what the caps cannot
+absorb stays in SATA).  The split is applied to the **tilt target before the
+adds-only pin**, so fresh entries are sized at the split and a held name is
+never re-split or trimmed (realised shares therefore drift on the days the
+four sleeves do not move together, and while a previously-sized name is
+pinned).  `signal_gated_allocation(cluster_mix=…)` live,
+`replay_gated_allocation(cluster_mix=…, cluster_mix_from=…)` /
+`walkforward_gated_replay(cluster_mix=…)` in the back-test, applied from the
+cut-over in the Combined view; V1, Growth and Aggressive keep the tilt split
+(`tests/test_cluster_mix.py` pins every part, including that every app/script
+call site passes the profile's mix).  The split was chosen on a post-hoc grid
+of ordered four-name mixes over the unchanged V2 cluster weights (all 28
+Balanced grid mixes beat V2 in both the selection and hold-out windows; in
+Growth 3 of 41 and in Aggressive 0 of 41 did, so those profiles keep the tilt);
+the proposed 45/35/15/5 would put MSTU at 10.5 % > Balanced's 10 % cap, so the
+cap-compliant neighbour 45/30/20/5 was adopted.  Balanced walk-forward replay
+vs the tilt split, same universe, anchors and three optimiser seeds (full
+2021 → 2026-10-10, 3-seed mean): **no costs +1,037 % / −13.4 % / 2.05 → +1,111 %
+/ −13.5 % / 2.10; 5 bp costs +885 % / −13.6 % / 1.93 → +950 % / −13.7 % / 1.98**;
+production seed (7) +1,257 % / −11.4 % / 2.19 → +1,293 % / −11.4 % / 2.23;
+hold-out 2025-07 → (5 bp, mean) +146 % / −9.4 % / 2.66 → +149 % / −9.2 % /
+2.72; turnover unchanged (8.2 %/day).  The new split never trails the tilt
+split on Sharpe in any window, cost level or seed view, and its return /
+max-drawdown differences are inside 0.1 pt where it is behind.  The cluster is
+held on only ~10 % of replay days (the crypto sleeves start 2024-03), so the
+effect is small in absolute terms and sits inside the optimiser-seed spread on
+the full window — the evidence is its consistency, not its size.  The
+published book holds no crypto sleeve today, so the first BTC-cluster entry
+after the change is the first one sized at the split.  Reproduce, and see the
+no-degradation gate, with `python scripts/eval_cluster_mix.py` →
+[`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md).
+
 **Universe — OIH → XOP (added 2026-10-10, before the first V2 publish).**
 The energy β slot trades **XOP** (SPDR S&P Oil & Gas Exploration & Production)
 instead of **OIH** (VanEck Oil Services) under V2.  Both trade the same XLE

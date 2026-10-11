@@ -95,7 +95,8 @@ def main() -> None:
         wfrep = oc.walkforward_gated_replay(results, caps=caps,
                                             mdd_floor=prof["mdd_floor"],
                                             objective=prof["objective"],
-                                            sata_daily=sata, tilt=True)
+                                            sata_daily=sata, tilt=True,
+                                            cluster_mix=oc.cluster_mix_for(pname))
         rows = [_row("Fixed-weight (in-sample anchors)", fixed_eq),
                 _row("Gate only (no tilt)", gate["equity"]),
                 _row("Gate + priority tilt", tilted["equity"]),

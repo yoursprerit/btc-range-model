@@ -25,7 +25,10 @@ Version history
   ("adds-only" band); the sleeves sharing one parent signal (XLE → XOP/ERX,
   GLDM → UGL, SOXX → SOXL, GDX → NUGT, BTC → MSTR/MSTU/ETH) never exceed
   30 % of the book combined ("parent-cluster cap", added 2026-10-10 before
-  the first V2 publish); XOP (SPDR S&P Oil & Gas E&P) trades the energy β
+  the first V2 publish) and, for the Balanced profile only, the BTC cluster's
+  weight is divided by a fixed split MSTR 45 / MSTU 30 / BTC 20 / ETH 5
+  instead of the tilt's ("fixed crypto-cluster split", 2026-10-11 — still V2,
+  no version bump; ``overall_core.CLUSTER_MIX``); XOP (SPDR S&P Oil & Gas E&P) trades the energy β
   slot in place of OIH (same XLE crash-shield signal; also 2026-10-10 —
   ``overall_core.UNIVERSE_CHANGES``); a stop/trail hit publishes a CLOSE.
   GRID, SOXX, XLE, BTC, PBW, ARTY, GDX/NUGT sleeves are identical in V1 and

@@ -24,7 +24,9 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 > on WGMI, a SMA20>SMA100 hold rule on REMX, an **adds-only** allocator (held
 > sleeves are never trimmed by the daily tilt), a **30 % parent-cluster cap**
 > (sleeves sharing one parent signal — e.g. XLE → XOP/ERX — never exceed 30 %
-> of the book combined), **XOP in place of OIH** in the energy β slot (same XLE
+> of the book combined), for the **Balanced** profile a **fixed split of the
+> crypto cluster** (MSTR 45 · MSTU 30 · BTC 20 · ETH 5 — still V2, no version
+> bump), **XOP in place of OIH** in the energy β slot (same XLE
 > signal; OIH stays in the XLE app and the V1 record) and stop hits that
 > publish a CLOSE.  Every P&L / back-test / historical / health view offers a
 > **Strategy V1 · Strategy V2 · Combined** selector.  See
@@ -172,7 +174,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 | Metals Dual-MA 50/200 golden cross | REMX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Miner MA-50 + volatility filter | WGMI | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Clean-energy / AI-Tech Divergence | PBW · ARTY | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy |
-| **Overall combined portfolio** | **all of the above** | **[`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md)** — how it works (universe, optimiser, priority, allocation)<br>_Additional docs:_ [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) |
+| **Overall combined portfolio** | **all of the above** | **[`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md)** — how it works (universe, optimiser, priority, allocation)<br>_Additional docs:_ [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) (walk-forward) · [`VEGN_REMOVAL_EVAL.md`](VEGN_REMOVAL_EVAL.md) (composition) · [`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md) (Balanced crypto-cluster split) |
 
 All seven ETF apps share one config-driven engine — see
 [`TICKER_APPS_README.md`](TICKER_APPS_README.md).
@@ -553,6 +555,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Per-asset strategy evaluations | [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) |
 | Overall strategy — how it works | [`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md) |
 | Overall strategy — walk-forward performance | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
+| Overall strategy — Balanced crypto-cluster split (baseline vs new replay) | [`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md) · `scripts/eval_cluster_mix.py` |
 | Strategy decay monitor (🩺 Strategy Health) | [`STRATEGY_HEALTH.md`](STRATEGY_HEALTH.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
 | Signal distribution | [`docs/COLLECTIVE2.md`](docs/COLLECTIVE2.md) (mirror the book onto a Collective2 strategy) · [`docs/COLLECTIVE2_SETUP.md`](docs/COLLECTIVE2_SETUP.md) (setup + testing runbook) |

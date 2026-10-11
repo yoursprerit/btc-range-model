@@ -383,11 +383,13 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
                                          mdd_floor=prof["mdd_floor"],
                                          objective=prof["objective"],
                                          sata_daily=sata, tilt=True,
-                                         version=version, gens=_gens)
+                                         version=version, gens=_gens,
+                                         cluster_mix=ov.cluster_mix_for(name, version))
     per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
     curves = {STRAT_CURVE: wf["equity"], **base_curves}
     gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
-                                      prev_weights=_prev_w)
+                                      prev_weights=_prev_w,
+                                      cluster_mix=ov.cluster_mix_for(name, version))
     return dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt, wf=wf)
 
 
@@ -1219,7 +1221,8 @@ with tab_live:
         gate_live = ov.signal_gated_allocation(
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
             force_exit=_live_exits, force_entry=_live_entries,
-            prev_weights=ov.load_published_book_weights())
+            prev_weights=ov.load_published_book_weights(),
+            cluster_mix=ov.cluster_mix_for(_profile))
         # weekend / holiday guard: on days the US market is closed, the daily
         # tilt must not re-size sleeves whose signal apps got no new bar (the
         # cross-set priority normalisation would let the crypto sleeves' fresh
@@ -1387,6 +1390,17 @@ with tab_live:
                    "Live book by cluster: "
                    + (" · ".join(f"**{c}** {w*100:.0f}%" for c, w in _clw) if _clw
                       else "all SATA") + ".")
+    _cmix = (gate_live.get("cluster_mix") or {}).get("BTC")
+    if _cmix:
+        st.caption("🪙 **Balanced crypto-cluster split** — the BTC cluster's weight is "
+                   "divided by a fixed split instead of the tilt's: "
+                   + " · ".join(f"**{k}** {v*100:.0f}%" for k, v in
+                                sorted(_cmix.items(), key=lambda kv: -kv[1]))
+                   + " of the cluster (at the 30% cap: "
+                   + " · ".join(f"{k} {v*ov.CLUSTER_CAP*100:.1f}%" for k, v in
+                                sorted(_cmix.items(), key=lambda kv: -kv[1]))
+                   + " of the book). Entries are sized at the split; held names "
+                   "keep their weight (adds-only).")
     _frz = gate_live.get("freeze")
     if _frz:
         st.info("🧊 **US market closed today** (weekend/holiday) — the "
@@ -5316,7 +5330,8 @@ with tab_hist:
         else:
             _h_alloc = ov.historical_allocation(
                 _snap, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
-                cluster_cap=ov.cluster_cap_for(_sv.version_for_date(_h_bar)))
+                cluster_cap=ov.cluster_cap_for(_sv.version_for_date(_h_bar)),
+                cluster_mix=ov.cluster_mix_for(_profile, _sv.version_for_date(_h_bar)))
             _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
         with _h_top[2]:
             st.markdown(
@@ -6062,7 +6077,9 @@ remainder in SATA — and, under **Strategy Logic V2**, the **adds-only** rule (
 held sleeve is never trimmed by the tilt; added to only when its target rises
 ≥ 8 pp) and the **parent-cluster cap** (the sleeves sharing one parent signal,
 e.g. XLE → XOP/ERX, never exceed 30% of the book combined) apply from the
-cut-over. Anchor weights are **re-fit at every quarter start
+cut-over — and, for the **Balanced** profile, the BTC cluster's weight is
+divided by a **fixed split** (MSTR 45 · MSTU 30 · BTC 20 · ETH 5) rather than
+by the tilt. Anchor weights are **re-fit at every quarter start
 (Jan/Apr/Jul/Oct 1) on the data before that date** (cap-normalised equal
 weight before enough history exists, and a sleeve with no return inside the
 fit window — e.g. the BTC/ETH sleeves before 2024-03, XOP before the V2
@@ -6096,6 +6113,19 @@ book (the energy crash-shield exits 30% below XLE's 52-week high, so that book
 could lose ~19% before the signal fired). Balanced replay, 3 optimiser seeds:
 max drawdown −18.7% → −13.5%, Sharpe 1.8 → 2.1, return within 3% of the
 un-capped book (the cost sits in 2022's energy bull).
+
+**Balanced crypto-cluster split.** BTC, MSTR, MSTU and ETH trade one signal and
+enter/exit together on ~98% of days, so how the cluster's weight is divided is
+a pure vehicle-mix choice. Under V2 the **Balanced** profile sizes the cluster
+as above (tilt, caps, 30% cluster cap) and then divides its weight
+**MSTR 45% · MSTU 30% · BTC 20% · ETH 5%** (shares renormalised over the
+members funded, each inside its per-sleeve cap — MSTU 9% ≤ 10%). The tilt used
+to put up to 29% of the book in BTC or 25% in ETH, the weakest sleeve. Balanced
+replay vs the tilt split, same seeds (full 2021 →, 3-seed mean, 5 bp costs):
+return +885% → +950%, Sharpe 1.93 → 1.98, max drawdown within 0.1 pt; hold-out
+(2025-07 →) +146% → +149% at −9.4% → −9.2%. Growth / Aggressive keep the tilt
+split (no hold-out edge); V1 never had the rule. Evidence and the
+no-degradation gate: `CRYPTO_CLUSTER_MIX_EVAL.md`.
 
 (An *Aggressive* profile — 35/40/35 caps, −38% budget — exists in
 `overall_core` for the CLI tools but is retired from this UI: its drawdown

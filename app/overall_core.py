@@ -2013,6 +2013,65 @@ def cluster_cap_for(version: str | None = None) -> float:
     return CLUSTER_CAP if bt.active_version(version) == "v2" else 0.0
 
 
+# Strategy Logic V2 allocator rule — "fixed crypto-cluster split" (Balanced
+# profile only, added 2026-10-11).  The BTC parent cluster (BTC · MSTR · MSTU ·
+# ETH) trades ONE signal — the four sleeves enter and exit together on ~98 % of
+# days — so how the cluster's weight is divided among them is purely a choice
+# of vehicle mix, not of timing.  The optimiser / priority tilt split it
+# erratically (a single day could put 29 % in BTC or 25 % in ETH, the weakest
+# sleeve); this rule sizes the cluster as before (anchor × priority, water-
+# filled, bound by ``CLUSTER_CAP``) and then DIVIDES that cluster weight by a
+# fixed ordered split: MSTR 45 % · MSTU 30 % · BTC 20 % · ETH 5 %.  MSTR and
+# MSTU (the strongest sleeves) carry three quarters of it, ETH the least; with
+# the 30 % cluster cap MSTU tops out at 9 % — inside Balanced's 10 % 2× cap.
+# Applied to the tilt target BEFORE the adds-only pin, so fresh entries are
+# sized at the split and held names are never re-split (adds-only keeps them).
+# Balanced walk-forward replay (3 optimiser seeds, 5 bp costs, 2021 → 2026-10-10)
+# vs the V2 tilt split: return +885 % → +950 %, Sharpe 1.93 → 1.98, max drawdown
+# −13.6 % → −13.7 % (0.07 pt); hold-out 2025-07 →: +146 % → +149 % at −9.4 % →
+# −9.2 %.  Growth / Aggressive keep the tilt split (no hold-out edge there).  V1
+# has no such rule.  Evidence + no-degradation gate: CRYPTO_CLUSTER_MIX_EVAL.md
+# (``scripts/eval_cluster_mix.py``).
+CLUSTER_MIX_BALANCED = {"BTC": {"MSTR": 0.45, "MSTU": 0.30, "BTC": 0.20, "ETH": 0.05}}
+CLUSTER_MIX = {"Balanced": CLUSTER_MIX_BALANCED}
+
+
+def cluster_mix_for(profile: str, version: str | None = None) -> dict | None:
+    """The fixed within-cluster split in force for ``profile`` under
+    ``version`` — ``{parent: {sleeve: share}}`` — or ``None`` (V1, or a
+    profile without one: the tilt decides the split)."""
+    # ``combined`` = V1 before the cut-over, V2 from it: the replay applies the
+    # split from the cut-over only (``walkforward_gated_replay``)
+    if str(version or "").lower() != "combined" and bt.active_version(version) != "v2":
+        return None
+    return CLUSTER_MIX.get(profile)
+
+
+def _apply_cluster_mix(weights: dict, cluster_of: dict, mix: dict | None,
+                       caps: dict) -> dict:
+    """Re-divide each mixed parent cluster's combined weight by the fixed
+    ``mix`` shares (renormalised over the members actually funded, each member
+    held to its per-sleeve cap; what the caps cannot absorb is left undeployed
+    → SATA).  The cluster's TOTAL is unchanged, so every cluster/book cap the
+    caller already applied still holds."""
+    if not mix or not weights:
+        return weights
+    out = dict(weights)
+    for parent, shares in mix.items():
+        members = [k for k, w in weights.items()
+                   if w > 0 and cluster_of.get(k, k) == parent and shares.get(k, 0.0) > 0]
+        if len(members) < 2:
+            continue
+        total = sum(weights[k] for k in members)
+        if total <= 0:
+            continue
+        frac = _waterfill({k: float(shares[k]) for k in members},
+                          {k: caps.get(k, 0.30) / total for k in members})
+        for k in members:
+            out[k] = total * frac.get(k, 0.0)
+    return out
+
+
 def cluster_map(results: list[dict]) -> dict[str, str]:
     """``key → parent signal`` for every result; a sleeve with no parent is
     its own cluster."""
@@ -2099,7 +2158,8 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             force_entry: set | None = None,
                             prev_weights: dict[str, float] | None = None,
                             adds_only: float | None = None,
-                            cluster_cap: float | None = None) -> dict:
+                            cluster_cap: float | None = None,
+                            cluster_mix: dict | None = None) -> dict:
     """Today's actionable allocation.
 
     ``prev_weights`` — the risk weights of the book currently held (the last
@@ -2113,6 +2173,11 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     :func:`cluster_cap_for` for the results' version): the sleeves sharing
     one parent signal never exceed this fraction of the book combined
     (:func:`_apply_cluster_cap`).  Pass ``cluster_cap=0`` for V1.
+
+    ``cluster_mix`` — the profile's fixed within-cluster split
+    (:func:`cluster_mix_for`; ``None`` = the tilt decides, and always ``None``
+    for V1 results): each mixed cluster's combined weight is divided by the
+    fixed shares (:func:`_apply_cluster_mix`) BEFORE the adds-only pin.
 
     Capital is deployed only to instruments the strategy is long (or opening a
     fresh entry).  Among those, the size of each slice is the historically
@@ -2176,7 +2241,10 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
         cluster_cap = cluster_cap_for(_ver)
     cluster_cap = float(cluster_cap or 0.0)
     cl = cluster_map(results)
+    if _ver == "v1":
+        cluster_mix = None
     target = _apply_cluster_cap(raw, caps, cl, cluster_cap)
+    target = _apply_cluster_mix(target, cl, cluster_mix, caps)
     tilt_target = dict(target)
     target = _apply_adds_only(target, prev_weights, {res["key"] for res in keep},
                               adds_only, cluster_of=cl, cluster_cap=cluster_cap)
@@ -2185,6 +2253,7 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     # current book (what we hold now) — optimal weights, no forward tilt
     current = _apply_cluster_cap({res["key"]: _b(res["key"]) for res in in_pos},
                                  caps, cl, cluster_cap)
+    current = _apply_cluster_mix(current, cl, cluster_mix, caps)
     sata_now = max(1.0 - sum(current.values()), 0.0)
 
     actions = []
@@ -2251,6 +2320,7 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 sata_info=SATA, tilt_target=tilt_target,
                 adds_only=float(adds_only or 0.0),
                 cluster_cap=cluster_cap,
+                cluster_mix=cluster_mix,
                 clusters=cluster_weights(target, cl),
                 held_pinned=sorted(k for k in target
                                    if prev_weights and k in {r["key"] for r in keep}
@@ -2683,7 +2753,8 @@ def snapshot_asof(results: list[dict], date) -> dict | None:
 
 def historical_allocation(snap: dict, base_weights: dict,
                           caps: dict | None = None,
-                          cluster_cap: float = 0.0) -> dict:
+                          cluster_cap: float = 0.0,
+                          cluster_mix: dict | None = None) -> dict:
     """The book the strategy held on the snapshot bar: the blend's optimal
     weights water-filled (to the profile caps) over the sleeves in position on
     that bar, the undeployed remainder parked in SATA — the same construction
@@ -2695,6 +2766,7 @@ def historical_allocation(snap: dict, base_weights: dict,
             for r in snap["rows"] if r["in_pos"]}
     cl = {r["key"]: (r.get("parent") or r["key"]) for r in snap["rows"]}
     book = _apply_cluster_cap(held, caps, cl, cluster_cap)
+    book = _apply_cluster_mix(book, cl, cluster_mix, caps)
     return dict(book=book, sata=max(1.0 - sum(book.values()), 0.0))
 
 
@@ -2901,7 +2973,9 @@ def replay_gated_allocation(results: list[dict],
                             cluster_cap: float | None = None,
                             cluster_cap_from=None,
                             start=None,
-                            init_weights: dict | None = None) -> dict:
+                            init_weights: dict | None = None,
+                            cluster_mix: dict | None = None,
+                            cluster_mix_from=None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -2915,6 +2989,10 @@ def replay_gated_allocation(results: list[dict],
     ``cluster_cap_from`` apply V2's parent-cluster cap the same way (the
     sleeves sharing one parent signal never exceed the cap combined; the
     adds-only pin respects it).  ``None`` / ``0`` → no cluster cap (V1).
+    ``cluster_mix`` / ``cluster_mix_from`` apply the profile's fixed
+    within-cluster split (:func:`cluster_mix_for`) to each day's tilt target,
+    before the adds-only pin, from the given date (``None`` = every bar;
+    ``cluster_mix=None`` → the tilt decides the split, as in V1).
     ``start`` replays only bars on/after that date, and ``init_weights`` is
     the book held going into the first replayed bar (the adds-only pin and
     the cluster cap read it as the previous day) — how the Combined view
@@ -3016,6 +3094,8 @@ def replay_gated_allocation(results: list[dict],
                if cluster_cap_from is not None else None)
     _cm = cluster_map(results)
     cl_j = {j: _cm.get(keys[j], keys[j]) for j in range(len(keys))}
+    mix_from = (pd.Timestamp(cluster_mix_from).to_datetime64()
+                if cluster_mix_from is not None else None)
     idx_vals = idx.values
     t0 = (int(np.searchsorted(idx_vals, pd.Timestamp(start).to_datetime64()))
           if start is not None else 0)
@@ -3054,6 +3134,12 @@ def replay_gated_allocation(results: list[dict],
         cc_t = cc_band if (cc_band > 0 and (cc_from is None or idx_vals[t] >= cc_from)) else 0.0
         target = _apply_cluster_cap(raw, {j: caps.get(keys[j], 0.30) for j in raw},
                                     cl_j, cc_t)
+        if cluster_mix and (mix_from is None or idx_vals[t] >= mix_from):
+            # fixed within-cluster split on the tilt target (name-keyed helper)
+            _byname = _apply_cluster_mix(
+                {keys[j]: w for j, w in target.items()},
+                {keys[j]: cl_j[j] for j in target}, cluster_mix, caps)
+            target = {j: _byname[keys[j]] for j in target}
         if ao_band > 0 and (t > t0 or has_init) and (ao_from is None or idx_vals[t] >= ao_from):
             # adds-only: a sleeve held yesterday keeps its weight unless the
             # tilted target rose by ≥ the band (never trimmed by the tilt)
@@ -3092,7 +3178,8 @@ def replay_gated_allocation(results: list[dict],
         turnover=dict(mean=float(turno.mean()) if len(turno) else 0.0,
                       p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
                       days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
-        tilt=tilt, adds_only=ao_band, cluster_cap=cc_band)
+        tilt=tilt, adds_only=ao_band, cluster_cap=cc_band,
+        cluster_mix=cluster_mix)
 
 
 def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
@@ -3110,7 +3197,8 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              adds_only_from=None,
                              cluster_cap: float | None = None,
                              cluster_cap_from=None,
-                             gens: tuple | None = None) -> dict:
+                             gens: tuple | None = None,
+                             cluster_mix: dict | None = None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
     on a ``walkforward_anchors`` schedule.
 
@@ -3133,6 +3221,10 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     combined back-test; the full-sample optimiser weights remain in use only
     for TODAY'S live book, where all history to date is legitimately known.
     The schedule is attached as ``anchors``.
+
+    ``cluster_mix`` — the profile's fixed within-cluster split
+    (:func:`cluster_mix_for`; V2 allocator rule).  Ignored for ``v1`` (which
+    never had it); for ``combined`` it applies from the V1 → V2 cut-over.
 
     The adaptivity-experiment knobs (``refit``/``fit_window``/``wr_window``/
     ``sharpe_window``/``penalty``) pass straight through to
@@ -3163,7 +3255,7 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
             wr_window=wr_window, sharpe_window=sharpe_window, penalty=penalty,
             adds_only=(ADDS_ONLY_BAND if adds_only is None else adds_only),
             cluster_cap=(CLUSTER_CAP if cluster_cap is None else cluster_cap),
-            start=cut, init_weights=init)
+            start=cut, init_weights=init, cluster_mix=cluster_mix)
         rep2["anchors"] = anchors2
         return splice_replays(rep1, rep2, cut)
     rets = returns_matrix(results)
@@ -3176,6 +3268,9 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
         cluster_cap = CLUSTER_CAP if ver in ("v2", "combined") else 0.0
         if ver == "combined" and cluster_cap_from is None:
             cluster_cap_from = STRATEGY_VERSION_START
+    mix_from = STRATEGY_VERSION_START if ver == "combined" else None
+    if ver == "v1":
+        cluster_mix = None                      # V1 never had the split
     anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
                                   objective=objective, sata_daily=sata_daily,
                                   min_hist=min_hist, n_samples=n_samples, seed=seed,
@@ -3186,7 +3281,9 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                                   penalty=penalty, adds_only=adds_only,
                                   adds_only_from=adds_only_from,
                                   cluster_cap=cluster_cap,
-                                  cluster_cap_from=cluster_cap_from)
+                                  cluster_cap_from=cluster_cap_from,
+                                  cluster_mix=cluster_mix,
+                                  cluster_mix_from=mix_from)
     rep["anchors"] = anchors
     rep["version"] = ver
     rep["adds_only"] = float(adds_only or 0.0)

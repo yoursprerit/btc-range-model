@@ -83,7 +83,8 @@ def main() -> None:
         caps = ov.caps_for(pname)
         full = ov.walkforward_gated_replay(
             results, caps=caps, mdd_floor=prof["mdd_floor"],
-            objective=prof["objective"], sata_daily=ov.SATA_DAILY, tilt=True)
+            objective=prof["objective"], sata_daily=ov.SATA_DAILY, tilt=True,
+            cluster_mix=ov.cluster_mix_for(pname))
         for cut in CUTOFFS:
             cut_ts = pd.Timestamp(cut)
             trunc_res = truncate_results(results, cut_ts)
@@ -94,7 +95,7 @@ def main() -> None:
                 part = ov.walkforward_gated_replay(
                     trunc_res, caps=caps, mdd_floor=prof["mdd_floor"],
                     objective=prof["objective"], sata_daily=ov.SATA_DAILY,
-                    tilt=True)
+                    tilt=True, cluster_mix=ov.cluster_mix_for(pname))
             finally:
                 ov._load_daily = orig_load_daily
 

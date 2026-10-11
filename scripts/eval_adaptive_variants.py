@@ -97,7 +97,7 @@ def main() -> None:
             wf = ov.walkforward_gated_replay(
                 results, caps=caps, mdd_floor=prof["mdd_floor"],
                 objective=prof["objective"], sata_daily=ov.SATA_DAILY,
-                tilt=True, **kw)
+                tilt=True, cluster_mix=ov.cluster_mix_for(pname), **kw)
             row = _metrics_row(wf)
             table[pname][label] = row
             print(f"  {label:<44} full: {_fmt(row['full'])}")
@@ -115,7 +115,8 @@ def main() -> None:
     full = ov.walkforward_gated_replay(results, caps=caps,
                                        mdd_floor=prof["mdd_floor"],
                                        objective=prof["objective"],
-                                       sata_daily=ov.SATA_DAILY, tilt=True, **kw)
+                                       sata_daily=ov.SATA_DAILY, tilt=True,
+                                       cluster_mix=ov.cluster_mix_for("Balanced"), **kw)
     cut = pd.Timestamp("2026-01-15")
     orig_load = ov._load_daily
     ov._load_daily = lambda cfg, _c=cut: orig_load(cfg).loc[:_c]
@@ -123,7 +124,8 @@ def main() -> None:
         part = ov.walkforward_gated_replay(truncate_results(results, cut),
                                            caps=caps, mdd_floor=prof["mdd_floor"],
                                            objective=prof["objective"],
-                                           sata_daily=ov.SATA_DAILY, tilt=True, **kw)
+                                           sata_daily=ov.SATA_DAILY, tilt=True,
+                                           cluster_mix=ov.cluster_mix_for("Balanced"), **kw)
     finally:
         ov._load_daily = orig_load
     d = float((part["ret"] - full["ret"].loc[part["ret"].index]).abs().max())

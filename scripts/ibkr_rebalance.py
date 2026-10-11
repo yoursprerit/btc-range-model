@@ -133,11 +133,13 @@ def compute_target_book(profile: str = None, results: list | None = None,
         live_exits = oc.live_exit_keys(results, spot, include_entries=True)
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
                                           caps=caps, force_exit=live_exits,
-                                          prev_weights=prev_weights)
+                                          prev_weights=prev_weights,
+                                          cluster_mix=oc.cluster_mix_for(profile))
     else:
         # committed signals only — the frozen published book.
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
-                                          caps=caps, prev_weights=prev_weights)
+                                          caps=caps, prev_weights=prev_weights,
+                                          cluster_mix=oc.cluster_mix_for(profile))
 
     targets = {k: float(w) for k, w in gate["target"].items() if w and w > 0}
 

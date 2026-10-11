@@ -100,7 +100,8 @@ def main() -> int:
                 replays[name] = oc.walkforward_gated_replay(
                     results, caps=oc.caps_for(name), mdd_floor=prof["mdd_floor"],
                     objective=prof["objective"], sata_daily=oc.SATA_DAILY, tilt=True,
-                    version=view, gens=gens)
+                    version=view, gens=gens,
+                    cluster_mix=oc.cluster_mix_for(name, view))
             except Exception:
                 traceback.print_exc()
                 replays[name] = None
