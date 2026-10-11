@@ -54,6 +54,7 @@ import overall_frictions as fx
 import ticker_config
 import freshness as fr
 import executed_book as eb          # cost-basis positions from the IBKR report
+import account_pnl as acpnl         # monthly-deposit dollar P&L per IBKR account
 import pnl_snapshot as pnl_snap     # precomputed P&L replays (daily CI build)
 import inspect as _inspect
 
@@ -2339,6 +2340,81 @@ with tab_live:
                       for p in _snap.get("positions") or [])}
         return _snap, _arch, _px
 
+    _DEPOSITS_PATH = _EB_DIR / "account_deposits.json"
+
+    def _render_ibkr_deposits(info, pv):
+        """Per-account monthly deposit inputs for an IBKR as-published record.
+
+        Defaults come from ``data/overall/account_deposits.json`` (committed),
+        so a saved schedule is the starting point on every load; the fields
+        override it for this session.  Returns (monthly $, day of month,
+        starting account value $)."""
+        acct = info["account"]
+        saved = acpnl.load_deposit_defaults(_DEPOSITS_PATH).get(acct, {})
+        st.markdown(f"<div style='font-size:13.5px;font-weight:700;margin:8px 0 2px'>"
+                    f"🏦 IBKR account #{acct} — deposits</div>", unsafe_allow_html=True)
+        dc = st.columns(3)
+        monthly = dc[0].number_input(
+            "💵 Monthly deposit ($)", min_value=0.0, step=100.0, format="%.0f",
+            value=float(saved.get("monthly", 0.0)), key=f"overall_dep_amt_{acct}",
+            help="Cash you add to this account every month. It is taken OUT "
+                 "of the P&L (money you put in is not profit) and invested "
+                 "from the next bar. 0 = no deposits.")
+        day = dc[1].number_input(
+            "📆 Day of month", min_value=1, max_value=acpnl.MAX_DEPOSIT_DAY,
+            step=1, value=int(saved.get("day", 1)), key=f"overall_dep_day_{acct}",
+            help="The day the deposit arrives (1–28). A weekend or holiday "
+                 "rolls to the next trading day. The first month has none: "
+                 "the account's starting balance already includes it.")
+        start_nl = float(info.get("first_net_liq") or 0.0)
+        initial = dc[2].number_input(
+            "🏁 Account value on its first executed day ($)", min_value=1.0,
+            step=1000.0, format="%.0f",
+            value=float(start_nl if start_nl > 0 else max(pv, 1.0)),
+            key=f"overall_dep_init_{acct}",
+            help="Defaults to the net liquidation IBKR reported after the "
+                 f"account's first executed run ({info['start']:%b %d, %Y}).")
+        st.caption("To make a deposit schedule permanent, add "
+                   f"`\"{acct}\": {{\"monthly\": {monthly:.0f}, \"day\": {int(day)}}}` "
+                   "to `data/overall/account_deposits.json` and commit it; the "
+                   "fields above only change this session.")
+        return float(monthly), int(day), float(initial)
+
+    def _render_ibkr_summary(info, sm_, sm, monthly, day, sim):
+        """The deposit-adjusted dollar picture for an IBKR account's window."""
+        def _sd(x):
+            return f"{'-' if x < 0 else '+'}${abs(x):,.0f}"
+        c = st.columns(5)
+        c[0].metric("Balance at start", f"${sm_['start_value']:,.0f}",
+                    delta=f"{sm_['start']:%b %d, %Y}", delta_color="off")
+        c[1].metric("Deposits in window", f"${sm_['deposits']:,.0f}",
+                    delta=(f"{sm_['n_deposits']} × ${monthly:,.0f} on day {day}"
+                           if sm_["n_deposits"] else "none yet"), delta_color="off")
+        c[2].metric("Money put in", f"${sm_['contributed']:,.0f}",
+                    help="Balance at the start of the window plus every deposit made in it.")
+        c[3].metric("Strategy P&L (deposits excluded)", _sd(sm_["pnl"]),
+                    delta=f"{sm_['pnl_pct_contributed']*100:+.1f}% of money put in",
+                    delta_color="normal" if sm_["pnl"] >= 0 else "inverse")
+        mwr = sm_.get("mwr")
+        c[4].metric("Money-weighted return (ann.)",
+                    "—" if mwr is None else f"{mwr*100:+.1f}%",
+                    delta=f"time-weighted {sm['total_ret']*100:+.1f}%", delta_color="off",
+                    help="The account's own return counting WHEN each deposit "
+                         "arrived (an internal rate of return). The "
+                         "time-weighted figure is the strategy's, unaffected by "
+                         "deposits. Shows — for windows under 30 days.")
+        if info.get("last_net_liq") and sim is not None and len(sim):
+            at = sim.loc[:info["last_executed_on"]]
+            if len(at):
+                rep_v, mod_v = float(info["last_net_liq"]), float(at["value"].iloc[-1])
+                gap = (mod_v / rep_v - 1.0) * 100 if rep_v else 0.0
+                st.caption(
+                    f"🔎 Check: IBKR reported net liquidation **${rep_v:,.0f}** after "
+                    f"the {info['last_executed_on']:%b %d, %Y} run; this replay "
+                    f"has the account at **${mod_v:,.0f}** that day ({gap:+.1f}%). "
+                    "A gap means deposits/withdrawals differ from the schedule "
+                    "above, or fills drifted from the published books.")
+
     def _render_c2_account(pv):
         """📡 The Collective2 model account — C2's own account value, fills
         and P&L — re-scaled from its starting cash to the 💼 portfolio value
@@ -2443,6 +2519,7 @@ with tab_live:
     # simulation of the same rules over the full back-test history.  Either
     # curve is re-based at the chosen date so drawdown, Sharpe etc. are
     # measured from the entry point, not from inception.
+    _pv_user = portfolio_value          # the IBKR source rebinds it; restored below
     with st.expander("📈 **Overall strategy P&L — pick your start & end dates**", expanded=False):
         # The as-published record FOLLOWS COLLECTIVE2: the books C2 actually
         # received (c2_book_archive/), from the record reset
@@ -2504,14 +2581,23 @@ with tab_live:
         _n_c2 = sum(1 for b in _books
                     if str(b.get("as_of")) >= ov.C2_RECORD_START)
         _ver_up = _pnl_view.upper()
-        _SRC_ACTUAL = "🎯 As-published record (actual books)"
+        _SRC_ACTUAL = "🎯 As-published record (C2)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
+        # One as-published option per IBKR account that has really EXECUTED the
+        # book (an archived execution report exists). An account with no
+        # executed run yet — or only previews — gets no option.
+        _ibkr_src = {}
+        for _rp in eb.account_report_paths(_EB_DIR):
+            _ri = acpnl.record_info(_rp)
+            if _ri:
+                _ibkr_src[f"🎯 As-published record (IBKR #{_ri['account']})"] = _ri
         _SRC_BH = "⚖️ Equal-weight buy & hold"
         _bhrep = get_bh_replay(_bucket(), _use_snap)
         # the buy-&-hold source is the "do nothing" alternative measured over
         # the identical window — always offered, since it needs no archive and
         # no profile.  The as-published option only exists once books do.
-        _src_opts = [_SRC_ACTUAL, _SRC_REPLAY] + ([_SRC_BH] if _bhrep is not None else [])
+        _src_opts = ([_SRC_ACTUAL, *_ibkr_src, _SRC_REPLAY]
+                     + ([_SRC_BH] if _bhrep is not None else []))
         # a remembered choice can vanish from the list (first archived book,
         # or none at all) — clear it rather than let the widget error
         if st.session_state.get("overall_pnl_source") not in _src_opts:
@@ -2520,7 +2606,12 @@ with tab_live:
             "Performance source", _src_opts,
             index=_src_opts.index(_SRC_ACTUAL),
             horizontal=True, key="overall_pnl_source",
-            help="**As-published record** — compounds the target books "
+            help="**As-published record (IBKR #…)** — the same published books, "
+                 "measured from the day that IBKR account first executed them, "
+                 "with the account's own **monthly deposit** (amount and day of "
+                 "month, set below) taken out of the dollar P&L. Listed only "
+                 "once the account has an executed run. "
+                 "**As-published record (C2)** — compounds the target books "
                  "**Collective2 actually received** (one archived JSON per "
                  "signal day, `data/overall/c2_book_archive/`), so the daily "
                  "optimizer's trims and re-sizes are exactly the ones C2 "
@@ -2539,7 +2630,8 @@ with tab_live:
                  "cash. Same dates, same instruments, no strategy — the "
                  "sections below switch to the ones that mean something "
                  "for a book that never trades.")
-        _actual = _pnl_src == _SRC_ACTUAL
+        _ibkr = _ibkr_src.get(_pnl_src)
+        _actual = _pnl_src == _SRC_ACTUAL or _ibkr is not None
         _bh_src = _pnl_src == _SRC_BH
         # the C2 record hasn't covered 2 bars yet: stay on this source (its
         # own start date, no figures) rather than quietly showing the replay
@@ -2548,6 +2640,7 @@ with tab_live:
         _c2_pending = _actual and _bookrep is None
         if _c2_pending:
             _actual = False
+            _ibkr = None        # no books to measure an account against yet
         _fx_costs, _fx_taxes, _fx_income = False, False, fx.INCOME_DEFAULT
         def _cost_controls() -> bool:
             """Brokerage-costs radio shared by the replay and as-published
@@ -2628,6 +2721,35 @@ with tab_live:
                              **_PFV["curves"]} if _bookrep is not None
                             else dict(_PFV["curves"]))
             _curve_all = _PFV["curves"][BH_CURVE]
+        elif _actual and _ibkr is not None:
+            _n_books = len(_bookrep["books"])
+            st.caption(f"P&L, performance and risk of the **as-published "
+                       f"Overall strategy book as IBKR account "
+                       f"#{_ibkr['account']} executed it** — the {_n_books} "
+                       f"dated target book{'s' if _n_books != 1 else ''} of "
+                       f"strategy version {_ver_up}, compounded at official "
+                       f"closes from the day the account first traded the "
+                       f"book (**{_ibkr['start']:%b %d, %Y}**). Percentages "
+                       "and risk figures are time-weighted, so deposits never "
+                       "move them; **dollar figures replay the account with "
+                       "the monthly deposit you set below**. Idle capital "
+                       "is held as SATA/cash exactly as the book says.")
+            _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"],
+                   "active": None}
+            _strat_label = STRAT_CURVE_ACTUAL
+            _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
+                            **_PFV["curves"]}
+            _curve_all = _bookrep["equity"]
+            _dep_monthly, _dep_day, _dep_initial = _render_ibkr_deposits(_ibkr, portfolio_value)
+            _fx_cols = st.columns(2)
+            with _fx_cols[0]:
+                _fx_costs = _cost_controls()
+            with _fx_cols[1]:
+                _fx_taxes, _fx_income = _tax_controls()
+            if _bookrep["dropped"]:
+                st.caption("⚠️ Book keys not in today's universe (weight "
+                           "earns nothing): "
+                           + ", ".join(f"`{k}`" for k in _bookrep["dropped"]))
         elif _actual:
             _n_books = len(_bookrep["books"])
             st.caption(f"P&L, performance and risk of the **as-published "
@@ -2693,6 +2815,10 @@ with tab_live:
         _c2_src = _actual or _c2_pending
         _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START if _c2_src
                                       else "2026-03-01").date()
+        if _ibkr is not None:
+            # an IBKR account's record cannot start before it first traded
+            _d0 = min(max(_d0, _ibkr["start"].date()), _d1)
+            _default_start = max(_default_start, _d0)
         # a record still waiting on its first close may start after the
         # data's last bar — let the start field hold that date
         _d1_start = max(_d1, _default_start) if _c2_pending else _d1
@@ -2701,7 +2827,8 @@ with tab_live:
         # a new source brings its own default start — a date remembered from
         # the replay (months back) would otherwise pin the C2 record to its
         # very first bar
-        _src_key = "actual" if _c2_src else ("bh" if _bh_src else "replay")
+        _src_key = ((f"ibkr:{_ibkr['account']}" if _ibkr is not None else "actual")
+                    if _c2_src else ("bh" if _bh_src else "replay"))
         # The start date is driven through Session State, never the widget's
         # ``value=``: with a key, Streamlit keeps a date_input's identity (and
         # the browser keeps showing its old date) when only ``value`` changes,
@@ -2777,6 +2904,17 @@ with tab_live:
         _bh_w = ({k: float(_wf["weights"][k]
                            .loc[pd.Timestamp(_start_sel):].mean())
                   for k in _wf["weights"].columns} if _bh_src else {})
+        # IBKR account: every $ figure below is read off the account's value on
+        # the start date (not a typed constant), so a deposit made before the
+        # window is in the base and one made inside it is not counted as profit.
+        # Restored after this section.
+        _ibkr_sim, _ibkr_sum = None, None
+        if _ibkr is not None:
+            _g_sim = acpnl.simulate_account(_curve_all, _ibkr["start"],
+                                            _dep_initial, _dep_monthly, _dep_day)
+            _g_sum = acpnl.window_summary(_g_sim, _start_sel, _end_ts)
+            if _g_sum is not None:
+                portfolio_value = float(_g_sum["start_value"])
         # replay only: re-play the book in dollars with IBKR costs / taxes and
         # swap the net curve in, so every metric downstream is net of them
         _fx_sim = None
@@ -2803,6 +2941,10 @@ with tab_live:
                                 (STRAT_CURVE_ACTUAL if _actual else STRAT_CURVE):
                                 _net_curve}
         _sm = None if _c2_pending else ov.slice_metrics(_curve_all, _start_sel)
+        if _ibkr is not None and _sm is not None:
+            _ibkr_sim = acpnl.simulate_account(_curve_all, _ibkr["start"],
+                                               _dep_initial, _dep_monthly, _dep_day)
+            _ibkr_sum = acpnl.window_summary(_ibkr_sim, _start_sel, _end_ts)
         if _c2_pending:
             st.info(f"🎯 The as-published record **follows the books "
                     f"Collective2 receives** and was reset to start on "
@@ -2833,8 +2975,12 @@ with tab_live:
                         f"{_sm['end'].strftime('%b %d, %Y')}")
             _pnl_d = _sm["total_ret"] * portfolio_value
             _end_v = portfolio_value * (1 + _sm["total_ret"])
+            if _ibkr_sum is not None:
+                _pnl_d, _end_v = _ibkr_sum["pnl"], _ibkr_sum["end_value"]
             _src_note = (f"as-published <b style='color:{_sv.BADGE_COLOR}'>"
-                         f"{_ver_up}</b> record · {_n_books} "
+                         f"{_ver_up}</b> record"
+                         + (f" · IBKR #{_ibkr['account']}" if _ibkr is not None else "")
+                         + f" · {_n_books} "
                          f"book{'s' if _n_books != 1 else ''}" if _actual
                          else (f"equal-weight buy &amp; hold · "
                                f"{_bhrep['n_assets']} instruments" if _bh_src
@@ -2882,7 +3028,9 @@ with tab_live:
             pm = st.columns(6)
             _pl_lbl = "Buy & hold P&L" if _bh_src else "Strategy P&L"
             pm[0].metric(_pl_lbl, f"{_sm['total_ret']*100:+.1f}%",
-                         delta=f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}",
+                         delta=(f"${_pnl_d:+,.0f} on ${_ibkr_sum['contributed']:,.0f} "
+                                "contributed" if _ibkr_sum is not None else
+                                f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}"),
                          delta_color="normal" if _pnl_d >= 0 else "inverse")
             pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
                          delta=f"CAGR {_sm['cagr']*100:+.1f}%")
@@ -2906,6 +3054,8 @@ with tab_live:
                               "returns| since the chosen start date. Above 1 "
                               "means gains outweigh losses. Shows — when the "
                               "window had no losing day.")
+            if _ibkr_sum is not None:
+                _render_ibkr_summary(_ibkr, _ibkr_sum, _sm, _dep_monthly, _dep_day, _ibkr_sim)
             # per-asset since-start reads (also feed the blend-level trade stats)
             _pa = ov.per_asset_slice_metrics(results, _start_sel, end=_end_arg)
             if _bh_src:
@@ -3165,6 +3315,8 @@ with tab_live:
                 if len(_sub) < 2:
                     continue
                 _c, _w = _pnl_styles.get(_nm, ("#888", 1.5))
+                if _ibkr_sim is not None and _nm == _strat_label:
+                    _nm = f"{_nm} — no deposits"
                 # a curve with less history is re-based at its OWN first bar,
                 # so its line enters mid-plot at break-even while the others
                 # have been compounding since the left edge.  Name it for what
@@ -3176,20 +3328,36 @@ with tab_live:
                           if _late else _nm),
                     line=dict(color=_c, width=_w,
                               dash="dot" if _late else "solid")))
+            if _ibkr_sim is not None:
+                _av = _ibkr_sim.loc[pd.Timestamp(_sm["start"]):]
+                _fig_pnl.add_trace(go.Scatter(
+                    x=_av.index, y=_av["value"].to_numpy(),
+                    name=f"IBKR #{_ibkr['account']} account value (with deposits)",
+                    line=dict(color="#111827", width=3)))
+                _contrib = _av["contributed"] - float(_av["contributed"].iloc[0]) \
+                    + float(_av["value"].iloc[0])
+                _fig_pnl.add_trace(go.Scatter(
+                    x=_av.index, y=_contrib.to_numpy(), name="Money put in",
+                    line=dict(color="#94a3b8", width=1.5, dash="dash", shape="hv")))
             _fig_pnl.add_hline(y=portfolio_value, line_dash="dot",
                                line_color="#cbd5e1",
                                annotation_text="break-even", annotation_font_size=10)
             _add_version_markers(_fig_pnl, _sm["start"], _sm["end"],
                                  combined=(_pnl_ver == "combined"))
-            _src_title = (f"as-published books ({_ver_up})" if _actual
+            _src_title = ((f"IBKR #{_ibkr['account']} as-published books ({_ver_up})"
+                           if _ibkr is not None else f"as-published books ({_ver_up})")
+                          if _actual
                           else ("equal-weight buy & hold" if _bh_src
                                 else f"`{_profile}` profile"))
             _fig_pnl.update_layout(
                 height=340, margin=dict(t=30, b=10, l=10, r=10),
                 yaxis_title="Portfolio value ($)", hovermode="x unified",
                 legend=dict(orientation="h", y=1.1),
-                title=dict(text=f"Growth of ${portfolio_value:,.0f} "
-                                f"{_win_lbl} — {_src_title}",
+                title=dict(text=(f"IBKR #{_ibkr['account']} account value "
+                                 f"{_win_lbl} — starts ${portfolio_value:,.0f}, "
+                                 f"monthly deposits included" if _ibkr_sim is not None
+                                 else f"Growth of ${portfolio_value:,.0f} "
+                                      f"{_win_lbl} — {_src_title}"),
                            font_size=13))
             st.plotly_chart(_fig_pnl, use_container_width=True)
             if _bh_src:
@@ -5076,6 +5244,8 @@ with tab_live:
                                "loss** are judged on those held days. **Σ "
                                "return pts** = the plain sum of the line's daily "
                                "contributions (un-compounded return points).")
+
+    portfolio_value = _pv_user
 
 
 # ══════════════════════════════════════════════════════════════════════════
