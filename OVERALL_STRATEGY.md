@@ -118,6 +118,41 @@ after the change is the first one sized at the split.  Reproduce, and see the
 no-degradation gate, with `python scripts/eval_cluster_mix.py` →
 [`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md).
 
+**Allocator — crypto cluster may add (Balanced profile only; still V2).**
+The adds-only pin freezes a held sleeve at its entry weight unless its target
+rises ≥ 8 pp.  For the crypto cluster that froze the position at its entry
+size (~13 % of the book from mid-April), while V1's daily re-sizing grew the
+cluster back to ~31–33 % whenever other sleeves exited and the funded set
+shrank (16 → 12 sleeves).  On the P&L section's walk-forward replay the crypto
+sleeves' **realized P&L since 2026-03-01** was therefore lower under V2 (Balanced,
+per $1 at the anchor: V1 +13.0c, V2 +7.4c; MSTU +9.2c vs +4.6c) although the
+crypto *signals* are identical and both held the cluster on the same 33 days.
+Stepping the V2 rules in one at a time (V2 universe with V1's allocator rules
++13.4c → + 30 % cluster cap +13.2c → **+ adds-only +7.4c** → + fixed split
++7.9c) isolates adds-only as the cause.  For the Balanced BTC cluster the
+adds-only band is now **0** (`overall_core.ADDS_ONLY_CLUSTER_BALANCED`;
+`cluster_adds_band_for(profile, version)`; `adds_only_cluster=` on
+`signal_gated_allocation` / `replay_gated_allocation` /
+`walkforward_gated_replay`, applied from the cut-over in the Combined view): a
+held crypto sleeve is **added to whenever its target rises and is never trimmed
+by the tilt** (only its own signal exit closes it).  The 30 % parent-cluster cap
+and the pre-existing book-overflow rule (scale the whole book down when the kept
+weights exceed 100 %) still apply, so "never trimmed" means never trimmed *by the
+tilt*.  Every other cluster keeps the 8 pp pin; V1, Growth and Aggressive are
+unchanged.  Balanced walk-forward replay vs V2 with the fixed split and the 8 pp
+pin, same universe, anchors and three optimiser seeds (2021 → 2026-10-10, 3-seed
+mean, 5 bp costs): **+950 % / −13.7 % / 1.98 → +1,062 % / −13.6 % / 2.00**
+(better on all three seeds: +1,103 → +1,244 %, +922 → +1,023 %, +825 → +919 %);
+selection window +318 % → +351 %; hold-out 2025-07 → +149 % → +156 % at
+−9.2 % → −9.3 %; crypto realized since 2026-03-01 +7.9c → +12.4c (V1: +13.0c);
+turnover unchanged (8.2 %/day).  **Trade-off:** it is not free — on the
+production seed alone the recent windows (hold-out, 2026 YTD) show Sharpe 2.89
+vs 2.96 and a 0.4 pt deeper max drawdown for +5 pt more return (the other two
+seeds improve on every metric), and a larger average crypto weight means more
+exposure to the one BTC signal (the cluster cap is unchanged).  Reproduce, with
+the no-degradation gate, via `python scripts/eval_cluster_mix.py` →
+[`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md).
+
 **Universe — OIH → XOP (added 2026-10-10, before the first V2 publish).**
 The energy β slot trades **XOP** (SPDR S&P Oil & Gas Exploration & Production)
 instead of **OIH** (VanEck Oil Services) under V2.  Both trade the same XLE

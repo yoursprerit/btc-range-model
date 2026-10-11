@@ -72,7 +72,8 @@ def main():
               f"MDD {row['mdd']*100:6.1f}%  Sharpe {row['sharpe']:.2f}")
 
     gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
-                                      cluster_mix=oc.cluster_mix_for(oc.DEFAULT_PROFILE))
+                                      cluster_mix=oc.cluster_mix_for(oc.DEFAULT_PROFILE),
+                                      adds_only_cluster=oc.cluster_adds_band_for(oc.DEFAULT_PROFILE))
     print(f"\nToday: {gate['n_active']} positions open, {gate['n_open']} new entries, "
           f"SATA {gate['sata']*100:.0f}%")
     print(f"  Priority rank: {gate['priority_rank']}")

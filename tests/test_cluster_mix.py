@@ -234,6 +234,8 @@ def test_walkforward_replay_ignores_the_mix_for_v1_and_applies_it_for_v2():
 
 # ── every consumer must pass the profile's mix ────────────────────────────
 _GUARDED = {"signal_gated_allocation", "walkforward_gated_replay", "historical_allocation"}
+# the two entry points that apply the adds-only pin also take the per-cluster band
+_ADDS = {"signal_gated_allocation", "walkforward_gated_replay"}
 
 
 def _unguarded_calls():
@@ -251,8 +253,11 @@ def _unguarded_calls():
                     continue
                 f = node.func
                 name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
-                if name in _GUARDED and "cluster_mix" not in {k.arg for k in node.keywords}:
-                    bad.append(f"{p.relative_to(REPO)}:{node.lineno} {name}")
+                kws = {k.arg for k in node.keywords}
+                if name in _GUARDED and "cluster_mix" not in kws:
+                    bad.append(f"{p.relative_to(REPO)}:{node.lineno} {name} (cluster_mix)")
+                if name in _ADDS and "adds_only_cluster" not in kws:
+                    bad.append(f"{p.relative_to(REPO)}:{node.lineno} {name} (adds_only_cluster)")
     return bad
 
 
@@ -296,3 +301,100 @@ def test_combined_replay_applies_the_mix_only_from_the_cutover():
     p = plain["weights"][cols].loc[entry]
     assert p.sum() == pytest.approx(w.sum())          # same cluster size, different split
     assert not (p / p.sum()).round(6).equals((w / w.sum()).round(6))
+
+
+# ── crypto cluster may add (Balanced): per-cluster adds-only band 0 ─────────
+_BANDS = oc.ADDS_ONLY_CLUSTER_BALANCED
+
+
+def test_cluster_adds_band_config_is_balanced_btc_v2_only():
+    assert _BANDS == {"BTC": 0.0}
+    assert oc.ADDS_ONLY_CLUSTER == {"Balanced": _BANDS}
+    assert oc.cluster_adds_band_for("Balanced") == _BANDS
+    assert oc.cluster_adds_band_for("Balanced", "v2") == _BANDS
+    assert oc.cluster_adds_band_for("Balanced", "combined") == _BANDS   # acts after the cut-over
+    assert oc.cluster_adds_band_for("Balanced", "v1") is None
+    assert oc.cluster_adds_band_for("Growth") is None
+    assert oc.cluster_adds_band_for("Aggressive") is None
+
+
+def test_apply_adds_only_cluster_band_adds_but_never_trims():
+    cl = {"MSTR": "BTC", "BTC": "BTC", "XLE": "XLE"}
+    prev = {"MSTR": 0.10, "BTC": 0.10, "XLE": 0.10}
+    held = set(prev)
+    tgt = {"MSTR": 0.12, "BTC": 0.06, "XLE": 0.12}              # +2 pp, -4 pp, +2 pp
+    plain = oc._apply_adds_only(tgt, prev, held, 0.08, cluster_of=cl)
+    assert plain == {"MSTR": 0.10, "BTC": 0.10, "XLE": 0.10}    # nothing moves under the 8 pp band
+    out = oc._apply_adds_only(tgt, prev, held, 0.08, cluster_of=cl, cluster_bands=_BANDS)
+    assert out["MSTR"] == pytest.approx(0.12)                   # crypto adds on a +2 pp rise
+    assert out["BTC"] == pytest.approx(0.10)                    # ... but is never trimmed
+    assert out["XLE"] == pytest.approx(0.10)                    # every other cluster keeps the 8 pp rule
+    # a fresh entry is untouched either way
+    assert oc._apply_adds_only({**tgt, "ETH": 0.05}, prev, held, 0.08, cluster_of={**cl, "ETH": "BTC"},
+                               cluster_bands=_BANDS)["ETH"] == pytest.approx(0.05)
+
+
+def test_gate_lets_a_held_crypto_cluster_grow_but_not_shrink():
+    caps = oc.caps_for("Balanced")
+    sleeves = _crypto_sleeves()
+    fresh = oc.signal_gated_allocation(sleeves, _BW, caps=caps, cluster_mix=_MIX)["target"]
+    # an older, smaller position: every sleeve 15% below today's target (< 8 pp, under the plain band)
+    small = {k: 0.85 * fresh[k] for k in _SHARES}
+    kw = dict(caps=caps, prev_weights=small, cluster_mix=_MIX)
+    pinned = oc.signal_gated_allocation(sleeves, _BW, **kw)
+    grown = oc.signal_gated_allocation(sleeves, _BW, adds_only_cluster=_BANDS, **kw)
+    for k in small:
+        assert pinned["target"][k] == pytest.approx(small[k])      # plain band: rise < 8 pp -> pinned
+        assert grown["target"][k] == pytest.approx(fresh[k])       # crypto band 0: added to the target
+    assert sum(grown["target"][k] for k in small) <= oc.CLUSTER_CAP + 1e-9   # the cluster cap still binds
+    assert grown["adds_only_cluster"] == _BANDS
+
+
+def test_gate_ignores_the_cluster_band_for_v1_results():
+    caps = oc.caps_for("Balanced")
+    prev = {"BTC": 0.02, "MSTR": 0.03, "MSTU": 0.02, "ETH": 0.005}
+    v1 = oc.signal_gated_allocation(_crypto_sleeves("v1"), _BW, caps=caps, prev_weights=prev,
+                                    adds_only_cluster=_BANDS)
+    assert v1["adds_only_cluster"] is None
+
+
+def test_replay_cluster_band_lets_a_held_cluster_add_without_trimming():
+    res = _universe(parents={"BBB": "AAA", "CCC": "AAA"})
+    cols = ["AAA", "BBB", "CCC"]
+    bw = {k: 0.3 for k in ("AAA", "BBB", "CCC", "DDD")}
+    kw = dict(base_weights=bw, adds_only=0.5, cluster_cap=0)     # a huge plain band: nothing adds under it
+    plain = oc.replay_gated_allocation(res, **kw)
+    free = oc.replay_gated_allocation(res, adds_only_cluster={"AAA": 0.0}, **kw)
+    allc = ["AAA", "BBB", "CCC", "DDD"]
+
+    def steps(rep, keys):
+        act = rep["active"][allc]
+        # held both days, and the book not at 100 % — when an add or a fresh
+        # entry would overflow it, the pre-existing overflow rule scales the
+        # whole book down pro rata (that, not the tilt, is the only way a
+        # held sleeve's weight can fall)
+        held = act & act.shift(1, fill_value=False)
+        room = rep["weights"][allc].sum(axis=1) < 1 - 1e-9
+        d = rep["weights"][allc].diff()
+        return {k: d[k][held[k] & room] for k in keys}
+
+    f, p = steps(free, cols), steps(plain, cols)
+    for k in cols:
+        assert (f[k] >= -1e-12).all(), k                          # adds allowed, never trimmed
+        assert (p[k] <= 1e-12).all(), k                           # the plain 0.5 band never adds
+    assert any((f[k] > 1e-9).any() for k in cols)                 # and the crypto-style cluster did add
+    assert (steps(free, ["DDD"])["DDD"] <= 1e-12).all()           # other clusters keep the plain pin
+    assert free["weights"][cols].sum(axis=1).mean() > plain["weights"][cols].sum(axis=1).mean()
+    assert free["adds_only_cluster"] == {"AAA": 0.0} and plain["adds_only_cluster"] is None
+
+
+def test_walkforward_replay_ignores_the_cluster_band_for_v1():
+    res = _universe(n_days=300, parents=_PAR)
+    kw = dict(n_samples=200, min_hist=40)
+    v1 = oc.walkforward_gated_replay(res, version="v1", adds_only_cluster={"AAA": 0.0}, **kw)
+    v1_plain = oc.walkforward_gated_replay(res, version="v1", **kw)
+    pd.testing.assert_series_equal(v1["ret"], v1_plain["ret"])
+    v2 = oc.walkforward_gated_replay(res, version="v2", adds_only_cluster={"AAA": 0.0}, **kw)
+    v2_plain = oc.walkforward_gated_replay(res, version="v2", **kw)
+    assert not v2["weights"].equals(v2_plain["weights"])
+    assert v2["adds_only_cluster"] == {"AAA": 0.0}
