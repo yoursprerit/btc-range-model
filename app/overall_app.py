@@ -384,12 +384,14 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
                                          objective=prof["objective"],
                                          sata_daily=sata, tilt=True,
                                          version=version, gens=_gens,
-                                         cluster_mix=ov.cluster_mix_for(name, version))
+                                         cluster_mix=ov.cluster_mix_for(name, version),
+                                         adds_only_cluster=ov.cluster_adds_band_for(name, version))
     per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
     curves = {STRAT_CURVE: wf["equity"], **base_curves}
     gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
                                       prev_weights=_prev_w,
-                                      cluster_mix=ov.cluster_mix_for(name, version))
+                                      cluster_mix=ov.cluster_mix_for(name, version),
+                                      adds_only_cluster=ov.cluster_adds_band_for(name, version))
     return dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt, wf=wf)
 
 
@@ -1222,7 +1224,8 @@ with tab_live:
             results, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
             force_exit=_live_exits, force_entry=_live_entries,
             prev_weights=ov.load_published_book_weights(),
-            cluster_mix=ov.cluster_mix_for(_profile))
+            cluster_mix=ov.cluster_mix_for(_profile),
+            adds_only_cluster=ov.cluster_adds_band_for(_profile))
         # weekend / holiday guard: on days the US market is closed, the daily
         # tilt must not re-size sleeves whose signal apps got no new bar (the
         # cross-set priority normalisation would let the crypto sleeves' fresh
@@ -1399,8 +1402,11 @@ with tab_live:
                    + " of the cluster (at the 30% cap: "
                    + " · ".join(f"{k} {v*ov.CLUSTER_CAP*100:.1f}%" for k, v in
                                 sorted(_cmix.items(), key=lambda kv: -kv[1]))
-                   + " of the book). Entries are sized at the split; held names "
-                   "keep their weight (adds-only).")
+                   + " of the book). Entries are sized at the split. "
+                   + ("The crypto cluster may **add** after entry (adds-only band 0 — it "
+                      "grows whenever its target rises and is never trimmed by the tilt; the "
+                      "30% cap still binds)." if gate_live.get("adds_only_cluster")
+                      else "Held names keep their weight (adds-only)."))
     _frz = gate_live.get("freeze")
     if _frz:
         st.info("🧊 **US market closed today** (weekend/holiday) — the "
@@ -6124,8 +6130,21 @@ to put up to 29% of the book in BTC or 25% in ETH, the weakest sleeve. Balanced
 replay vs the tilt split, same seeds (full 2021 →, 3-seed mean, 5 bp costs):
 return +885% → +950%, Sharpe 1.93 → 1.98, max drawdown within 0.1 pt; hold-out
 (2025-07 →) +146% → +149% at −9.4% → −9.2%. Growth / Aggressive keep the tilt
-split (no hold-out edge); V1 never had the rule. Evidence and the
-no-degradation gate: `CRYPTO_CLUSTER_MIX_EVAL.md`.
+split (no hold-out edge); V1 never had the rule.
+
+**Balanced crypto cluster may add.** V2's adds-only pin freezes a held sleeve
+at its entry weight unless its target rises ≥ 8 pp — which left the crypto
+cluster at its ~13% entry size while V1's daily re-sizing grew it to ~31% as
+other sleeves exited (crypto realized P&L since 2026-03-01, Balanced: V1 +13.0c
+vs V2 +7.4c per $1). For the Balanced BTC cluster the band is **0**: a held
+crypto sleeve is added to whenever its target rises and is never trimmed by the
+tilt (the 30% cluster cap and the book-overflow rule still apply). Replay vs the
+fixed split with the 8 pp pin (3-seed mean, 5 bp): return +950% → +1,062%,
+Sharpe 1.98 → 2.00, max drawdown −13.7% → −13.6%, better on every seed; crypto
+realized since March +7.9c → +12.4c. Trade-off: on the production seed alone the
+recent windows show a 0.4 pt deeper max drawdown and Sharpe 2.89 vs 2.96.
+Growth / Aggressive keep the plain pin. Evidence and the no-degradation gate:
+`CRYPTO_CLUSTER_MIX_EVAL.md`.
 
 (An *Aggressive* profile — 35/40/35 caps, −38% budget — exists in
 `overall_core` for the CLI tools but is retired from this UI: its drawdown

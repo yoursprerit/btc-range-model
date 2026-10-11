@@ -2072,6 +2072,38 @@ def _apply_cluster_mix(weights: dict, cluster_of: dict, mix: dict | None,
     return out
 
 
+# Strategy Logic V2 allocator rule — "crypto cluster may add" (Balanced profile
+# only, added 2026-10-11, alongside the fixed crypto split; still V2).  The V2
+# adds-only rule pins a held sleeve at its entry weight unless its target
+# rises by >= ``ADDS_ONLY_BAND`` (8 pp of the book).  For the BTC cluster that
+# froze the position at its entry size: V1 re-sized it daily, so when other
+# sleeves exited and the funded set shrank V1's cluster grew back to ~31 % of the
+# book while V2's stayed at ~13 % — and V2 banked ~45 % less crypto profit
+# since 2026-03-01 (+7.4c vs +13.0c per $1; MSTU +4.6c vs +9.2c).  For the
+# Balanced BTC cluster the band is therefore 0: a held crypto sleeve is
+# ADDED to whenever its target rises, and still NEVER trimmed by the tilt (only
+# its own signal exit closes it) — the 30 % cluster cap still binds.  Balanced
+# walk-forward replay (3 seeds, 5 bp, 2021 -> 2026-10-10) vs the V2 fixed split
+# with the 8 pp band: return +950 % -> +1,062 %, max drawdown -13.7 % -> -13.6 %,
+# Sharpe 1.98 -> 2.00; hold-out 2025-07 -> +149 % -> +156 %; better on all three
+# seeds on the full replay.  Not free: on the production seed alone the recent
+# windows (hold-out, 2026 YTD) show Sharpe 2.89 vs 2.96 and a 0.4 pt deeper max
+# drawdown for +5 pt more return (the other two seeds improve on every metric).
+# Growth / Aggressive keep the plain band (hold-out drawdown +1 pt); V1 re-sizes
+# everything daily anyway.  See CRYPTO_CLUSTER_MIX_EVAL.md.
+ADDS_ONLY_CLUSTER_BALANCED = {"BTC": 0.0}
+ADDS_ONLY_CLUSTER = {"Balanced": ADDS_ONLY_CLUSTER_BALANCED}
+
+
+def cluster_adds_band_for(profile: str, version: str | None = None) -> dict | None:
+    """Per-cluster adds-only band overrides in force for ``profile`` under
+    ``version`` — ``{parent: band}`` (``0`` = add whenever the target rises,
+    never trim) — or ``None`` (V1, or a profile on the plain band)."""
+    if str(version or "").lower() != "combined" and bt.active_version(version) != "v2":
+        return None
+    return ADDS_ONLY_CLUSTER.get(profile)
+
+
 def cluster_map(results: list[dict]) -> dict[str, str]:
     """``key → parent signal`` for every result; a sleeve with no parent is
     its own cluster."""
@@ -2129,9 +2161,12 @@ def _bind_cluster_cap(target: dict, cluster_of: dict, cap: float) -> dict:
 
 def _apply_adds_only(target: dict, prev: dict | None, held: set,
                      band: float, cluster_of: dict | None = None,
-                     cluster_cap: float = 0.0) -> dict:
+                     cluster_cap: float = 0.0,
+                     cluster_bands: dict | None = None) -> dict:
     """Hold every ``held`` sleeve at its previous weight unless its new target
-    exceeds it by ≥ ``band``; new entries keep their targets; a parent
+    exceeds it by ≥ ``band`` (``cluster_bands[parent]`` overrides the band for
+    that parent cluster — ``0`` lets it add whenever its target rises, never
+    trimmed); new entries keep their targets; a parent
     cluster the pin holds above ``cluster_cap`` is scaled down to it; the
     whole book is scaled down only if the kept weights overflow 100%."""
     if not band or not prev:
@@ -2142,7 +2177,10 @@ def _apply_adds_only(target: dict, prev: dict | None, held: set,
         if pw <= 0:
             continue
         tw = float(out.get(k, 0.0))
-        if tw < pw or (tw - pw) < band:
+        bk = band
+        if cluster_bands and cluster_of is not None:
+            bk = cluster_bands.get(cluster_of.get(k, k), band)
+        if tw < pw or (tw - pw) < bk:
             out[k] = pw
     if cluster_cap and cluster_of is not None:
         out = _bind_cluster_cap(out, cluster_of, cluster_cap)
@@ -2159,7 +2197,8 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             prev_weights: dict[str, float] | None = None,
                             adds_only: float | None = None,
                             cluster_cap: float | None = None,
-                            cluster_mix: dict | None = None) -> dict:
+                            cluster_mix: dict | None = None,
+                            adds_only_cluster: dict | None = None) -> dict:
     """Today's actionable allocation.
 
     ``prev_weights`` — the risk weights of the book currently held (the last
@@ -2178,6 +2217,11 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     (:func:`cluster_mix_for`; ``None`` = the tilt decides, and always ``None``
     for V1 results): each mixed cluster's combined weight is divided by the
     fixed shares (:func:`_apply_cluster_mix`) BEFORE the adds-only pin.
+
+    ``adds_only_cluster`` — per-cluster adds-only band overrides
+    (:func:`cluster_adds_band_for`; ``None`` = the plain ``adds_only`` band
+    everywhere, and always ``None`` for V1 results): a cluster with band ``0``
+    is added to whenever its target rises and still never trimmed.
 
     Capital is deployed only to instruments the strategy is long (or opening a
     fresh entry).  Among those, the size of each slice is the historically
@@ -2243,11 +2287,13 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     cl = cluster_map(results)
     if _ver == "v1":
         cluster_mix = None
+        adds_only_cluster = None
     target = _apply_cluster_cap(raw, caps, cl, cluster_cap)
     target = _apply_cluster_mix(target, cl, cluster_mix, caps)
     tilt_target = dict(target)
     target = _apply_adds_only(target, prev_weights, {res["key"] for res in keep},
-                              adds_only, cluster_of=cl, cluster_cap=cluster_cap)
+                              adds_only, cluster_of=cl, cluster_cap=cluster_cap,
+                              cluster_bands=adds_only_cluster)
     sata = max(1.0 - sum(target.values()), 0.0)
 
     # current book (what we hold now) — optimal weights, no forward tilt
@@ -2321,6 +2367,7 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                 adds_only=float(adds_only or 0.0),
                 cluster_cap=cluster_cap,
                 cluster_mix=cluster_mix,
+                adds_only_cluster=adds_only_cluster,
                 clusters=cluster_weights(target, cl),
                 held_pinned=sorted(k for k in target
                                    if prev_weights and k in {r["key"] for r in keep}
@@ -2975,7 +3022,8 @@ def replay_gated_allocation(results: list[dict],
                             start=None,
                             init_weights: dict | None = None,
                             cluster_mix: dict | None = None,
-                            cluster_mix_from=None) -> dict:
+                            cluster_mix_from=None,
+                            adds_only_cluster: dict | None = None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -2993,6 +3041,10 @@ def replay_gated_allocation(results: list[dict],
     within-cluster split (:func:`cluster_mix_for`) to each day's tilt target,
     before the adds-only pin, from the given date (``None`` = every bar;
     ``cluster_mix=None`` → the tilt decides the split, as in V1).
+    ``adds_only_cluster`` (``{parent: band}``, :func:`cluster_adds_band_for`)
+    overrides the adds-only band for those parent clusters — band ``0`` adds
+    whenever the target rises and never trims; it acts wherever the adds-only
+    pin is active (so, in the Combined view, from the cut-over).
     ``start`` replays only bars on/after that date, and ``init_weights`` is
     the book held going into the first replayed bar (the adds-only pin and
     the cluster cap read it as the previous day) — how the Combined view
@@ -3147,7 +3199,9 @@ def replay_gated_allocation(results: list[dict],
             held = [j for j in act if prevW[j] > 0]
             for j in held:
                 tw = target.get(j, 0.0)
-                if tw < prevW[j] or (tw - prevW[j]) < ao_band:
+                bj = (adds_only_cluster.get(cl_j[j], ao_band)
+                      if adds_only_cluster else ao_band)
+                if tw < prevW[j] or (tw - prevW[j]) < bj:
                     target[j] = float(prevW[j])
             if cc_t:                              # a pinned cluster still respects the cap
                 target = _bind_cluster_cap(target, cl_j, cc_t)
@@ -3179,7 +3233,7 @@ def replay_gated_allocation(results: list[dict],
                       p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
                       days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
         tilt=tilt, adds_only=ao_band, cluster_cap=cc_band,
-        cluster_mix=cluster_mix)
+        cluster_mix=cluster_mix, adds_only_cluster=adds_only_cluster)
 
 
 def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
@@ -3198,7 +3252,8 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              cluster_cap: float | None = None,
                              cluster_cap_from=None,
                              gens: tuple | None = None,
-                             cluster_mix: dict | None = None) -> dict:
+                             cluster_mix: dict | None = None,
+                             adds_only_cluster: dict | None = None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
     on a ``walkforward_anchors`` schedule.
 
@@ -3225,6 +3280,8 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     ``cluster_mix`` — the profile's fixed within-cluster split
     (:func:`cluster_mix_for`; V2 allocator rule).  Ignored for ``v1`` (which
     never had it); for ``combined`` it applies from the V1 → V2 cut-over.
+    ``adds_only_cluster`` — per-cluster adds-only band overrides
+    (:func:`cluster_adds_band_for`); same V1 / Combined handling.
 
     The adaptivity-experiment knobs (``refit``/``fit_window``/``wr_window``/
     ``sharpe_window``/``penalty``) pass straight through to
@@ -3255,7 +3312,8 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
             wr_window=wr_window, sharpe_window=sharpe_window, penalty=penalty,
             adds_only=(ADDS_ONLY_BAND if adds_only is None else adds_only),
             cluster_cap=(CLUSTER_CAP if cluster_cap is None else cluster_cap),
-            start=cut, init_weights=init, cluster_mix=cluster_mix)
+            start=cut, init_weights=init, cluster_mix=cluster_mix,
+            adds_only_cluster=adds_only_cluster)
         rep2["anchors"] = anchors2
         return splice_replays(rep1, rep2, cut)
     rets = returns_matrix(results)
@@ -3271,6 +3329,7 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     mix_from = STRATEGY_VERSION_START if ver == "combined" else None
     if ver == "v1":
         cluster_mix = None                      # V1 never had the split
+        adds_only_cluster = None                # ... nor a per-cluster band
     anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
                                   objective=objective, sata_daily=sata_daily,
                                   min_hist=min_hist, n_samples=n_samples, seed=seed,
@@ -3283,7 +3342,8 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                                   cluster_cap=cluster_cap,
                                   cluster_cap_from=cluster_cap_from,
                                   cluster_mix=cluster_mix,
-                                  cluster_mix_from=mix_from)
+                                  cluster_mix_from=mix_from,
+                                  adds_only_cluster=adds_only_cluster)
     rep["anchors"] = anchors
     rep["version"] = ver
     rep["adds_only"] = float(adds_only or 0.0)

@@ -96,7 +96,8 @@ def main() -> None:
                                             mdd_floor=prof["mdd_floor"],
                                             objective=prof["objective"],
                                             sata_daily=sata, tilt=True,
-                                            cluster_mix=oc.cluster_mix_for(pname))
+                                            cluster_mix=oc.cluster_mix_for(pname),
+                                            adds_only_cluster=oc.cluster_adds_band_for(pname))
         rows = [_row("Fixed-weight (in-sample anchors)", fixed_eq),
                 _row("Gate only (no tilt)", gate["equity"]),
                 _row("Gate + priority tilt", tilted["equity"]),

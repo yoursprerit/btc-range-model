@@ -25,8 +25,8 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 > sleeves are never trimmed by the daily tilt), a **30 % parent-cluster cap**
 > (sleeves sharing one parent signal — e.g. XLE → XOP/ERX — never exceed 30 %
 > of the book combined), for the **Balanced** profile a **fixed split of the
-> crypto cluster** (MSTR 45 · MSTU 30 · BTC 20 · ETH 5 — still V2, no version
-> bump), **XOP in place of OIH** in the energy β slot (same XLE
+> crypto cluster** (MSTR 45 · MSTU 30 · BTC 20 · ETH 5) that may also **add**
+> after entry (adds-only band 0 for that cluster — still V2, no version bump), **XOP in place of OIH** in the energy β slot (same XLE
 > signal; OIH stays in the XLE app and the V1 record) and stop hits that
 > publish a CLOSE.  Every P&L / back-test / historical / health view offers a
 > **Strategy V1 · Strategy V2 · Combined** selector.  See
