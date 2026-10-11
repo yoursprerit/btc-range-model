@@ -202,6 +202,29 @@ live; push races → one report commit per run, rebased once if rejected.
 
 ---
 
+## Strategy P&L per account, with monthly deposits
+
+On the **Overall → 📈 Strategy P&L** section the *Performance source* radio has
+**As-published record (C2)** and, once an account has **executed** the book,
+**As-published record (IBKR #…)** — one per account. An account that has no
+executed run yet (or only previews) gets no option.
+
+* The percentage figures are time-weighted, so cash you add never moves them.
+* The dollar figures replay the account from the day it first traded the book,
+  using **your monthly deposit and the day of the month it arrives** (fields
+  under the radio; day 1–28, weekends/holidays roll to the next trading day).
+  A deposit is credited at that day's close, earns from the next bar, and is
+  **excluded from P&L** (`P&L = value now − start balance − deposits`).
+* The starting balance defaults to the net liquidation IBKR reported after the
+  account's first executed run; you can override it.
+* To save a schedule across sessions, add it to `data/overall/account_deposits.json`:
+  `{"U1234567": {"monthly": 500, "day": 15}}` and commit it.
+* A 🔎 *Check* line compares the replayed balance with the net liquidation IBKR
+  reported at the last run; a gap means your real deposits differ from the
+  schedule (or fills drifted from the published books).
+* Costs/taxes toggles and the per-asset tables below the headline scale the
+  account's balance at the start date (they don't model the deposits).
+
 ## Where things live
 
 | Thing | Path |
