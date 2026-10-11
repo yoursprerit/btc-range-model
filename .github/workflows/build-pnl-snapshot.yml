@@ -1,0 +1,90 @@
+name: Build P&L snapshot
+
+# Precomputes the replays behind the app's 📈 Overall-strategy-P&L section
+# (every strategy view V1/V2/Combined x every UI risk profile, plus the
+# price-returns matrix, buy-&-hold replay and sleeve prices) and commits them to
+# data/overall/pnl_snapshot.pkl.gz, so the Streamlit app reads them back
+# instantly instead of replaying everything on a cold start.  See
+# app/pnl_snapshot.py — the app ignores a snapshot that is stale or was built by
+# different engine code and falls back to computing live, so a missed run only
+# costs speed, never correctness.
+#
+# Triggers: chained after the daily publish (which pulls the newest bar
+# synchronously, so the snapshot sees it), a few best-effort cron slots as a backstop (GitHub cron is
+# routinely delayed or dropped), a push that changes the engine code (the
+# snapshot's code fingerprint would otherwise no longer match), and manual runs.
+# The builder is idempotent: it commits nothing unless the code, data vintage or
+# last bar changed.
+
+on:
+  workflow_run:
+    workflows: ["Publish target book (IBKR Option C)"]
+    types: [completed]
+  schedule:
+    - cron: "40 12 * * *"
+    - cron: "40 14 * * *"
+    - cron: "40 19 * * *"
+  push:
+    paths:
+      - "app/*.py"
+      - "!app/*_app.py"
+      - "!app/pnl_snapshot.py"
+      - "models/**"
+      - "scripts/build_pnl_snapshot.py"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+# One build at a time; a newer trigger waits rather than racing the push.
+concurrency:
+  group: build-pnl-snapshot
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"          # the app's pinned interpreter
+
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build snapshot
+        run: python scripts/build_pnl_snapshot.py
+
+      - name: Commit & push snapshot
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- data/overall/pnl_snapshot.pkl.gz)" ]; then
+            echo "Snapshot unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/overall/pnl_snapshot.pkl.gz
+          git commit \
+            -m "chore(data): refresh P&L snapshot" \
+            -m "Automated build via .github/workflows/build-pnl-snapshot.yml"
+          # Other workflows push to this branch on overlapping schedules; a
+          # snapshot is a whole-file replacement, so this run's build wins.
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}"; then
+              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            else
+              git rebase --abort || true
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not push the P&L snapshot after 3 attempts."
+          exit 1

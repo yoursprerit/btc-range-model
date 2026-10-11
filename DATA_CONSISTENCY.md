@@ -609,3 +609,31 @@ Tests: `tests/test_action_plan_price_consistency.py`.
   backtests run from the committed vintage.
 * After the 4 PM ET close, the day's new session is validated and appended —
   numbers legitimately update once per trading day.
+
+## Precomputed P&L snapshot (instant 📈 P&L section)
+
+The walk-forward replays behind the Overall app's P&L section (every strategy
+view V1 / V2 / Combined × every UI risk profile, plus the price-returns matrix,
+the equal-weight buy-&-hold replay and the sleeve price table) only change when a
+new daily bar lands, so they are built once a day rather than on every cold
+start:
+
+* `scripts/build_pnl_snapshot.py` → `data/overall/pnl_snapshot.pkl.gz` (~1.5 MB),
+  run by `.github/workflows/build-pnl-snapshot.yml` after the daily publish, on
+  backstop cron slots, and on any push that changes engine code. It commits
+  nothing unless the code, data vintage or last bar changed.
+* `app/pnl_snapshot.py` loads it. The app **ignores** a snapshot that is missing,
+  unreadable, whose newest bar is > 4 days old, or that was built by different
+  engine code (`code_fingerprint` = hash of every `app/*.py` except the page
+  modules) and recomputes live exactly as before — a missed CI run costs speed,
+  never correctness.
+* `get_profile_pack` (Live / Historical / Backtesting tabs) reuses a snapshotted
+  replay only if it was computed on a returns matrix numerically identical to the
+  live one (`rets_match`), so two data vintages are never mixed.
+* The P&L section shows which path served it and has a **🔄 Recompute live**
+  toggle to cross-check. Cold full-page load: ~118 s → ~33 s (the rest is the
+  live tab's own universe runs).
+* Git-history cost is ~1.5 MB per daily commit; squash or prune the file's
+  history periodically if the repository size matters.
+
+Tests: `tests/test_pnl_snapshot.py`.
