@@ -144,9 +144,14 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
                        portfolio_value: float = 100_000.0,
                        costs: bool = False, taxes: bool = False,
                        income: float = INCOME_DEFAULT,
-                       sata_daily: float = 0.0) -> dict | None:
+                       sata_daily: float = 0.0,
+                       cash_w: pd.Series | None = None) -> dict | None:
     """Dollar re-play of the target-weight book from ``start`` with the chosen
-    frictions.  Returns ``net`` (value per $1 at the anchor, indexed from the
+    frictions.  ``cash_w`` (Strategy Logic V2's SATA cap) is the weight held in
+    CASH above the SATA cap: with it, the SATA leg is held at its own (capped)
+    target ``sata_w`` and the rest of the idle capital sits in a separate cash
+    balance that earns 0 % and has no tax lots; without it SATA is the plug for
+    all idle capital (V1).  Returns ``net`` (value per $1 at the anchor, indexed from the
     anchor bar), ``gross`` (same book, no frictions), totals, and the
     per-calendar-year tax tally (``years``).  ``None`` with < 2 bars."""
     idx = rets.index
@@ -165,6 +170,8 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
 
     lots = {j: [] for j in range(len(cols))}
     val = np.zeros(len(cols))
+    cash_mode = cash_w is not None
+    cash_val = 0.0                       # idle capital above the SATA cap (0 % yield)
     equity = float(portfolio_value)
     st_y = lt_y = 0.0
     carry_st = carry_lt = 0.0
@@ -179,7 +186,7 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
 
     def rebalance(t_dec: int, t_next: int, day: pd.Timestamp, first: bool):
         """Trade at close ``t_dec`` into the weights that earn bar ``t_next``."""
-        nonlocal equity, st_y, lt_y, total_comm, n_orders
+        nonlocal equity, st_y, lt_y, total_comm, n_orders, cash_val
         tgt = W[t_next] * equity
         delta = tgt - val
         trade = np.zeros(len(cols), bool)
@@ -216,6 +223,10 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
                 n_orders += 1
         sj = len(cols) - 1
         want = equity - val[:sj].sum() - comm
+        if cash_mode:                    # SATA up to its capped target, the rest cash
+            sata_tgt = max(float(W[t_next, -1]) * equity, 0.0)
+            cash_val = max(want - sata_tgt, 0.0)
+            want -= cash_val
         d_s = want - val[sj]
         if d_s > 1e-9:
             lots[sj].append([day, d_s, d_s])
@@ -253,6 +264,11 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
                 pay = min(due, max(equity, 0.0)) if due > 0 else due
                 if pay != 0.0 and equity > 0:
                     sj = len(cols) - 1
+                    if cash_mode and pay > 0 and cash_val > 0:   # settle from idle cash first
+                        from_cash = min(pay, cash_val)
+                        cash_val -= from_cash
+                        equity -= from_cash
+                        pay -= from_cash
                     from_sata = min(pay, val[sj]) if pay > 0 else pay
                     if from_sata > 0:
                         _sell_fifo(lots[sj], from_sata, idx[t - 1])
@@ -284,7 +300,7 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
             val[sj] *= g
             for lot in lots[sj]:
                 lot[2] *= g
-        equity = float(val.sum())
+        equity = float(val.sum()) + cash_val
         gross_eq *= 1.0 + float(np.dot(W[t, :-1], R[t])
                                 + (W[t, -1] * sata_daily if biz[t] else 0.0))
         if t + 1 < len(idx) and t + 1 < b:

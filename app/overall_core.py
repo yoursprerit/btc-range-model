@@ -2104,6 +2104,43 @@ def cluster_adds_band_for(profile: str, version: str | None = None) -> dict | No
     return ADDS_ONLY_CLUSTER.get(profile)
 
 
+# Strategy Logic V2 allocator rule — "SATA cap" (both profiles, added
+# 2026-10-11; still V2).  Whatever the signals leave undeployed used to sit
+# entirely in SATA (Strive's variable-rate preferred): up to 84 % of the book in
+# the replay, 40 % in today's published book, and a preferred's price can fall.
+# Idle capital is now parked in SATA only up to ``SATA_CAP`` of the book; the
+# excess stays in CASH, earning 0 % (the SATA coupon accrues on the SATA leg
+# only).  SATA is the allocator's residual, so the cap changes no sleeve weight —
+# only where the idle remainder sits.  Balanced replay (3 seeds, 2021 ->
+# 2026-10-10, no costs): +1,241 % -> +1,196 %, max drawdown -13.4 % unchanged,
+# Sharpe 2.11 -> 2.09; the cost is the lost coupon on the excess (average 4.3 %
+# of the book, on 24 % of days), concentrated in 2021-25 when the book was often
+# idle.  The back-test prices SATA at a steady coupon (no price risk), so it
+# cannot show what the cap protects against.  V1 has no cap; the Combined view
+# applies it from the cut-over.  See CRYPTO_CLUSTER_MIX_EVAL.md (cluster rules)
+# and scripts/eval_sata_cap.py.
+SATA_CAP = 0.30
+
+
+def sata_cap_for(version: str | None = None) -> float | None:
+    """The cap on the SATA share of the book in force under ``version`` —
+    ``None`` (V1: idle capital is all SATA) or a fraction of the book.  For
+    ``combined`` it is the cap the replay applies from the V1 → V2 cut-over."""
+    if str(version or "").lower() != "combined" and bt.active_version(version) != "v2":
+        return None
+    return SATA_CAP
+
+
+def split_idle(idle: float, sata_cap: float | None) -> tuple[float, float]:
+    """``(sata, cash)`` for an idle remainder: SATA up to ``sata_cap`` of the
+    book, the excess in cash (``sata_cap=None`` → all SATA, the V1 behaviour)."""
+    idle = max(float(idle), 0.0)
+    if sata_cap is None:
+        return idle, 0.0
+    sata = min(idle, max(float(sata_cap), 0.0))
+    return sata, idle - sata
+
+
 def cluster_map(results: list[dict]) -> dict[str, str]:
     """``key → parent signal`` for every result; a sleeve with no parent is
     its own cluster."""
@@ -2198,7 +2235,8 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                             adds_only: float | None = None,
                             cluster_cap: float | None = None,
                             cluster_mix: dict | None = None,
-                            adds_only_cluster: dict | None = None) -> dict:
+                            adds_only_cluster: dict | None = None,
+                            sata_cap: float | None = None) -> dict:
     """Today's actionable allocation.
 
     ``prev_weights`` — the risk weights of the book currently held (the last
@@ -2222,6 +2260,12 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     (:func:`cluster_adds_band_for`; ``None`` = the plain ``adds_only`` band
     everywhere, and always ``None`` for V1 results): a cluster with band ``0``
     is added to whenever its target rises and still never trimmed.
+
+    ``sata_cap`` — the V2 cap on the SATA share of the book
+    (:func:`sata_cap_for`; ``None`` = all idle capital is SATA, and always
+    ``None`` for V1 results).  The idle remainder is split by
+    :func:`split_idle`: ``sata`` (≤ cap) and ``cash`` (the excess, 0 %
+    yield); ``idle`` is their sum — what a paper book holds as cash.
 
     Capital is deployed only to instruments the strategy is long (or opening a
     fresh entry).  Among those, the size of each slice is the historically
@@ -2288,19 +2332,22 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     if _ver == "v1":
         cluster_mix = None
         adds_only_cluster = None
+        sata_cap = None
     target = _apply_cluster_cap(raw, caps, cl, cluster_cap)
     target = _apply_cluster_mix(target, cl, cluster_mix, caps)
     tilt_target = dict(target)
     target = _apply_adds_only(target, prev_weights, {res["key"] for res in keep},
                               adds_only, cluster_of=cl, cluster_cap=cluster_cap,
                               cluster_bands=adds_only_cluster)
-    sata = max(1.0 - sum(target.values()), 0.0)
+    idle = max(1.0 - sum(target.values()), 0.0)
+    sata, cash = split_idle(idle, sata_cap)
 
     # current book (what we hold now) — optimal weights, no forward tilt
     current = _apply_cluster_cap({res["key"]: _b(res["key"]) for res in in_pos},
                                  caps, cl, cluster_cap)
     current = _apply_cluster_mix(current, cl, cluster_mix, caps)
-    sata_now = max(1.0 - sum(current.values()), 0.0)
+    idle_now = max(1.0 - sum(current.values()), 0.0)
+    sata_now, cash_now = split_idle(idle_now, sata_cap)
 
     actions = []
     for res in results:
@@ -2360,7 +2407,9 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
                                 -(a["priority"] if a["priority"] is not None else -1),
                                 -a["target"]))
     ranked = sorted(prio.items(), key=lambda kv: -kv[1]["score"])
-    return dict(target=target, sata=sata, current=current, sata_now=sata_now,
+    return dict(target=target, sata=sata, cash=cash, idle=idle, current=current,
+                sata_now=sata_now, cash_now=cash_now, idle_now=idle_now,
+                sata_cap=sata_cap,
                 actions=actions, priorities=prio, priority_rank=[k for k, _ in ranked],
                 n_active=len(in_pos), n_open=len(opens), n_close=len(closing),
                 sata_info=SATA, tilt_target=tilt_target,
@@ -2441,10 +2490,11 @@ def apply_closed_market_freeze(gate: dict, book_weights: dict | None,
         target[k] = w
         idle -= w
         opened.append(k)
-    sata = max(1.0 - sum(target.values()), 0.0)
+    idle_total = max(1.0 - sum(target.values()), 0.0)
+    sata, cash = split_idle(idle_total, gate.get("sata_cap"))
     actions = [dict(a, target=target.get(a["key"], 0.0))
                for a in gate["actions"]]
-    return dict(gate, target=target, sata=sata, actions=actions,
+    return dict(gate, target=target, sata=sata, cash=cash, idle=idle_total, actions=actions,
                 freeze=dict(day=str(today), closed=sorted(closed),
                             opened=opened,
                             pinned=sorted(k for k in target
@@ -2801,7 +2851,8 @@ def snapshot_asof(results: list[dict], date) -> dict | None:
 def historical_allocation(snap: dict, base_weights: dict,
                           caps: dict | None = None,
                           cluster_cap: float = 0.0,
-                          cluster_mix: dict | None = None) -> dict:
+                          cluster_mix: dict | None = None,
+                          sata_cap: float | None = None) -> dict:
     """The book the strategy held on the snapshot bar: the blend's optimal
     weights water-filled (to the profile caps) over the sleeves in position on
     that bar, the undeployed remainder parked in SATA — the same construction
@@ -2814,7 +2865,9 @@ def historical_allocation(snap: dict, base_weights: dict,
     cl = {r["key"]: (r.get("parent") or r["key"]) for r in snap["rows"]}
     book = _apply_cluster_cap(held, caps, cl, cluster_cap)
     book = _apply_cluster_mix(book, cl, cluster_mix, caps)
-    return dict(book=book, sata=max(1.0 - sum(book.values()), 0.0))
+    idle = max(1.0 - sum(book.values()), 0.0)
+    sata, cash = split_idle(idle, sata_cap)
+    return dict(book=book, sata=sata, cash=cash, idle=idle)
 
 
 # ── historical replay of the signal-gated, priority-tilted allocation ──────
@@ -3023,7 +3076,9 @@ def replay_gated_allocation(results: list[dict],
                             init_weights: dict | None = None,
                             cluster_mix: dict | None = None,
                             cluster_mix_from=None,
-                            adds_only_cluster: dict | None = None) -> dict:
+                            adds_only_cluster: dict | None = None,
+                            sata_cap: float | None = None,
+                            sata_cap_from=None) -> dict:
     """Historical replay of ``signal_gated_allocation`` — what the daily
     gate/tilt/water-fill book would have earned, decided each day from data
     available at the PREVIOUS bar's close.
@@ -3045,6 +3100,11 @@ def replay_gated_allocation(results: list[dict],
     overrides the adds-only band for those parent clusters — band ``0`` adds
     whenever the target rises and never trims; it acts wherever the adds-only
     pin is active (so, in the Combined view, from the cut-over).
+    ``sata_cap`` / ``sata_cap_from`` cap the SATA share of the book (V2): the
+    idle remainder sits in SATA up to the cap (earning the coupon) and the
+    excess in cash (0 %), returned as the ``cash`` series; ``sata`` is then the
+    capped SATA weight, so the P&L maths (which accrue the coupon on ``sata``
+    only) price the cash at 0 %.  ``None`` → all idle capital is SATA (V1).
     ``start`` replays only bars on/after that date, and ``init_weights`` is
     the book held going into the first replayed bar (the adds-only pin and
     the cluster cap read it as the previous day) — how the Combined view
@@ -3138,6 +3198,10 @@ def replay_gated_allocation(results: list[dict],
     port = np.zeros(len(idx))
     W = np.zeros((len(idx), len(keys)))
     sata_w = np.zeros(len(idx))
+    cash_w = np.zeros(len(idx))
+    sc_cap = float(sata_cap) if sata_cap is not None else None
+    sc_from = (pd.Timestamp(sata_cap_from).to_datetime64()
+               if sata_cap_from is not None else None)
     ao_band = float(adds_only or 0.0)
     ao_from = (pd.Timestamp(adds_only_from).to_datetime64()
                if adds_only_from is not None else None)
@@ -3158,9 +3222,10 @@ def replay_gated_allocation(results: list[dict],
     has_init = init_weights is not None
     for t in range(t0, len(idx)):
         act = [j for j in range(len(keys)) if P[t, j] > 0]
+        cap_t = sc_cap if (sc_cap is not None and (sc_from is None or idx_vals[t] >= sc_from)) else None
         if not act:
-            port[t] = sata_daily if biz[t] else 0.0
-            sata_w[t] = 1.0
+            sata_w[t], cash_w[t] = split_idle(1.0, cap_t)
+            port[t] = sata_w[t] * sata_daily if biz[t] else 0.0
             continue
         bw = day_anchor[t] if day_anchor is not None else base_weights
         if tilt:
@@ -3212,12 +3277,13 @@ def replay_gated_allocation(results: list[dict],
         for j, w in target.items():
             W[t, j] = w
             dep += w
-        sata_w[t] = max(1.0 - dep, 0.0)
+        sata_w[t], cash_w[t] = split_idle(1.0 - dep, cap_t)
         port[t] = float(np.dot(W[t], R[t])) + \
             (sata_w[t] * sata_daily if biz[t] else 0.0)
 
     if t0:                                     # only the replayed bars are returned
         idx, port, W, sata_w, P = idx[t0:], port[t0:], W[t0:], sata_w[t0:], P[t0:]
+        cash_w = cash_w[t0:]
     daily = pd.Series(port, index=idx)
     eq = _equity(daily)
     full = np.column_stack([W, sata_w])
@@ -3226,6 +3292,7 @@ def replay_gated_allocation(results: list[dict],
         ret=daily, equity=eq, metrics=curve_metrics(eq),
         weights=pd.DataFrame(W, index=idx, columns=keys),
         sata=pd.Series(sata_w, index=idx),
+        cash=pd.Series(cash_w, index=idx),
         # per-day signal/position truth (the funded set) — lets the trade
         # log tell real signal flips from optimizer re-sizes through zero
         active=pd.DataFrame(P > 0, index=idx, columns=keys),
@@ -3233,7 +3300,8 @@ def replay_gated_allocation(results: list[dict],
                       p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
                       days_traded=float((turno > 0.005).mean()) if len(turno) else 0.0),
         tilt=tilt, adds_only=ao_band, cluster_cap=cc_band,
-        cluster_mix=cluster_mix, adds_only_cluster=adds_only_cluster)
+        cluster_mix=cluster_mix, adds_only_cluster=adds_only_cluster,
+        sata_cap=sc_cap)
 
 
 def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
@@ -3253,7 +3321,8 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                              cluster_cap_from=None,
                              gens: tuple | None = None,
                              cluster_mix: dict | None = None,
-                             adds_only_cluster: dict | None = None) -> dict:
+                             adds_only_cluster: dict | None = None,
+                             sata_cap: float | None = None) -> dict:
     """The look-ahead-free Overall back-test: ``replay_gated_allocation`` run
     on a ``walkforward_anchors`` schedule.
 
@@ -3282,6 +3351,9 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     never had it); for ``combined`` it applies from the V1 → V2 cut-over.
     ``adds_only_cluster`` — per-cluster adds-only band overrides
     (:func:`cluster_adds_band_for`); same V1 / Combined handling.
+    ``sata_cap`` — the V2 cap on the SATA share of the book
+    (:func:`sata_cap_for`; excess idle capital is cash at 0 %); same V1 /
+    Combined handling (``cash`` is returned alongside ``sata``).
 
     The adaptivity-experiment knobs (``refit``/``fit_window``/``wr_window``/
     ``sharpe_window``/``penalty``) pass straight through to
@@ -3313,7 +3385,7 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
             adds_only=(ADDS_ONLY_BAND if adds_only is None else adds_only),
             cluster_cap=(CLUSTER_CAP if cluster_cap is None else cluster_cap),
             start=cut, init_weights=init, cluster_mix=cluster_mix,
-            adds_only_cluster=adds_only_cluster)
+            adds_only_cluster=adds_only_cluster, sata_cap=sata_cap)
         rep2["anchors"] = anchors2
         return splice_replays(rep1, rep2, cut)
     rets = returns_matrix(results)
@@ -3330,6 +3402,7 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     if ver == "v1":
         cluster_mix = None                      # V1 never had the split
         adds_only_cluster = None                # ... nor a per-cluster band
+        sata_cap = None                         # ... nor a SATA cap
     anchors = walkforward_anchors(rets, pos=pos, caps=caps, mdd_floor=mdd_floor,
                                   objective=objective, sata_daily=sata_daily,
                                   min_hist=min_hist, n_samples=n_samples, seed=seed,
@@ -3343,7 +3416,9 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                                   cluster_cap_from=cluster_cap_from,
                                   cluster_mix=cluster_mix,
                                   cluster_mix_from=mix_from,
-                                  adds_only_cluster=adds_only_cluster)
+                                  adds_only_cluster=adds_only_cluster,
+                                  sata_cap=sata_cap,
+                                  sata_cap_from=mix_from)
     rep["anchors"] = anchors
     rep["version"] = ver
     rep["adds_only"] = float(adds_only or 0.0)
@@ -3369,6 +3444,9 @@ def splice_replays(rep1: dict, rep2: dict, cutover=None) -> dict:
     W = pd.concat([before(rep1["weights"]).reindex(columns=cols),
                    after(rep2["weights"]).reindex(columns=cols)]).fillna(0.0)
     sata = pd.concat([before(rep1["sata"]), after(rep2["sata"])])
+    _c1 = rep1.get("cash") if rep1.get("cash") is not None else pd.Series(0.0, index=rep1["sata"].index)
+    _c2 = rep2.get("cash") if rep2.get("cash") is not None else pd.Series(0.0, index=rep2["sata"].index)
+    cash = pd.concat([before(_c1), after(_c2)])
     act = None
     if rep1.get("active") is not None and rep2.get("active") is not None:
         act = pd.concat([before(rep1["active"]).reindex(columns=cols),
@@ -3382,7 +3460,7 @@ def splice_replays(rep1: dict, rep2: dict, cutover=None) -> dict:
     anchors = a1 + ([(cut, cur2[-1])] if cur2 else []) + \
         [(d, w) for d, w in a2 if pd.Timestamp(d) > cut]
     return dict(
-        ret=ret, equity=eq, metrics=curve_metrics(eq), weights=W, sata=sata,
+        ret=ret, equity=eq, metrics=curve_metrics(eq), weights=W, sata=sata, cash=cash,
         active=act,
         turnover=dict(mean=float(turno.mean()) if len(turno) else 0.0,
                       p95=float(np.percentile(turno, 95)) if len(turno) else 0.0,
@@ -4051,9 +4129,11 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
             # live books hold idle capital as an actual SATA position — that
             # IS the cash/SATA leg, not a market sleeve
             cash = float(b.get("cash_weight", 0.0) or 0.0) + w.pop("SATA", 0.0)
+            _sc = b.get("sata_cap")                 # stamped by the V2 SATA-cap publisher
             side = version_map.get(str(as_of.date()), {})
             parsed.append(dict(
                 as_of=as_of, weights=w, cash=cash,
+                sata_cap=(float(_sc) if _sc is not None else None),
                 profile=str(b.get("profile") or "—"),
                 book_mode=str(b.get("book_mode") or "paper"),
                 version=str(b.get("strategy_version")
@@ -4093,6 +4173,7 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     biz = np.asarray(idx.dayofweek < 5)
     W = np.zeros((len(idx), len(keys)))
     sata_w = np.zeros(len(idx))
+    cash_w = np.zeros(len(idx))
     port = np.zeros(len(idx))
     dropped = set()
     for t, d in enumerate(idx):
@@ -4104,7 +4185,10 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                 dropped.add(k)
                 continue
             W[t, j] = wt
-        sata_w[t] = b["cash"]
+        # idle capital = SATA up to the book's stamped cap (books published
+        # before the cap carry none → all of it is SATA, as they always were),
+        # the excess in cash earning 0 %
+        sata_w[t], cash_w[t] = split_idle(b["cash"], b.get("sata_cap"))
         if t > 0:
             port[t] = float(np.dot(W[t], R[t])) + \
                 (sata_w[t] * sata_daily if biz[t] else 0.0)
@@ -4131,6 +4215,7 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     return dict(ret=daily, equity=eq, metrics=curve_metrics(eq),
                 weights=pd.DataFrame(W, index=idx, columns=keys),
                 sata=pd.Series(sata_w, index=idx),
+                cash=pd.Series(cash_w, index=idx),
                 books=parsed, version_spans=spans, dropped=sorted(dropped))
 
 
@@ -4375,6 +4460,7 @@ def equal_weight_bh_replay(results: list[dict],
     return dict(ret=daily, equity=eq, metrics=curve_metrics(eq),
                 weights=pd.DataFrame(W, index=bh.index, columns=bh.columns),
                 sata=pd.Series(0.0, index=bh.index),
+                cash=pd.Series(0.0, index=bh.index),
                 rets=bh, n_assets=n)
 
 

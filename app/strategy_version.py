@@ -30,7 +30,9 @@ Version history
   instead of the tilt's, and that cluster may add after entry (adds-only band
   0 instead of 8 pp; never trimmed by the tilt) ("fixed crypto-cluster split"
   + "crypto cluster may add", 2026-10-11 — still V2, no version bump;
-  ``overall_core.CLUSTER_MIX`` / ``ADDS_ONLY_CLUSTER``); XOP (SPDR S&P Oil & Gas E&P) trades the energy β
+  ``overall_core.CLUSTER_MIX`` / ``ADDS_ONLY_CLUSTER``); idle capital is parked in
+  SATA only up to 30 % of the book (``overall_core.SATA_CAP``, both profiles,
+  2026-10-11 — still V2), the excess stays in cash at 0 %; XOP (SPDR S&P Oil & Gas E&P) trades the energy β
   slot in place of OIH (same XLE crash-shield signal; also 2026-10-10 —
   ``overall_core.UNIVERSE_CHANGES``); a stop/trail hit publishes a CLOSE.
   GRID, SOXX, XLE, BTC, PBW, ARTY, GDX/NUGT sleeves are identical in V1 and

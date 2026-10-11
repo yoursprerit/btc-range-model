@@ -153,6 +153,41 @@ exposure to the one BTC signal (the cluster cap is unchanged).  Reproduce, with
 the no-degradation gate, via `python scripts/eval_cluster_mix.py` →
 [`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md).
 
+**Allocator — SATA cap (both profiles; added 2026-10-11; still V2).**
+Whatever the signals leave undeployed used to sit entirely in **SATA** — up to
+84 % of the book in the replay (average ~19 %) and 40 % in the published book at
+the time — and a preferred's price can fall.  Under V2 idle capital is parked in
+SATA only **up to 30 % of the book** (`overall_core.SATA_CAP`;
+`sata_cap_for(version)`; `split_idle`); **any excess stays in cash earning 0 %**.
+SATA is the allocator's residual, so the cap moves **no sleeve weight** — it only
+changes where the idle remainder sits and so how much of it earns the coupon.  It
+applies everywhere the book is built or replayed: `signal_gated_allocation`
+returns `sata` (≤ cap), `cash` (the excess) and `idle` (their sum — what a
+**paper** book still holds entirely as cash); the closed-market freeze re-splits
+the pinned book; `replay_gated_allocation(sata_cap=…)` /
+`walkforward_gated_replay(sata_cap=…)` return a `cash` series next to `sata` (from
+the cut-over in the Combined view; V1 has no cap), and since the P&L maths accrue
+the coupon on `sata` only, **every P&L, attribution, trade-log and realized-P&L
+figure prices the cash at 0 %**; the costs/taxes simulator holds a separate
+zero-yield cash balance.  Published books are stamped with `sata_cap` (inside the
+signature): the **live** book parks `min(idle, cap)` in its `SATA` position and
+the excess in `cash_weight`; the as-published replay credits the coupon only up
+to a book's stamped cap, so books published before the cap are unchanged.
+Balanced walk-forward replay vs uncapped, 3 seeds (2021 → 2026-10-10, no costs):
+**+1,241 % → +1,196 %, max drawdown −13.4 % unchanged, Sharpe 2.11 → 2.09**
+(Growth +1,842 % → +1,775 %, −17.4 % unchanged, 2.05 → 2.02); 5 bp costs
++1,062 % → +1,037 %; hold-out 2025-07 → and since 2026-03-01 lose only 1–2
+points.  The cost is the lost coupon on the cash leg (average ~4 % of the book, on
+~24 % of days, mostly 2021–25 when the book was often idle); cap sensitivity (Balanced):
+50 % cap +1,228 %, 40 % +1,215 %, 30 % +1,196 %, 20 % +1,164 %, 10 % +1,120 %, 0 %
++1,061 %.  **The back-test prices SATA at a steady coupon with no price risk, so it
+cannot show what the cap protects against — the return cost is the premium.**  The
+optimiser that fits the quarterly anchors still assumes idle capital earns the
+coupon, so anchors and the fixed-weight "optimal blend" statistics ignore the cap
+(the walk-forward replay, the live book and the P&L section apply it).  Evidence and
+the invariant checks: `python scripts/eval_sata_cap.py` →
+[`SATA_CAP_EVAL.md`](SATA_CAP_EVAL.md); tests in `tests/test_sata_cap.py`.
+
 **Universe — OIH → XOP (added 2026-10-10, before the first V2 publish).**
 The energy β slot trades **XOP** (SPDR S&P Oil & Gas Exploration & Production)
 instead of **OIH** (VanEck Oil Services) under V2.  Both trade the same XLE
@@ -306,7 +341,10 @@ that actually have data each day (staggered inception — BTC's CT features begi
 ~2024), and any **deployed weight that is sitting out of the market that day earns
 `SATA_DAILY`** instead of nothing. A fully-cash day earns the SATA yield. So the
 back-test reflects cash *working*, and the live book's undeployed remainder goes
-to SATA too.
+to SATA too.  **Under Strategy Logic V2 only up to 30 % of the book** (§0 "SATA
+cap"): the replay, the live gate and the published books park the idle remainder
+in SATA up to the cap and hold the excess as **cash at 0 %** (`_combine`, the
+fixed-weight blend, is unchanged and still lets all idle capital earn the coupon).
 
 ### The published back-test is the walk-forward gated replay
 
@@ -561,8 +599,10 @@ historically-optimal weight.
   V2 the **adds-only** rule (a held sleeve is never trimmed by the tilt, added
   to only on a ≥ 8 pp rise) and the **parent-cluster cap** (the sleeves sharing
   one parent signal never exceed 30 % combined) are applied on top — see §0.
-- **Whatever can't be deployed is parked in SATA.** With **no open positions the
-  entire book sits in SATA**, earning its yield until a signal fires.
+- **Whatever can't be deployed is parked in SATA — up to 30 % of the book under
+  V2; the excess is cash at 0 %.** With **no open positions the book sits 30 % in
+  SATA and 70 % in cash** (all SATA under V1), earning the SATA yield on the SATA
+  leg until a signal fires.
 - The Live tab's three donuts are:
   - **Previous Targetbook** — the published book that preceded the current one
     (`data/overall/target_book*_prev.json`, rotated at each publish).
@@ -593,7 +633,8 @@ historically-optimal weight.
 The **rebalancing moves** are just `current → adjusted target` per instrument,
 with the delta routed to/from SATA. A user **include/exclude** overlay
 (`adjust_for_selection`) can drop a position; its weight moves to **SATA**, with
-no redistribution to the survivors (so `deployed + cash` is invariant).
+no redistribution to the survivors (so `deployed + idle` is invariant; the idle
+total is then split SATA-up-to-the-cap / cash again).
 
 ---
 
@@ -618,7 +659,7 @@ blends of the strategies. Numbers and the full walk-forward are in
   shown for comparison.
 - **SATA is modelled** as always having existed, flat at $100 par, paying its
   ~13 % daily dividend across every period — an assumption, not a market-tested
-  series.
+  series (and it carries no price risk, which is what the V2 30 % SATA cap bounds).
 - **Leveraged 2× / 3× sleeves compound decay and gap risk**; the caps bound but
   don't remove it. See [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md)
   and [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md).

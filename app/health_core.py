@@ -147,9 +147,13 @@ def realized_book_returns(books: list[dict], rets: pd.DataFrame,
     parsed = []
     for b in books or []:
         try:
-            parsed.append((pd.Timestamp(b["as_of"]),
-                           {k: float(v) for k, v in (b.get("weights") or {}).items()},
-                           float(b.get("cash_weight", 0.0) or 0.0)))
+            w_ = {k: float(v) for k, v in (b.get("weights") or {}).items()}
+            idle_ = float(b.get("cash_weight", 0.0) or 0.0) + w_.pop("SATA", 0.0)
+            cap_ = b.get("sata_cap")
+            # idle capital earns the coupon up to the book's stamped SATA cap
+            # (Strategy Logic V2); books published before the cap have none
+            parsed.append((pd.Timestamp(b["as_of"]), w_,
+                           idle_ if cap_ is None else min(idle_, float(cap_))))
         except Exception:
             continue
     parsed.sort(key=lambda t: t[0])

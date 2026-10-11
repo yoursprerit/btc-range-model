@@ -73,10 +73,12 @@ from ibkr_common import (                        # noqa: E402  shared broker/ord
 class TargetBook:
     as_of: str                       # freshest completed signal bar (YYYY-MM-DD)
     weights: dict[str, float]        # signal-key → target portfolio weight (0..1)
-    cash_weight: float               # undeployed remainder → held as cash
+    cash_weight: float               # undeployed remainder (ALL idle capital) → held as cash on the paper book
     exec_price: dict[str, float]     # traded-symbol live price used for sizing
     actions: list[dict]              # the gate's per-asset action rows (for logging)
     equity_close: str = ""           # last COMPLETED 4:00-PM-ET close behind it
+    sata_cap: float | None = None    # V2: at most this fraction of the book may be parked in SATA
+                                     # (a LIVE book holds min(idle, cap) in SATA, the excess in cash)
 
 
 def compute_target_book(profile: str = None, results: list | None = None,
@@ -135,13 +137,15 @@ def compute_target_book(profile: str = None, results: list | None = None,
                                           caps=caps, force_exit=live_exits,
                                           prev_weights=prev_weights,
                                           cluster_mix=oc.cluster_mix_for(profile),
-                                          adds_only_cluster=oc.cluster_adds_band_for(profile))
+                                          adds_only_cluster=oc.cluster_adds_band_for(profile),
+                                          sata_cap=oc.sata_cap_for())
     else:
         # committed signals only — the frozen published book.
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
                                           caps=caps, prev_weights=prev_weights,
                                           cluster_mix=oc.cluster_mix_for(profile),
-                                          adds_only_cluster=oc.cluster_adds_band_for(profile))
+                                          adds_only_cluster=oc.cluster_adds_band_for(profile),
+                                          sata_cap=oc.sata_cap_for())
 
     targets = {k: float(w) for k, w in gate["target"].items() if w and w > 0}
 
@@ -155,9 +159,10 @@ def compute_target_book(profile: str = None, results: list | None = None,
     as_of = max((str(pd.Timestamp(r["as_of"]).date()) for r in results), default="")
     # as_of is the freshest bar across the universe, so the 24/7 sleeves push it
     # onto weekend dates; the equity basis is what the session guard judges.
-    return TargetBook(as_of=as_of, weights=targets, cash_weight=float(gate["sata"]),
+    return TargetBook(as_of=as_of, weights=targets, cash_weight=float(gate["idle"]),
                       exec_price=exec_price, actions=gate["actions"],
-                      equity_close=str(fr.expected_equity_asof().date()))
+                      equity_close=str(fr.expected_equity_asof().date()),
+                      sata_cap=gate.get("sata_cap"))
 
 
 # ════════════════════════════════════════════════════════════════════════════

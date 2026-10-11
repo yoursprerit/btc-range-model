@@ -26,7 +26,8 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 > (sleeves sharing one parent signal — e.g. XLE → XOP/ERX — never exceed 30 %
 > of the book combined), for the **Balanced** profile a **fixed split of the
 > crypto cluster** (MSTR 45 · MSTU 30 · BTC 20 · ETH 5) that may also **add**
-> after entry (adds-only band 0 for that cluster — still V2, no version bump), **XOP in place of OIH** in the energy β slot (same XLE
+> after entry (adds-only band 0 for that cluster) and **SATA capped at 30 % of the
+> book with the excess held as 0 %-yield cash** (all still V2, no version bump), **XOP in place of OIH** in the energy β slot (same XLE
 > signal; OIH stays in the XLE app and the V1 record) and stop hits that
 > publish a CLOSE.  Every P&L / back-test / historical / health view offers a
 > **Strategy V1 · Strategy V2 · Combined** selector.  See
@@ -556,6 +557,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Overall strategy — how it works | [`OVERALL_STRATEGY.md`](OVERALL_STRATEGY.md) |
 | Overall strategy — walk-forward performance | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
 | Overall strategy — Balanced crypto-cluster split (baseline vs new replay) | [`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md) · `scripts/eval_cluster_mix.py` |
+| Overall strategy — SATA cap (uncapped vs capped replay) | [`SATA_CAP_EVAL.md`](SATA_CAP_EVAL.md) · `scripts/eval_sata_cap.py` |
 | Strategy decay monitor (🩺 Strategy Health) | [`STRATEGY_HEALTH.md`](STRATEGY_HEALTH.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
 | Signal distribution | [`docs/COLLECTIVE2.md`](docs/COLLECTIVE2.md) (mirror the book onto a Collective2 strategy) · [`docs/COLLECTIVE2_SETUP.md`](docs/COLLECTIVE2_SETUP.md) (setup + testing runbook) |

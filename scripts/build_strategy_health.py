@@ -102,7 +102,8 @@ def main() -> int:
                     objective=prof["objective"], sata_daily=oc.SATA_DAILY, tilt=True,
                     version=view, gens=gens,
                     cluster_mix=oc.cluster_mix_for(name, view),
-                    adds_only_cluster=oc.cluster_adds_band_for(name, view))
+                    adds_only_cluster=oc.cluster_adds_band_for(name, view),
+                    sata_cap=oc.sata_cap_for(view))
             except Exception:
                 traceback.print_exc()
                 replays[name] = None

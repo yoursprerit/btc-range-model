@@ -98,7 +98,8 @@ def main() -> None:
                 results, caps=caps, mdd_floor=prof["mdd_floor"],
                 objective=prof["objective"], sata_daily=ov.SATA_DAILY,
                 tilt=True, cluster_mix=ov.cluster_mix_for(pname),
-                adds_only_cluster=ov.cluster_adds_band_for(pname), **kw)
+                adds_only_cluster=ov.cluster_adds_band_for(pname),
+                sata_cap=ov.sata_cap_for(), **kw)
             row = _metrics_row(wf)
             table[pname][label] = row
             print(f"  {label:<44} full: {_fmt(row['full'])}")
@@ -118,7 +119,8 @@ def main() -> None:
                                        objective=prof["objective"],
                                        sata_daily=ov.SATA_DAILY, tilt=True,
                                        cluster_mix=ov.cluster_mix_for("Balanced"),
-                                       adds_only_cluster=ov.cluster_adds_band_for("Balanced"), **kw)
+                                       adds_only_cluster=ov.cluster_adds_band_for("Balanced"),
+                                       sata_cap=ov.sata_cap_for(), **kw)
     cut = pd.Timestamp("2026-01-15")
     orig_load = ov._load_daily
     ov._load_daily = lambda cfg, _c=cut: orig_load(cfg).loc[:_c]
@@ -128,7 +130,8 @@ def main() -> None:
                                            objective=prof["objective"],
                                            sata_daily=ov.SATA_DAILY, tilt=True,
                                            cluster_mix=ov.cluster_mix_for("Balanced"),
-                                           adds_only_cluster=ov.cluster_adds_band_for("Balanced"), **kw)
+                                           adds_only_cluster=ov.cluster_adds_band_for("Balanced"),
+                                       sata_cap=ov.sata_cap_for(), **kw)
     finally:
         ov._load_daily = orig_load
     d = float((part["ret"] - full["ret"].loc[part["ret"].index]).abs().max())

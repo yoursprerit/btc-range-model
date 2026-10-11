@@ -545,8 +545,13 @@ def main() -> int:
             freed += weights[k] - nw
             weights[k] = nw
         if "SATA" in weights:
-            weights["SATA"] = weights.get("SATA", 0.0) + freed
-            sink = "SATA"
+            # the freed weight parks in SATA only up to the book's own SATA cap
+            # (Strategy Logic V2); anything beyond stays cash
+            _cap = payload.get("sata_cap")
+            _room = (max(float(_cap) - weights.get("SATA", 0.0), 0.0)
+                     if _cap is not None else freed)
+            weights["SATA"] = weights.get("SATA", 0.0) + min(freed, _room)
+            sink = "SATA" if _room >= freed - 1e-12 else "SATA/cash"
         else:
             sink = "cash"
         print(f"Exposure cap: risk {risk_total*100:.0f}% → {args.max_deploy_frac*100:.0f}% "
