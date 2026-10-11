@@ -86,7 +86,7 @@ def _pack(version: str, name: str, cache: dict, rets_cache: dict) -> dict:
     wf = ov.walkforward_gated_replay(
         results, caps=ov.caps_for(name), mdd_floor=prof["mdd_floor"],
         objective=prof["objective"], sata_daily=ov.SATA_DAILY, tilt=True,
-        version=version, gens=gens)
+        version=version, gens=gens, cluster_mix=ov.cluster_mix_for(name, version))
     return dict(wf=wf)
 
 
