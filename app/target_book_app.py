@@ -205,7 +205,8 @@ def build_adjusted_payload(payload: dict, adj_weights: dict, adj_cash: float) ->
                     if k in adj_weights},
         actions=payload.get("actions"),
         generated_at_utc=payload.get("generated_at_utc"),
-        book_mode=payload.get("book_mode", "paper"))
+        book_mode=payload.get("book_mode", "paper"),
+        sata_cap=payload.get("sata_cap"))
     if payload.get("signal_audit"):        # carry the audit verdict through
         adj["signal_audit"] = dict(payload["signal_audit"])
     return adj
@@ -223,13 +224,18 @@ def _render_book(payload: dict, *, source: str) -> None:
     ok_val, val_why = tb.validate(payload, today)
 
     is_live = payload.get("book_mode") == "live"
-    idle_label = "SATA" if is_live else "Cash"       # where idle capital parks
+    sata_cap = payload.get("sata_cap")                # V2: SATA ≤ this share of the book
+    # where idle capital parks: a live book holds it in SATA up to the cap (the
+    # excess in cash), a paper book entirely in cash
+    idle_label = (("SATA + cash" if sata_cap is not None else "SATA")
+                  if is_live else "Cash")
     prices = payload.get("exec_price", {}) or {}
     cash = float(payload.get("cash_weight", 0.0) or 0.0)
-    # split the idle bucket out of the weights: for live it's the SATA position,
-    # for paper it's cash_weight (SATA is never a paper key).
+    # split the idle bucket out of the weights: for live it's the SATA position
+    # (+ the over-cap excess in cash_weight), for paper it's cash_weight (SATA is
+    # never a paper key).
     all_w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
-    idle_base = all_w.pop("SATA", 0.0) if is_live else cash
+    idle_base = (all_w.pop("SATA", 0.0) + cash) if is_live else cash
     risk_w = all_w                                    # risk positions only
 
     # ── header + status badges ────────────────────────────────────────────────
@@ -346,8 +352,15 @@ def _render_book(payload: dict, *, source: str) -> None:
     m[0].metric("Risk assets", f"{risk_total * 100:.0f}%",
                 delta=(f"−{moved * 100:.0f}%" if moved > 1e-9 else None),
                 delta_color="inverse")
+    # idle capital → SATA up to the book's cap on a live book, the rest in cash
+    sata_after, cash_after = (ov.split_idle(idle_after, sata_cap) if is_live
+                              else (0.0, idle_after))
     m[1].metric(idle_label, f"{idle_after * 100:.0f}%", f"${idle_after * nav:,.0f}",
                 delta_color="off")
+    if is_live and sata_cap is not None and idle_after > 1e-9:
+        st.caption(f"Idle {idle_after * 100:.1f}% → **SATA {sata_after * 100:.1f}%** "
+                   f"(capped at {sata_cap * 100:.0f}% of the book) · "
+                   f"**cash {cash_after * 100:.1f}%** (0% yield).")
     m[2].metric("Positions", f"{len(included)}/{len(risk_w)}")
     if excluded:
         st.info(f"Excluded **{', '.join(excluded)}** → moved "
@@ -355,8 +368,8 @@ def _render_book(payload: dict, *, source: str) -> None:
 
     # deployable positions = risk + (SATA as a real position on live)
     deploy_w = dict(adj_risk)
-    if is_live and idle_after > 1e-9:
-        deploy_w["SATA"] = idle_after
+    if is_live and sata_after > 1e-9:
+        deploy_w["SATA"] = sata_after
 
     left, right = st.columns([3, 2])
     with left:
@@ -378,8 +391,8 @@ def _render_book(payload: dict, *, source: str) -> None:
         keys_sorted = sorted(deploy_w, key=lambda k: -deploy_w[k])
         labels = [(sym.trade_symbol(k) or k) for k in keys_sorted]
         vals = [deploy_w[k] * 100 for k in keys_sorted]
-        if not is_live and idle_after > 0.001:        # paper cash slice
-            labels += ["CASH"]; vals += [idle_after * 100]
+        if cash_after > 0.001:                        # paper cash / live over-cap cash slice
+            labels += ["CASH"]; vals += [cash_after * 100]
         fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.55,
                                sort=False, textinfo="label+percent"))
         fig.update_layout(height=340, margin=dict(t=10, b=10, l=10, r=10),
@@ -402,12 +415,13 @@ def _render_book(payload: dict, *, source: str) -> None:
         st.dataframe(adf, hide_index=True, use_container_width=True)
 
     # ── downloads: original + (if edited) an adjusted, re-signed book ──────────
-    # live keeps idle in the SATA weight (cash_weight 0); paper keeps it as cash.
+    # live keeps idle in the SATA weight up to its cap (the excess in cash_weight);
+    # paper keeps it all as cash.
     if is_live:
         dl_weights = dict(adj_risk)
-        if idle_after > 1e-9:
-            dl_weights["SATA"] = idle_after
-        dl_cash = 0.0
+        if sata_after > 1e-9:
+            dl_weights["SATA"] = sata_after
+        dl_cash = cash_after
     else:
         dl_weights, dl_cash = adj_risk, idle_after
     _downloads(payload, dl_weights, dl_cash, excluded, secret)

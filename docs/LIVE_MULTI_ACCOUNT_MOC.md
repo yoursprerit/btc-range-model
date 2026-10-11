@@ -93,7 +93,7 @@ notepad deploy\ibkr_accounts.json
   "kill_switch_file": "STOP_LIVE",  // create this file to halt trading
   "defaults": {                     // every account inherits these…
     "band": 0.01,                   //   no-trade band (fraction of the account's NAV)
-    "max_deploy_frac": 0.25,        //   risk assets ≤ 25% of NAV; the rest parks in SATA
+    "max_deploy_frac": 0.25,        //   risk assets ≤ 25% of NAV; the rest parks in SATA (up to the book's 30 % SATA cap; cash beyond)
     "max_order_notional": 5000,     //   $ cap on any single order
     "max_gross_frac": 1.02, "max_turnover_frac": 1.5, "max_price_drift": 0.25
   },

@@ -107,7 +107,8 @@ def run() -> dict:
             rep = oc.walkforward_gated_replay(
                 results, caps=caps, mdd_floor=prof["mdd_floor"],
                 objective=prof["objective"], seed=seed, version="v2",
-                cluster_mix=kw["cluster_mix"], adds_only_cluster=kw["adds_only_cluster"])
+                cluster_mix=kw["cluster_mix"], adds_only_cluster=kw["adds_only_cluster"],
+                sata_cap=None)      # isolates the CLUSTER rules; the SATA cap is scripts/eval_sata_cap.py
             rl = oc.realized_pnl_by_asset(rep["weights"], rep["sata"], MAR1, rets,
                                           active=rep.get("active"))
             reps[(seed, label)] = dict(

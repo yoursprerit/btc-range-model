@@ -85,7 +85,8 @@ def main() -> None:
             results, caps=caps, mdd_floor=prof["mdd_floor"],
             objective=prof["objective"], sata_daily=ov.SATA_DAILY, tilt=True,
             cluster_mix=ov.cluster_mix_for(pname),
-            adds_only_cluster=ov.cluster_adds_band_for(pname))
+            adds_only_cluster=ov.cluster_adds_band_for(pname),
+            sata_cap=ov.sata_cap_for())
         for cut in CUTOFFS:
             cut_ts = pd.Timestamp(cut)
             trunc_res = truncate_results(results, cut_ts)
@@ -97,7 +98,8 @@ def main() -> None:
                     trunc_res, caps=caps, mdd_floor=prof["mdd_floor"],
                     objective=prof["objective"], sata_daily=ov.SATA_DAILY,
                     tilt=True, cluster_mix=ov.cluster_mix_for(pname),
-                    adds_only_cluster=ov.cluster_adds_band_for(pname))
+                    adds_only_cluster=ov.cluster_adds_band_for(pname),
+                    sata_cap=ov.sata_cap_for())
             finally:
                 ov._load_daily = orig_load_daily
 

@@ -48,7 +48,9 @@ overall_core.run_universe()                       every strategy, live
 ```
 
 - **Targets** are portfolio weights per signal key. The undeployed remainder is
-  **held as cash** (no SATA leg in the live book).
+  **held as cash** (no SATA leg in the paper book). The *live* book parks idle
+  capital in SATA only up to 30 % of the book (Strategy Logic V2) and holds the
+  excess as cash — see `docs/LIVE_TRADING.md`.
 - **BTC → IBIT.** IBKR has no spot-Bitcoin product, so the BTC signal sleeve is
   traded via the IBIT spot-Bitcoin ETF. Every other name is a US-listed
   ETF/equity traded under its own ticker. See `scripts/ibkr_symbols.py`.

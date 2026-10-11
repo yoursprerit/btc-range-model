@@ -97,7 +97,8 @@ def main() -> None:
                                             objective=prof["objective"],
                                             sata_daily=sata, tilt=True,
                                             cluster_mix=oc.cluster_mix_for(pname),
-                                            adds_only_cluster=oc.cluster_adds_band_for(pname))
+                                            adds_only_cluster=oc.cluster_adds_band_for(pname),
+                                            sata_cap=oc.sata_cap_for())
         rows = [_row("Fixed-weight (in-sample anchors)", fixed_eq),
                 _row("Gate only (no tilt)", gate["equity"]),
                 _row("Gate + priority tilt", tilted["equity"]),

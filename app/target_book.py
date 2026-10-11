@@ -142,19 +142,24 @@ def build_payload(*, as_of: str, profile: str, weights: dict[str, float],
                   cash_weight: float, exec_price: dict[str, float],
                   actions: list[dict] | None = None,
                   generated_at_utc: str | None = None,
-                  book_mode: str = "paper") -> dict:
+                  book_mode: str = "paper",
+                  sata_cap: float | None = None) -> dict:
     """Assemble a v1 target-book payload (unsigned).
 
     ``actions`` are trimmed to the fields the executor / audit log care about, so
     the artifact stays compact and stable regardless of engine-internal extras.
-    ``book_mode`` is ``paper`` (idle → cash) or ``live`` (idle → a SATA position).
+    ``book_mode`` is ``paper`` (idle → cash) or ``live`` (idle → a SATA position
+    up to ``sata_cap`` of the book, the excess in ``cash_weight``).  ``sata_cap``
+    (Strategy Logic V2) is stamped into the signed payload when set, so every
+    consumer — the as-published replay, the executor — reads the cap the book
+    was built under; books published before the cap carry none.
     """
     trimmed = [
         {k: a.get(k) for k in ("key", "action", "decision", "target",
                                "in_pos", "priority", "exits_next_bar")}
         for a in (actions or [])
     ]
-    return {
+    payload = {
         "schema": SCHEMA,
         "generated_at_utc": generated_at_utc or datetime.now(timezone.utc)
                                                         .isoformat(timespec="seconds"),
@@ -166,6 +171,9 @@ def build_payload(*, as_of: str, profile: str, weights: dict[str, float],
         "exec_price": {k: float(v) for k, v in exec_price.items()},
         "actions": trimmed,
     }
+    if sata_cap is not None:
+        payload["sata_cap"] = float(sata_cap)
+    return payload
 
 
 def _canonical(payload: dict) -> bytes:

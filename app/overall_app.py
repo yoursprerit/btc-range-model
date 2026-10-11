@@ -385,13 +385,15 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
                                          sata_daily=sata, tilt=True,
                                          version=version, gens=_gens,
                                          cluster_mix=ov.cluster_mix_for(name, version),
-                                         adds_only_cluster=ov.cluster_adds_band_for(name, version))
+                                         adds_only_cluster=ov.cluster_adds_band_for(name, version),
+                                         sata_cap=ov.sata_cap_for(version))
     per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
     curves = {STRAT_CURVE: wf["equity"], **base_curves}
     gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
                                       prev_weights=_prev_w,
                                       cluster_mix=ov.cluster_mix_for(name, version),
-                                      adds_only_cluster=ov.cluster_adds_band_for(name, version))
+                                      adds_only_cluster=ov.cluster_adds_band_for(name, version),
+                                      sata_cap=ov.sata_cap_for(version))
     return dict(opt=opt, per=per, curves=curves, gate=gate, w_opt=w_opt, wf=wf)
 
 
@@ -607,14 +609,16 @@ def _add_version_markers(fig, x0, x1, *, combined: bool, y_label_pos: float = 1.
     return fig
 
 
-def _alloc_area_fig(weights: pd.DataFrame, sata: pd.Series, title: str):
+def _alloc_area_fig(weights: pd.DataFrame, sata: pd.Series, title: str,
+                    cash: pd.Series | None = None):
     """Stacked-area figure of the replayed book's daily % allocation, kept
     deliberately simple to read: ONE band per **signal group** (each app's
     family of instruments — e.g. BTC·MSTR·MSTU·ETH — summed and drawn in the
     parent's accent colour, so every band has a distinct colour), largest
     group first, groups that never matter folded into a single *Other* band,
-    and the SATA idle-cash remainder in light grey on top.  Every day stacks
-    to 100%; hovering a band shows its per-asset split that day.  Used below
+    the SATA idle-cash remainder in light grey on top and — under the V2 SATA
+    cap — the excess above the cap as a white-grey *Cash* band (0 % yield).
+    Every day stacks to 100%; hovering a band shows its per-asset split that day.  Used below
     both Growth charts."""
     fam: dict[str, list[str]] = {}                 # parent signal → member cols
     for c in weights.columns:
@@ -665,6 +669,11 @@ def _alloc_area_fig(weights: pd.DataFrame, sata: pd.Series, title: str):
         x=sata.index, y=sata.to_numpy() * 100, name="💵 SATA (idle cash)",
         mode="lines", stackgroup="book", line=dict(width=0, color="#cbd5e1"),
         hovertemplate="SATA idle cash: <b>%{y:.1f}%</b><extra></extra>"))
+    if cash is not None and float(cash.max()) > 0.0005:
+        fig.add_trace(go.Scatter(
+            x=cash.index, y=cash.to_numpy() * 100, name="💵 Cash (over the SATA cap, 0% yield)",
+            mode="lines", stackgroup="book", line=dict(width=0, color="#f1f5f9"),
+            hovertemplate="Cash over the SATA cap: <b>%{y:.1f}%</b><extra></extra>"))
     fig.update_layout(height=380, margin=dict(t=30, b=10, l=10, r=10),
                       yaxis=dict(title="% of book", range=[0, 100.5]),
                       legend=dict(orientation="h", y=-0.14),
@@ -1166,8 +1175,8 @@ with tab_live:
                    f"with each new close.")
     st.markdown("")
 
-    invested = 1.0 - gate["sata"]
-    k = st.columns(5)
+    invested = 1.0 - gate.get("idle", gate["sata"])
+    k = st.columns(6)
     k[0].metric("Positions open", f"{gate['n_active']}")
     k[1].metric("Open today", f"{gate['n_open']}",
                 delta="new entries" if gate["n_open"] else None)
@@ -1176,7 +1185,15 @@ with tab_live:
     k[3].metric("Target in risk assets", f"{invested*100:.0f}%")
     k[4].metric("Target in SATA", f"{gate['sata']*100:.0f}%",
                 help=f"{gate['sata_info']['name']} — idle cash parked at "
-                     f"~{gate['sata_info']['annual_rate']*100:.0f}% yield.")
+                     f"~{gate['sata_info']['annual_rate']*100:.0f}% yield"
+                     + (f", capped at {gate['sata_cap']*100:.0f}% of the book "
+                        "(Strategy Logic V2)." if gate.get("sata_cap") is not None
+                        else "."))
+    k[5].metric("Target in cash", f"{gate.get('cash', 0.0)*100:.0f}%",
+                help="Idle capital above the SATA cap stays in cash earning 0% "
+                     "(Strategy Logic V2)." if gate.get("sata_cap") is not None
+                else "No SATA cap under this strategy generation — idle capital "
+                     "is all SATA.")
 
     # live-adjusted allocation (drops MA instruments whose live price is below the
     # trend filter → they exit next bar) — used by the action table's Live target
@@ -1211,6 +1228,12 @@ with tab_live:
         idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
         return w, idle
 
+    def _book_idle_split(payload: dict, idle: float) -> tuple[float, float]:
+        """``(sata, cash)`` of a published book's idle capital: SATA up to the
+        book's own stamped ``sata_cap`` (V2), the excess cash; a book published
+        before the cap carries none, so all of it is SATA."""
+        return ov.split_idle(idle, (payload or {}).get("sata_cap"))
+
     # published books loaded BEFORE the live gate: the closed-market freeze
     # below pins the weekend/holiday live recommendation to the current book
     _TB_DIR = _REPO_ROOT / "data" / "overall"
@@ -1225,7 +1248,8 @@ with tab_live:
             force_exit=_live_exits, force_entry=_live_entries,
             prev_weights=ov.load_published_book_weights(),
             cluster_mix=ov.cluster_mix_for(_profile),
-            adds_only_cluster=ov.cluster_adds_band_for(_profile))
+            adds_only_cluster=ov.cluster_adds_band_for(_profile),
+            sata_cap=ov.sata_cap_for())
         # weekend / holiday guard: on days the US market is closed, the daily
         # tilt must not re-size sleeves whose signal apps got no new bar (the
         # cross-set priority normalisation would let the crypto sleeves' fresh
@@ -1273,7 +1297,7 @@ with tab_live:
                "not closed yet.")
     # (_live_exits / gate_live computed above, before the action table)
 
-    def _alloc_donut(alloc: dict, sata: float, title: str):
+    def _alloc_donut(alloc: dict, sata: float, title: str, cash: float = 0.0):
         labels, vals, colors = [], [], []
         for kk, vv in sorted(alloc.items(), key=lambda x: -x[1]):
             if vv <= 0.0005:
@@ -1284,6 +1308,8 @@ with tab_live:
             colors.append(meta.get("accent") or "#94a3b8")
         if sata > 0.005:
             labels.append("SATA"); vals.append(sata * 100); colors.append("#334155")
+        if cash > 0.005:                      # V2: idle capital above the SATA cap
+            labels.append("Cash"); vals.append(cash * 100); colors.append("#cbd5e1")
         if not vals:
             labels, vals, colors = ["SATA"], [100.0], ["#334155"]
         fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.58,
@@ -1340,8 +1366,9 @@ with tab_live:
     with ac[0]:
         if _prev_book:
             _pw, _pidle = _book_alloc(_prev_book)
-            st.plotly_chart(_alloc_donut(_pw, _pidle,
-                                         "Previously Traded Targetbook"),
+            _ps, _pc = _book_idle_split(_prev_book, _pidle)
+            st.plotly_chart(_alloc_donut(_pw, _ps, "Previously Traded Targetbook",
+                                         cash=_pc),
                             use_container_width=True)
             st.caption(f"Last trading day's published book, as traded — "
                        f"{_book_close_caption(_prev_book)} · profile "
@@ -1355,7 +1382,8 @@ with tab_live:
     with ac[1]:
         if _cur_book:
             _cw, _cidle = _book_alloc(_cur_book)
-            st.plotly_chart(_alloc_donut(_cw, _cidle, "Current Targetbook"),
+            _cs, _cc_ = _book_idle_split(_cur_book, _cidle)
+            st.plotly_chart(_alloc_donut(_cw, _cs, "Current Targetbook", cash=_cc_),
                             use_container_width=True)
             st.caption(f"{_book_close_caption(_cur_book)} — committed closes "
                        f"only · "
@@ -1370,7 +1398,8 @@ with tab_live:
                     "Book app.")
     with ac[2]:
         st.plotly_chart(_alloc_donut(gate_live["target"], gate_live["sata"],
-                                     "Recommended Live Possible Targetbook"),
+                                     "Recommended Live Possible Targetbook",
+                                     cash=gate_live.get("cash", 0.0)),
                         use_container_width=True)
         st.caption("⚡ Live recommendation — the possible Targetbook **today's "
                    "live prices point to**; **could change** until today's "
@@ -1565,8 +1594,9 @@ with tab_live:
                 f"**{_adj_moved*100:.1f}%** (${_adj_moved*_pv_sel:,.0f}) to SATA. "
                 f"Deployed {_adj_dep*100:.0f}% · SATA {_adj_sata*100:.0f}%.")
         ac2 = st.columns([1, 1, 1])
-        ac2[1].plotly_chart(_alloc_donut(_adj_target, _adj_sata,
-                            "Recommended Live (your selection)"),
+        _adj_s, _adj_c = ov.split_idle(_adj_sata, gate_live.get("sata_cap"))
+        ac2[1].plotly_chart(_alloc_donut(_adj_target, _adj_s,
+                            "Recommended Live (your selection)", cash=_adj_c),
                             use_container_width=True)
 
     # ── BASELINE — the book actually in force ────────────────────────────
@@ -2031,8 +2061,14 @@ with tab_live:
         # the last-bar cell shows the previously traded book's idle weight (its
         # donut's SATA slice), falling back as the risk rows do.
         si = gate["sata_info"]
-        sata_pct = _committed_idle if _committed_idle is not None else gate["sata"]
-        sata_live = gate_live["sata"]
+        # idle capital → SATA up to the book's cap (V2), the excess cash; the
+        # committed side splits the published book's idle by that book's own
+        # stamped cap (legacy books carry none → all SATA)
+        if _committed_idle is not None:
+            sata_pct, cash_pct = _book_idle_split(_prev_book or _cur_book, _committed_idle)
+        else:
+            sata_pct, cash_pct = gate["sata"], gate.get("cash", 0.0)
+        sata_live, cash_live = gate_live["sata"], gate_live.get("cash", 0.0)
 
         def _sata_bar(t):
             return (f"<div style='height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden;"
@@ -2083,13 +2119,35 @@ with tab_live:
             f"<td style='text-align:right;font-weight:800;color:{_sata_col}'>{sata_live*100:.1f}%{sbar_live}</td>"
             f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_sata_col}'>"
             f"${sata_live*portfolio_value:,.0f}</td></tr>")
+        if cash_pct > 0.0005 or cash_live > 0.0005:
+            # V2 SATA cap: idle capital above the cap is held in cash (0% yield)
+            _cash_col = (C_BUY if cash_live > cash_pct else C_EXIT) if abs(cash_live - cash_pct) > 0.005 else "inherit"
+            rows.append(
+                f"<tr style='background:#f8fafc'>"
+                f"<td style='padding:8px 10px'>{_pill('CASH', '#94a3b8')}</td>"
+                f"<td style='font-weight:700'>💵 Cash"
+                f"<div style='font-size:11px;color:#64748b;font-weight:400'>over the SATA cap</div></td>"
+                f"<td style='font-size:12px;color:#334155'>Idle above the SATA cap → cash"
+                f"<div style='font-size:10px;color:#94a3b8'>SATA is capped at {(gate.get('sata_cap') or 0)*100:.0f}% of the book (Strategy Logic V2) · cash earns 0%</div></td>"
+                f"<td style='text-align:center;color:#cbd5e1'>—</td>"
+                f"<td style='text-align:right;color:#cbd5e1'>—</td>"
+                f"<td style='text-align:right;color:#cbd5e1'>—</td>"
+                f"<td style='text-align:right;color:#cbd5e1'>—</td>"
+                f"<td style='text-align:right;color:#cbd5e1'>—</td>"
+                f"<td style='text-align:right;font-weight:800'>{cash_pct*100:.1f}%</td>"
+                f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums'>"
+                f"${cash_pct*portfolio_value:,.0f}</td>"
+                f"<td style='text-align:right;font-weight:800;color:{_cash_col}'>{cash_live*100:.1f}%</td>"
+                f"<td style='text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:{_cash_col}'>"
+                f"${cash_live*portfolio_value:,.0f}</td></tr>")
         st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
                     f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table></div>",
                     unsafe_allow_html=True)
         if gate["n_active"] == 0:
             st.warning("**No open positions today** — no instrument is signalling long, "
-                       "so the entire book is parked in **SATA** earning its idle-cash "
-                       "yield until a signal fires.")
+                       "so the entire book sits idle: up to the SATA cap in **SATA** "
+                       "earning its idle-cash yield, the rest in cash, until a signal "
+                       "fires.")
 
         closes = [a for a in gate["actions"] if a["action"] == "CLOSE"]
         opens = [a for a in gate["actions"] if a["action"] == "OPEN"]
@@ -2733,7 +2791,7 @@ with tab_live:
                        "sleeve and never sells it. Dollar figures scale the "
                        "💼 portfolio value entered above.")
             _wf = {"weights": _bhrep["weights"], "sata": _bhrep["sata"],
-                   "active": None}
+                   "cash": _bhrep.get("cash"), "active": None}
             _strat_label = BH_CURVE
             # keep the as-published record alongside the strategy curves so
             # "what did trading actually add?" is one glance
@@ -2755,7 +2813,7 @@ with tab_live:
                        "the monthly deposit you set below**. Idle capital "
                        "is held as SATA/cash exactly as the book says.")
             _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"],
-                   "active": None}
+                   "cash": _bookrep.get("cash"), "active": None}
             _strat_label = STRAT_CURVE_ACTUAL
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
                             **_PFV["curves"]}
@@ -2793,7 +2851,7 @@ with tab_live:
             # no separate signal record exists for archived books — the trade
             # log falls back to weight-inferred signal-vs-tilt classification
             _wf = {"weights": _bookrep["weights"], "sata": _bookrep["sata"],
-                   "active": None}
+                   "cash": _bookrep.get("cash"), "active": None}
             _strat_label = STRAT_CURVE_ACTUAL
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
                             **_PFV["curves"]}
@@ -2903,6 +2961,9 @@ with tab_live:
         _curves_view = {k: v.loc[:_end_ts] for k, v in _curves_view.items()}
         _wf = {"weights": _wf["weights"].loc[:_end_ts],
                "sata": _wf["sata"].loc[:_end_ts],
+               # V2 SATA cap: idle capital above the cap, in cash at 0 %
+               "cash": (_wf.get("cash").loc[:_end_ts]
+                        if _wf.get("cash") is not None else None),
                # replay source: per-day signal truth (funded set); absent on
                # older cached replays and the as-published record
                "active": (_wf.get("active").loc[:_end_ts]
@@ -2946,7 +3007,8 @@ with tab_live:
                 get_sleeve_prices(_bucket(), _use_snap), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
-                sata_daily=0.0 if _actual else ov.SATA_DAILY)
+                sata_daily=0.0 if _actual else ov.SATA_DAILY,
+                cash_w=_wf.get("cash"))
             if _fx_sim is not None:
                 _a0 = _fx_sim["net"].index[0]
                 # apply the friction drag (net ÷ gross of the same dollar
@@ -5333,12 +5395,14 @@ with tab_hist:
             _h_wrow = _h_wf["weights"].loc[_h_bar]
             _h_book = {k: float(v) for k, v in _h_wrow.items() if v > 0.0005}
             _h_sata = float(_h_wf["sata"].loc[_h_bar])
+            _h_cash = (float(_h_wf["cash"].loc[_h_bar]) if _h_wf.get("cash") is not None else 0.0)
         else:
             _h_alloc = ov.historical_allocation(
                 _snap, opt["optimal"]["weights"], caps=ov.caps_for(_profile),
                 cluster_cap=ov.cluster_cap_for(_sv.version_for_date(_h_bar)),
-                cluster_mix=ov.cluster_mix_for(_profile, _sv.version_for_date(_h_bar)))
-            _h_book, _h_sata = _h_alloc["book"], _h_alloc["sata"]
+                cluster_mix=ov.cluster_mix_for(_profile, _sv.version_for_date(_h_bar)),
+                sata_cap=ov.sata_cap_for(_sv.version_for_date(_h_bar)))
+            _h_book, _h_sata, _h_cash = _h_alloc["book"], _h_alloc["sata"], _h_alloc["cash"]
         with _h_top[2]:
             st.markdown(
                 f"<div style='font-size:13px;color:#64748b;padding-top:30px'>"
@@ -5380,7 +5444,8 @@ with tab_hist:
         with _h_cols[0]:
             st.plotly_chart(
                 _alloc_donut(_h_book, _h_sata,
-                             f"Strategy book — {_h_bar.strftime('%b %d, %Y')}"),
+                             f"Strategy book — {_h_bar.strftime('%b %d, %Y')}",
+                             cash=_h_cash),
                 use_container_width=True)
             st.caption("The **replayed book on that bar**: anchor weights fit "
                        "only on data before that date, water-filled over the "
@@ -5553,8 +5618,9 @@ with tab_hist:
             _epw, _epidle = _book_alloc(_h_pub)
             with _ep_cols[0]:
                 st.plotly_chart(
-                    _alloc_donut(_epw, _epidle,
-                                 f"Executed book — {_h_bar.strftime('%b %d, %Y')}"),
+                    _alloc_donut(_epw, _book_idle_split(_h_pub, _epidle)[0],
+                                 f"Executed book — {_h_bar.strftime('%b %d, %Y')}",
+                                 cash=_book_idle_split(_h_pub, _epidle)[1]),
                     use_container_width=True)
             with _ep_cols[1]:
                 _ep_px = _h_pub.get("exec_price") or {}
@@ -5861,7 +5927,8 @@ with tab_bt:
         st.plotly_chart(
             _alloc_area_fig(_wf_bt["weights"], _wf_bt["sata"],
                             "Daily % allocation — every asset plus SATA "
-                            "(stacks to 100%)"),
+                            "and cash (stacks to 100%)",
+                            cash=_wf_bt.get("cash")),
             use_container_width=True)
         st.caption("The book the back-test compounds each day, **one colour "
                    "per signal group** (e.g. ₿ BTC covers BTC·MSTR·MSTU·ETH — "
@@ -6168,14 +6235,20 @@ weight × (0.5 + priority), water-filled to the caps (and, under V2, bound by th
 parent-cluster cap) — so the highest-priority signals in today's tape get the
 largest slices.
 
-**Today's book & SATA.** Capital is deployed only to instruments currently
+**Today's book, SATA & cash.** Capital is deployed only to instruments currently
 signalling long (or firing a fresh entry); the held/opened **risk assets total
 100%** when the caps allow, and **whatever can't be deployed is parked in SATA**
 — *Strive's Variable-Rate Series A Perpetual Preferred*, a US-listed security
 paying a ~13% annual coupon as a daily dividend on $100 par (≈13.88% effective
-reinvested). With **no open positions the entire book sits in SATA**, earning
-that yield until a signal fires. Idle capital earns SATA in the back-test too, so
-the combined curve reflects cash working rather than sitting dead.
+reinvested) — **up to 30% of the book under Strategy Logic V2; any excess stays
+in cash earning 0%** (a preferred's price can fall, so SATA exposure is bounded;
+V1 parked all idle capital in SATA). With **no open positions the book sits 30%
+in SATA and 70% in cash** until a signal fires. The back-test applies the same
+split — SATA earns its coupon, cash earns nothing — so the combined curve and
+every P&L figure follow it (Balanced replay: return +1,241% → +1,196%, drawdown
+unchanged; the cost is the lost coupon on the cash leg). The back-test prices SATA
+without price risk, which is exactly what the cap guards against. Evidence:
+`SATA_CAP_EVAL.md`.
 
 **🩺 Strategy Health — the decay watchdog.** Every sleeve's config was
 *selected* by sweeping candidates over the same history it is reported on, so

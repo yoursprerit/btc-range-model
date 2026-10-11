@@ -73,7 +73,8 @@ def main():
 
     gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
                                       cluster_mix=oc.cluster_mix_for(oc.DEFAULT_PROFILE),
-                                      adds_only_cluster=oc.cluster_adds_band_for(oc.DEFAULT_PROFILE))
+                                      adds_only_cluster=oc.cluster_adds_band_for(oc.DEFAULT_PROFILE),
+                                      sata_cap=oc.sata_cap_for())
     print(f"\nToday: {gate['n_active']} positions open, {gate['n_open']} new entries, "
           f"SATA {gate['sata']*100:.0f}%")
     print(f"  Priority rank: {gate['priority_rank']}")
