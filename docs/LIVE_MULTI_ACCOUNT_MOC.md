@@ -168,7 +168,7 @@ rejected, or didn't fully fill.
    `data\overall\accounts\U1111111\`.
 4. **Add accounts one at a time**, then let the scheduled task run unattended.
 5. Reconcile daily against the paper control and the Executed Book page
-   (**Live · U…** picker) for the first few weeks; raise caps slowly.
+   (**🏦 IBKR Account #U…** broker radio) for the first few weeks; raise caps slowly.
 
 Manual run any time: `python scripts\ibkr_execute_accounts.py` (preview) or
 `--execute`; `--check` verifies config + gateway only; `--only <id>` restricts to

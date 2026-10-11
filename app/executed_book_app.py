@@ -810,12 +810,32 @@ _sv.render_badge()
 import freshness as fr                         # noqa: E402
 
 _BROKER_C2, _BROKER_IBKR = "📡 Collective2", "🏦 IBKR"
+# One radio entry per IBKR account the multi-account executor trades, labelled
+# with the account number ("🏦 IBKR Account #U1234567"); each has its own report
+# and history under data/overall/accounts/<ACCT>/.
+_acct_paths = {f"🏦 IBKR Account #{eb.account_id_of(_p)}": _p
+               for _p in eb.account_report_paths(REPORT_PATH.parent)}
+if _acct_paths:
+    # the paper control (and a pre-multi-account live report, if any) stay
+    # reachable, named for what they are
+    _legacy_live_seen = REPORT_PATH_LIVE.exists() or bool(
+        eb.archive_dir(REPORT_PATH_LIVE).is_dir()
+        and list(eb.archive_dir(REPORT_PATH_LIVE).glob("*_live.json")))
+    _ibkr_opts = dict(_acct_paths)
+    _ibkr_opts["🏦 IBKR Paper"] = REPORT_PATH
+    if _legacy_live_seen:
+        _ibkr_opts["🏦 IBKR Live (single-account)"] = REPORT_PATH_LIVE
+    _broker_opts = [_BROKER_C2, *_ibkr_opts]
+else:
+    _ibkr_opts = {}
+    _broker_opts = [_BROKER_C2, _BROKER_IBKR]
 _broker = st.radio(
-    "Broker", [_BROKER_C2, _BROKER_IBKR], index=0, horizontal=True,
+    "Broker", _broker_opts, index=0, horizontal=True,
     key="executed_book_broker",
     help="**Collective2** — the C2 model account the book is mirrored onto, "
          "refreshed by a GitHub Actions workflow (no local executor). "
-         "**IBKR** — the last execution report the IBKR executor pushed back.")
+         "**IBKR Account #…** — the last execution report the IBKR executor "
+         "pushed back for that account, with its own history.")
 
 if _broker == _BROKER_C2:
     st.caption("What the Collective2 model account holds after the book is "
@@ -844,22 +864,20 @@ st.caption("What the IBKR executor actually did on the last rebalance — trades
            "placed and the resulting positions — plus every earlier run, by date, "
            "under 🕰️ Historical.")
 
-# Which account views are available? (paper always; live once a live run exists —
-# either as the current report or as an archived one)
-_live_seen = REPORT_PATH_LIVE.exists() or bool(
-    eb.archive_dir(REPORT_PATH_LIVE).is_dir()
-    and list(eb.archive_dir(REPORT_PATH_LIVE).glob("*_live.json")))
-_avail = [("Paper", REPORT_PATH)] + ([("Live", REPORT_PATH_LIVE)] if _live_seen else [])
-# One entry per live account the multi-account MOC executor trades.
-_avail += [(f"Live · {eb.account_id_of(_p)}", _p)
-           for _p in eb.account_report_paths(REPORT_PATH.parent)]
-if len(_avail) > 1:
-    _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
-                     help="Paper and live executions are kept as separate reports; "
-                          "each live account has its own report and history.")
-    _path = dict(_avail)[_pick]
+if _ibkr_opts:
+    _path = _ibkr_opts[_broker]
 else:
-    _path = REPORT_PATH
+    # No per-account reports yet: the original paper / live selector.
+    _live_seen = REPORT_PATH_LIVE.exists() or bool(
+        eb.archive_dir(REPORT_PATH_LIVE).is_dir()
+        and list(eb.archive_dir(REPORT_PATH_LIVE).glob("*_live.json")))
+    _avail = [("Paper", REPORT_PATH)] + ([("Live", REPORT_PATH_LIVE)] if _live_seen else [])
+    if len(_avail) > 1:
+        _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
+                         help="Paper and live executions are kept as separate reports.")
+        _path = dict(_avail)[_pick]
+    else:
+        _path = REPORT_PATH
 
 _tab_now, _tab_hist = st.tabs(["✅ Latest run", "🕰️ Historical"])
 
