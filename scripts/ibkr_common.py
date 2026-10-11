@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -28,6 +29,7 @@ import ibkr_symbols as sym
 
 # IB Gateway default sockets: paper 4002 / live 4001 (TWS would be 7497 / 7496).
 DEFAULT_PORT = 4002
+DEFAULT_LIVE_PORT = 4001
 PAPER_ACCT_PREFIX = "DU"          # IBKR paper account ids start with DU
 STALE_BAR_DAYS = 4                # abort if the freshest signal bar is older than this
 
@@ -113,6 +115,16 @@ US_MARKET_HOLIDAYS = {
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
     "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 }
+
+# Scheduled 1:00 PM ET early closes (the day after Thanksgiving, Christmas Eve).
+# Exchanges stop accepting MOC entries 10 minutes before the bell, so on these
+# days the cutoff is 12:50 ET — long before the 3:30 PM ET executor slot.  A
+# strict-MOC run therefore skips the session instead of sending orders the
+# exchange would reject.  Extend as needed.
+US_EARLY_CLOSES = {
+    "2026-11-27": (13, 0), "2026-12-24": (13, 0), "2027-11-26": (13, 0),
+}
+MOC_CUTOFF_LEAD_MIN = 10          # minutes before the bell MOC entry stops
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -925,13 +937,32 @@ def _et_now(now=None) -> pd.Timestamp:
     return n.tz_convert(ET_TZ)
 
 
-def moc_entry_open(now=None, cutoff: tuple[int, int] = MOC_CUTOFF_ET
+def session_close_et(day) -> tuple[int, int]:
+    """(hour, minute) ET of the closing auction on *day* — 16:00, or the 13:00
+    early close on the handful of days the exchanges shut at 1 PM."""
+    return US_EARLY_CLOSES.get(str(pd.Timestamp(day).date()), US_CLOSE_ET)
+
+
+def moc_cutoff_et(day) -> tuple[int, int]:
+    """(hour, minute) ET after which a MOC entry is rejected on *day*."""
+    close = session_close_et(day)
+    if close == US_CLOSE_ET:
+        return MOC_CUTOFF_ET
+    t = close[0] * 60 + close[1] - MOC_CUTOFF_LEAD_MIN
+    return t // 60, t % 60
+
+
+def moc_entry_open(now=None, cutoff: tuple[int, int] | None = None
                    ) -> tuple[bool, str]:
     """(accepting?, reason) — can a MOC order still be entered right now?
 
     Past the exchange cutoff a MOC is rejected outright, so the caller must
-    route around it rather than discover the rejection order by order."""
+    route around it rather than discover the rejection order by order.  The
+    cutoff follows the session: 15:50 ET normally, 12:50 ET on a 1 PM early
+    close.  An explicit *cutoff* overrides that."""
     et = _et_now(now)
+    if cutoff is None:
+        cutoff = moc_cutoff_et(et)
     edge = et.normalize() + pd.Timedelta(hours=cutoff[0], minutes=cutoff[1])
     stamp = et.strftime("%H:%M ET")
     if et > edge:
@@ -942,15 +973,15 @@ def moc_entry_open(now=None, cutoff: tuple[int, int] = MOC_CUTOFF_ET
 
 def moc_wait_seconds(now=None, buffer_s: float = MOC_CLOSE_BUFFER_S,
                      max_wait_s: float = MOC_MAX_WAIT_S) -> float:
-    """How long to wait for MOC fills: until the 4:00 PM ET auction prints plus
+    """How long to wait for MOC fills: until the closing auction prints plus
     a reporting buffer, clamped to ``max_wait_s``.
 
     MOC is the one order type whose fills are unknowable at submit time, so the
     executor has to hold the connection open to write a truthful execution
     report instead of one that says "Submitted" for every leg."""
     et = _et_now(now)
-    close = et.normalize() + pd.Timedelta(hours=US_CLOSE_ET[0],
-                                          minutes=US_CLOSE_ET[1])
+    h, m = session_close_et(et)
+    close = et.normalize() + pd.Timedelta(hours=h, minutes=m)
     secs = (close - et).total_seconds() + buffer_s
     return float(min(max(secs, 0.0), max_wait_s))
 
@@ -966,6 +997,149 @@ def print_plan(orders: list[Order], net_liq: float) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# MULTI-ACCOUNT + STRICT-MOC GUARDS — pure helpers, unit-tested without a broker.
+# ════════════════════════════════════════════════════════════════════════════
+class MocUnavailable(RuntimeError):
+    """Strict-MOC run that cannot send its orders (past the exchange cutoff).
+
+    Raised BEFORE any order is built.  A strict-MOC run never degrades to a
+    limit or market order: a session that cannot be traded in the closing
+    auction is skipped, and tomorrow's book supersedes today's."""
+
+
+def select_account(accounts: list[str], requested: str | None,
+                   account_mode: str) -> tuple[str | None, str]:
+    """(account, reason) — which of the login's managed accounts to trade.
+
+    One IB Gateway login can expose several accounts, and ``managedAccounts()``
+    lists them in no order you control.  Taking ``[0]`` silently — the old
+    behaviour — trades whichever account IBKR happens to list first, which is
+    only acceptable when the login has exactly one.  So:
+
+    * an explicit *requested* id must be in the list (exact match) — otherwise
+      the answer is None and the reason names what IS available;
+    * with no request and a single account, that account is used;
+    * with no request and several accounts, a LIVE run refuses (None) — it will
+      not guess which real account to trade.  Paper keeps the old ``[0]``."""
+    accts = [a for a in (accounts or []) if a]
+    if requested:
+        if requested in accts:
+            return requested, f"account {requested} selected"
+        return None, (f"account '{requested}' is not managed by this login "
+                      f"(available: {', '.join(accts) or 'none'})")
+    if not accts:
+        return None, "the gateway reported no managed accounts (not logged in?)"
+    if len(accts) == 1:
+        return accts[0], f"single account {accts[0]}"
+    if account_mode == "live":
+        return None, (f"this login manages {len(accts)} accounts "
+                      f"({', '.join(accts)}) — pass --account to say which one "
+                      "to trade; a live run will not guess")
+    return accts[0], f"first of {len(accts)} accounts: {accts[0]}"
+
+
+def working_orders(trades, account: str) -> list:
+    """The not-yet-done orders in *trades* that belong to *account*.
+
+    An order with no account stamp is treated as belonging to the account being
+    checked (the safe reading: it blocks rather than slips through)."""
+    out = []
+    for t in trades or []:
+        try:
+            if t.isDone():
+                continue
+            acct = getattr(t.order, "account", "") or ""
+        except Exception:
+            continue
+        if not acct or acct == account:
+            out.append(t)
+    return out
+
+
+def check_no_working_orders(trades, account: str) -> tuple[bool, str]:
+    """(ok, reason) — refuse to send a book into an account that already has
+    orders working.
+
+    The duplicate-run lock keys on the execution REPORT, which a MOC run only
+    writes after the 4:00 PM auction — so a second run at 3:40 PM would find no
+    report and send the whole book again, on top of MOC orders that cannot be
+    cancelled after the cutoff.  Orders still working at the broker are the
+    ground truth for that window."""
+    live = working_orders(trades, account)
+    if not live:
+        return True, f"no working orders on {account}"
+    def _desc(t) -> str:
+        qty = getattr(t.order, "totalQuantity", None)
+        q = f"{qty:g} " if isinstance(qty, (int, float)) else ""
+        return f"{t.order.action} {q}{t.contract.symbol}"
+    names = ", ".join(_desc(t) for t in live[:6])
+    more = f" (+{len(live) - 6} more)" if len(live) > 6 else ""
+    return False, (f"{account} already has {len(live)} working order(s): "
+                   f"{names}{more} — a previous run's orders are still live and "
+                   "sending the book again would double them. Wait for them to "
+                   "fill/expire, or cancel them in TWS, then re-run "
+                   "(--ignore-working-orders to override)")
+
+
+def send_lock_path(report_path, as_of) -> Path:
+    """``…/<account dir>/.send_locks/<as_of>.lock`` next to the report."""
+    return (Path(report_path).parent / ".send_locks"
+            / f"{pd.Timestamp(as_of).date()}.lock")
+
+
+def acquire_send_lock(report_path, as_of, account: str,
+                      force: bool = False) -> tuple[bool, str]:
+    """Atomically claim the right to TRANSMIT *as_of*'s book for this account.
+
+    Created immediately before orders go out and left in place afterwards: it
+    is the record that this bar's orders were sent, readable the moment they
+    are — hours before a MOC report exists.  ``O_EXCL`` makes two simultaneous
+    runs race to a single winner.  ``force`` (``--force-rerun``) replaces it.
+    The directory is untracked/ignored, so a ``git reset --hard`` after a
+    failed report push cannot erase it."""
+    import json as _json
+    import os as _os
+    from datetime import datetime, timezone
+    p = send_lock_path(report_path, as_of)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    body = _json.dumps({"account": account, "as_of": str(pd.Timestamp(as_of).date()),
+                        "locked_at_utc": datetime.now(timezone.utc).isoformat(),
+                        "pid": _os.getpid()})
+    flags = _os.O_WRONLY | _os.O_CREAT | (_os.O_TRUNC if force else _os.O_EXCL)
+    try:
+        fd = _os.open(str(p), flags)
+    except FileExistsError:
+        try:
+            prior = _json.loads(p.read_text())
+            when = prior.get("locked_at_utc", "?")
+        except Exception:
+            when = "?"
+        return False, (f"orders for signal bar {pd.Timestamp(as_of).date()} were "
+                       f"already transmitted for {account} at {when} "
+                       f"({p.name}) — refusing to send them again. If that run "
+                       "genuinely placed nothing, re-run with --force-rerun")
+    with _os.fdopen(fd, "w") as f:
+        f.write(body)
+    return True, f"send lock taken ({p.name})"
+
+
+def moc_rejections(trades) -> list[tuple[str, str, str]]:
+    """(symbol, status, last log message) for MOC orders the broker already
+    refused or cancelled — visible within seconds of submission, long before
+    the auction, which is the window in which a human can still act."""
+    bad = []
+    for *_, t in trades:
+        try:
+            st = t.orderStatus.status
+            if st in ("Cancelled", "ApiCancelled", "Inactive"):
+                msg = (t.log[-1].message if getattr(t, "log", None) else "") or ""
+                bad.append((t.contract.symbol, st, msg))
+        except Exception:
+            continue
+    return bad
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # IBKR SESSION — connect, read account, place orders (lazy ib_async import).
 # ════════════════════════════════════════════════════════════════════════════
 class Broker:
@@ -973,7 +1147,8 @@ class Broker:
 
     def __init__(self, host: str, port: int, client_id: int,
                  account_mode: str = "paper", expected_account: str | None = None,
-                 confirm_live: bool = False, market_data_type: int = 1):
+                 confirm_live: bool = False, market_data_type: int = 1,
+                 account: str | None = None):
         """Connect and enforce the account guard for the chosen mode.
 
         account_mode:
@@ -983,10 +1158,20 @@ class Broker:
             match, so a real account can never be traded by accident or the wrong
             real account traded by mistake.
           * ``any``   — no check (escape hatch; not used by the executor).
+
+        account: which of the login's managed accounts to trade (see
+          :func:`select_account`).  Every read and every order below is scoped
+          to ``self.account``; orders carry it explicitly so the gateway cannot
+          route them to a different account on the same login.  In live mode a
+          login with several accounts REQUIRES it.
         """
         from ib_async import IB
         self.ib = IB()
-        self.ib.connect(host, port, clientId=client_id, timeout=30)
+        # ``account=`` tells ib_async which account is the main one for the
+        # account-update subscription; with several accounts on one login it
+        # must not be left to the gateway's default.
+        self.ib.connect(host, port, clientId=client_id, timeout=30,
+                        account=account or "")
         # 1 = live (default), 2 = frozen, 3 = delayed, 4 = delayed-frozen.
         # Delayed data is free and needs no subscription, but IBKR only serves
         # it when the client asks — without this call an unsubscribed account
@@ -997,10 +1182,16 @@ class Broker:
             self.ib.reqMarketDataType(int(market_data_type))
             print(f"  market data type {market_data_type} requested "
                   f"({'delayed' if int(market_data_type) in (3, 4) else 'frozen'})")
-        accts = self.ib.managedAccounts()
-        self.account = accts[0] if accts else ""
+        accts = list(self.ib.managedAccounts() or [])
+        chosen, why = select_account(accts, account, account_mode)
+        if chosen is None:
+            self._abort(why)
+        self.accounts = accts
+        self.account = chosen
+        print(f"  {why}" + (f" (login manages {len(accts)})" if len(accts) > 1 else ""))
         self.account_mode = account_mode
-        self._enforce_account_guard(account_mode, expected_account, confirm_live)
+        self._enforce_account_guard(account_mode, expected_account or account,
+                                    confirm_live)
 
     def _enforce_account_guard(self, mode: str, expected: str | None,
                                confirm_live: bool) -> None:
@@ -1120,6 +1311,12 @@ class Broker:
             con = getattr(f, "contract", None)
             if ex is None or con is None:
                 continue
+            # One login, several accounts: ``ib.fills()`` is the whole login's,
+            # so without this filter account B's report would book account A's
+            # trades as its own.
+            fill_acct = getattr(ex, "acctNumber", "") or ""
+            if fill_acct and fill_acct != self.account:
+                continue
             symbol = getattr(con, "symbol", "") or ""
             shares = float(getattr(ex, "shares", 0.0) or 0.0)
             price = float(getattr(ex, "price", 0.0) or 0.0)
@@ -1226,6 +1423,16 @@ class Broker:
         if not ok:
             raise PositionReadError(why)
         return current
+
+    def working_orders(self) -> list:
+        """Orders still working for this account, whichever API client or TWS
+        window placed them (``reqAllOpenOrders`` sees them all)."""
+        try:
+            trades = self.ib.reqAllOpenOrders()
+        except Exception as e:
+            raise RuntimeError(f"could not read the account's working orders "
+                               f"({e}) — refusing to send blind") from e
+        return working_orders(trades, self.account)
 
     def quote(self, contract) -> dict:
         """Snapshot bid/ask/last/close for a qualified contract (empty on any
@@ -1343,15 +1550,32 @@ class Broker:
         return MarketOrder(o.action, qty), ORDER_MARKET, 0.0
 
     def _resolve_order_type(self, order_type: str, fractional: bool,
-                            now=None, outside_rth: bool = False) -> tuple[str, bool]:
+                            now=None, outside_rth: bool = False,
+                            moc_strict: bool = False) -> tuple[str, bool]:
         """(effective order type, fractional) after the routing guards.
 
         MOC is refused after the exchange cutoff (it would simply be rejected)
-        and cannot carry fractional quantities, so both fall back rather than
-        fail the run."""
+        and cannot carry fractional quantities.  By default both fall back
+        rather than fail the run.  With *moc_strict* there is NO fallback: the
+        run is MOC or it is nothing — a late run raises :class:`MocUnavailable`
+        before a single order is built, and quantities are whole shares."""
         if order_type not in ORDER_TYPES:
             raise ValueError(f"unknown order type {order_type!r} "
                              f"(want one of {', '.join(ORDER_TYPES)})")
+        if moc_strict:
+            if order_type != ORDER_MOC:
+                raise ValueError("strict MOC requires --order-type moc")
+            if outside_rth:
+                raise MocUnavailable("strict MOC cannot be combined with "
+                                     "--outside-rth: there is no auction "
+                                     "outside regular hours")
+            ok, why = moc_entry_open(now)
+            if not ok:
+                raise MocUnavailable(f"{why} — strict MOC: nothing is sent "
+                                     "(no limit/market fallback)")
+            print(f"  MOC routing (strict): {why}; whole shares only, fills "
+                  "print in the closing auction.")
+            return ORDER_MOC, False
         if outside_rth and order_type != ORDER_MARKETABLE_LIMIT:
             # Neither MOC (there is no auction) nor MARKET (rejected by the
             # venue) means anything outside regular hours.
@@ -1414,8 +1638,10 @@ class Broker:
             self.ib.qualifyContracts(contract)
             esc = Order(o.key, o.symbol, o.action, rem, o.price,
                         f"{o.reason} (escalated from unfilled limit)")
+            mkt = MarketOrder(o.action, rem)
+            mkt.account = self.account
             extra.append((esc, rem, ORDER_MARKET, 0.0,
-                          self.ib.placeOrder(contract, MarketOrder(o.action, rem))))
+                          self.ib.placeOrder(contract, mkt)))
         if extra:
             deadline = wait
             while deadline > 0 and any(not t.isDone() for *_, t in extra):
@@ -1428,7 +1654,8 @@ class Broker:
               slippage_cap: float = DEFAULT_SLIPPAGE_CAP,
               now=None, outside_rth: bool = False,
               allow_margin: bool = False,
-              funding_buffer: float = FUNDING_BUFFER) -> list[dict]:
+              funding_buffer: float = FUNDING_BUFFER,
+              moc_strict: bool = False) -> list[dict]:
         """Transmit the order plan, sells first, waiting for fills.
 
         ``order_type`` is one of :data:`ORDER_TYPES`; see the module header for
@@ -1448,7 +1675,8 @@ class Broker:
         as ``SKIPPED-FUNDING`` so the execution report shows what was not bought.
         """
         order_type, fractional = self._resolve_order_type(order_type, fractional,
-                                                          now, outside_rth)
+                                                          now, outside_rth,
+                                                          moc_strict)
         results: list[dict] = []
         sells = [o for o in orders if o.action == "SELL"]
         buys = [o for o in orders if o.action == "BUY"]
@@ -1552,12 +1780,25 @@ class Broker:
                                     limit_price=0.0,
                                     reason=f"{o.reason} [no price outside RTH]"))
                 continue
+            # Explicit, on every order: a login with several accounts routes an
+            # unstamped order to its DEFAULT account, which is not necessarily
+            # the one this run was told to trade.
+            order.account = self.account
             trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
-            print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}]"
-                  + (" outsideRth" if outside_rth else ""))
+            print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}] "
+                  f"-> {self.account}" + (" outsideRth" if outside_rth else ""))
         if not trades:
             return results
         if order_type == ORDER_MOC:
+            # A MOC the broker refuses (restricted product, IRA rule, no
+            # permission) shows up within seconds; saying so NOW leaves the
+            # operator the minutes before the cutoff to act, instead of
+            # discovering it from the 4 PM report.
+            self.ib.sleep(5.0)
+            for symbol, st, msg in moc_rejections(trades):
+                print(f"    !! MOC {symbol} was {st} by the broker"
+                      + (f": {msg}" if msg else "")
+                      + " — nothing was substituted; act in TWS before the cutoff")
             deadline = moc_wait_seconds(now)
             print(f"    waiting {deadline/60:.0f} min for the closing "
                   f"auction to print…")

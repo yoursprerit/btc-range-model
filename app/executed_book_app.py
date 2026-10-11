@@ -850,9 +850,13 @@ _live_seen = REPORT_PATH_LIVE.exists() or bool(
     eb.archive_dir(REPORT_PATH_LIVE).is_dir()
     and list(eb.archive_dir(REPORT_PATH_LIVE).glob("*_live.json")))
 _avail = [("Paper", REPORT_PATH)] + ([("Live", REPORT_PATH_LIVE)] if _live_seen else [])
+# One entry per live account the multi-account MOC executor trades.
+_avail += [(f"Live · {eb.account_id_of(_p)}", _p)
+           for _p in eb.account_report_paths(REPORT_PATH.parent)]
 if len(_avail) > 1:
     _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
-                     help="Paper and live executions are kept as separate reports.")
+                     help="Paper and live executions are kept as separate reports; "
+                          "each live account has its own report and history.")
     _path = dict(_avail)[_pick]
 else:
     _path = REPORT_PATH

@@ -4,6 +4,10 @@ Every step from the Streamlit / cloud engine that **decides the weights** to the
 laptop executor that **places the orders** on IBKR paper. The heavy model runs in
 the cloud; the money-moving steps run only on the laptop.
 
+> **Live, several accounts:** the laptop half below runs once per account via
+> `scripts/ibkr_execute_accounts.py` with strict MOC orders — see
+> [`LIVE_MULTI_ACCOUNT_MOC.md`](LIVE_MULTI_ACCOUNT_MOC.md).
+
 **Legend:** ☁️ Cloud (Streamlit / GitHub Action) · 💻 Laptop (next to IB Gateway) ·
 🛡️ Guard (aborts if it fails) · 📏 Order sizing.
 

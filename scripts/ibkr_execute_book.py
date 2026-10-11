@@ -63,13 +63,22 @@ import executed_book as eb                          # noqa: E402
 import ibkr_symbols as sym                          # noqa: E402
 import ibkr_common as ic                            # noqa: E402  (pure guards)
 from ibkr_common import (                           # noqa: E402
-    DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
+    DEFAULT_LIVE_PORT, DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
     ORDER_MARKETABLE_LIMIT, ORDER_TYPES, Broker, Guards, PositionReadError,
     bar_is_current, build_order_plan, is_trading_day, post_trade_check,
     preflight, print_plan,
 )
 
 DEFAULT_REPORT = _REPO / "data" / "overall" / "executed_book.json"
+# Per-account live reports: one directory per account, each holding its own
+# executed_book_live.json + executed_archive/ — so the duplicate-run lock, the
+# reset marker and the Executed Book page all work per account unchanged.
+ACCOUNTS_DIR = _REPO / "data" / "overall" / "accounts"
+
+# Exit codes the multi-account runner reads.  0 = traded / nothing to do.
+EXIT_ABORT = 1          # a guard refused the run; nothing was sent
+EXIT_MOC_SKIPPED = 3    # strict MOC: past the cutoff, session skipped, nothing sent
+EXIT_MOC_UNFILLED = 4   # strict MOC: orders were sent but did not all fill
 
 
 def _write_report(broker, payload: dict, mode: str, trades: list[dict],
@@ -188,8 +197,14 @@ def main() -> int:
     ap.add_argument("--fractional", action="store_true",
                     help="allow fractional shares (default: whole shares)")
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
-                    help=f"IB Gateway API port (default {DEFAULT_PORT} = paper)")
+    ap.add_argument("--port", type=int, default=None,
+                    help=f"IB Gateway API port (default {DEFAULT_PORT} for paper, "
+                         f"{DEFAULT_LIVE_PORT} for --account-mode live)")
+    ap.add_argument("--account",
+                    help="which of the login's managed accounts to trade (e.g. "
+                         "U1234567). REQUIRED in live mode when the login "
+                         "manages more than one account; every read and every "
+                         "order is scoped to it")
     ap.add_argument("--client-id", type=int, default=18)
     ap.add_argument("--fill-timeout", type=float, default=None,
                     help="seconds to wait for each order leg to fill. Default "
@@ -241,6 +256,20 @@ def main() -> int:
                          "this multiple of net liquidation (default %(default)s). "
                          "The book is unlevered, so anything above ~1x means a "
                          "bad positions read or a duplicate run")
+    ap.add_argument("--strict-moc", action="store_true",
+                    help="MOC or nothing: requires --order-type moc, never falls "
+                         "back to a limit/market order, skips the session when "
+                         "the exchange cutoff has passed (exit 3), ignores "
+                         "--catch-up/--outside-rth, and exits 4 if any order "
+                         "is still unfilled after the closing auction")
+    ap.add_argument("--allow-paper-book", action="store_true",
+                    help="allow --account-mode live to trade a book that is not "
+                         "the live one (target_book_live.json parks idle capital "
+                         "in SATA; the paper book holds it as cash)")
+    ap.add_argument("--ignore-working-orders", action="store_true",
+                    help="send the book even though the account already has "
+                         "orders working (normally refused: it would double "
+                         "them)")
     ap.add_argument("--allow-margin", action="store_true",
                     help="permit buys beyond settled cash + realised sell "
                          "proceeds (i.e. on margin). OFF by default: the buy leg "
@@ -320,9 +349,37 @@ def main() -> int:
         args.push_report = not os.environ.get("IBKR_NO_PUSH_REPORT")
 
     live = args.account_mode == "live"
-    report_out = args.report_out or str(
-        _REPO / "data" / "overall" / ("executed_book_live.json" if live
-                                      else "executed_book.json"))
+    if args.port is None:
+        args.port = DEFAULT_LIVE_PORT if live else DEFAULT_PORT
+    if live and args.account:
+        # Pin by default: naming the account to trade IS naming the account
+        # expected, and a mismatch must abort rather than trade another one.
+        args.expected_account = args.expected_account or args.account
+        if args.expected_account != args.account:
+            print(f"ABORT: --account {args.account} and --expected-account "
+                  f"{args.expected_account} disagree. No orders placed.")
+            return EXIT_ABORT
+    if args.account:
+        default_report = (ACCOUNTS_DIR / args.account /
+                          ("executed_book_live.json" if live else "executed_book.json"))
+    else:
+        default_report = (_REPO / "data" / "overall" /
+                          ("executed_book_live.json" if live else "executed_book.json"))
+    report_out = args.report_out or str(default_report)
+
+    if args.strict_moc:
+        if args.order_type != ic.ORDER_MOC:
+            print("ABORT: --strict-moc requires --order-type moc.")
+            return EXIT_ABORT
+        if args.catch_up or args.outside_rth:
+            print("  --strict-moc: ignoring --catch-up/--outside-rth (there is "
+                  "no auction after the cutoff; a late session is skipped).")
+            args.catch_up = False
+            args.outside_rth = False
+        if args.fractional:
+            print("  --strict-moc: MOC takes whole shares only — ignoring "
+                  "--fractional.")
+            args.fractional = False
     default_book = str(_REPO / "data" / "overall" / (
         "target_book_live.json" if live else "target_book.json"))
 
@@ -339,6 +396,16 @@ def main() -> int:
     if args.require_signature and not payload.get("signature"):
         print("ABORT: --require-signature set but the book is unsigned.")
         return 1
+
+    # ── the right book for the mode ──────────────────────────────────────────
+    # The publisher emits two books from one engine run: paper (idle -> cash)
+    # and live (idle -> SATA). A live account handed the paper book would sit on
+    # the idle 40% instead of parking it, silently.
+    if live and payload.get("book_mode") != "live" and not args.allow_paper_book:
+        print(f"ABORT: --account-mode live but this book is "
+              f"book_mode={payload.get('book_mode')!r}, not 'live' "
+              "(use data/overall/target_book_live.json). No orders placed.")
+        return EXIT_ABORT
 
     # ── trading day + freshness ──────────────────────────────────────────────
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
@@ -390,6 +457,20 @@ def main() -> int:
               "Use --refresh-report to re-state the account without trading, or "
               "--force-rerun if that run genuinely placed no orders.")
         return 0
+
+    # ── strict MOC: is the closing auction still reachable? ─────────────────
+    # Checked BEFORE connecting: a late run must not touch the account at all.
+    # There is deliberately no fallback — a book that cannot be traded in the
+    # auction is skipped, and the next session's book supersedes it.
+    if args.strict_moc:
+        ok_moc, moc_why = ic.moc_entry_open()
+        print(f"MOC window: {moc_why}")
+        if not ok_moc and trades_now:
+            print("SKIP SESSION: strict MOC and the exchange cutoff has passed. "
+                  "No orders placed (no limit/market fallback by design).")
+            return EXIT_MOC_SKIPPED
+        if not ok_moc:
+            print("  (a run with --execute would SKIP the session here)")
 
     # ── missed-slot catch-up ─────────────────────────────────────────────────
     # A scheduled run cannot fire on a host that is switched off, and the book
@@ -480,7 +561,8 @@ def main() -> int:
     account_kwargs = dict(account_mode=args.account_mode,
                           expected_account=args.expected_account,
                           confirm_live=args.confirm_live,
-                          market_data_type=args.market_data_type)
+                          market_data_type=args.market_data_type,
+                          account=args.account)
     tag = args.account_mode.upper()
 
     # ── report refresh: no orders, just re-state reality ─────────────────────
@@ -557,6 +639,7 @@ def main() -> int:
 
     # ── execute ──────────────────────────────────────────────────────────────
     broker = Broker(args.host, args.port, args.client_id, **account_kwargs)
+    rc = 0
     try:
         net_liq = broker.net_liq()
         try:
@@ -564,7 +647,7 @@ def main() -> int:
         except PositionReadError as e:
             print(f"ABORT: {e}. No orders placed — the next scheduled run will "
                   "re-read the account.")
-            return 1
+            return EXIT_ABORT
         orders = build_order_plan(weights, exec_price, net_liq, current,
                                   args.band, args.fractional, args.max_order_notional)
         print(f"\nAccount {broker.account} ({tag}).")
@@ -573,26 +656,71 @@ def main() -> int:
                                     Guards.from_args(args))
         if not ok_pre:
             print(f"ABORT: {why_pre} No orders placed.")
-            return 1
+            return EXIT_ABORT
         fills: list[dict] = []
         if orders:
-            print(f"\nTransmitting orders ({args.order_type})…")
-            fills = broker.place(orders, args.fractional, args.fill_timeout,
-                                 order_type=args.order_type,
-                                 slippage_cap=args.slippage_cap,
-                                 outside_rth=args.outside_rth,
-                                 allow_margin=args.allow_margin)
+            # Ground truth for the window the report cannot cover: a MOC run
+            # writes its report only after the 4 PM auction, so a second run in
+            # between would see no report and send everything again.
+            if not args.ignore_working_orders:
+                try:
+                    ok_w, why_w = ic.check_no_working_orders(
+                        broker.working_orders(), broker.account)
+                except RuntimeError as e:
+                    ok_w, why_w = False, str(e)
+                print(f"  {'✓' if ok_w else '✗'} {why_w}")
+                if not ok_w:
+                    print("ABORT: No orders placed.")
+                    return EXIT_ABORT
+            ok_lock, why_lock = ic.acquire_send_lock(
+                report_out, payload.get("as_of"), broker.account,
+                force=args.force_rerun)
+            print(f"  {'✓' if ok_lock else '✗'} {why_lock}")
+            if not ok_lock:
+                print("ABORT: No orders placed.")
+                return EXIT_ABORT
+            print(f"\nTransmitting orders ({args.order_type}"
+                  f"{', strict' if args.strict_moc else ''}) to {broker.account}…")
+            try:
+                fills = broker.place(orders, args.fractional, args.fill_timeout,
+                                     order_type=args.order_type,
+                                     slippage_cap=args.slippage_cap,
+                                     outside_rth=args.outside_rth,
+                                     allow_margin=args.allow_margin,
+                                     moc_strict=args.strict_moc)
+            except ic.MocUnavailable as e:
+                # Raised before any order was built — release the lock so a
+                # legitimate re-run (if still before the cutoff) is not blocked.
+                try:
+                    ic.send_lock_path(report_out, payload.get("as_of")).unlink()
+                except OSError:
+                    pass
+                print(f"SKIP SESSION: {e}")
+                return EXIT_MOC_SKIPPED
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,
                           args.account_mode)
         post_trade_check(broker, weights, exec_price, Guards.from_args(args))
-        print("\n✓ Rebalance complete.")
+        if args.strict_moc:
+            open_legs = [f for f in fills
+                         if not str(f.get("status", "")).startswith("SKIPPED")
+                         and f.get("filled", 0.0) + 1e-9 < f.get("qty", 0.0)]
+            if open_legs:
+                rc = EXIT_MOC_UNFILLED
+                print("\n!! MOC NOT FULLY FILLED — "
+                      + ", ".join(f"{f['action']} {f['symbol']} "
+                                  f"{f.get('filled', 0):g}/{f['qty']:g} "
+                                  f"[{f['status']}]" for f in open_legs))
+                print("   Nothing was re-sent. Check the account in TWS; tomorrow's "
+                      "run re-plans from the positions the account really holds.")
+        if rc == 0:
+            print("\n✓ Rebalance complete.")
     finally:
         broker.disconnect()
     if args.push_report:
         _push_report(report_out)
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

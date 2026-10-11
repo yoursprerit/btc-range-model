@@ -399,6 +399,36 @@ def archive_report(payload: dict, report_path, secret: str | None = None) -> Pat
         return None
 
 
+ACCOUNTS_DIRNAME = "accounts"
+
+
+def account_report_paths(base_dir) -> list[Path]:
+    """Per-account LIVE reports under ``<base_dir>/accounts/<ACCT>/``.
+
+    The multi-account executor gives every account its own directory holding an
+    ``executed_book_live.json`` and an ``executed_archive/`` — so each account's
+    report, dated history and duplicate-run lock are independent, and every
+    function in this module that takes a *report_path* works on one unchanged.
+    A directory counts once it has either a current report or archived runs.
+    Sorted by account id."""
+    root = Path(base_dir) / ACCOUNTS_DIRNAME
+    if not root.is_dir():
+        return []
+    out = []
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        rep = d / "executed_book_live.json"
+        arch = d / ARCHIVE_DIRNAME
+        if rep.exists() or (arch.is_dir() and any(arch.glob("*_live.json"))):
+            out.append(rep)
+    return out
+
+
+def account_id_of(report_path) -> str | None:
+    """The account id a per-account report path belongs to, else None."""
+    p = Path(report_path)
+    return p.parent.name if p.parent.parent.name == ACCOUNTS_DIRNAME else None
+
+
 def archive_dir(report_path) -> Path:
     return Path(report_path).parent / ARCHIVE_DIRNAME
 

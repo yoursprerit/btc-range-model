@@ -1,0 +1,43 @@
+{
+  "_comment": "Copy to deploy/ibkr_accounts.json (git-ignored) and edit. One IB Gateway LIVE login, several accounts under it. Every account trades the same signed live book (data/overall/target_book_live.json) as MARKET-ON-CLOSE orders only.",
+
+  "host": "127.0.0.1",
+  "port": 4001,
+  "client_id_base": 40,
+  "book": "data/overall/target_book_live.json",
+  "kill_switch_file": "STOP_LIVE",
+  "child_timeout_s": 3000,
+  "stagger_s": 3,
+  "market_data_type": 1,
+
+  "defaults": {
+    "band": 0.01,
+    "max_deploy_frac": 0.25,
+    "max_order_notional": 5000,
+    "max_gross_frac": 1.02,
+    "max_turnover_frac": 1.5,
+    "max_price_drift": 0.25
+  },
+
+  "accounts": [
+    {
+      "id": "U1111111",
+      "label": "Taxable margin",
+      "type": "margin",
+      "enabled": true
+    },
+    {
+      "id": "U2222222",
+      "label": "Roth IRA",
+      "type": "ira",
+      "enabled": true,
+      "max_order_notional": 3000
+    },
+    {
+      "id": "U3333333",
+      "label": "Traditional IRA (paused)",
+      "type": "ira",
+      "enabled": false
+    }
+  ]
+}

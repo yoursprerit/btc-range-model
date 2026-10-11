@@ -8,6 +8,11 @@ book** and trades the IBKR **paper** account.
 > This is the Windows-specific companion to `IBKR_PAPER_TRADING.md`. Read that
 > for the cross-platform overview and the artifact schema; read this for the
 > exact Windows install/run/automate steps.
+>
+> **Trading REAL accounts?** Everything below is the **paper** setup. Live,
+> multi-account, market-on-close-only trading on this PC has its own runbook:
+> **[`docs/LIVE_MULTI_ACCOUNT_MOC.md`](docs/LIVE_MULTI_ACCOUNT_MOC.md)** (summary
+> in §13). The paper wrapper refuses `IBKR_ACCOUNT_MODE=live`.
 
 ---
 
@@ -733,6 +738,8 @@ Then the specifics:
 | `ABORT: account already carries a margin loan` | The account is not where the last run left it. Flatten the loan (or reconcile manually), then re-run. |
 | `buys $… exceed $… available — scaled to …%` | Not an error: the sell leg realised less than planned, so the buy leg was trimmed to the cash that funds it. Names dropped entirely show as `SKIPPED-FUNDING` in the Executed Book. The next session's run closes the gap. |
 | `ABORT: … outside regular trading hours` | The run fired outside 09:30–16:00 ET. Check the scheduled time (§7); `--outside-rth` only for a deliberate manual run. |
+| **Live:** `cannot open an API session on 127.0.0.1:4001` (exit 2) | The live gateway isn't logged in (2FA push not approved) or isn't running. Nothing was traded. See `docs/LIVE_MULTI_ACCOUNT_MOC.md` troubleshooting. |
+| **Live:** `SKIP SESSION … past the 15:50 ET MOC entry cutoff` | Strict MOC: the run started after the exchange cutoff, so it deliberately placed nothing. Move `-LiveTaskTime` earlier / keep the PC awake and the gateway up. |
 | Log shows `ù` where `—` should be | Cosmetic mojibake from the same encoding mismatch (cp1252 out, cp437 in); fixed by the same change. |
 
 ---
@@ -760,3 +767,33 @@ Then the specifics:
   the volatile part of the book — paper-test thoroughly before trusting it.
 - This is for **paper** validation. Real money is a separate, deliberate step
   beyond this repo's scope.
+
+---
+
+## 13. LIVE: several accounts, market-on-close only
+
+Sections 1–12 set up **paper**. To trade your real IBKR accounts (all under one
+login) with this same machine, use the multi-account live runner — full runbook:
+**[`docs/LIVE_MULTI_ACCOUNT_MOC.md`](docs/LIVE_MULTI_ACCOUNT_MOC.md)**.
+
+Short version:
+
+1. Run IB Gateway **live** under IBC (`deploy\ibc\config.live.ini.example`), API
+   port **4001**, read-only API off, 2FA approved on your phone.
+2. `copy deploy\ibkr_accounts.example.json deploy\ibkr_accounts.json` and list
+   your account ids with per-account limits (`max_deploy_frac`,
+   `max_order_notional`, `type: margin|ira|cash`, `enabled`).
+3. `setx OVERALL_BOOK_SECRET …` (same as the publisher; live **requires** a
+   verified signature).
+4. Register the live task (elevated): 
+   `powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LiveTask -LiveTaskTime 14:15`
+5. `... -LivePreflight`, then `... -LiveRehearse` (reads every account, sends
+   nothing), then enable **one** account with a small deploy cap first.
+
+What it does at 2:15 PM US Central: pulls `target_book_live.json`, checks the
+gateway login manages every configured account, then starts one executor per
+account **together**, each sending whole-share **MOC** orders stamped with its
+account id (**no limit/market fallback; a run past the 15:50 ET cutoff skips the
+session**), waits for the 4 PM auction, and publishes all reports in one commit.
+Reports: `data\overall\accounts\<ACCT>\`; logs: `logs\ibkr_live_executor.log`.
+

@@ -104,6 +104,9 @@ param(
     [switch]$Preflight,
     [switch]$Rehearse,
     [switch]$Verify,
+    [switch]$LiveTask,
+    [switch]$LivePreflight,
+    [switch]$LiveRehearse,
     [switch]$GenerateSecret,
 
     [string]$BookSecret,
@@ -113,6 +116,8 @@ param(
     [string]$TaskTime = '14:30',
     [string]$Branch   = 'main',
     [string]$Port     = '4002',
+    [string]$LivePort = '4001',
+    [string]$LiveTaskTime = '14:15',
     [string]$KillSwitchFile = 'C:\IBC\HALT_TRADING'
 )
 
@@ -125,7 +130,8 @@ $Venvpy    = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 
 # If no phase flags were passed, default to -All (nice bare-invocation UX).
 $anyPhase = $InstallPython -or $Venv -or $Secret -or $Gateway -or $IBC -or $Task `
-            -or $Autostart -or $Preflight -or $Rehearse -or $Verify
+            -or $Autostart -or $Preflight -or $Rehearse -or $Verify `
+            -or $LiveTask -or $LivePreflight -or $LiveRehearse
 if (-not $anyPhase) { $All = $true }
 if ($All) { $InstallPython=$true; $Venv=$true; $Secret=$true; $Gateway=$true
             $IBC=$true; $Task=$true; $Autostart=$true; $Preflight=$true }
@@ -469,6 +475,96 @@ if ($Rehearse) {
             else { Warn "kill switch was ALREADY armed before this run - left armed" }
         }
     }
+}
+
+
+# -- 7L. LIVE multi-account task (strict MOC) -----------------------------------
+# Deliberately NOT part of -All: turning on real-money trading is its own step.
+if ($LiveTask) {
+    Section "Task Scheduler - LIVE multi-account MOC executor"
+    $wrapper = Join-Path $ScriptDir 'ibkr_execute_live_accounts.ps1'
+    if (-not (Test-Path $wrapper)) { throw "missing $wrapper" }
+    $cfgPath = Join-Path $RepoRoot 'deploy\ibkr_accounts.json'
+    if (-not (Test-Path $cfgPath)) {
+        Warn "no $cfgPath yet - copy deploy\ibkr_accounts.example.json to it and edit"
+        Warn "  (the task is registered anyway; it will exit 2 until the file exists)"
+    }
+    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Branch `"$Branch`""
+    $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $RepoRoot
+    $trg = New-ScheduledTaskTrigger -Daily -At ([datetime]$LiveTaskTime)
+    # No -StartWhenAvailable on purpose: a LIVE MOC run that fires late is
+    # skipped by the runner anyway (past the 15:50 ET cutoff), so a catch-up
+    # fire would only produce a confusing "skipped" alert after the close.
+    $set = New-ScheduledTaskSettingsSet -WakeToRun `
+            -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+    Register-ScheduledTask -TaskName 'IBKR Option C LIVE executor' -Action $act -Trigger $trg `
+        -Settings $set -RunLevel Highest -Force `
+        -Description 'Trade the published live book in every configured IBKR account as market-on-close orders.' | Out-Null
+    Ok "registered task 'IBKR Option C LIVE executor' at $LiveTaskTime daily (-WakeToRun), branch $Branch"
+    Info "the MOC cutoff is 15:50 ET: $LiveTaskTime must be well before it in YOUR time zone"
+    Info "preview now (no orders): .\scripts\setup_windows_option_c.ps1 -LiveRehearse"
+}
+
+# -- 9L. LIVE pre-flight ----------------------------------------------------------
+if ($LivePreflight) {
+    Section "LIVE pre-flight (multi-account, strict MOC)"
+    $preflightEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $persistedSecret = [Environment]::GetEnvironmentVariable('OVERALL_BOOK_SECRET', 'User')
+    if (-not $env:OVERALL_BOOK_SECRET -and $persistedSecret) {
+        $env:OVERALL_BOOK_SECRET = $persistedSecret
+        $env:IBKR_SECRET_FROM_PERSISTED = '1'
+    } else {
+        Remove-Item Env:\IBKR_SECRET_FROM_PERSISTED -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path $Venvpy) {
+        $env:IBKR_TASK_TIME = $LiveTaskTime
+        $env:PYTHONUTF8 = '1'
+        & $Venvpy (Join-Path $ScriptDir 'preflight_option_c.py') '--live' 2>&1 |
+            ForEach-Object { if ($_ -match "`t") { Report $_ } }
+        # Does the live login actually manage every configured account?
+        Info "checking the gateway login against deploy\ibkr_accounts.json ..."
+        & $Venvpy (Join-Path $ScriptDir 'ibkr_execute_accounts.py') '--check' 2>&1 |
+            ForEach-Object { Info $_ }
+        if ($LASTEXITCODE -eq 0) { Ok "every enabled account is managed by the live gateway login" }
+        else { Fail "gateway/account check failed (exit $LASTEXITCODE) - see above" }
+    } else {
+        Fail "venv python MISSING at $Venvpy - run -Venv"
+    }
+
+    if (Get-ScheduledTask -TaskName 'IBKR Option C LIVE executor' -ErrorAction SilentlyContinue) {
+        $info = Get-ScheduledTask -TaskName 'IBKR Option C LIVE executor' | Get-ScheduledTaskInfo
+        Ok "LIVE scheduled task registered (next run $($info.NextRunTime))"
+        if ($info.LastTaskResult -and $info.LastTaskResult -ne 0 -and $info.LastTaskResult -ne 267011) {
+            Warn "last run exited $($info.LastTaskResult) - check logs\ibkr_live_executor.log"
+        }
+    } else {
+        Fail "LIVE scheduled task NOT registered - run -LiveTask from an ELEVATED PowerShell"
+    }
+
+    $tcp = Test-NetConnection -ComputerName 127.0.0.1 -Port ([int]$LivePort) -WarningAction SilentlyContinue
+    if ($tcp.TcpTestSucceeded) { Ok "IB Gateway (live) reachable on 127.0.0.1:$LivePort" }
+    else { Fail "nothing listening on 127.0.0.1:$LivePort - start the LIVE IB Gateway / IBC and complete 2FA" }
+
+    $ErrorActionPreference = $preflightEAP
+    Section "LIVE pre-flight result"
+    if ($script:FailCount -eq 0) { Ok "no blocking problems - the $LiveTaskTime LIVE run should trade" }
+    else { Fail "$($script:FailCount) blocking problem(s) above - the LIVE run will NOT trade correctly" }
+}
+
+# -- 10L. LIVE rehearsal (preview: reads every account, places NO orders) ------------
+if ($LiveRehearse) {
+    Section "LIVE dress rehearsal (preview - NO orders)"
+    $wrapper = Join-Path $ScriptDir 'ibkr_execute_live_accounts.ps1'
+    # -Preview runs the runner without --execute: it logs in to the gateway,
+    # reads every account, runs the real guards and prints each account's order
+    # plan, but transmits nothing.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $wrapper -Branch $Branch -Preview 2>&1 |
+        ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -eq 0) { Ok "preview completed for every account (no orders were sent)" }
+    else { Fail "preview exited $LASTEXITCODE - read the output above" }
 }
 
 Section "Next steps"

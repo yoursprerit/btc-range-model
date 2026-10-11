@@ -805,7 +805,11 @@ def _pct(x, digits=1):
 # the sizing close, a top-up averages the basis up), which is exactly why the
 # account's own P&L is worth showing next to the engine's.
 _EB_DIR = _REPO_ROOT / "data" / "overall"
-_EB_PATHS = (_EB_DIR / "executed_book_live.json", _EB_DIR / "executed_book.json")
+# Live first (the multi-account executor's per-account reports, then the legacy
+# single live report), then paper.  Several live accounts => the first one by
+# account id is shown here; the Executed Book page has the per-account picker.
+_EB_PATHS = (*eb.account_report_paths(_EB_DIR),
+             _EB_DIR / "executed_book_live.json", _EB_DIR / "executed_book.json")
 
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=2)
@@ -826,7 +830,9 @@ def get_executed_report(bucket: str) -> dict | None:
         except Exception:
             continue
         if payload.get("schema") == eb.SCHEMA and (payload.get("positions") or []):
-            payload = dict(payload, _source=_p.name)
+            _acct = eb.account_id_of(_p)
+            payload = dict(payload, _source=(f"{_acct}/{_p.name}" if _acct
+                                             else _p.name))
             return payload
     return None
 

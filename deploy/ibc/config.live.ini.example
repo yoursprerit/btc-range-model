@@ -1,0 +1,43 @@
+# IBC config for the LIVE IB Gateway used by the multi-account MOC executor.
+# Copy to e.g. C:\IBC\config-live.ini and fill in. NEVER commit the filled-in file:
+# IBC stores the password in clear text, so the live login should be a
+# dedicated username with only the permissions the strategy needs.
+#
+# Differences from the paper config (config.ini.example):
+#   * TradingMode=live and the live API port (4001, not 4002)
+#   * 2FA is MANDATORY on a funded login -- see the notes below
+#   * ReadOnlyApi must be 'no' or every order is rejected
+#
+# Re-check each key against the IBC User Guide for the version you installed;
+# key names and defaults move between releases.
+
+IbLoginId=
+IbPassword=
+
+TradingMode=live
+OverrideTwsApiPort=4001
+ReadOnlyApi=no
+
+# Auto-accept the "incoming API connection" dialog for 127.0.0.1.
+AcceptIncomingConnectionAction=accept
+# Dismiss the "non-brokerage account" / blind-trading dialogs so an unattended
+# session never blocks on a modal window.
+AcceptNonBrokerageAccountWarning=yes
+AllowBlindTrading=yes
+
+# If you sign in elsewhere (phone, Client Portal) IBKR drops this session. Keep
+# THIS one primary so a stray web login does not silently kill tomorrow's run.
+ExistingSessionDetectedAction=primary
+
+# Daily restart: pick a time far from the 2:15 PM US Central order window and
+# the 3:00 PM close. After this restart IBC logs back in on its own.
+AutoRestartTime=03:00 AM
+
+# 2FA (IBKR Mobile push). IBC re-sends the push if it times out instead of
+# giving up, and exits cleanly if you never approve it.
+ReloginAfterSecondFactorAuthenticationTimeout=yes
+SecondFactorAuthenticationExitInterval=180
+
+# IBKR forces a full interactive re-login with 2FA about once a week (around the
+# weekend). Approve the push on your phone then; until you do, the 2:15 PM run
+# exits 2 ("cannot open an API session") and trades NOTHING.

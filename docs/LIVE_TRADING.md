@@ -1,5 +1,12 @@
 # Live trading — running real money alongside paper
 
+> **Several live accounts under one login, on a local PC, market-on-close only?**
+> Use **[`LIVE_MULTI_ACCOUNT_MOC.md`](LIVE_MULTI_ACCOUNT_MOC.md)** — it supersedes
+> the single-account recipe below for that setup (per-account caps and reports,
+> strict MOC with no limit/market fallback, all accounts submitted together before
+> the exchange cutoff). This page remains the reference for the cloud/Docker
+> single-account flow and for the guard table, which still applies.
+
 > ⚠️ **Real money.** This runs the strategy against a **funded IBKR account**.
 > The strategy was built and validated on paper; treat live as a monitored trial
 > with small capital. Keep **paper running in parallel** as your control — don't
