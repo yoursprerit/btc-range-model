@@ -54,6 +54,7 @@ import overall_frictions as fx
 import ticker_config
 import freshness as fr
 import executed_book as eb          # cost-basis positions from the IBKR report
+import pnl_snapshot as pnl_snap     # precomputed P&L replays (daily CI build)
 import inspect as _inspect
 
 if not hasattr(fr, "audit_universe"):          # self-heal a stale module cache
@@ -206,6 +207,32 @@ def _bucket() -> str:
     return f"{now.date()}-{now.hour}-{now.minute // 30}"
 
 
+@st.cache_resource(show_spinner=False, max_entries=2)
+def _load_pnl_snapshot(mtime: float):
+    return pnl_snap.load()
+
+
+def _snap_ok() -> bool:
+    """Whether snapshot reuse is allowed (cache-key part for the cached packs:
+    the "recompute live" toggle must change it)."""
+    return not st.session_state.get("overall_pnl_live")
+
+
+def get_pnl_snapshot():
+    """The precomputed P&L replays (data/overall/pnl_snapshot.pkl.gz, rebuilt
+    daily by CI), or None when absent / stale / built by different engine code
+    / bypassed with the "recompute live" toggle — every caller then falls back
+    to the live computation below.  Keyed on the file's mtime so a redeploy
+    that ships a new snapshot is picked up without a manual cache clear."""
+    if st.session_state.get("overall_pnl_live"):
+        return None
+    try:
+        mt = pnl_snap.SNAPSHOT_PATH.stat().st_mtime
+    except OSError:
+        return None
+    return _load_pnl_snapshot(mt)
+
+
 @st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…", max_entries=6)
 def get_results(bucket: str, version: str = "v2"):
     # computed_at is cached alongside the results, so it records when the
@@ -221,7 +248,7 @@ def get_results(bucket: str, version: str = "v2"):
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
-def get_price_returns(bucket: str):
+def get_price_returns(bucket: str, use_snap: bool = True):
     """Per-sleeve daily PRICE returns (the underlying's bar-to-bar move,
     ``bh_returns_matrix``) — version-independent, so the as-published record
     prices every archived book identically under the V1 / V2 / Combined
@@ -230,6 +257,9 @@ def get_price_returns(bucket: str):
     what its P&L must compound (a strategy stream goes flat on a sleeve the
     generation has exited or retired, e.g. GLDM/UGL/OIH on 2026-10-09 under
     V2, and silently dropped the move of a position the account still held)."""
+    _snap = get_pnl_snapshot() if use_snap else None
+    if _snap is not None:
+        return _snap["price_returns"]
     res = get_results(bucket, "v2")
     if not res["results"]:
         return None
@@ -266,7 +296,7 @@ def get_entry_closes(positions: tuple):
 
 # display name of the combined back-test curve — the walk-forward gated replay
 # (the daily gate/tilt book, look-ahead-free anchors), NOT a fixed-weight blend.
-STRAT_CURVE = "Overall strategy (gated replay)"
+STRAT_CURVE = pnl_snap.STRAT_CURVE
 
 # display name of the as-published record — the target books actually committed
 # each day (data/overall/book_archive/), daily optimiser trims included.
@@ -276,7 +306,7 @@ STRAT_CURVE_ACTUAL = "Overall strategy (as published)"
 # instrument in the universe, held through every signal, never in cash.  It is
 # both a benchmark line on every Growth chart AND a selectable performance
 # source in the P&L section, so the name has to be one constant.
-BH_CURVE = "Equal-weight Buy & Hold"
+BH_CURVE = pnl_snap.BH_CURVE
 
 
 @st.cache_data(ttl=900, show_spinner=False, max_entries=2)
@@ -316,7 +346,7 @@ def get_universe_pack(bucket: str, version: str = "v2"):
 
 @st.cache_data(ttl=1800, show_spinner="Optimising the allocation and replaying the back-test…",
                max_entries=12)
-def get_profile_pack(bucket: str, version: str, name: str):
+def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True):
     """ONE risk profile's optimiser + walk-forward replay + live gate for a
     generation — cached per (generation, profile) so a selector switch
     replays only the profile on screen (the comparison table assembles the
@@ -339,11 +369,20 @@ def get_profile_pack(bucket: str, version: str, name: str):
     # the book V1 last held — spliced from the two cached generations
     _gens = ((get_results(bucket, "v1")["results"], get_results(bucket, "v2")["results"])
              if str(version).lower() == "combined" else None)
-    wf = ov.walkforward_gated_replay(results, caps=caps,
-                                     mdd_floor=prof["mdd_floor"],
-                                     objective=prof["objective"],
-                                     sata_daily=sata, tilt=True,
-                                     version=version, gens=_gens)
+    # the walk-forward replay is the slow part and only changes with a new daily
+    # bar: reuse the CI-built one when it was computed on exactly this returns
+    # matrix, otherwise replay live (never mixes data vintages)
+    wf = None
+    _snap = get_pnl_snapshot() if use_snap else None
+    _sp = pnl_snap.get_pack(_snap, version, name) if _snap is not None else None
+    if _sp is not None and pnl_snap.rets_match(_sp["rets"], rets):
+        wf = _sp["wf"]
+    if wf is None:
+        wf = ov.walkforward_gated_replay(results, caps=caps,
+                                         mdd_floor=prof["mdd_floor"],
+                                         objective=prof["objective"],
+                                         sata_daily=sata, tilt=True,
+                                         version=version, gens=_gens)
     per = ov.period_metrics_from_ret(wf["ret"], ov.COMBINED_PERIODS)
     curves = {STRAT_CURVE: wf["equity"], **base_curves}
     gate = ov.signal_gated_allocation(results, opt["optimal"]["weights"], caps=caps,
@@ -369,7 +408,8 @@ def get_all_profiles(bucket: str, version: str = "v2"):
     up = get_universe_pack(bucket, version)
     if not up:
         return None
-    profiles = {name: get_profile_pack(bucket, version, name) for name in UI_PROFILES}
+    profiles = {name: get_profile_pack(bucket, version, name, _snap_ok())
+                for name in UI_PROFILES}
     if any(p is None for p in profiles.values()):
         return None
     return dict(results=up["results"], computed_at=up["computed_at"], rets=up["rets"],
@@ -377,13 +417,16 @@ def get_all_profiles(bucket: str, version: str = "v2"):
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
-def get_bh_replay(bucket: str):
+def get_bh_replay(bucket: str, use_snap: bool = True):
     """Equal-weight buy & hold of the whole universe, in the same shape the
     strategy replays return (weights / SATA / returns matrices), so the P&L
     section can drive every figure off it exactly as it does off the gated
     replay or the as-published record.  Aligned to the strategy returns
     matrix's calendar, which makes its curve identical to the
     ``BH_CURVE`` benchmark line the same charts already draw."""
+    _snap = get_pnl_snapshot() if use_snap else None
+    if _snap is not None:
+        return _snap["bh_replay"]
     allp = get_all_profiles(bucket)
     if not allp:
         return None
@@ -395,7 +438,7 @@ def get_portfolio(bucket: str, profile: str, version: str = "v2"):
     optimised / replayed (per-profile cache), so the P&L section's V1 / V2 /
     Combined switch costs one replay, not one per profile."""
     up = get_universe_pack(bucket, version)
-    p = get_profile_pack(bucket, version, profile) if up else None
+    p = get_profile_pack(bucket, version, profile, _snap_ok()) if up else None
     if not up or not p:
         return None
     return dict(results=up["results"], computed_at=up["computed_at"],
@@ -404,13 +447,16 @@ def get_portfolio(bucket: str, profile: str, version: str = "v2"):
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
-def get_sleeve_prices(bucket: str):
+def get_sleeve_prices(bucket: str, use_snap: bool = True):
     """Daily close per sleeve (share-price scale for the IBKR commission
     schedule), aligned to the strategy returns calendar.  Built from the
     COMBINED universe — the superset of every generation's sleeves — so an
     archived book that holds a sleeve the live universe has retired (OIH
     under V2) still sizes its orders off that sleeve's real price, not the
     simulator's placeholder."""
+    _snap = get_pnl_snapshot() if use_snap else None
+    if _snap is not None and _snap.get("sleeve_prices") is not None:
+        return _snap["sleeve_prices"]
     res = get_results(bucket, "combined")
     results = res["results"] if res else None
     if not results:
@@ -2396,6 +2442,27 @@ with tab_live:
         # received (c2_book_archive/), from the record reset
         # (C2_RECORD_START), current strategy version only. C2 holds idle
         # capital as plain cash, so the cash leg earns nothing (no SATA).
+        # ⚡ the heavy replays come from the snapshot CI rebuilds every day
+        # (data/overall/pnl_snapshot.pkl.gz) — instant; the toggle recomputes
+        # them live (30–60 s) and is also the automatic fallback whenever the
+        # snapshot is missing, stale or built by different engine code
+        _live_cols = st.columns([3, 2])
+        with _live_cols[1]:
+            st.toggle("🔄 Recompute live (slow)", key="overall_pnl_live",
+                      help="Ignore the precomputed daily snapshot and re-run "
+                           "every replay from the engine right now (~30–60 s "
+                           "on a cold start). Same code, so the figures match; "
+                           "use it to cross-check the snapshot.")
+        _snap_info = get_pnl_snapshot()
+        _use_snap = _snap_info is not None
+        with _live_cols[0]:
+            if _snap_info is not None:
+                st.caption(f"⚡ Replays served from the precomputed snapshot "
+                           f"(last bar **{_snap_info['last_bar']}**, built "
+                           f"{str(_snap_info['built_at'])[:16].replace('T', ' ')} UTC).")
+            else:
+                st.caption("🧮 Computing replays live (no fresh precomputed "
+                           "snapshot available).")
         _books = get_c2_books(_bucket())
         _vmap = get_book_version_map(_bucket())
         # ── strategy-logic selector — drives BOTH sources below: the
@@ -2407,7 +2474,10 @@ with tab_live:
             "overall_pnl_strategy_view", default=_sv.VIEW_COMBINED, what="P&L figures")
         _pnl_ver = _sv.VIEW_TO_VERSION[_pnl_view]
         try:
-            _PFV = get_portfolio(_bucket(), _profile, _pnl_ver) or _PF
+            _snap = get_pnl_snapshot()
+            _PFV = ((pnl_snap.get_pack(_snap, _pnl_ver, _profile)
+                     if _snap is not None else None)
+                    or get_portfolio(_bucket(), _profile, _pnl_ver) or _PF)
         except Exception as _exc:
             st.warning(f"Could not build the {_pnl_view} replay ({_exc}); showing "
                        "the live-logic replay instead.")
@@ -2416,7 +2486,7 @@ with tab_live:
         # the record is priced on the sleeves' PRICE returns (version-
         # independent): a published book held its sleeves whatever a
         # generation's engine did that day — see get_price_returns
-        _px_rets = get_price_returns(_bucket())
+        _px_rets = get_price_returns(_bucket(), _use_snap)
         _bookrep = (ov.published_book_replay(
                         _px_rets if _px_rets is not None else _PFV["rets"],
                         _books, sata_daily=0.0, version_map=_vmap,
@@ -2431,7 +2501,7 @@ with tab_live:
         _SRC_ACTUAL = "🎯 As-published record (actual books)"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
         _SRC_BH = "⚖️ Equal-weight buy & hold"
-        _bhrep = get_bh_replay(_bucket())
+        _bhrep = get_bh_replay(_bucket(), _use_snap)
         # the buy-&-hold source is the "do nothing" alternative measured over
         # the identical window — always offered, since it needs no archive and
         # no profile.  The as-published option only exists once books do.
@@ -2709,7 +2779,7 @@ with tab_live:
         if _fx_on:
             _fx_sim = fx.simulate_frictions(
                 _src_rets, _wf["weights"], _wf["sata"],
-                get_sleeve_prices(_bucket()), _start_sel, end=_end_arg,
+                get_sleeve_prices(_bucket(), _use_snap), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
                 sata_daily=0.0 if _actual else ov.SATA_DAILY)
