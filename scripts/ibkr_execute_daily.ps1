@@ -78,6 +78,14 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 
 $AccountMode = if ($env:IBKR_ACCOUNT_MODE) { $env:IBKR_ACCOUNT_MODE } else { 'paper' }
+# Live trading goes through ibkr_execute_live_accounts.ps1 (multi-account,
+# market-on-close only, strict). This wrapper's live branch predates that and
+# would route marketable limits with fallbacks, so it is refused unless you opt
+# in explicitly.
+if ($AccountMode -eq 'live' -and $env:IBKR_ALLOW_LEGACY_LIVE -ne '1') {
+    Write-Output "ERROR: live trading now runs via scripts\ibkr_execute_live_accounts.ps1 (strict MOC, all accounts). Set IBKR_ALLOW_LEGACY_LIVE=1 to force this legacy path."
+    exit 2
+}
 if (-not $Branch) { $Branch = 'main' }
 if (-not $Book)   {
     # live parks idle capital in SATA (target_book_live.json); paper holds cash.

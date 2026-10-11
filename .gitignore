@@ -23,6 +23,12 @@ Thumbs.db
 # IBKR gateway credentials — commit .env.example, never the filled-in .env
 .env
 deploy/ibkr-gateway/.env
+# Multi-account live runner: real account ids stay local; the send-locks are
+# per-machine state (they must survive a `git reset --hard`, so never tracked)
+deploy/ibkr_accounts.json
+data/overall/accounts/*/.send_locks/
+logs/
+
 # systemd EnvironmentFile — holds the signing secret; commit only the .example
 deploy/systemd/executor.env
 deploy/systemd/executor-live.env

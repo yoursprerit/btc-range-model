@@ -218,6 +218,10 @@ Useful flags:
 | `--max-price-drift` | `0.25` | abort when a name quotes this far from its sizing price |
 | `--outside-rth` | off | allow the run outside 09:30–16:00 ET |
 | `--allow-nonpaper` | off | **danger** — disable the paper-account guard |
+| `--account` | — | which of the login's managed accounts to trade (**required** in live mode when the login manages several; every read and order is scoped to it) *(Option-C executor only)* |
+| `--strict-moc` | off | MOC or nothing: needs `--order-type moc`, never falls back, skips the session past the cutoff (exit 3), exit 4 if unfilled after the auction *(Option-C executor only)* |
+| `--ignore-working-orders` | off | send even though the account already has orders working *(Option-C executor only)* |
+| `--allow-paper-book` | off | let `--account-mode live` trade a non-live book *(Option-C executor only)* |
 
 The Option-A rebalancer carries the same limits as the Option-C executor, from
 the same code — see [Pre-flight guards](#pre-flight-guards-what-the-executor-refuses-to-do).
@@ -464,6 +468,8 @@ trade-offs are real:
   2:30-PM-CT (3:30 PM ET) slot clears it by 20 minutes — this is exactly why
   MOC wasn't an option at the old 8:45-AM-CT slot. Past the cutoff the executor
   automatically falls back to a marketable limit rather than eat a rejection.
+  (Live trading uses `--strict-moc` instead: **no fallback** — a late run skips
+  the session. See [`docs/LIVE_MULTI_ACCOUNT_MOC.md`](docs/LIVE_MULTI_ACCOUNT_MOC.md).)
 - **Nothing fills until 4:00 PM ET**, so the executor holds the connection for
   ~32 minutes to write a truthful execution report. Keep
   `TimeoutStartSec` in `ibkr-executor.service` above ~35 min (it ships at 3600).
@@ -639,6 +645,8 @@ and the paper account ended at 3.4× net liquidation on a $2.17M margin loan
 | **Current-bar check** | A book whose **equity basis** is not the last completed session. The 36-hour freshness window could not catch this: a book published 7:15 AM CT is still "fresh" at 2:30 PM CT the *next* day. A withheld publish now means **no trade**. A weekend `as_of` over the right basis is normal — the 24/7 sleeves move on Saturdays and Sundays. | `--allow-stale-bar` |
 | **Duplicate-run lock** | A second execute run for a signal bar that already has an execution report (`executed_archive/<as_of>.json`). Dry-runs don't lock. | `--force-rerun` |
 | **Account state** | Trading into an account that already carries a margin loan (negative cash) or is already geared past the cap. | `--allow-margin` |
+| **Working orders** | Sending a book into an account that already has orders working (a previous run's MOCs can't be cancelled after the cutoff, and a MOC run's report only exists after 4 PM, so the duplicate-run lock below can't see them yet). Read from the broker via `reqAllOpenOrders`. | `--ignore-working-orders` |
+| **Send lock** | A second transmit for a signal bar whose orders were already sent for this account: a lock file is created atomically the instant orders go out, readable immediately — hours before a MOC report exists. | `--force-rerun` |
 | **Book math** | A book with a NaN/negative weight, weights summing past 100%, or a name carrying weight with no usable execution price. | none |
 | **Projected exposure** | A plan that would leave gross exposure above `--max-gross-frac` (default 1.02×) of net liquidation. The book is unlevered by construction, so anything above ~1× means a bad read or a duplicate run. | raise `--max-gross-frac` |
 | **Turnover** | A plan trading more than `--max-turnover-frac` (default 1.5×) of NAV — implausible for a daily rebalance. | raise the flag |

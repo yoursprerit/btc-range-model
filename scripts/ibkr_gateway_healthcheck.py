@@ -1,7 +1,12 @@
-"""Healthcheck: is IB Gateway up, logged in, and serving the PAPER account?
+"""Healthcheck: is IB Gateway up, logged in, and serving the right account(s)?
 
 Connects to the gateway's API port and confirms it returns a paper (DU…) managed
-account. Exits 0 when healthy, 1 when not — so systemd (or cron) marks the run
+account.  With ``--live`` it instead expects REAL (non-DU) accounts, and with
+``--expect U1234567`` (repeatable, or ``--accounts-config``) that every named
+account is managed by the login — the multi-account MOC executor's pre-check::
+
+    python scripts/ibkr_gateway_healthcheck.py --live --port 4001 --accounts-config deploy/ibkr_accounts.json
+ Exits 0 when healthy, 1 when not — so systemd (or cron) marks the run
 failed. On failure it also POSTs an alert to ``IBKR_ALERT_WEBHOOK`` if set
 (Slack / Discord / Mattermost / generic-compatible: it sends both ``text`` and
 ``content`` keys, so whichever the endpoint reads is present).
@@ -42,7 +47,8 @@ def send_alert(msg: str, webhook: str | None) -> None:
 
 
 def check(host: str, port: int, client_id: int, paper_prefix: str,
-          webhook: str | None) -> int:
+          webhook: str | None, live: bool = False,
+          expect: list[str] | None = None) -> int:
     where = f"{host}:{port}"
 
     # 1) fast socket probe — is anything listening at all?
@@ -75,6 +81,21 @@ def check(host: str, port: int, client_id: int, paper_prefix: str,
             send_alert(f"🔴 IB Gateway on {where} connected but returned NO accounts — "
                        f"the session is not authenticated (login/2FA failed?).", webhook)
             return 1
+        if live:
+            paper = [a for a in accts if a.startswith(paper_prefix)]
+            if paper:
+                send_alert(f"🟠 IB Gateway on {where} is logged in to PAPER account(s) "
+                           f"{', '.join(paper)} but --live expects real accounts. "
+                           f"Check TRADING_MODE / the login.", webhook)
+                return 1
+            missing = [a for a in (expect or []) if a not in accts]
+            if missing:
+                send_alert(f"🔴 IB Gateway on {where} does not manage {', '.join(missing)} "
+                           f"(manages: {', '.join(accts)}). Wrong login, or the "
+                           f"account is not linked to it.", webhook)
+                return 1
+            print(f"🟢 healthy — {where} logged in, live account(s) {', '.join(accts)}")
+            return 0
         acct = accts[0]
         if not acct.startswith(paper_prefix):
             send_alert(f"🟠 IB Gateway on {where} is logged in, but account '{acct}' is "
@@ -97,6 +118,15 @@ def main() -> int:
     ap.add_argument("--client-id", type=int, default=19,
                     help="distinct from the executor's client id to avoid clashes")
     ap.add_argument("--paper-prefix", default="DU")
+    ap.add_argument("--live", action="store_true",
+                    help="expect REAL accounts (no DU…) instead of a paper one; "
+                         "use with --port 4001")
+    ap.add_argument("--expect", action="append", default=[],
+                    help="with --live: an account id the login must manage "
+                         "(repeatable)")
+    ap.add_argument("--accounts-config",
+                    help="with --live: take the expected ids from the enabled "
+                         "accounts in this deploy/ibkr_accounts.json")
     ap.add_argument("--message",
                     help="don't probe — just send this text to IBKR_ALERT_WEBHOOK "
                          "(used by the systemd OnFailure alert unit) and exit 1")
@@ -106,7 +136,17 @@ def main() -> int:
     if args.message:
         send_alert(f"🔴 {args.message}", webhook)
         return 1
-    return check(args.host, args.port, args.client_id, args.paper_prefix, webhook)
+    expect = list(args.expect)
+    if args.accounts_config:
+        try:
+            raw = json.loads(open(args.accounts_config).read())
+            expect += [a["id"] for a in raw.get("accounts", [])
+                       if a.get("enabled", True)]
+        except (OSError, ValueError, KeyError) as e:
+            send_alert(f"🔴 healthcheck cannot read {args.accounts_config}: {e}", webhook)
+            return 1
+    return check(args.host, args.port, args.client_id, args.paper_prefix, webhook,
+                 live=args.live, expect=expect)
 
 
 if __name__ == "__main__":

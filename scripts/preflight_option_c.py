@@ -14,6 +14,11 @@ Each check prints one tab-separated line::
 
 Exit code is the number of FAILs (0 = ready to trade), so a caller can just
 test the exit status.
+
+``--live`` switches every check to the LIVE multi-account, strict-MOC setup
+(scripts/ibkr_execute_accounts.py): the live book, the accounts config, a
+signature that MUST verify, the 15:50 ET MOC cutoff instead of the 2:30 PM CT
+paper slot, and each account's own execution record.
 """
 from __future__ import annotations
 
@@ -27,6 +32,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 BOOK = REPO / "data" / "overall" / "target_book.json"
+LIVE_BOOK = REPO / "data" / "overall" / "target_book_live.json"
+ACCOUNTS_DIR = REPO / "data" / "overall" / "accounts"
+ACCOUNTS_CONFIG = REPO / "deploy" / "ibkr_accounts.json"
+LIVE = False                       # set by --live
+# Exchanges stop taking MOC entries here; mirrors ibkr_common.MOC_CUTOFF_ET.
+MOC_CUTOFF_ET = (15, 50)
 
 # Mirrors app/target_book.py: the executor's own limits, restated here so this
 # script stays importable with nothing but the stdlib.
@@ -98,13 +109,14 @@ def check_deps() -> None:
 
 
 def check_book() -> dict | None:
-    if not BOOK.exists():
-        _add("FAIL", "book-present", f"{BOOK} is missing -- publish one and git pull")
+    book = LIVE_BOOK if LIVE else BOOK
+    if not book.exists():
+        _add("FAIL", "book-present", f"{book} is missing -- publish one and git pull")
         return None
     try:
-        payload = json.loads(BOOK.read_text(encoding="utf-8"))
+        payload = json.loads(book.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        _add("FAIL", "book-present", f"{BOOK} unreadable: {e}")
+        _add("FAIL", "book-present", f"{book} unreadable: {e}")
         return None
     _add("PASS", "book-present", f"as-of {payload.get('as_of')}, "
                                  f"profile {payload.get('profile')}")
@@ -169,8 +181,11 @@ def check_book() -> dict | None:
                  f"publish has not landed; git pull, or check the publisher")
 
         # already traded? the archived execution report is the executor's lock
+        # (live: each account has its own -- see check_live_accounts)
         rec = EXECUTED_ARCHIVE / f"{as_of}.json"
-        if rec.exists():
+        if LIVE:
+            pass
+        elif rec.exists():
             _add("WARN", "book-already-executed",
                  f"{rec.name} exists -- this bar was already executed, so the "
                  f"next run will be a no-op (--refresh-report re-states the "
@@ -278,6 +293,92 @@ def check_slot() -> None:
                                            "the task with the right -TaskTime")
 
 
+def check_live_accounts(payload: dict | None) -> None:
+    """The multi-account config, and whether each account has already had this
+    bar's orders sent (a send lock or an archived report)."""
+    if not ACCOUNTS_CONFIG.exists():
+        _add("FAIL", "accounts-config",
+             f"{ACCOUNTS_CONFIG} is missing -- copy deploy/ibkr_accounts.example.json "
+             "to it and put your real account ids in")
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        sys.path.insert(0, str(REPO / "app"))
+        import ibkr_execute_accounts as acc
+    except Exception as e:
+        _add("WARN", "accounts-config", f"could not import the runner to validate "
+                                        f"the config ({e})")
+        return
+    cfg, errs = acc.load_config(ACCOUNTS_CONFIG)
+    if errs or cfg is None:
+        for e in errs:
+            _add("FAIL", "accounts-config", e)
+        return
+    en = cfg.enabled()
+    _add("PASS", "accounts-config",
+         f"{len(en)} account(s) enabled: " + ", ".join(a.id for a in en)
+         + f" (gateway {cfg.host}:{cfg.port})")
+    off = [a.id for a in cfg.accounts if not a.enabled]
+    if off:
+        _add("WARN", "accounts-disabled", "disabled, will NOT trade: " + ", ".join(off))
+    if cfg.kill_switch_file and Path(cfg.kill_switch_file).exists():
+        _add("FAIL", "kill-switch", f"ARMED ({cfg.kill_switch_file} exists)")
+    elif cfg.kill_switch_file:
+        _add("PASS", "kill-switch", f"disarmed (arm by creating {cfg.kill_switch_file})")
+    else:
+        _add("WARN", "kill-switch", "no kill_switch_file in the accounts config")
+    if payload and payload.get("as_of"):
+        as_of = payload["as_of"]
+        for a in en:
+            d = ACCOUNTS_DIR / a.id
+            if (d / ".send_locks" / f"{as_of}.lock").exists() or \
+                    (d / "executed_archive" / f"{as_of}_live.json").exists():
+                _add("WARN", f"already-sent {a.id}",
+                     f"orders for {as_of} were already sent -- the next run is a "
+                     "no-op for this account")
+            else:
+                _add("PASS", f"already-sent {a.id}", f"{as_of} not yet sent")
+
+
+def check_live_secret_required(payload: dict | None) -> None:
+    """A live book MUST be signed and verify -- an unsigned book is acceptable
+    to the paper executor, never to the live runner."""
+    if payload is not None and not (payload.get("signature") or {}).get("value"):
+        _add("FAIL", "live-signed", "the live book is unsigned -- the live runner "
+                                    "requires a verified signature")
+
+
+def check_moc_slot() -> None:
+    """Where the scheduled live trigger lands relative to the MOC cutoff."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:                                    # pragma: no cover
+        _add("WARN", "task-slot", "zoneinfo unavailable -- cannot check the timezone")
+        return
+    task_time = os.environ.get("IBKR_TASK_TIME", "14:15")
+    try:
+        hh, mm = (int(x) for x in task_time.split(":"))
+    except ValueError:
+        _add("WARN", "task-slot", f"unparseable task time {task_time!r}")
+        return
+    local = datetime.now().astimezone().replace(hour=hh, minute=mm, second=0,
+                                                microsecond=0)
+    et = local.astimezone(ZoneInfo("America/New_York"))
+    ct = local.astimezone(ZoneInfo("America/Chicago"))
+    mins_to_cutoff = (MOC_CUTOFF_ET[0] * 60 + MOC_CUTOFF_ET[1]) - (et.hour * 60 + et.minute)
+    detail = (f"{task_time} local = {ct:%H:%M} US Central = {et:%H:%M} ET; "
+              f"{mins_to_cutoff} min before the {MOC_CUTOFF_ET[0]}:{MOC_CUTOFF_ET[1]} "
+              f"ET MOC cutoff (machine zone {local.tzname()})")
+    if mins_to_cutoff < 0 or et.hour < 10:
+        _add("FAIL", "task-slot", detail + " -- the run would start AFTER the cutoff "
+                                           "(or before the open); strict MOC would skip every session")
+    elif mins_to_cutoff < 20:
+        _add("WARN", "task-slot", detail + " -- thin margin for a slow gateway or "
+                                           "git pull; 2:15 PM US Central is recommended")
+    else:
+        _add("PASS", "task-slot", detail)
+
+
 def check_kill_switch() -> None:
     path = os.environ.get("IBKR_KILL_SWITCH_FILE")
     if not path:
@@ -291,13 +392,21 @@ def check_kill_switch() -> None:
 
 
 def main() -> int:
-    print("=== Option C pre-flight (python checks) ===")
+    global LIVE
+    LIVE = "--live" in sys.argv[1:]
+    print("=== Option C " + ("LIVE multi-account (strict MOC) " if LIVE else "")
+          + "pre-flight (python checks) ===")
     check_unicode_io()
     check_deps()
     payload = check_book()
     check_secret(payload)
-    check_slot()
-    check_kill_switch()
+    if LIVE:
+        check_live_secret_required(payload)
+        check_moc_slot()
+        check_live_accounts(payload)
+    else:
+        check_slot()
+        check_kill_switch()
     fails = sum(1 for s, _, _ in _results if s == "FAIL")
     warns = sum(1 for s, _, _ in _results if s == "WARN")
     print(f"=== {len(_results) - fails - warns} pass, {warns} warn, {fails} fail ===")

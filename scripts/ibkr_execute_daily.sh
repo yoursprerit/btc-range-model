@@ -46,6 +46,14 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON="${IBKR_PYTHON:-${REPO_ROOT}/.venv/bin/python}"
 BRANCH="${IBKR_BRANCH:-main}"
 ACCOUNT_MODE="${IBKR_ACCOUNT_MODE:-paper}"
+# Live trading goes through ibkr_execute_live_accounts.sh (multi-account,
+# market-on-close only, strict). This wrapper's live branch predates that and
+# would route marketable limits with fallbacks, so it is refused unless you opt
+# in explicitly.
+if [ "${ACCOUNT_MODE}" = "live" ] && [ "${IBKR_ALLOW_LEGACY_LIVE:-0}" != "1" ]; then
+  echo "ERROR: live trading now runs via scripts/ibkr_execute_live_accounts.sh (strict MOC, all accounts). Set IBKR_ALLOW_LEGACY_LIVE=1 to force this legacy path." >&2
+  exit 2
+fi
 # Pick the right published book by mode: live parks idle capital in SATA, paper
 # holds it as cash. Override with IBKR_BOOK.
 if [ "${ACCOUNT_MODE}" = "live" ]; then
