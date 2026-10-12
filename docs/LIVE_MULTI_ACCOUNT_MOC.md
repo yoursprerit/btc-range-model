@@ -109,6 +109,10 @@ notepad deploy\ibkr_accounts.json
 }
 ```
 
+* `child_timeout_s` (seconds, default 3900): how long one account's executor may run before the
+  runner kills it. It is never allowed below the 60-minute MOC wait ceiling plus 5 minutes — a
+  smaller value (the old example carried 3000) is raised automatically, so the executor is not
+  killed while it waits for the 4:00 PM ET auction.
 * `expected_profile` (optional, per account, e.g. `"Balanced"`): the risk profile this account
   follows. A published book for any other profile **aborts that account's run** with an alert.
   Recommended for every live account — see "Is this the right book?" in `LIVE_TRADING.md`.

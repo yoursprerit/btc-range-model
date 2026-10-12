@@ -12,6 +12,14 @@
 # ib_insync, with the same API surface. Pinned to a recent minor.
 ib_async>=1.0.1,<2.0
 
+# cryptography: app/report_vault.py (imported by the multi-account runner as soon
+# as it decides whether to publish reports) encrypts the execution reports with
+# AES-GCM. The executor host does not install requirements.txt, so without it the
+# run finishes trading and then crashes with ``No module named 'cryptography'``
+# before it can publish -- tests/test_executor_requirements.py keeps this list
+# honest. Same floor as requirements.txt.
+cryptography>=42
+
 # pandas: the executor (scripts/ibkr_execute_book.py) and the shared
 # app/target_book.py, app/executed_book.py, scripts/ibkr_common.py modules all
 # import it. It is NOT pulled in by ib_async, and the executor host does not

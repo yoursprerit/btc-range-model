@@ -99,7 +99,7 @@ class Config:
     port: int = ic.DEFAULT_LIVE_PORT
     client_id_base: int = 40
     book: str = "data/overall/target_book_live.json"
-    child_timeout_s: float = 3000.0
+    child_timeout_s: float = 3900.0   # = ic.MOC_MAX_WAIT_S + 300 (enforced below)
     stagger_s: float = 10.0
     market_data_type: int = 1      # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen
     kill_switch_file: str = ""
@@ -134,6 +134,11 @@ def validate_config(raw: dict) -> tuple[Config | None, list[str]]:
         errs.append("market_data_type must be 1 (live), 2, 3 (delayed) or 4")
     if cfg.child_timeout_s < 600:
         errs.append("child_timeout_s must allow for the closing auction (>= 600)")
+    # Never kill an executor that is still waiting for the auction: whatever the
+    # config says, the timeout is at least the MOC wait ceiling plus time to
+    # start, read the account and write the report. (A config copied from the
+    # old example carried 3000 s, which is shorter than a full wait.)
+    cfg.child_timeout_s = max(cfg.child_timeout_s, ic.MOC_MAX_WAIT_S + 300.0)
 
     defaults = dict(DEFAULT_LIMITS)
     for k, v in (raw.get("defaults") or {}).items():

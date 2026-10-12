@@ -473,7 +473,7 @@ trade-offs are real:
   the session. See [`docs/LIVE_MULTI_ACCOUNT_MOC.md`](docs/LIVE_MULTI_ACCOUNT_MOC.md).)
 - **Nothing fills until 4:00 PM ET**, so the executor holds the connection for
   ~32 minutes to write a truthful execution report. Keep
-  `TimeoutStartSec` in `ibkr-executor.service` above ~35 min (it ships at 3600).
+  `TimeoutStartSec` in `ibkr-executor.service` above the 60-minute MOC wait ceiling (it ships at 4500).
 - MOC can't be cancelled after the cutoff and accepts whole shares only
   (`--fractional` is ignored for MOC, with a warning).
 
