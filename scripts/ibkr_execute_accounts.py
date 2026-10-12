@@ -433,11 +433,22 @@ def summary(results: list[Result], missing: list[Account]) -> str:
 
 
 # ── publishing ──────────────────────────────────────────────────────────────
+VAULT_DIR = _REPO / "data" / "overall" / "vault"
+
+
+def vault_enabled() -> bool:
+    """True when ``IBKR_VAULT_KEY`` is set: reports are then published only as an
+    AES-256-GCM encrypted vault (``app/report_vault.py``), never in the clear."""
+    import report_vault as rv
+    return bool(rv.passphrase())
+
+
 def publishing_enabled(no_push: bool = False) -> bool:
     """Reports hold account numbers, balances and holdings, so they stay on this
     PC unless you explicitly opt in with ``IBKR_PUBLISH_REPORTS=1``."""
-    return (os.environ.get("IBKR_PUBLISH_REPORTS", "").strip() == "1"
-            and not no_push and not os.environ.get("IBKR_NO_PUSH_REPORT"))
+    opted = (os.environ.get("IBKR_PUBLISH_REPORTS", "").strip() == "1"
+             or vault_enabled())
+    return (opted and not no_push and not os.environ.get("IBKR_NO_PUSH_REPORT"))
 
 
 def push_reports(accounts: list[Account], branch: str | None = None) -> bool:
@@ -449,11 +460,18 @@ def push_reports(accounts: list[Account], branch: str | None = None) -> bool:
     replay), and failing that it un-commits but KEEPS the files — a later run
     overwrites them anyway, and nothing is left diverged."""
     rels = []
-    for a in accounts:
-        d = account_dir(a.id)
-        for p in (d / "executed_book_live.json", d / "executed_archive"):
-            if p.exists():
-                rels.append(str(p.relative_to(_REPO)))
+    if vault_enabled():
+        import report_vault as rv
+        # seal EVERY account's report (the vault is rebuilt whole, so a partial
+        # seal would drop the other accounts) and publish only the ciphertext
+        if rv.seal_tree(ACCOUNTS_DIR.parent, VAULT_DIR, rv.passphrase()):
+            rels.append(str(VAULT_DIR.relative_to(_REPO)))
+    else:
+        for a in accounts:
+            d = account_dir(a.id)
+            for p in (d / "executed_book_live.json", d / "executed_archive"):
+                if p.exists():
+                    rels.append(str(p.relative_to(_REPO)))
     if not rels:
         print("  no reports to publish")
         return True
