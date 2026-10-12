@@ -93,7 +93,7 @@ class Config:
     client_id_base: int = 40
     book: str = "data/overall/target_book_live.json"
     child_timeout_s: float = 3000.0
-    stagger_s: float = 3.0
+    stagger_s: float = 10.0
     market_data_type: int = 1      # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen
     kill_switch_file: str = ""
     accounts: list[Account] = field(default_factory=list)
@@ -302,7 +302,8 @@ def run_child(cfg: Config, acct: Account, index: int, *, execute: bool,
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log = (LOG_DIR / f"{acct.id}.log").open("a", encoding="utf-8")
     argv = child_argv(cfg, acct, index, execute=execute)
-    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
+               PYTHONUNBUFFERED="1")  # a piped child otherwise holds its log until exit
     t0 = time.monotonic()
     log.write(f"\n===== {pd.Timestamp.now('UTC'):%Y-%m-%d %H:%M:%SZ} "
               f"{' '.join(argv[2:])}\n")
