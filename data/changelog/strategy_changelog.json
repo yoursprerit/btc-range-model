@@ -735,7 +735,12 @@
   "kind": "ui",
   "title": "Overall: Current Positions reads the encrypted IBKR account reports",
   "description": "The per-account IBKR picker only looked in local data/overall/accounts, but the account reports live in the encrypted vault, so no accounts were found. The Overall page now opens the vault the same way the Executed Book page does, so each IBKR account appears as its own option.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #222",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/222"
+   }
+  ]
  }
  ]
 }
