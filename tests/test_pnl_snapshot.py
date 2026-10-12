@@ -66,3 +66,60 @@ def test_get_pack_assembles_curves():
     p = ps.get_pack(snap, "V2", "Growth")
     assert set(p["curves"]) == {ps.STRAT_CURVE, ps.BH_CURVE}
     assert ps.get_pack(snap, "v1", "Growth") is None
+
+
+# ── download from the data-snapshots branch ──────────────────────────────────
+class _Resp:
+    def __init__(self, blob): self._b = blob
+    def read(self): return self._b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _xz_blob(tmp_path):
+    f = tmp_path / "src.pkl.xz"
+    ps.save(_payload(), f)
+    return f.read_bytes()
+
+
+def test_fetch_remote_downloads_then_stays_fresh(tmp_path, monkeypatch):
+    blob, calls = _xz_blob(tmp_path), []
+    monkeypatch.setattr(ps.urllib.request, "urlopen",
+                        lambda req, timeout=0: calls.append(req.full_url) or _Resp(blob))
+    monkeypatch.setattr(ps, "_last_failure", [0.0])
+    dest = tmp_path / "local.pkl.xz"
+    assert ps.fetch_remote(dest) == "downloaded"
+    assert calls[0].startswith("https://raw.githubusercontent.com/")
+    assert ps.load(dest, now=pd.Timestamp("2026-10-10")) is not None
+    assert ps.fetch_remote(dest) == "fresh" and len(calls) == 1
+
+
+def test_fetch_remote_with_token_uses_contents_api(tmp_path, monkeypatch):
+    blob, seen = _xz_blob(tmp_path), []
+    monkeypatch.setattr(ps.urllib.request, "urlopen",
+                        lambda req, timeout=0: seen.append(req) or _Resp(blob))
+    monkeypatch.setattr(ps, "_last_failure", [0.0])
+    assert ps.fetch_remote(tmp_path / "l.pkl.xz", token="t") == "downloaded"
+    assert "api.github.com" in seen[0].full_url
+    assert seen[0].get_header("Authorization") == "Bearer t"
+
+
+def test_fetch_remote_failure_keeps_old_copy_and_backs_off(tmp_path, monkeypatch):
+    def boom(req, timeout=0): raise OSError("offline")
+    monkeypatch.setattr(ps.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(ps, "_last_failure", [0.0])
+    dest = tmp_path / "local.pkl.xz"
+    ps.save(_payload(), dest)
+    import os
+    os.utime(dest, (0, 0))                       # old enough to need a refresh
+    assert ps.fetch_remote(dest) == "failed"
+    assert ps.fetch_remote(dest) == "backoff"    # no hammering GitHub
+    assert ps.load(dest, now=pd.Timestamp("2026-10-10")) is not None
+
+
+def test_fetch_remote_rejects_a_corrupt_download(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps.urllib.request, "urlopen",
+                        lambda req, timeout=0: _Resp(b"<html>404</html>"))
+    monkeypatch.setattr(ps, "_last_failure", [0.0])
+    dest = tmp_path / "local.pkl.xz"
+    assert ps.fetch_remote(dest) == "failed" and not dest.exists()

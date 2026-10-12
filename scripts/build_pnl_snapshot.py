@@ -3,7 +3,8 @@
     python scripts/build_pnl_snapshot.py            # skip if nothing changed
     python scripts/build_pnl_snapshot.py --force    # always rewrite
 
-Writes data/overall/pnl_snapshot.pkl.gz (see app/pnl_snapshot.py).  Invoked daily
+Writes data/overall/pnl_snapshot.pkl.xz by default (see app/pnl_snapshot.py); CI
+points --out at a checkout of the data-snapshots branch.  Invoked daily
 by .github/workflows/build-pnl-snapshot.yml.  Exit 0 and "unchanged" when the
 engine code, data vintage and last bar match the committed snapshot and it is
 still fresh, so repeated CI slots do not grow the repo.
@@ -11,8 +12,6 @@ still fresh, so repeated CI slots do not grow the repo.
 from __future__ import annotations
 
 import argparse
-import gzip
-import pickle
 import sys
 import time
 from pathlib import Path
@@ -37,8 +36,7 @@ def main() -> int:
 
     if not a.force and a.out.exists():
         try:
-            with gzip.open(a.out, "rb") as fh:
-                old = pickle.load(fh)
+            old = ps.read(a.out)
             if ps.content_key(old) == key:
                 print(f"unchanged ({key}) — keeping the committed snapshot")
                 return 0
