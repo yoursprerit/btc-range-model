@@ -289,6 +289,12 @@ def main() -> int:
                     help="permit buys beyond settled cash + realised sell "
                          "proceeds (i.e. on margin). OFF by default: the buy leg "
                          "is trimmed to what the account can actually pay for")
+    ap.add_argument("--substitute", action="append", default=[], metavar="KEY=KEY",
+                    help="trade KEY2 wherever the book holds KEY1, e.g. "
+                         "UGL=GLDM for an IRA that may not buy leveraged ETFs "
+                         "(repeatable). The weight moves one-for-one before "
+                         "sizing; the substitute needs an execution price in "
+                         "the book or the run aborts")
     ap.add_argument("--max-turnover-frac", type=float, default=1.5,
                     help="abort when the plan would trade more than this multiple "
                          "of net liquidation (default %(default)s) — a daily "
@@ -542,6 +548,17 @@ def main() -> int:
 
     weights = dict(payload.get("weights", {}))
     exec_price = payload.get("exec_price", {})
+
+    # ── account restrictions: trade the allowed sibling of a restricted name ──
+    try:
+        subs = ic.parse_substitutions(args.substitute)
+    except ValueError as e:
+        print(f"ABORT: {e}. No orders placed.")
+        return 1
+    weights, moved = ic.apply_substitutions(weights, subs)
+    for src, dst, w in moved:
+        print(f"Substitution: {src} {w*100:.1f}% → {dst} (this account cannot "
+              f"trade {src}; same capital, so {dst} exposure replaces {src}'s).")
 
     # ── the book's own arithmetic ────────────────────────────────────────────
     ok_math, math_why = ic.validate_book_math(weights, exec_price)

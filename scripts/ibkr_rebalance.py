@@ -152,7 +152,13 @@ def compute_target_book(profile: str = None, results: list | None = None,
     # Size on the price of the instrument we ACTUALLY trade (IBIT for the BTC
     # sleeve, the ticker itself otherwise) — not the signal's underlying (spot
     # BTC ≈ $100k would mis-size an IBIT position).
-    trade_syms = {k: sym.trade_symbol(k) for k in targets if sym.trade_symbol(k)}
+    # Also price the account-type substitutes of held names (UGL → GLDM for an
+    # IRA): the book is shared, so an IRA executor needs GLDM's price even when
+    # only UGL is in the book.
+    price_keys = set(targets)
+    for _subs in sym.ACCOUNT_TYPE_SUBSTITUTIONS.values():
+        price_keys |= {d for s, d in _subs.items() if s in targets}
+    trade_syms = {k: sym.trade_symbol(k) for k in price_keys if sym.trade_symbol(k)}
     px_raw = oc.fetch_spot({k: s for k, s in trade_syms.items()})
     exec_price = {k: v["price"] for k, v in px_raw.items() if v and v.get("price")}
 
