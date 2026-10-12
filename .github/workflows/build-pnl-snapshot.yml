@@ -1,10 +1,11 @@
 name: Build P&L snapshot
 
-# Precomputes the replays behind the app's 📈 Overall-strategy-P&L section
+# Precomputes the V1/V2 universe runs behind the live cockpit and the replays behind the app's 📈 Overall-strategy-P&L section
 # (every strategy view V1/V2/Combined x every UI risk profile, plus the
 # price-returns matrix, buy-&-hold replay and sleeve prices) and commits them to
-# data/overall/pnl_snapshot.pkl.gz, so the Streamlit app reads them back
-# instantly instead of replaying everything on a cold start.  See
+# the single-commit ``data-snapshots`` branch (NOT main: a ~1 MB binary per build
+# would bloat the repo), which the Streamlit app downloads and reads back instantly
+# instead of replaying everything on a cold start.  See
 # app/pnl_snapshot.py — the app ignores a snapshot that is stale or was built by
 # different engine code and falls back to computing live, so a missed run only
 # costs speed, never correctness.
@@ -28,7 +29,6 @@ on:
     paths:
       - "app/*.py"
       - "!app/*_app.py"
-      - "!app/pnl_snapshot.py"
       - "models/**"
       - "scripts/build_pnl_snapshot.py"
   workflow_dispatch: {}
@@ -59,32 +59,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build snapshot
-        run: python scripts/build_pnl_snapshot.py
-
-      - name: Commit & push snapshot
+      - name: Fetch the published snapshot (for the unchanged check)
         run: |
           set -euo pipefail
-          if [ -z "$(git status --porcelain -- data/overall/pnl_snapshot.pkl.gz)" ]; then
-            echo "Snapshot unchanged — nothing to commit."
+          mkdir -p snapshot-out
+          if git fetch --depth=1 origin data-snapshots; then
+            git show FETCH_HEAD:pnl_snapshot.pkl.xz > snapshot-out/pnl_snapshot.pkl.xz \
+              || rm -f snapshot-out/pnl_snapshot.pkl.xz
+          else
+            echo "No data-snapshots branch yet — the first build creates it."
+          fi
+          cp -p snapshot-out/pnl_snapshot.pkl.xz snapshot-out/previous.xz 2>/dev/null || true
+
+      - name: Build snapshot
+        run: python scripts/build_pnl_snapshot.py --out snapshot-out/pnl_snapshot.pkl.xz
+
+      - name: Publish to the data-snapshots branch
+        run: |
+          set -euo pipefail
+          if [ -f snapshot-out/previous.xz ] && cmp -s snapshot-out/previous.xz snapshot-out/pnl_snapshot.pkl.xz; then
+            echo "Snapshot unchanged — nothing to publish."
             exit 0
           fi
+          # A one-commit orphan branch, force-pushed: the previous snapshot's
+          # blob becomes unreachable, so the repository never accumulates them.
+          # Nothing else lives on this branch, and nothing reads its history.
+          cd snapshot-out
+          rm -f previous.xz
+          git init -q
+          git checkout -q --orphan data-snapshots
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/overall/pnl_snapshot.pkl.gz
-          git commit \
-            -m "chore(data): refresh P&L snapshot" \
-            -m "Automated build via .github/workflows/build-pnl-snapshot.yml"
-          # Other workflows push to this branch on overlapping schedules; a
-          # snapshot is a whole-file replacement, so this run's build wins.
+          git add pnl_snapshot.pkl.xz
+          git commit -q -m "P&L snapshot $(date -u +%Y-%m-%dT%H:%MZ)" \
+            -m "Automated build via .github/workflows/build-pnl-snapshot.yml (single-commit branch, force-pushed)"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           for attempt in 1 2 3; do
-            git fetch origin "${GITHUB_REF_NAME}"
-            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}"; then
-              git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
-            else
-              git rebase --abort || true
-            fi
+            git push --force origin data-snapshots && exit 0
             sleep $((attempt * 5))
           done
-          echo "::error::Could not push the P&L snapshot after 3 attempts."
+          echo "::error::Could not publish the P&L snapshot after 3 attempts."
           exit 1
