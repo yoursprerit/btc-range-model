@@ -695,7 +695,12 @@
   "title": "Executed Book page: fix crash when reading reports from the encrypted vault",
   "description": "The first time the Streamlit app read the encrypted report vault, every IBKR account page failed with \"ValueError: ... is not in the subpath of '/mount/src/btc-range-model'\": the decrypted reports sit in a temp folder outside the repo and the page labelled them with Path.relative_to. A small tested helper (scripts/report_label.py, kept out of the hashed app modules so the P&L snapshot fingerprint is untouched) now labels a vault copy as 'encrypted vault: accounts/<ACCT>/...' and leaves repo-relative labels unchanged.",
   "impact": "IBKR executed books published through the vault now render in the Streamlit app, in both the Latest run and Historical tabs.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #219",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/219"
+   }
+  ]
  }
  ]
 }
