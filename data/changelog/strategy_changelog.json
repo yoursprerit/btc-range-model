@@ -667,7 +667,12 @@
   "title": "Executor book checks: profile pin, book-change hold, soft price drift, immediate MOC-refusal alert",
   "description": "The executor now (1) aborts when the published book's profile differs from the account's pinned expected_profile; (2) holds the day's BUYS, with an alert, when the book adds more than 60 % of NAV in new target weight versus the last book that account saw, or an unpinned account's profile changed - sells and de-risking are never held, and IBKR_ACCEPT_LARGE_CHANGE=1 overrides for one run; (3) holds the buy of an unlevered ETF quoting 10 %+ from its book price instead of aborting the run (leveraged, single-stock and crypto names exempt; the 25 % hard abort is unchanged); (4) alerts immediately, and re-checks every minute, when the broker refuses a MOC order.",
   "impact": "A signed-but-wrong book (profile switch, corrupted weights) can no longer open large positions unseen, and a refused closing-auction order is reported while it can still be fixed before the 15:50 ET cutoff. Nothing is held on an ordinary day.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #217",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/217"
+   }
+  ]
  }
  ]
 }
