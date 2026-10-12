@@ -105,6 +105,7 @@ param(
     [switch]$Rehearse,
     [switch]$Verify,
     [switch]$LiveTask,
+    [switch]$ReconcileTask,
     [switch]$LivePreflight,
     [switch]$LiveRehearse,
     [switch]$GenerateSecret,
@@ -118,6 +119,7 @@ param(
     [string]$Port     = '4002',
     [string]$LivePort = '4001',
     [string]$LiveTaskTime = '14:15',
+    [string]$ReconcileTaskTime = '15:15',
     [string]$KillSwitchFile = 'C:\IBC\HALT_TRADING'
 )
 
@@ -131,7 +133,7 @@ $Venvpy    = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 # If no phase flags were passed, default to -All (nice bare-invocation UX).
 $anyPhase = $InstallPython -or $Venv -or $Secret -or $Gateway -or $IBC -or $Task `
             -or $Autostart -or $Preflight -or $Rehearse -or $Verify `
-            -or $LiveTask -or $LivePreflight -or $LiveRehearse
+            -or $LiveTask -or $ReconcileTask -or $LivePreflight -or $LiveRehearse
 if (-not $anyPhase) { $All = $true }
 if ($All) { $InstallPython=$true; $Venv=$true; $Secret=$true; $Gateway=$true
             $IBC=$true; $Task=$true; $Autostart=$true; $Preflight=$true }
@@ -505,6 +507,27 @@ if ($LiveTask) {
     Info "preview now (no orders): .\scripts\setup_windows_option_c.ps1 -LiveRehearse"
 }
 
+# -- 7R. LIVE after-the-close reconcile task ------------------------------------
+# 4:15 PM US Eastern = 3:15 PM US Central: 15 minutes after the closing auction.
+# Checks each account that had orders sent today against the broker, rebuilds a
+# report the 2:15 PM run never got to write, and alerts on unfilled legs or
+# orders still working. It never sends or cancels an order.
+if ($ReconcileTask) {
+    Section "Task Scheduler - LIVE after-the-close reconcile"
+    $wrapper = Join-Path $ScriptDir 'ibkr_reconcile_live_accounts.ps1'
+    if (-not (Test-Path $wrapper)) { throw "missing $wrapper" }
+    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`""
+    $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $RepoRoot
+    $trg = New-ScheduledTaskTrigger -Daily -At ([datetime]$ReconcileTaskTime)
+    $set = New-ScheduledTaskSettingsSet -WakeToRun `
+            -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+    Register-ScheduledTask -TaskName 'IBKR Option C LIVE reconcile' -Action $act -Trigger $trg `
+        -Settings $set -RunLevel Limited -Force `
+        -Description 'After the close: verify what filled in each live IBKR account and rebuild any missing execution report.' | Out-Null
+    Ok "registered task 'IBKR Option C LIVE reconcile' at $ReconcileTaskTime daily (4:15 PM ET = 3:15 PM US Central)"
+    Info "dry run now: .\scripts\ibkr_reconcile_live_accounts.ps1 -DryRun"
+}
+
 # -- 9L. LIVE pre-flight ----------------------------------------------------------
 if ($LivePreflight) {
     Section "LIVE pre-flight (multi-account, strict MOC)"
@@ -542,6 +565,17 @@ if ($LivePreflight) {
         }
     } else {
         Fail "LIVE scheduled task NOT registered - run -LiveTask from an ELEVATED PowerShell"
+    }
+
+
+    if (Get-ScheduledTask -TaskName 'IBKR Option C LIVE reconcile' -ErrorAction SilentlyContinue) {
+        Ok "LIVE reconcile task registered"
+    } else {
+        Warn "LIVE reconcile task NOT registered - run -ReconcileTask (it rebuilds a report the 2:15 run could not finish)"
+    }
+    foreach ($v in 'IBKR_HEARTBEAT_URL', 'IBKR_RECONCILE_HEARTBEAT_URL') {
+        if ([Environment]::GetEnvironmentVariable($v, 'User')) { Ok "$v is set (dead-man's switch armed)" }
+        else { Warn "$v is not set - if the PC is off or asleep, nothing will tell you the run never happened (docs\LIVE_MULTI_ACCOUNT_MOC.md, Monitoring)" }
     }
 
     $tcp = Test-NetConnection -ComputerName 127.0.0.1 -Port ([int]$LivePort) -WarningAction SilentlyContinue

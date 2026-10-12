@@ -388,4 +388,4 @@ def test_runtime_versions_line():
 
 def test_scheduled_tasks_do_not_run_elevated():
     setup = (ROOT / "scripts" / "setup_windows_option_c.ps1").read_text()
-    assert "RunLevel Highest" not in setup and setup.count("RunLevel Limited") == 2
+    assert "RunLevel Highest" not in setup and setup.count("RunLevel Limited") == 3     # paper, live, reconcile

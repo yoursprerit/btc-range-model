@@ -145,6 +145,31 @@ compatible). The runner alerts on: gateway not logged in, an account the login
 doesn't manage, a session skipped for the cutoff, any account that failed, was
 rejected, or didn't fully fill.
 
+### 5. Dead-man's switch and the 4:15 PM reconcile
+
+Alerts only fire from a run that started. If the PC is off or asleep, or Windows
+restarted, nothing runs and nothing complains. A heartbeat fixes that: each run
+pings an outside monitor, and the **monitor** alerts when a ping is missing.
+
+1. Create two free checks at healthchecks.io (or Uptime Kuma push monitors):
+   * **Run** - schedule `15 14 * * *`, timezone `America/Chicago`, grace 30-45 min.
+   * **Reconcile** - schedule `15 16 * * *`, timezone `America/New_York`, grace 30-45 min.
+   Both are *daily*: a weekend or holiday is a normal, successful "nothing to do" run that still pings.
+2. `setx IBKR_HEARTBEAT_URL "https://hc-ping.com/<run-uuid>"` and
+   `setx IBKR_RECONCILE_HEARTBEAT_URL "https://hc-ping.com/<reconcile-uuid>"`
+   (https only; the URL is a secret). For Kuma add `setx IBKR_HEARTBEAT_STYLE kuma`.
+3. Pings carry statuses and masked account ids (`...6213`) only - never balances or holdings.
+   A monitoring outage never stops a run. Previews and `--check` never ping.
+
+**Reconcile** (`ibkr_reconcile_accounts.py`, task from `setup_windows_option_c.ps1 -ReconcileTask`,
+15:15 CT = 16:15 ET) is **read-only**: it never places or cancels orders. For each account that
+sent orders today it reads the day's executions and working orders from IBKR and
+* rebuilds a signed `executed_book_live.json` if the run died before writing it;
+* writes late fills into an existing report (never overwrites a record with an empty one);
+* alerts on any unfilled leg, orders still working after the close, or missing executions.
+Exit codes: `0` all reconciled / `1` a problem was found / `2` gateway or config / `3` nothing sent today.
+Use `--dry-run` to see what it would do and `--force` to run before 16:05 ET.
+
 ---
 
 ## Rollout — do this in order
