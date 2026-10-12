@@ -715,6 +715,19 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/220"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-12",
+  "kind": "ui",
+  "title": "Overall: per-account IBKR picker in Current Positions",
+  "description": "The Current Positions section on the Overall page always showed the first IBKR account's report. With the IBKR source selected it now offers one radio option per IBKR account (\"IBKR Account #<id>\"), each showing that account's own cost basis and cash.",
+  "links": [
+   {
+    "label": "PR #221",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/221"
+   }
+  ]
  }
  ]
 }
