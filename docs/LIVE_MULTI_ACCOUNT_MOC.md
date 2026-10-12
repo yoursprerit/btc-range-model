@@ -1,5 +1,7 @@
 # Live trading, several IBKR accounts, market-on-close (Option C on one PC)
 
+> **Setting up a PC?** Follow [`LIVE_SETUP_WINDOWS.md`](LIVE_SETUP_WINDOWS.md) - one command, no trial and error. This page is the reference.
+
 > ⚠️ **Real money.** This trades the strategy in **funded** IBKR accounts. It was
 > built from the paper trial, but **it has not been run against a live gateway
 > yet** — the first live run is yours to supervise (see
@@ -22,7 +24,7 @@ orders only**, each sized to its own net liquidation and its own limits.
              ibkr_execute_book.py --account U222… --strict-moc …    │ one clientId each
              …                                                      ▼
                                               IB Gateway (live) 127.0.0.1:4001
-   └─ one git commit + push of every account's report
+   └─ reports stay on this PC (git-ignored); publishing is an opt-in
 ```
 
 **Why all accounts at once.** A MOC order must be *entered* before the exchange
@@ -198,7 +200,7 @@ Use `--dry-run` to see what it would do and `--force` to run before 16:05 ET.
 
 Manual run any time: `python scripts\ibkr_execute_accounts.py` (preview) or
 `--execute`; `--check` verifies config + gateway only; `--only <id>` restricts to
-an account; `--no-push` skips publishing the reports.
+an account. Reports are **not** published to GitHub unless you set `IBKR_PUBLISH_REPORTS=1` (see *Privacy*).
 
 ---
 
@@ -225,7 +227,7 @@ an account; `--no-push` skips publishing the reports.
 | Gateway retry | A gateway that isn't answering is retried every 30 s for up to 10 min (stopping 6 min before the cutoff) before the session is given up. |
 | Order tag | Every order carries `orderRef = btc-range:<book date>` so the bot's orders are recognisable in TWS and audits. |
 | Atomic reports | Reports, archives and reset markers are written to a temp file and renamed, so a crash cannot leave half a file. |
-| Report publishing | Commits **only** the report files (anything else you have staged is left alone) and refuses to push from a detached HEAD. |
+| Report publishing | **Off by default** (reports hold account numbers, balances and holdings). With `IBKR_PUBLISH_REPORTS=1` it commits **only** the report files and refuses to push from a detached HEAD. |
 | Logs | Per-account and wrapper logs rotate at 5 MB (3 kept); each run logs the Python / `ib_async` / `pandas` / `numpy` versions. |
 | Least privilege | The scheduled tasks run with normal user rights, not as administrator. |
 | Kill switch | `kill_switch_file` or `IBKR_TRADING_DISABLED=1` |
@@ -256,7 +258,7 @@ executed run yet (or only previews) gets no option.
 * The starting balance defaults to the net liquidation IBKR reported after the
   account's first executed run; you can override it.
 * To save a schedule across sessions, add it to `data/overall/account_deposits.json`:
-  `{"U1234567": {"monthly": 500, "day": 15}}` and commit it.
+  `{"U1234567": {"monthly": 500, "day": 15}}` — keep it **local** and do not commit real amounts (`git update-index --skip-worktree data/overall/account_deposits.json`), or just enter them on the page each session.
 * A 🔎 *Check* line compares the replayed balance with the net liquidation IBKR
   reported at the last run; a gap means your real deposits differ from the
   schedule (or fills drifted from the published books).
@@ -302,6 +304,18 @@ executed run yet (or only previews) gets no option.
 > each account's id and holdings (as the paper reports always did). Keep the
 > repository **private**.
 
+## Privacy - what never goes to GitHub
+
+* Account numbers, balances, holdings, fills and your IBKR login live **only on the PC**:
+  `deploy/ibkr_accounts.json`, `data/overall/accounts/` (reports, archives, send-locks),
+  `logs/`, `C:\IBC\config-live.ini` (password) are git-ignored, and a test fails the build if a
+  real-looking account id is ever committed.
+* Execution reports are **not** pushed unless you set `IBKR_PUBLISH_REPORTS=1`. The *Executed Book*
+  and *Strategy P&L* pages then show live accounts only when Streamlit runs **on this PC**
+  (`streamlit run app/...`), not on a cloud deployment.
+* Alerts and heartbeats go to *your* Slack / healthchecks.io, not GitHub, and carry masked ids (`...4567`).
+* Never paste account numbers, balances, logs or the signing secret into issues, PR descriptions or commits.
+
 ## Exit codes (runner and wrapper)
 
 `0` all good · `1` an account failed / didn't fully fill / a configured account
@@ -323,7 +337,7 @@ isn't managed by the login · `2` gateway or config problem, **nothing traded** 
 | `!! MOC … was Inactive/Cancelled by the broker: …` | The broker refused it (e.g. IRA/product restriction, permissions). Act in TWS before 15:50 ET; nothing is substituted. |
 | `MOC NOT FULLY FILLED` (exit 4) | Check TWS. The next session re-plans from actual holdings. |
 | `ABORT: … book_mode=…, not 'live'` | `book` in the accounts file points at the paper book. |
-| `could not push the reports … un-committing, files kept` | No git write credential (see `IBKR_OPTION_C_WINDOWS.md` §8). Trading was unaffected. |
+| `could not push the reports … un-committing, files kept` | Only appears if you opted in to publishing and the PC has no git write credential (`IBKR_OPTION_C_WINDOWS.md` §8). Trading was unaffected. |
 
 ## What is and isn't verified
 
