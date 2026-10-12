@@ -65,7 +65,7 @@ in hand leaves you with a half-configured box.
 | **The repo cloned** | `git clone https://github.com/yoursprerit/btc-range-model.git C:\btc-range-model` |
 | **Power settings that allow wake** | The daily task registers `-WakeToRun`, but Windows must permit it (§7). |
 | **Your machine's timezone** | The task trigger fires in **local** time; the target is 2:30 PM US Central. Pass `-TaskTime` accordingly (§7). |
-| **Git write credentials** *(optional)* | Only needed to publish the execution report back so the cloud app's *Executed Book* tab updates. Trading works without it (§8). |
+| **Git write credentials** *(optional)* | Only needed to publish the execution report back so the cloud app's *Executed Book* tab updates (paper; live reports are never published unless `IBKR_PUBLISH_REPORTS=1`). Trading works without it (§8). |
 
 Only once all of the above is true should you run the quick start below.
 

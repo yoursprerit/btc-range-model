@@ -37,7 +37,7 @@ MAX_BODY = 4000                     # healthchecks keeps 100 KB; a summary is sh
 
 
 def mask_account(acct: str) -> str:
-    """``U22636213`` -> ``…6213``: enough to tell accounts apart, not to name one."""
+    """``U1234567`` -> ``…4567``: enough to tell accounts apart, not to name one."""
     acct = str(acct or "")
     return f"…{acct[-4:]}" if len(acct) > 4 else acct
 

@@ -326,8 +326,7 @@ def _reconcile(args) -> tuple[int, str, bool]:
             print(f"      · {n}")
 
     changed = [a for a in todo if any(x.account == a.id and x.rewritten for x in findings)]
-    if changed and not args.dry_run and not args.no_push \
-            and not os.environ.get("IBKR_NO_PUSH_REPORT"):
+    if changed and not args.dry_run and acc.publishing_enabled(args.no_push):
         print("\nPublishing the rebuilt reports …")
         acc.push_reports(changed)
 

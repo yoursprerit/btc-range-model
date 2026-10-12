@@ -547,6 +547,14 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/209"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "One-command Windows live setup; account data stays off GitHub",
+   "description": "setup_live.ps1 + live_setup.py: finds the installed IB Gateway version and Java, builds StartGateway-live.bat and the live IBC config, discovers the accounts, registers the run/reconcile/gateway-autostart/watchdog tasks and retires paper. Live execution reports are no longer pushed to GitHub (opt-in IBKR_PUBLISH_REPORTS=1), account data paths are git-ignored, and a test fails if a real account id is committed.",
+   "impact": "Streamlines setup (docs/LIVE_SETUP_WINDOWS.md) and keeps account numbers, balances and holdings private."
   }
  ]
 }

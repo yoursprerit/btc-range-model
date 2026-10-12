@@ -433,6 +433,13 @@ def summary(results: list[Result], missing: list[Account]) -> str:
 
 
 # ── publishing ──────────────────────────────────────────────────────────────
+def publishing_enabled(no_push: bool = False) -> bool:
+    """Reports hold account numbers, balances and holdings, so they stay on this
+    PC unless you explicitly opt in with ``IBKR_PUBLISH_REPORTS=1``."""
+    return (os.environ.get("IBKR_PUBLISH_REPORTS", "").strip() == "1"
+            and not no_push and not os.environ.get("IBKR_NO_PUSH_REPORT"))
+
+
 def push_reports(accounts: list[Account], branch: str | None = None) -> bool:
     """Commit every account's report + archive in ONE commit and push it.
 
@@ -459,7 +466,7 @@ def push_reports(accounts: list[Account], branch: str | None = None) -> bool:
         print("  WARN: the repo is on a detached HEAD — not pushing the reports "
               "(git checkout main)")
         return False
-    git("add", *rels)
+    git("add", "-f", *rels)       # the report dir is git-ignored; publishing is an explicit opt-in
     if git("diff", "--cached", "--quiet", "--", *rels).returncode == 0:
         print("  reports unchanged — nothing to publish")
         return True
@@ -644,10 +651,12 @@ def _run(argv: list[str] | None, hb: Heartbeat) -> int:
     print(summary(results, missing))
     code = overall_exit(results, missing)
 
-    if args.execute and not args.no_push and not os.environ.get("IBKR_NO_PUSH_REPORT"):
+    if args.execute and publishing_enabled(args.no_push):
         traded = [r.acct for r in results if r.rc in (0, 4, 5)]
-        print("\nPublishing execution reports …")
+        print("\nPublishing execution reports (IBKR_PUBLISH_REPORTS=1) …")
         push_reports(traded)
+    elif args.execute:
+        print("\nReports stay on this PC (account data is not published to GitHub).")
     if code == EXIT_FAILED:
         bad = [f"{r.acct.id}: {describe(r.rc)}" for r in results if r.rc not in (0, 3)]
         bad += [f"{a.id}: not managed by login" for a in missing]

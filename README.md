@@ -495,7 +495,7 @@ verification. The full table is in
 [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md#pre-flight-guards-what-the-executor-refuses-to-do).
 
 Guides: **[`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md)** (setup + both
-topologies) · **[`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)** (Windows) · **[`docs/LIVE_MULTI_ACCOUNT_MOC.md`](docs/LIVE_MULTI_ACCOUNT_MOC.md)** (live, several accounts, MOC)
+topologies) · **[`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md)** (Windows) · **[`docs/LIVE_SETUP_WINDOWS.md`](docs/LIVE_SETUP_WINDOWS.md)** (live setup, step by step) · **[`docs/LIVE_MULTI_ACCOUNT_MOC.md`](docs/LIVE_MULTI_ACCOUNT_MOC.md)** (live, several accounts, MOC)
 · **[`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md)** (headless Docker gateway
 on a free VM) · **[`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md)** (real-money
 mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture.md)**

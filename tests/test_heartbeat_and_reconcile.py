@@ -94,7 +94,7 @@ def test_server_errors_are_retried_then_give_up(server):
 
 
 def test_mask_account():
-    assert hb.mask_account("U22636213") == "…6213" and hb.mask_account("U1") == "U1"
+    assert hb.mask_account("U1234567") == "…4567" and hb.mask_account("U1") == "U1"
 
 
 # ═══ the runner pings around a real run ═════════════════════════════════════
@@ -458,6 +458,7 @@ def test_job_with_a_problem_alerts_and_pings_fail(job, monkeypatch):
 
 
 def test_job_pushes_only_rebuilt_reports(job, monkeypatch):
+    monkeypatch.setenv("IBKR_PUBLISH_REPORTS", "1")
     _sent_today(job)
     monkeypatch.setattr(rc, "reconcile_account", lambda *a, **k: rc.Finding(
         "U1111111", "2026-10-09", rewritten=True))
@@ -466,6 +467,15 @@ def test_job_pushes_only_rebuilt_reports(job, monkeypatch):
     job["pushed"].clear()
     monkeypatch.setattr(rc, "reconcile_account", lambda *a, **k: rc.Finding("U1111111", "x"))
     rc.main(["--config", job["cfg"]])
+    assert job["pushed"] == []
+
+
+def test_reports_are_never_published_unless_opted_in(job, monkeypatch):
+    _sent_today(job)
+    monkeypatch.delenv("IBKR_PUBLISH_REPORTS", raising=False)
+    monkeypatch.setattr(rc, "reconcile_account", lambda *a, **k: rc.Finding(
+        "U1111111", "2026-10-09", rewritten=True))
+    assert rc.main(["--config", job["cfg"]]) == rc.EXIT_OK
     assert job["pushed"] == []
 
 
