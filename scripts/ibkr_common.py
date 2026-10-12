@@ -57,8 +57,12 @@ POSITION_READ_TOL = 0.02
 # portfolio and refused. Re-request it a few times before giving up, and as a
 # last resort price the positions off live quotes -- an independent check, not a
 # weaker one.
-ACCOUNT_SYNC_RETRIES = 3
+ACCOUNT_SYNC_RETRIES = 2
 ACCOUNT_SYNC_WAIT_S = 8.0
+# Every request to the gateway that ``ib_async`` offers only as a BLOCKING call
+# (it waits for an answer with no deadline) is run through ``Broker._bounded``
+# with one of these, so a gateway that never answers cannot hang the run.
+GATEWAY_REQUEST_TIMEOUT_S = 20.0
 # A quote is reused for this long within one run (the pre-flight's drift check
 # and the buy leg's funding budget ask for the same names minutes apart).
 QUOTE_CACHE_TTL_S = 60.0
@@ -1227,7 +1231,7 @@ class Broker:
         # ``account=`` tells ib_async which account is the main one for the
         # account-update subscription; with several accounts on one login it
         # must not be left to the gateway's default.
-        self.ib.connect(host, port, clientId=client_id, timeout=60,
+        self.ib.connect(host, port, clientId=client_id, timeout=20,
                         account=account or "")
         # 1 = live (default), 2 = frozen, 3 = delayed, 4 = delayed-frozen.
         # Delayed data is free and needs no subscription, but IBKR only serves
@@ -1456,7 +1460,7 @@ class Broker:
         """
         if settle:
             try:
-                self.ib.reqPositions()
+                self._bounded("reqPositions", timeout=GATEWAY_REQUEST_TIMEOUT_S)
             except Exception:
                 pass                      # already subscribed — the sleep still helps
             last = None
@@ -1491,17 +1495,48 @@ class Broker:
             total += mv
         return total
 
+    def _bounded(self, name: str, *args, timeout: float):
+        """Run the ib_async request *name* with a DEADLINE: (finished, result).
+
+        ``IB.reqAccountUpdates`` / ``reqAllOpenOrders`` / ``reqPositions`` are
+        "blocking" calls that wait for the gateway's answer with no timeout, so
+        a gateway that never answers (it does not serve some accounts' account
+        updates on a multi-account login) hangs the run forever.  The ``…Async``
+        twin run under ``wait_for`` returns (False, None) instead.  Objects with
+        no async twin (the unit-test fakes) fall back to the plain call."""
+        fn = getattr(self.ib, name + "Async", None)
+        if fn is None:
+            return True, getattr(self.ib, name)(*args)
+        import asyncio
+        from ib_async import util
+        try:
+            return True, util.run(fn(*args), timeout=timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            return False, None
+
+    def _qualify(self, contract) -> None:
+        """Fill in the contract's details, with a deadline (raises TimeoutError)."""
+        done, _ = self._bounded("qualifyContracts", contract,
+                                timeout=GATEWAY_REQUEST_TIMEOUT_S)
+        if not done:
+            raise TimeoutError(f"no contract details for {contract.symbol} "
+                               f"within {GATEWAY_REQUEST_TIMEOUT_S:g}s")
+
     def refresh_account_updates(self) -> None:
         """Ask the gateway again for this account's values and portfolio.
 
-        Harmless when the subscription is healthy; when the first request timed
-        out at connect (``account updates request timed out``) this is what
-        gets the prices flowing."""
+        Bounded by :data:`ACCOUNT_SYNC_WAIT_S`: harmless when the subscription is
+        healthy, and when the gateway does not answer it just returns so the
+        caller can fall back to live quotes."""
         try:
-            self.ib.reqAccountUpdates(self.account)
+            done, _ = self._bounded("reqAccountUpdates", self.account,
+                                    timeout=ACCOUNT_SYNC_WAIT_S)
+            if not done:
+                print(f"    no answer from the gateway within "
+                      f"{ACCOUNT_SYNC_WAIT_S:g}s")
         except Exception as e:
             print(f"    could not re-request account updates ({e})")
-        self.ib.sleep(ACCOUNT_SYNC_WAIT_S)
+        self.ib.sleep(1.0)
 
     def read_value_from_quotes(self) -> float | None:
         """The positions valued at live quotes, or None if any cannot be priced.
@@ -1585,7 +1620,10 @@ class Broker:
         """Orders still working for this account, whichever API client or TWS
         window placed them (``reqAllOpenOrders`` sees them all)."""
         try:
-            trades = self.ib.reqAllOpenOrders()
+            done, trades = self._bounded("reqAllOpenOrders",
+                                         timeout=GATEWAY_REQUEST_TIMEOUT_S)
+            if not done:
+                raise TimeoutError(f"no answer within {GATEWAY_REQUEST_TIMEOUT_S:g}s")
         except Exception as e:
             raise RuntimeError(f"could not read the account's working orders "
                                f"({e}) — refusing to send blind") from e
@@ -1595,7 +1633,12 @@ class Broker:
         """Snapshot bid/ask/last/close for a qualified contract (empty on any
         failure — a missing market-data subscription must degrade, not raise)."""
         try:
-            tickers = self.ib.reqTickers(contract)
+            done, tickers = self._bounded("reqTickers", contract,
+                                          timeout=GATEWAY_REQUEST_TIMEOUT_S)
+            if not done:
+                print(f"    quote {contract.symbol}: no answer within "
+                      f"{GATEWAY_REQUEST_TIMEOUT_S:g}s")
+                return {}
         except Exception as e:
             print(f"    quote {contract.symbol}: unavailable ({e})")
             return {}
@@ -1621,7 +1664,7 @@ class Broker:
             return hit[1]
         try:
             contract = sym.ibkr_contract(symbol)
-            self.ib.qualifyContracts(contract)
+            self._qualify(contract)
             q = self.quote(contract)
         except Exception:
             q = {}
@@ -1792,7 +1835,11 @@ class Broker:
             print(f"    ESCALATE {o.symbol}: limit unfilled after {wait:g}s — "
                   f"re-sending {rem:g} as MARKET")
             contract = sym.ibkr_contract(o.symbol)
-            self.ib.qualifyContracts(contract)
+            try:
+                self._qualify(contract)
+            except Exception as e:
+                print(f"    WARN {o.symbol}: cannot escalate ({e})")
+                continue
             esc = Order(o.key, o.symbol, o.action, rem, o.price,
                         f"{o.reason} (escalated from unfilled limit)")
             mkt = MarketOrder(o.action, rem)
@@ -1915,7 +1962,20 @@ class Broker:
         trades = []
         for o in leg_orders:
             contract = sym.ibkr_contract(o.symbol)
-            self.ib.qualifyContracts(contract)
+            try:
+                self._qualify(contract)
+            except Exception as e:
+                # No contract details = no order for this name. Say so in the
+                # report like any other leg that could not be sent, and carry on
+                # with the rest rather than hang or abort half-way.
+                print(f"    SKIP {o.action} {o.symbol}: {e}")
+                results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
+                                    qty=float(o.qty), price=float(o.price),
+                                    status="SKIPPED-UNQUALIFIED", filled=0.0,
+                                    avg_fill_price=0.0, order_type="",
+                                    limit_price=0.0,
+                                    reason=f"{o.reason} [contract not resolved]"))
+                continue
             qty = executable_qty(o.action, o.qty, fractional)
             if qty <= 0:
                 if not fractional and o.qty > 0:
