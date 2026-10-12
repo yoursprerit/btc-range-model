@@ -2196,6 +2196,10 @@ with tab_live:
         st.markdown(f"<div style='overflow-x:auto;margin:8px 0;'>"
                     f"<table style='width:100%;border-collapse:collapse'>{hdr}{''.join(rows)}</table></div>",
                     unsafe_allow_html=True)
+        st.caption("**Chg %** is one number and one only: the move from the "
+                   "close of the instrument's last bar to the live price — the "
+                   "two price columns it sits between — never the feed's "
+                   "separate session day-change.")
         if gate["n_active"] == 0:
             st.warning("**No open positions today** — no instrument is signalling long, "
                        "so the entire book sits idle: up to the SATA cap in **SATA** "

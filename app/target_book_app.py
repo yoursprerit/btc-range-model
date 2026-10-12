@@ -513,7 +513,7 @@ if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
 _sv.render_badge()
 st.caption("The signed allocation the IBKR executor trades — mapped to the "
            "instruments actually traded (BTC → IBIT). Paper and **Live** "
-           "books carry the same weights: idle capital is parked in a SATA position." Published **once "
+           "books carry the same weights: idle capital is parked in a SATA position. Published **once "
            "daily at ≈7:15 AM CT** (after the daily audit) and then **frozen "
            "until the next morning** — only the 🚀 button below replaces it "
            "intraday.")
