@@ -62,6 +62,7 @@ import target_book as tb                           # noqa: E402  (light: stdlib 
 import executed_book as eb                          # noqa: E402
 import ibkr_symbols as sym                          # noqa: E402
 import ibkr_common as ic                            # noqa: E402  (pure guards)
+import ibkr_safety as ibs                           # noqa: E402  (stress / fill-quality guards)
 from ibkr_common import (                           # noqa: E402
     DEFAULT_LIVE_PORT, DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
     ORDER_MARKETABLE_LIMIT, ORDER_TYPES, Broker, Guards, PositionReadError,
@@ -360,6 +361,7 @@ def main() -> int:
                          "or executed_book_live.json in live mode)")
     ap.add_argument("--no-report", action="store_true",
                     help="do not write the execution report")
+    ibs.add_arguments(ap)
     args = ap.parse_args()
 
     # Publishing is the default because the failure it prevents is silent: the
@@ -661,6 +663,7 @@ def main() -> int:
             return 0
         try:
             net_liq = broker.net_liq()
+            ibs.arm(broker, args, net_liq, report_out, args.kill_switch_file)
             try:
                 current = broker.holdings(net_liq)
             except PositionReadError as e:
@@ -693,6 +696,7 @@ def main() -> int:
     rc = 0
     try:
         net_liq = broker.net_liq()
+        ibs.arm(broker, args, net_liq, report_out, args.kill_switch_file)
         try:
             current = broker.holdings(net_liq)
         except PositionReadError as e:

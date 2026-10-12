@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import ibkr_safety as safety
 import ibkr_symbols as sym
 
 # IB Gateway default sockets: paper 4002 / live 4001 (TWS would be 7497 / 7496).
@@ -917,6 +918,23 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
             checks.append(check_clock(skew_fn()))
         except Exception as e:
             checks.append((True, f"clock not verified ({e})"))
+    # Informational only: the stress gate and NAV brake never abort the run —
+    # they withhold BUYS at placement time, so sells (de-risking) still go.
+    lim = getattr(broker, "safety", None)
+    if isinstance(lim, safety.SafetyLimits):
+        try:
+            if getattr(broker, "buy_block", None):
+                print(f"  ! NAV brake: {broker.buy_block} — buys will be withheld")
+            st = broker.stress_assessment(orders)
+            if st is not None:
+                state = (f"BUYS WILL BE WITHHELD ({st.block_buys})" if st.block_buys
+                         else "no market-wide stress")
+                print(f"  {'!' if st.block_buys else '✓'} {state}"
+                      + (f" [{'; '.join(st.notes)}]" if st.notes else ""))
+                for why in st.names.values():
+                    print(f"  ! buy withheld: {why}")
+        except Exception as e:
+            print(f"  · stress check unavailable ({e}) — not blocking")
     failed = ""
     for ok, why in checks:
         print(f"  {'✓' if ok else '✗'} {why}")
@@ -1391,6 +1409,15 @@ def acquire_send_lock(report_path, as_of, account: str,
     with _os.fdopen(fd, "w") as f:
         f.write(body)
     return True, f"send lock taken ({p.name})"
+
+
+def skipped_result(o: Order, status: str, why: str, qty: float | None = None) -> dict:
+    """Report row for a leg that was deliberately NOT sent, so the execution
+    report says what was withheld and why instead of the leg just vanishing."""
+    return dict(key=o.key, symbol=o.symbol, action=o.action,
+                qty=float(o.qty if qty is None else qty), price=float(o.price),
+                status=status, filled=0.0, avg_fill_price=0.0, order_type="",
+                limit_price=0.0, reason=f"{o.reason} [{why}]")
 
 
 def moc_rejections(trades) -> list[tuple[str, str, str]]:
@@ -1884,7 +1911,8 @@ class Broker:
             return {}
         t = tickers[0]
         return {"bid": getattr(t, "bid", None), "ask": getattr(t, "ask", None),
-                "last": getattr(t, "last", None), "close": getattr(t, "close", None)}
+                "last": getattr(t, "last", None), "close": getattr(t, "close", None),
+                "halted": getattr(t, "halted", None)}
 
     def quote_by_symbol(self, symbol: str) -> dict:
         """Quote for *symbol*, cached briefly (empty dict on any failure).
@@ -1908,6 +1936,86 @@ class Broker:
             q = {}
         cache[symbol] = (now, q)
         return q
+
+    # ── market-stress & execution-quality guards (see ibkr_safety) ───────────
+    # All of these read ``self.safety``; a Broker without one (a unit-test
+    # double, or an entry point that never configured it) behaves exactly as
+    # it did before the guards existed.
+    def _alert(self, msg: str) -> None:
+        cb = getattr(getattr(self, "safety", None), "alert", None)
+        try:
+            (cb or safety.send_alert)(msg)
+        except Exception:
+            print(msg)
+
+    def _halt_reason(self) -> str | None:
+        """The kill switch, re-read between orders.  Sticky: once it has fired
+        the run stays halted even if the file is removed mid-run."""
+        if getattr(self, "_halted", None):
+            return self._halted
+        check = getattr(getattr(self, "safety", None), "halt_check", None)
+        if check is None:
+            return None
+        try:
+            why = check()
+        except Exception:
+            why = None
+        if why:
+            self._halted = why
+            self._alert(f"🛑 KILL SWITCH — {why}: no further orders will be "
+                        f"sent and working orders are being cancelled "
+                        f"({self.account}).")
+        return why
+
+    def _unsafe_quote(self, symbol: str, action: str, quote: dict) -> str | None:
+        lim = getattr(self, "safety", None)
+        if lim is None:
+            return None
+        return safety.quote_problem(quote, action, lim.max_spread,
+                                    lim.sell_spread_mult, lim.outside_rth)
+
+    def _cancel_working(self, trades: list) -> None:
+        """Best-effort cancel of every not-yet-done order in *trades*."""
+        for *_, t in trades:
+            try:
+                if not t.isDone():
+                    self.ib.cancelOrder(t.order)
+            except Exception as e:
+                print(f"    WARN: cancel failed ({e})")
+
+    def index_quote(self, symbol: str, exchange: str) -> dict:
+        """Quote for an index (VIX…); empty on any failure — no subscription,
+        no feed — so a missing index never blocks a rebalance."""
+        try:
+            from ib_async import Index
+            contract = Index(symbol, exchange)
+            self._qualify(contract)
+            return self.quote(contract)
+        except Exception:
+            return {}
+
+    def stress_assessment(self, orders: list[Order]) -> "safety.Stress | None":
+        """Market-wide and per-name stress for the names about to be bought.
+        None when no safety limits are configured.  Cached for the run."""
+        lim = getattr(self, "safety", None)
+        if lim is None:
+            return None
+        if getattr(self, "_stress", None) is not None:
+            return self._stress
+        names = {o.symbol: self.quote_by_symbol(o.symbol)
+                 for o in orders if o.action == "BUY"} if lim.stress_name_move > 0 else {}
+        spy = self.quote_by_symbol("SPY") if lim.stress_spy_move > 0 else None
+        vix = self.index_quote("VIX", "CBOE") if lim.stress_vix > 0 else None
+        self._stress = safety.stress_assessment(spy, vix, names, lim)
+        return self._stress
+
+    def _buy_block(self, buys: list[Order]) -> tuple[str | None, dict[str, str]]:
+        """(reason ALL buys are blocked, {symbol: reason} for single names)."""
+        why_all = getattr(self, "buy_block", None)        # e.g. the NAV brake
+        st = self.stress_assessment(buys)
+        if st is None:
+            return why_all, {}
+        return why_all or st.block_buys, dict(st.names)
 
     def funding_price(self, o: Order,
                       slippage_cap: float = DEFAULT_SLIPPAGE_CAP) -> float:
@@ -2078,6 +2186,21 @@ class Broker:
             except Exception as e:
                 print(f"    WARN {o.symbol}: cannot escalate ({e})")
                 continue
+            # A MARKET order has no price ceiling, so it is the one order that
+            # must not chase a halted, crossed or blown-out book — leave the
+            # remainder unfilled; the next run re-plans from real positions.
+            halt = self._halt_reason()
+            bad = None
+            if not halt and getattr(self, "safety", None) is not None:
+                bad = self._unsafe_quote(o.symbol, o.action, self.quote(contract))
+            if halt or bad:
+                why = f"kill switch ({halt})" if halt else bad
+                print(f"    NOT escalating {o.symbol}: {why} — {rem:g} left unfilled")
+                if bad:
+                    self._alert(f"⚠️ {o.action} {o.symbol} ({self.account}): "
+                                f"{rem:g} shares left unfilled, not escalated to a "
+                                f"market order — {bad}.")
+                continue
             esc = Order(o.key, o.symbol, o.action, rem, o.price,
                         f"{o.reason} (escalated from unfilled limit)")
             mkt = MarketOrder(o.action, rem)
@@ -2125,6 +2248,8 @@ class Broker:
         sells = [o for o in orders if o.action == "SELL"]
         buys = [o for o in orders if o.action == "BUY"]
         self.funding_note = ""
+        self._send_ref = {}          # (action, symbol) -> touch the order was priced off
+        buys = self._withhold_blocked_buys(buys, results)
 
         cash0 = None
         if not allow_margin:
@@ -2162,6 +2287,18 @@ class Broker:
                                      slippage_cap, now, outside_rth)
         results += sell_results
 
+        lim = getattr(self, "safety", None)
+        trip = (safety.fills_tripwire(sell_results, self.__dict__.get("_send_ref", {}),
+                                      lim.max_fill_slippage) if lim else None)
+        if trip and buys:
+            print(f"    !! FILL-QUALITY TRIPWIRE — {trip}. The {len(buys)} buy(s) "
+                  "are NOT sent.")
+            self._alert(f"🔴 Fill-quality tripwire ({self.account}): {trip}. "
+                        "Remaining buys withheld — check the market and the account.")
+            results += [skipped_result(o, "SKIPPED-TRIPWIRE", "fill-quality tripwire")
+                        for o in buys]
+            return results
+
         if cash0 is not None:
             realised = sum(r["filled"] * (r["avg_fill_price"] or r["price"])
                            for r in sell_results)
@@ -2180,6 +2317,31 @@ class Broker:
         results += self._run_leg("BUY", buys, fractional, wait, order_type,
                                  slippage_cap, now, outside_rth)
         return results
+
+    def _withhold_blocked_buys(self, buys: list[Order],
+                               results: list[dict]) -> list[Order]:
+        """Drop the buys the stress gate / NAV brake forbids (sells are never
+        touched — de-risking must always be possible) and record each one."""
+        if not buys or getattr(self, "safety", None) is None:
+            return buys
+        why_all, per_name = self._buy_block(buys)
+        st = getattr(self, "_stress", None)
+        if st is not None and st.notes:
+            print("    Stress check: " + "; ".join(st.notes))
+        keep: list[Order] = []
+        dropped: list[tuple[Order, str]] = []
+        for o in buys:
+            why = why_all or per_name.get(o.symbol)
+            (dropped.append((o, why)) if why else keep.append(o))
+        if dropped:
+            reasons = sorted({w for _, w in dropped})
+            print(f"    !! BUYS WITHHELD ({len(dropped)}): " + "; ".join(reasons)
+                  + " — sells proceed.")
+            self._alert(f"⚠️ Buys withheld on {self.account}: "
+                        + "; ".join(reasons)
+                        + f". {len(dropped)} buy(s) not sent; sells proceed.")
+            results += [skipped_result(o, "SKIPPED-STRESS", w) for o, w in dropped]
+        return keep
 
     def _note_funding(self, note: str, dropped: list[Order],
                       results: list[dict]) -> None:
@@ -2201,6 +2363,12 @@ class Broker:
         results: list[dict] = []
         trades = []
         for o in leg_orders:
+            halt = self._halt_reason()
+            if halt:
+                print(f"    SKIP {o.action} {o.symbol}: kill switch ({halt})")
+                results.append(skipped_result(o, "SKIPPED-KILLSWITCH",
+                                              "kill switch"))
+                continue
             contract = sym.ibkr_contract(o.symbol)
             try:
                 self._qualify(contract)
@@ -2229,6 +2397,20 @@ class Broker:
                                         limit_price=0.0,
                                         reason=f"{o.reason} [fractional dust]"))
                 continue
+            if getattr(self, "safety", None) is not None:
+                q = self.quote(contract)
+                bad = self._unsafe_quote(o.symbol, o.action, q)
+                if bad:
+                    print(f"    SKIP {o.action} {o.symbol}: {bad} — nothing sent "
+                          "for this leg")
+                    self._alert(f"⚠️ {o.action} {o.symbol} skipped on "
+                                f"{self.account}: {bad}.")
+                    results.append(skipped_result(o, "SKIPPED-UNSAFE-QUOTE", bad,
+                                                  qty))
+                    continue
+                ref = safety.touch_price(o.action, q)
+                if ref:
+                    self.__dict__.setdefault("_send_ref", {})[(o.action, o.symbol)] = ref
             order, used, lmt = self._build_order(o, qty, order_type,
                                                  slippage_cap, contract,
                                                  outside_rth)
@@ -2274,8 +2456,12 @@ class Broker:
         else:
             deadline = wait              # wait for this leg before the next
         while deadline > 0 and any(not t.isDone() for *_, t in trades):
+            if self._halt_reason():
+                break
             self.ib.sleep(1.0)
             deadline -= 1.0
+        if self._halt_reason():
+            self._cancel_working(trades)
         if order_type == ORDER_MARKETABLE_LIMIT:
             trades += self._escalate_unfilled(trades, fractional, wait,
                                               outside_rth)

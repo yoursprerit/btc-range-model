@@ -56,6 +56,7 @@ sys.path.insert(0, str(_REPO))
 
 import overall_core as oc                       # noqa: E402  headless engine
 import freshness as fr                          # noqa: E402  session calendars
+import ibkr_safety as ibs                       # noqa: E402  stress / fill-quality guards
 import ibkr_symbols as sym                       # noqa: E402
 from ibkr_common import (                        # noqa: E402  shared broker/order plumbing
     DEFAULT_MAX_GROSS_FRAC, DEFAULT_PORT, DEFAULT_SLIPPAGE_CAP,
@@ -236,6 +237,7 @@ def main() -> int:
                     help="permit a non-DU account (DANGEROUS — disables the paper guard)")
     ap.add_argument("--force", action="store_true",
                     help="ignore the weekend/holiday trading-day guard")
+    ibs.add_arguments(ap)
     args = ap.parse_args()
 
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
@@ -284,6 +286,7 @@ def main() -> int:
             return 0
         try:
             net_liq = broker.net_liq()
+            ibs.arm(broker, args, net_liq)
             current = broker.holdings(net_liq)
             orders = build_order_plan(book.weights, book.exec_price, net_liq,
                                       current, args.band, args.fractional)
@@ -301,6 +304,7 @@ def main() -> int:
                         account_mode=("any" if args.allow_nonpaper else "paper"))
     try:
         net_liq = broker.net_liq()
+        ibs.arm(broker, args, net_liq)
         # Same verified read + exposure guards as the Option-C executor: this
         # entry point sizes off net liquidation too, so an empty positions read
         # would re-buy the whole book here in exactly the same way.
