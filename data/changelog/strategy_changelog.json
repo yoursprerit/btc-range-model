@@ -681,7 +681,12 @@
   "title": "Executor: report publishing needs cryptography, and the MOC wait now reaches the auction",
   "description": "Two failures seen on the first live run: (1) the runner traded and then crashed with \"No module named 'cryptography'\" while publishing the encrypted reports, because requirements-ibkr.txt (what the executor host installs) did not list it - it does now, and a test scans the executor's import chain (including lazy imports) against that file; (2) the post-submit wait was capped at 40 minutes, so a 2:15 PM CT start stopped waiting about 3 minutes before the 4:00 PM ET auction and wrote the report with every leg still Submitted - the ceiling is now 60 minutes, an early start that would still be capped prints a warning, the per-account child timeout is floored at the ceiling plus 5 minutes (an old config value of 3000 is raised), and the systemd unit allows 4500 s.",
   "impact": "Reports are written after the fills rather than before them, the run no longer ends in a false 'not fully filled' exit, and a missing dependency on the executor host can no longer slip in unnoticed.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #218",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/218"
+   }
+  ]
  }
  ]
 }
