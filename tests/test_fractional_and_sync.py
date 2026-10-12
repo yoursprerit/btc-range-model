@@ -256,3 +256,136 @@ def test_orchestrator_children_are_unbuffered_and_staggered_wider():
     cfg, _ = acc.validate_config({"accounts": [{"id": "U1111111"}]})
     assert cfg.stagger_s >= 10
     assert "PYTHONUNBUFFERED" in (ROOT / "scripts" / "ibkr_execute_accounts.py").read_text()
+
+
+# ── 3. a gateway that never answers must not hang the run ───────────────────
+class _SilentGatewayIB(_SyncIB):
+    """The blocking calls would wait forever; only the *Async twins are safe to
+    use, and they never complete -- exactly an unserved account-updates feed."""
+
+    def reqAccountUpdates(self, _acct):
+        raise AssertionError("blocking reqAccountUpdates would hang the run")
+
+    def reqPositions(self):
+        raise AssertionError("blocking reqPositions would hang the run")
+
+    def reqAllOpenOrders(self):
+        raise AssertionError("blocking reqAllOpenOrders would hang the run")
+
+    async def _never(self):
+        import asyncio
+        await asyncio.Event().wait()
+
+    def reqAccountUpdatesAsync(self, _acct):
+        self.refreshes += 1
+        return self._never()
+
+    def reqPositionsAsync(self):
+        return self._never()
+
+    def reqAllOpenOrdersAsync(self):
+        return self._never()
+
+
+def test_bounded_returns_instead_of_waiting_forever():
+    pytest.importorskip("ib_async")
+    import time
+    ib = _SilentGatewayIB(POS, 15_500.0, 50_000.0)
+    t0 = time.monotonic()
+    done, res = _bk(ib)._bounded("reqAccountUpdates", "U1", timeout=0.3)
+    assert (done, res) == (False, None) and time.monotonic() - t0 < 3
+
+
+def test_bounded_passes_a_normal_answer_through():
+    pytest.importorskip("ib_async")
+
+    class _OK(_SyncIB):
+        async def _v(self):
+            return ["answer"]
+
+        def reqAllOpenOrdersAsync(self):
+            return self._v()
+    done, res = _bk(_OK(POS, 1.0, 1.0))._bounded("reqAllOpenOrders", timeout=5)
+    assert done and res == ["answer"]
+
+
+def test_silent_gateway_falls_back_to_quotes_without_hanging(monkeypatch):
+    pytest.importorskip("ib_async")
+    import time
+    monkeypatch.setattr(ic, "ACCOUNT_SYNC_WAIT_S", 0.3)
+    monkeypatch.setattr(ic, "GATEWAY_REQUEST_TIMEOUT_S", 0.3)
+    ib = _SilentGatewayIB(POS, gross=15_500.0, nl=50_000.0, arrives_after=None,
+                          quotes=QUOTES)
+    t0 = time.monotonic()
+    cur = _bk(ib).holdings(50_000.0)
+    assert set(cur) >= {"XLE", "GRID"}
+    assert ib.refreshes == ic.ACCOUNT_SYNC_RETRIES
+    assert time.monotonic() - t0 < 15, "the run must not wait on a silent gateway"
+
+
+def test_silent_gateway_with_no_quotes_refuses_rather_than_hangs(monkeypatch):
+    pytest.importorskip("ib_async")
+    monkeypatch.setattr(ic, "ACCOUNT_SYNC_WAIT_S", 0.2)
+    monkeypatch.setattr(ic, "GATEWAY_REQUEST_TIMEOUT_S", 0.2)
+    ib = _SilentGatewayIB(POS, gross=15_500.0, nl=50_000.0, quotes={})
+    with pytest.raises(ic.PositionReadError):
+        _bk(ib).holdings(50_000.0)
+
+
+def test_working_orders_fails_closed_when_the_gateway_is_silent(monkeypatch):
+    pytest.importorskip("ib_async")
+    monkeypatch.setattr(ic, "GATEWAY_REQUEST_TIMEOUT_S", 0.2)
+    with pytest.raises(RuntimeError, match="refusing to send blind"):
+        _bk(_SilentGatewayIB(POS, 1.0, 1.0)).working_orders()
+
+
+def test_no_blocking_gateway_call_is_left_unbounded():
+    """Guard against a new un-deadlined call sneaking back in."""
+    src = (ROOT / "scripts" / "ibkr_common.py").read_text()
+    for call in ("self.ib.reqAccountUpdates(", "self.ib.reqAllOpenOrders(",
+                 "self.ib.reqPositions(", "self.ib.reqTickers(",
+                 "self.ib.qualifyContracts("):
+        assert call not in src, f"{call} blocks with no timeout; use _bounded"
+
+
+def test_a_silent_gateway_cannot_hang_quotes_or_contract_lookup(monkeypatch):
+    pytest.importorskip("ib_async")
+    import time
+
+    class _Silent(_SilentGatewayIB):
+        def reqTickers(self, *_a, **_k):
+            raise AssertionError("blocking reqTickers would hang")
+
+        def reqTickersAsync(self, *_a, **_k):
+            return self._never()
+
+        def qualifyContracts(self, *_a):
+            raise AssertionError("blocking qualifyContracts would hang")
+
+        def qualifyContractsAsync(self, *_a):
+            return self._never()
+    monkeypatch.setattr(ic, "GATEWAY_REQUEST_TIMEOUT_S", 0.3)
+    b = _bk(_Silent(POS, 1.0, 1.0))
+    t0 = time.monotonic()
+    assert b.quote(_Contract("XLE")) == {}
+    with pytest.raises(TimeoutError):
+        b._qualify(_Contract("XLE"))
+    assert time.monotonic() - t0 < 10
+
+
+def test_unresolvable_contract_skips_that_order_and_sends_the_rest(monkeypatch):
+    pytest.importorskip("ib_async")
+    monkeypatch.setattr(ic.sym, "ibkr_contract", lambda s: _Contract(s))
+    b = _send_broker()
+
+    def _qualify(contract):
+        if contract.symbol == "BAD":
+            raise TimeoutError("no contract details for BAD")
+    b._qualify = _qualify
+    res = b.place([ic.Order("BAD", "BAD", "BUY", 5.0, 10.0, "t"),
+                   ic.Order("OK", "OK", "BUY", 5.0, 10.0, "t")],
+                  fractional=False, wait=0.0, order_type=ic.ORDER_MOC,
+                  now=__import__("pandas").Timestamp("2026-10-12 15:30", tz="America/New_York"),
+                  moc_strict=True)
+    assert b.ib.placed == [("OK", "BUY", 5.0)]
+    assert [r["status"] for r in res if r["symbol"] == "BAD"] == ["SKIPPED-UNQUALIFIED"]
