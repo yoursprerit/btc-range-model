@@ -23,9 +23,9 @@ def test_a_path_inside_the_repo_is_labelled_relative_as_before():
 
 
 def test_a_vault_copy_outside_the_repo_no_longer_raises():
-    p = Path("/tmp/reportvault-qg8yydsq/accounts/U22546572/executed_book_live.json")
+    p = Path("/tmp/reportvault-qg8yydsq/accounts/U1111111/executed_book_live.json")
     label = rl.source_label(p, REPO)
-    assert label == "`🔒 encrypted vault: accounts/U22546572/executed_book_live.json`"
+    assert label == "`🔒 encrypted vault: accounts/U1111111/executed_book_live.json`"
     assert "/tmp" not in label and "reportvault" not in label
 
 

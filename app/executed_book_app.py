@@ -51,6 +51,7 @@ import overall_core as ov                 # noqa: E402
 import ticker_config                       # noqa: E402
 import target_book as tb                   # noqa: E402  (shared HMAC verify)
 import report_label as _rl                 # noqa: E402  (a vault copy sits outside the repo)
+import drift_target as _dt                 # noqa: E402  (live reports are judged against the LIVE book)
 import executed_book as eb                 # noqa: E402
 import ibkr_symbols as sym                 # noqa: E402  (BTC→IBIT mapping)
 
@@ -340,8 +341,15 @@ def _drift_section(payload: dict, *, historical: bool = False,
                        "compare this run against.")
             return
     else:
-        tgt_path = TARGET_PATH
+        # the book the executor actually traded for this account mode: a live
+        # report judged against the paper book showed SATA at 0 % and cash at 40 %
+        tgt_path = _dt.current_target_path(payload, TARGET_PATH.parent)
         if not tgt_path.exists():
+            if _dt.is_live(payload):
+                st.markdown("---")
+                st.markdown("### 🎯 vs Target Book — allocation drift")
+                st.caption(f"No live target book found (`{tgt_path.relative_to(_REPO_ROOT)}`), "
+                           "so there is nothing to compare this run against.")
             return
     try:
         tgt = tb.loads(tgt_path.read_text())
@@ -356,6 +364,10 @@ def _drift_section(payload: dict, *, historical: bool = False,
     elif historical:
         st.caption(f"Against the book published for signal bar **{tgt.get('as_of')}** "
                    f"(`{tgt_path.relative_to(_REPO_ROOT)}`) — the one this run traded.")
+    if target_path is None and not historical:
+        _warn = _dt.book_mode_warning(tgt, payload)
+        if _warn:
+            st.caption(_warn)
 
     t_weights = tgt.get("weights", {}) or {}
     t_cash = float(tgt.get("cash_weight", 0.0) or 0.0)
