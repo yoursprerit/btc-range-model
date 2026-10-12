@@ -1093,6 +1093,26 @@ def trim_sata(weights: dict[str, float], cap: float) -> tuple[dict[str, float], 
     return out, excess
 
 
+def apply_deploy_cap(weights: dict[str, float], max_deploy_frac: float
+                     ) -> tuple[dict[str, float], dict | None]:
+    """Cap the TOTAL the book may deploy at *max_deploy_frac* of the account.
+
+    Every asset in the book -- SATA included -- is scaled by the same factor so
+    the weights sum to the cap, and everything left over simply stays CASH
+    (a weight that is not assigned is not traded into).  It is a ceiling, not a
+    target: a book that already deploys less than the cap is left as it is.
+
+    Returns ``(new weights, info)`` where info is None when no scaling was
+    needed, else ``{"before", "after", "scale"}``.  The input is not modified."""
+    out = dict(weights)
+    total = sum(v for v in out.values() if v > 0)
+    if max_deploy_frac >= 1.0 or total <= max_deploy_frac or total <= 0:
+        return out, None
+    scale = max_deploy_frac / total
+    out = {k: v * scale for k, v in out.items()}
+    return out, dict(before=total, after=max_deploy_frac, scale=scale)
+
+
 def print_dust(skipped: list[dict]) -> None:
     """Tell the operator what the whole-share plan had to leave alone."""
     for d in skipped or []:

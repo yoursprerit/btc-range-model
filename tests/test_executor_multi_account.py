@@ -193,7 +193,7 @@ def test_a_live_run_refuses_the_paper_book(env, monkeypatch):
     assert _run(monkeypatch, _argv(book, "--allow-paper-book")) == 0
 
 
-# ── the deploy cap and the V2 SATA cap ──────────────────────────────────────
+# ── the deploy cap (TOTAL across all assets) and the V2 SATA cap ────────────
 def _book(path, weights, cash, sata_cap=None):
     d = json.loads(path.read_text())
     d.update(weights=weights, cash_weight=cash,
@@ -205,74 +205,101 @@ def _book(path, weights, cash, sata_cap=None):
     path.write_text(json.dumps(d))
 
 
-def _planned(monkeypatch, book, *extra):
-    assert _run(monkeypatch, _argv(book, "--max-deploy-frac", "0.25", *extra)) == 0
+def _planned(monkeypatch, book, *extra, deploy="0.25"):
+    assert _run(monkeypatch, _argv(book, "--max-deploy-frac", deploy, *extra)) == 0
     (orders, _kw), = _FakeBroker.instances[-1].placed
     return {o.symbol: o.qty * o.price / 100_000.0 for o in orders}
 
 
-def test_deploy_cap_frees_weight_into_sata_only_up_to_the_books_cap(env, monkeypatch):
-    """Book built under the V2 SATA cap: risk 60% -> 25%, SATA stays at its 30%
-    cap, the rest (45%) is cash -- NOT 75% in SATA."""
+def test_deploy_cap_is_the_total_across_every_asset_sata_included(env, monkeypatch):
+    """25 % means 25 % of the account in TOTAL -- risk assets AND SATA -- and the
+    other 75 % is left as cash. (SATA 30 % + risk 60 % + cash 10 % scales by
+    25/90.)"""
     _, book = env
     _book(book, {"GDX": 0.60, "SATA": 0.30}, 0.10, sata_cap=0.30)
     got = _planned(monkeypatch, book)
-    assert got["GDX"] == pytest.approx(0.25, abs=0.005)
-    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
-    assert sum(got.values()) == pytest.approx(0.55, abs=0.01)    # 45% left in cash
+    assert sum(got.values()) == pytest.approx(0.25, abs=0.005)
+    assert got["GDX"] == pytest.approx(0.60 * 25 / 90, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.30 * 25 / 90, abs=0.005)
 
 
-def test_deploy_cap_tops_sata_up_to_its_cap_and_no_further(env, monkeypatch):
-    _, book = env
-    _book(book, {"GDX": 0.80, "SATA": 0.10}, 0.10, sata_cap=0.30)
-    got = _planned(monkeypatch, book)
-    assert got["GDX"] == pytest.approx(0.25, abs=0.005)
-    # freed 55% would fill SATA 10% -> 65%; the cap stops it at 30%
-    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
-
-
-def test_a_pre_cap_book_gets_the_executor_default_cap(env, monkeypatch):
-    """The first live preview: a book published BEFORE the V2 cap (SATA 40 %, no
-    sata_cap) under a 25 % deploy cap used to put 75 % of the account in SATA.
-    The executor now applies its 30 % default: SATA 30 %, the rest cash."""
+def test_a_pre_cap_book_is_capped_at_30_then_scaled_to_the_deploy_cap(env, monkeypatch):
+    """The first live preview's book (SATA 40 %, no sata_cap): SATA is trimmed to
+    30 % first, then everything is scaled to the 25 % total."""
     _, book = env
     _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
     got = _planned(monkeypatch, book)
-    assert got["GDX"] == pytest.approx(0.25, abs=0.005)
-    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
+    assert sum(got.values()) == pytest.approx(0.25, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.30 * 25 / 90, abs=0.005)
 
 
-def test_pre_cap_book_without_a_deploy_cap_is_trimmed_too(env, monkeypatch):
+def test_without_the_sata_fallback_it_is_still_capped_in_total(env, monkeypatch):
     _, book = env
     _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
-    assert _run(monkeypatch, _argv(book)) == 0
-    (orders, _kw), = _FakeBroker.instances[-1].placed
-    got = {o.symbol: o.qty * o.price / 100_000.0 for o in orders}
+    got = _planned(monkeypatch, book, "--default-sata-cap", "-1")
+    assert sum(got.values()) == pytest.approx(0.25, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.40 * 0.25, abs=0.005)
+
+
+def test_nothing_is_added_when_the_book_deploys_less_than_the_cap(env, monkeypatch):
+    """A ceiling, not a target: no scaling UP, and no SATA park for the rest."""
+    _, book = env
+    _book(book, {"GDX": 0.10, "SATA": 0.05}, 0.85, sata_cap=0.30)
+    got = _planned(monkeypatch, book)
+    assert got["GDX"] == pytest.approx(0.10, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.05, abs=0.005)
+
+
+def test_a_paper_style_book_without_sata_is_scaled_to_the_cap(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.60}, 0.40)
+    got = _planned(monkeypatch, book)
+    assert got == {"GDX": pytest.approx(0.25, abs=0.005)}
+
+
+def test_no_deploy_cap_leaves_the_book_alone(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.60, "SATA": 0.30}, 0.10, sata_cap=0.30)
+    got = _planned(monkeypatch, book, deploy="1.0")
     assert got["GDX"] == pytest.approx(0.60, abs=0.005)
     assert got["SATA"] == pytest.approx(0.30, abs=0.005)
 
 
-def test_the_fallback_can_be_switched_off(env, monkeypatch):
+def test_log_says_what_the_cap_did(env, monkeypatch, capsys):
+    _, book = env
+    _book(book, {"GDX": 0.60, "SATA": 0.30}, 0.10, sata_cap=0.30)
+    _planned(monkeypatch, book)
+    out = capsys.readouterr().out
+    assert "Deploy cap 25% of NAV" in out and "SATA included" in out
+    assert "stays cash" in out and "freed" not in out
+
+
+def test_pre_cap_book_without_a_deploy_cap_is_trimmed_to_30(env, monkeypatch):
     _, book = env
     _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
-    got = _planned(monkeypatch, book, "--default-sata-cap", "-1")
-    assert got["SATA"] == pytest.approx(0.75, abs=0.005)      # the old behaviour
+    got = _planned(monkeypatch, book, deploy="1.0")
+    assert got["GDX"] == pytest.approx(0.60, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
 
 
 def test_a_books_own_cap_beats_the_default(env, monkeypatch):
     _, book = env
     _book(book, {"GDX": 0.50, "SATA": 0.40}, 0.10, sata_cap=0.50)
-    assert _run(monkeypatch, _argv(book)) == 0
-    (orders, _kw), = _FakeBroker.instances[-1].placed
-    got = {o.symbol: o.qty * o.price / 100_000.0 for o in orders}
+    got = _planned(monkeypatch, book, deploy="1.0")
     assert got["SATA"] == pytest.approx(0.40, abs=0.005)      # not trimmed to 30 %
 
 
-def test_a_paper_style_book_without_sata_frees_into_cash(env, monkeypatch):
-    _, book = env
-    _book(book, {"GDX": 0.60}, 0.40)
-    got = _planned(monkeypatch, book)
-    assert got == {"GDX": pytest.approx(0.25, abs=0.005)}
+def test_apply_deploy_cap_unit():
+    w = {"GRID": 0.30, "XLE": 0.20, "SATA": 0.30}
+    out, info = ic.apply_deploy_cap(w, 0.25)
+    assert sum(out.values()) == pytest.approx(0.25)
+    assert out["GRID"] / out["XLE"] == pytest.approx(0.30 / 0.20)     # proportional
+    assert info["scale"] == pytest.approx(0.25 / 0.80) and info["before"] == pytest.approx(0.80)
+    assert w == {"GRID": 0.30, "XLE": 0.20, "SATA": 0.30}            # input untouched
+    assert ic.apply_deploy_cap(w, 1.0)[1] is None                    # no cap
+    same, info = ic.apply_deploy_cap({"GRID": 0.10}, 0.25)           # under the cap
+    assert same == {"GRID": 0.10} and info is None
+    assert ic.apply_deploy_cap({}, 0.25) == ({}, None)
 
 
 def test_effective_sata_cap_rules():

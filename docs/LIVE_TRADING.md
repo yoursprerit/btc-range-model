@@ -35,7 +35,7 @@ Cloud publisher → target_book.json (paper) + target_book_live.json (live)
 | **Account mode** | `--account-mode live` | Refuses to run unless the account is **non-paper**. |
 | **Explicit confirm** | `--confirm-live` | Live never runs by accident — the wrapper only adds this when `IBKR_ACCOUNT_MODE=live`. |
 | **Pinned account** | `--expected-account U1234567` | Aborts if the connected account isn't **exactly** yours — can't trade the wrong account. |
-| **Exposure cap** | `--max-deploy-frac 0.25` | Caps **risk assets** at **25% of net-liq**; the freed weight goes to **SATA** on the live book (idle → yield park, up to the book's 30 % `sata_cap`; beyond that cash), or cash on paper. |
+| **Deploy cap** | `--max-deploy-frac 0.25` | The book may put at most **25% of net-liq** to work **in total, across every asset including SATA** — all positions are scaled by the same factor and the other 75% of the account is left as cash. A ceiling, not a target. (SATA is first limited to the book's 30 % `sata_cap`.) |
 | **Per-order cap** | `--max-order-notional 5000` | Clamps any single order to a dollar ceiling (fat-finger / bug backstop). |
 | **Kill switch** | `--kill-switch-file …/STOP_LIVE` or `IBKR_TRADING_DISABLED=1` | `touch` the file to halt live on the next run — no cron/systemd edits. |
 | **Dry-run default** | (no `--execute`) | Orders require `--execute`; the wrapper adds it deliberately. |
@@ -61,7 +61,7 @@ for the full table.
 | **Duplicate-run lock** | always on (`--force-rerun`) | A signal bar with an execution report already archived is never executed twice. |
 | **Cash-funded buys** | always on (`--allow-margin`) | Buys are capped at settled cash + the proceeds the sells actually realised, budgeted at live quotes. **A live account cannot take on an unintended margin loan.** |
 | **Account state** | always on | Refuses to trade an account that already carries a margin loan or is already geared past the cap. |
-| **Projected exposure** | `--max-gross-frac 1.02` | Aborts any plan landing above ~1× NAV. Note this sits *on top of* `--max-deploy-frac`: that one caps the book's risk weight, this one catches a plan that would gear the account regardless of what the book said. |
+| **Projected exposure** | `--max-gross-frac 1.02` | Aborts any plan landing above ~1× NAV. Note this sits *on top of* `--max-deploy-frac`: that one caps the book's total deployed weight, this one catches a plan that would gear the account regardless of what the book said. |
 | **Turnover** | `--max-turnover-frac 1.5` | Aborts an implausible churn — the signature of a plan built against the wrong picture of the account. |
 | **Price drift** | `--max-price-drift 0.25` | Aborts when a name quotes far from its sizing price (a split between publish and execution would size every order wrong). |
 | **Session hours** | always on (`--outside-rth`) | No orders outside 09:30–16:00 ET. The incident's first round went out at 18:48 ET. |

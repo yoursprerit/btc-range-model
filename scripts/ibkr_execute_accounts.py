@@ -67,7 +67,7 @@ LIVE_ID = re.compile(r"^[UFI]\d{5,}$")      # a REAL account (U individual/joint
 # globally under "defaults" and again per account.
 DEFAULT_LIMITS = {
     "band": 0.01,                # no-trade band, fraction of the account's net-liq
-    "max_deploy_frac": 1.0,      # cap on risk assets; the rest parks in SATA
+    "max_deploy_frac": 1.0,      # cap on the TOTAL invested, all assets incl. SATA; rest = cash
     "max_order_notional": 0.0,   # $ cap on any single order (0 = none)
     "max_gross_frac": ic.DEFAULT_MAX_GROSS_FRAC,
     "max_turnover_frac": 1.5,
