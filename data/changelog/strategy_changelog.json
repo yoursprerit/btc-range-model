@@ -569,7 +569,12 @@
    "title": "Encrypted report vault",
    "description": "With IBKR_VAULT_KEY set, live execution reports are published only as an AES-256-GCM vault (opaque file names, sealed manifest, path-bound tags) under data/overall/vault; the Executed Book page decrypts it into a temp folder with the same key.",
    "impact": "Lets the cloud app show live reports without account numbers, balances or holdings being readable on GitHub.",
-   "links": []
+   "links": [
+    {
+     "label": "PR #211",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/211"
+    }
+   ]
   }
  ]
 }
