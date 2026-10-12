@@ -240,9 +240,8 @@ def child_argv(cfg: Config, acct: Account, index: int, *, execute: bool,
 
 
 # ── gateway check ───────────────────────────────────────────────────────────
-def verify_gateway(cfg: Config) -> tuple[list[str] | None, str]:
-    """(managed accounts, reason) from one short-lived API session, or
-    (None, reason) when the gateway is down / not logged in."""
+def _connect_once(cfg: Config) -> tuple[list[str] | None, str]:
+    """One short-lived API session: (managed accounts, reason) or (None, reason)."""
     try:
         from ib_async import IB
     except Exception as e:
@@ -263,6 +262,40 @@ def verify_gateway(cfg: Config) -> tuple[list[str] | None, str]:
     if not accts:
         return None, "the gateway returned no accounts (login/2FA incomplete?)"
     return accts, f"gateway managed accounts: {', '.join(accts)}"
+
+
+GATEWAY_RETRY_S = 600.0        # keep trying this long (execute runs only)
+GATEWAY_RETRY_EVERY_S = 30.0
+MOC_RETRY_MARGIN_MIN = 6       # stop retrying this close to the exchange cutoff
+
+
+def verify_gateway(cfg: Config, retry_s: float = 0.0,
+                   every_s: float = GATEWAY_RETRY_EVERY_S,
+                   sleep=time.sleep, now=None, clock=time.monotonic
+                   ) -> tuple[list[str] | None, str]:
+    """(managed accounts, reason), retrying for up to *retry_s* seconds.
+
+    A gateway that is momentarily unavailable (restarting, a slow login) must not
+    cost the whole session: the run starts ~35 minutes before the MOC cutoff, so
+    there is time to try again.  Retries stop early once an order placed after
+    the next attempt could no longer beat the cutoff."""
+    t0 = clock()
+    attempt = 0
+    while True:
+        attempt += 1
+        accts, why = _connect_once(cfg)
+        if accts is not None or retry_s <= 0:
+            return accts, why
+        waited = clock() - t0
+        late = not ic.moc_entry_open(
+            (pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now))
+            + pd.Timedelta(minutes=MOC_RETRY_MARGIN_MIN))[0]
+        if waited + every_s > retry_s or late:
+            return None, (f"{why} (gave up after {attempt} attempt(s), "
+                          f"{waited:.0f}s)")
+        print(f"  gateway not ready — {why}\n  retrying in {every_s:.0f}s "
+              f"(attempt {attempt + 1})…", flush=True)
+        sleep(every_s)
 
 
 def split_by_availability(cfg: Config, managed: list[str]
@@ -289,6 +322,7 @@ def describe(rc: int | None) -> str:
     return {0: "ok", 1: "ABORTED/FAILED — a guard refused or an error occurred",
             3: "skipped (MOC cutoff passed)",
             4: "orders sent but NOT fully filled — check TWS",
+            5: "orders filled but the account did NOT land on target — check TWS",
             None: "did not finish (timed out and was killed)"}.get(rc, f"exit {rc}")
 
 
@@ -296,10 +330,26 @@ def _tag(acct: Account) -> str:
     return f"[{acct.id}]"
 
 
+def rotate_log(path: Path, max_bytes: int = 5_000_000, keep: int = 3) -> None:
+    """Size-based rotation (path -> path.1 -> path.2 ...), so a per-account log
+    that holds account ids and balances does not grow without bound."""
+    try:
+        if not path.exists() or path.stat().st_size < max_bytes:
+            return
+        for i in range(keep - 1, 0, -1):
+            src = path.with_name(f"{path.name}.{i}")
+            if src.exists():
+                src.replace(path.with_name(f"{path.name}.{i + 1}"))
+        path.replace(path.with_name(f"{path.name}.1"))
+    except OSError:
+        pass                               # never let log housekeeping stop a run
+
+
 def run_child(cfg: Config, acct: Account, index: int, *, execute: bool,
               echo_lock: threading.Lock, results: dict[str, Result]) -> None:
     res = results[acct.id] = Result(acct)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    rotate_log(LOG_DIR / f"{acct.id}.log")
     log = (LOG_DIR / f"{acct.id}.log").open("a", encoding="utf-8")
     argv = child_argv(cfg, acct, index, execute=execute)
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
@@ -403,14 +453,19 @@ def push_reports(accounts: list[Account], branch: str | None = None) -> bool:
     def git(*a):
         return subprocess.run(("git",) + a, cwd=_REPO, capture_output=True, text=True)
     branch = branch or (git("rev-parse", "--abbrev-ref", "HEAD").stdout or "main").strip()
+    if branch == "HEAD":
+        # detached: "HEAD:HEAD" would create a branch literally named HEAD
+        print("  WARN: the repo is on a detached HEAD — not pushing the reports "
+              "(git checkout main)")
+        return False
     git("add", *rels)
     if git("diff", "--cached", "--quiet", "--", *rels).returncode == 0:
         print("  reports unchanged — nothing to publish")
         return True
     msg = f"chore(ibkr): live execution reports {date.today()}"
     c = git("-c", "user.name=ibkr-executor", "-c", "user.email=executor@localhost",
-            "commit", "-q", "-m", msg)
-    if c.returncode != 0:
+            "commit", "-q", "-m", msg, "--", *rels)    # ONLY the reports: anything
+    if c.returncode != 0:                              # else staged stays staged
         print(f"  WARN: could not commit reports ({c.stderr.strip()[:200]})")
         return False
     r = git("push", "origin", f"HEAD:{branch}")
@@ -473,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
 
     mode = "EXECUTE" if args.execute else "preview (no orders)"
     print(f"Multi-account MOC runner — {mode}")
+    print("Runtime: " + ic.runtime_versions())
     print(f"  gateway {cfg.host}:{cfg.port}, book {cfg.book}, "
           f"{len(cfg.enabled())} account(s) enabled")
     for a in cfg.enabled():
@@ -492,6 +548,14 @@ def main(argv: list[str] | None = None) -> int:
                   "signature-verified before any order. Nothing sent.")
             return EXIT_SETUP
         today = pd.Timestamp.now(tz=ic.ET_TZ).tz_localize(None)
+        if not ic.calendar_covers(today):
+            print(f"ABORT: {ic.calendar_warning(today)}. Nothing sent.")
+            alert("🔴 IBKR live run REFUSED — the market-holiday table has run out; "
+                  "extend US_MARKET_HOLIDAYS / US_EARLY_CLOSES in scripts/ibkr_common.py.")
+            return EXIT_SETUP
+        _note = ic.calendar_warning(today)
+        if _note:
+            print(f"NOTE: {_note}")
         ok_day, why_day = ic.is_trading_day(today)
         if not ok_day:
             print(f"Not trading: {why_day}.")
@@ -505,7 +569,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"({why_moc}). No orders were placed today.")
             return EXIT_SKIPPED
 
-    managed, why = verify_gateway(cfg)
+    managed, why = verify_gateway(
+        cfg, retry_s=GATEWAY_RETRY_S if (args.execute and not args.check) else 0.0)
     print(f"Gateway: {why}")
     if managed is None:
         alert(f"🔴 IBKR live MOC run ABORTED — {why}. Nothing was traded.")

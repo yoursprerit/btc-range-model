@@ -27,6 +27,7 @@ class _FakeBroker:
         self.kw, self.port = kw, port
         self.account = kw.get("account")
         self.placed = []
+        self.pos = {}                    # what the account holds after "fills"
         self.disconnected = False
 
     def net_liq(self): return 100_000.0
@@ -37,12 +38,15 @@ class _FakeBroker:
     def quote_by_symbol(self, _s): return {}
     def portfolio_snapshot(self): return []
     def realized_pnl(self): return None
-    def positions_by_key(self, settle=True): return {}
+    def positions_by_key(self, settle=True): return dict(self.pos)
     def working_orders(self): return list(type(self).working)
     def disconnect(self): self.disconnected = True
 
     def place(self, orders, fractional, wait, **kw):
         self.placed.append((orders, kw))
+        for o in orders:                 # a real account reflects its fills
+            d = o.qty * type(self).fill_ratio * (1 if o.action == "BUY" else -1)
+            self.pos[o.key] = self.pos.get(o.key, 0.0) + d
         return [dict(key=o.key, symbol=o.symbol, action=o.action, qty=o.qty,
                      price=o.price, status="Filled" if self.fill_ratio >= 1 else "Submitted",
                      filled=o.qty * self.fill_ratio, avg_fill_price=o.price,
@@ -74,9 +78,12 @@ def env(tmp_path, monkeypatch):
 
 
 def _argv(book, *extra):
+    # the test books put 30-60 % in one name; the per-order NAV limit has its own
+    # tests, so open it here
     return ["--file", str(book), "--execute", "--account-mode", "live",
             "--confirm-live", "--account", ACCT, "--order-type", "moc",
-            "--strict-moc", "--no-push-report", "--port", "4001", *extra]
+            "--strict-moc", "--no-push-report", "--port", "4001",
+            "--max-buy-frac", "1.0", *extra]
 
 
 def _run(monkeypatch, argv):

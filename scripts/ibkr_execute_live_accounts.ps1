@@ -65,6 +65,18 @@ $LogDir = Join-Path $RepoRoot 'logs'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $Log = Join-Path $LogDir 'ibkr_live_executor.log'
 
+# Rotate the wrapper log (it holds account ids and balances) so it cannot grow
+# without bound: ibkr_live_executor.log -> .1 -> .2 -> .3, at 5 MB.
+try {
+    if ((Test-Path $Log) -and ((Get-Item $Log).Length -gt 5MB)) {
+        foreach ($i in 2, 1) {
+            $src = "$Log.$i"
+            if (Test-Path $src) { Move-Item -Force $src "$Log.$($i + 1)" }
+        }
+        Move-Item -Force $Log "$Log.1"
+    }
+} catch { }
+
 function Log($msg) {
     # Convert explicitly: Get-Date -Format 'u' labels LOCAL time as UTC.
     $line = "[{0}] {1}" -f (Get-Date).ToUniversalTime().ToString('u'), $msg

@@ -313,7 +313,7 @@ if ($Task) {
     $set = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
             -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
     Register-ScheduledTask -TaskName 'IBKR Option C executor' -Action $act -Trigger $trg `
-        -Settings $set -RunLevel Highest -Force `
+        -Settings $set -RunLevel Limited -Force `
         -Description 'Pull the published target book and rebalance the IBKR paper account.' | Out-Null
     Ok "registered task 'IBKR Option C executor' at $TaskTime daily (-WakeToRun), branch $Branch"
     Info "test it now: Start-ScheduledTask -TaskName 'IBKR Option C executor'"
@@ -498,7 +498,7 @@ if ($LiveTask) {
     $set = New-ScheduledTaskSettingsSet -WakeToRun `
             -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
     Register-ScheduledTask -TaskName 'IBKR Option C LIVE executor' -Action $act -Trigger $trg `
-        -Settings $set -RunLevel Highest -Force `
+        -Settings $set -RunLevel Limited -Force `
         -Description 'Trade the published live book in every configured IBKR account as market-on-close orders.' | Out-Null
     Ok "registered task 'IBKR Option C LIVE executor' at $LiveTaskTime daily (-WakeToRun), branch $Branch"
     Info "the MOC cutoff is 15:50 ET: $LiveTaskTime must be well before it in YOUR time zone"
