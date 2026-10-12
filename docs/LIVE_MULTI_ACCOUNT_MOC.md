@@ -41,7 +41,7 @@ all. A failing or hung account cannot affect the others (separate processes).
 | Normal run, before 15:50 ET | Whole-share `MOC` / `DAY` orders, every one stamped with its account id. |
 | Run starts **after** the cutoff (PC was off, gateway slow) | **Skip the session.** Nothing is sent, exit code 3, an alert is raised. No limit/market fallback and **no after-hours catch-up** — tomorrow's book supersedes today's. |
 | Early-close day (day after Thanksgiving, Dec 24) | The cutoff moves to 12:50 ET, so the normal slot is past it → session skipped. |
-| A name would need fractional shares | Whole shares only (MOC can't be fractional); the executor rounds. |
+| An account holds fractional shares (e.g. 22.8672) | MOC is whole shares only. Buys round to the nearest share; **sells round DOWN and never exceed what is held**. The leftover fraction (e.g. 0.87 share) can't be sold by an MOC order: the log says so (`note: … sell the fractional remainder by hand`) and it is left alone. |
 | The broker rejects an order (IRA/product restriction, permissions) | Reported **within seconds** in the log and alert, with the broker's message, while there's still time before the cutoff to act in TWS. Nothing is substituted. |
 | MOC didn't fully fill after the auction | Exit code 4 + alert; nothing is re-sent. Tomorrow's run re-plans from what the account really holds. |
 
@@ -89,6 +89,7 @@ notepad deploy\ibkr_accounts.json
 {
   "port": 4001,                     // live gateway
   "client_id_base": 40,             // account i uses 40+i (stable per list position)
+  "stagger_s": 10,                  // seconds between starting each account (gateway is slow if hit at once)
   "book": "data/overall/target_book_live.json",
   "kill_switch_file": "STOP_LIVE",  // create this file to halt trading
   "defaults": {                     // every account inherits these…
@@ -250,6 +251,7 @@ isn't managed by the login · `2` gateway or config problem, **nothing traded** 
 | Symptom | Meaning / fix |
 |---|---|
 | `cannot open an API session on 127.0.0.1:4001` (exit 2) | Gateway not running or not logged in — approve the IBKR Mobile push / restart IBC. Nothing was traded. |
+| `positions read explains $0 of the $… the account reports` / `account updates request timed out` | The gateway was slow to send that account's prices when several accounts connected at once. The executor now re-requests them (3 tries), then values the positions at **live quotes** as an independent cross-check, and only refuses if neither agrees with the account's own total. If it still happens, raise `stagger_s` in the accounts file (default 10 s) or restart the gateway. |
 | `✗ U… is NOT managed by this login` | Wrong login, or the account isn't linked to it. Fix before the next run; that account is skipped, the others still trade. |
 | `this login manages N accounts … pass --account` | Running the single-account executor by hand on a multi-account login — pass `--account U…` (the runner always does). |
 | `SKIP SESSION … past the 15:50 ET MOC entry cutoff` | The run started too late. Move the task earlier; check the PC wasn't asleep / the gateway was up. |

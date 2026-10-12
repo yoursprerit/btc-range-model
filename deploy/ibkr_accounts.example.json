@@ -7,7 +7,7 @@
   "book": "data/overall/target_book_live.json",
   "kill_switch_file": "STOP_LIVE",
   "child_timeout_s": 3000,
-  "stagger_s": 3,
+  "stagger_s": 10,
   "market_data_type": 1,
 
   "defaults": {

@@ -624,10 +624,13 @@ def main() -> int:
             except PositionReadError as e:
                 print(f"ABORT: {e}.")
                 return 1
+            dust: list = []
             orders = build_order_plan(weights, exec_price, net_liq, current,
-                                      args.band, args.fractional, args.max_order_notional)
+                                      args.band, args.fractional, args.max_order_notional,
+                                      skipped=dust)
             print(f"\nAccount {broker.account} ({tag}).")
             print_plan(orders, net_liq)
+            ic.print_dust(dust)
             preflight(broker, orders, current, exec_price, net_liq,
                       Guards.from_args(args))
             if not args.no_report:
@@ -653,10 +656,13 @@ def main() -> int:
             print(f"ABORT: {e}. No orders placed — the next scheduled run will "
                   "re-read the account.")
             return EXIT_ABORT
+        dust: list = []
         orders = build_order_plan(weights, exec_price, net_liq, current,
-                                  args.band, args.fractional, args.max_order_notional)
+                                  args.band, args.fractional, args.max_order_notional,
+                                  skipped=dust)
         print(f"\nAccount {broker.account} ({tag}).")
         print_plan(orders, net_liq)
+        ic.print_dust(dust)
         ok_pre, why_pre = preflight(broker, orders, current, exec_price, net_liq,
                                     Guards.from_args(args))
         if not ok_pre:

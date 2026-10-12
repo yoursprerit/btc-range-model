@@ -51,6 +51,14 @@ POSITION_SETTLE_SLEEP_S = 1.0
 # gross position value than the read accounts for (tolerance as a fraction of
 # net liquidation).
 POSITION_READ_TOL = 0.02
+# One login serving several accounts to several client processes at once can be
+# slow to deliver the per-account "account updates" (the prices behind
+# ``portfolio()``). The positions read is then compared against an EMPTY
+# portfolio and refused. Re-request it a few times before giving up, and as a
+# last resort price the positions off live quotes -- an independent check, not a
+# weaker one.
+ACCOUNT_SYNC_RETRIES = 3
+ACCOUNT_SYNC_WAIT_S = 8.0
 # A quote is reused for this long within one run (the pre-flight's drift check
 # and the buy leg's funding budget ask for the same names minutes apart).
 QUOTE_CACHE_TTL_S = 60.0
@@ -277,9 +285,28 @@ class Order:
         return self.qty * self.price
 
 
+def executable_qty(action: str, qty: float, fractional: bool) -> float:
+    """The quantity that can actually be SENT for a planned order.
+
+    Fractional trading sends *qty* as is.  Whole-share trading (which MOC always
+    is) cannot send a fraction, and the two directions must round differently:
+    a SELL rounds DOWN — rounding 22.8672 held shares up to 23 sells a share the
+    account does not own (rejected, or a short) — while a BUY rounds to nearest,
+    which can overshoot the target by under half a share.  A SELL whose whole-
+    share part is zero returns 0.0: the fractional dust is left for the owner to
+    sell by hand, since no MOC order can close it."""
+    q = float(qty)
+    if fractional:
+        return q
+    if action == "SELL":
+        return float(math.floor(q + 1e-9))
+    return float(round(q))
+
+
 def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
                      net_liq: float, current: dict[str, float], band: float,
-                     fractional: bool, max_order_notional: float = 0.0) -> list[Order]:
+                     fractional: bool, max_order_notional: float = 0.0,
+                     skipped: list | None = None) -> list[Order]:
     """Turn target weights + current share counts into BUY/SELL orders.
 
     ``weights``    signal-key → target portfolio weight (0..1).
@@ -290,6 +317,13 @@ def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
     A per-name no-trade band (``band`` × net-liq) suppresses tiny rebalances.
     ``max_order_notional`` (>0) clamps any single order's size to that dollar cap
     — a fat-finger / bug backstop that matters most for live trading.
+
+    Without ``fractional`` every order is a WHOLE number of shares and the plan
+    already says so (see :func:`executable_qty`): the preview then shows exactly
+    what will be sent, and a SELL never exceeds what is held.  A name whose only
+    remaining difference is fractional dust that cannot be sold in whole shares
+    is left out of the plan; if a *skipped* list is passed, it is described
+    there (``{"key", "symbol", "held", "reason"}``) so the caller can say so.
     """
     orders: list[Order] = []
     keys = set(weights) | set(current)
@@ -317,6 +351,10 @@ def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
         delta_value = abs(delta) * px if px else float("inf")
 
         if abs(delta) < (1e-6 if fractional else 0.5):
+            if (not fractional and w <= 0 and held > 1e-6 and skipped is not None):
+                skipped.append(dict(key=key, symbol=symbol, held=held,
+                                    reason=f"{held:g} share(s) left, less than one "
+                                           "whole share"))
             continue                            # already at target (share-level)
         if w > 0 and delta_value < band_value:
             continue                            # inside the no-trade band → leave it
@@ -329,6 +367,18 @@ def build_order_plan(weights: dict[str, float], exec_price: dict[str, float],
             clamped = f" [clamped to ${max_order_notional:,.0f}]"
             if order_qty < (1e-6 if fractional else 0.5):
                 continue                        # cap too small to place a share
+
+        if not fractional:
+            whole = executable_qty("BUY" if delta > 0 else "SELL", order_qty, False)
+            if whole < 0.5:
+                # e.g. 0.87 of a share left after the rest was closed: nothing a
+                # whole-share order can do. Say so rather than drop it silently.
+                if skipped is not None:
+                    skipped.append(dict(key=key, symbol=symbol, held=held,
+                                        reason=f"{abs(delta):g} share(s) cannot "
+                                               "be traded in whole shares"))
+                continue
+            order_qty = whole
 
         if delta > 0:
             orders.append(Order(key, symbol, "BUY", order_qty, px,
@@ -999,6 +1049,13 @@ def print_plan(orders: list[Order], net_liq: float) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 # MULTI-ACCOUNT + STRICT-MOC GUARDS — pure helpers, unit-tested without a broker.
 # ════════════════════════════════════════════════════════════════════════════
+def print_dust(skipped: list[dict]) -> None:
+    """Tell the operator what the whole-share plan had to leave alone."""
+    for d in skipped or []:
+        print(f"  note: {d['symbol']} — {d['reason']} (holding {d['held']:g}); "
+              "sell the fractional remainder by hand in TWS if you want it gone")
+
+
 class MocUnavailable(RuntimeError):
     """Strict-MOC run that cannot send its orders (past the exchange cutoff).
 
@@ -1170,7 +1227,7 @@ class Broker:
         # ``account=`` tells ib_async which account is the main one for the
         # account-update subscription; with several accounts on one login it
         # must not be left to the gateway's default.
-        self.ib.connect(host, port, clientId=client_id, timeout=30,
+        self.ib.connect(host, port, clientId=client_id, timeout=60,
                         account=account or "")
         # 1 = live (default), 2 = frozen, 3 = delayed, 4 = delayed-frozen.
         # Delayed data is free and needs no subscription, but IBKR only serves
@@ -1277,8 +1334,13 @@ class Broker:
         not the same as a real zero, so it is never coerced to 0.0."""
         out = []
         self.positions_by_key()          # settle the subscription first: a report
-        for item in self.ib.portfolio(self.account):   # written off a half-arrived
-                                                       # read understates the book
+        items = list(self.ib.portfolio(self.account))  # written off a half-arrived
+        if not items and self._positions_raw():        # read understates the book
+            self.refresh_account_updates()
+            items = list(self.ib.portfolio(self.account))
+        if not items and self._positions_raw():
+            return self._snapshot_from_positions()
+        for item in items:
             c = item.contract
             out.append(dict(
                 key=sym.key_for_symbol(c.symbol), symbol=c.symbol,
@@ -1288,6 +1350,33 @@ class Broker:
                 market_value=float(getattr(item, "marketValue", 0.0) or 0.0),
                 unrealized_pnl=_pnl_value(getattr(item, "unrealizedPNL", None)),
                 realized_pnl=_pnl_value(getattr(item, "realizedPNL", None))))
+        return out
+
+    def _snapshot_from_positions(self) -> list[dict]:
+        """Holdings rebuilt from the positions read and live quotes, for when
+        the account's portfolio subscription never arrived.  Shares and average
+        cost are the broker's own; the mark is a live quote (0.0 -- shown as
+        "—" -- when none is available); realised P&L is unknown, not zero."""
+        print("    portfolio subscription unavailable — report built from "
+              "positions + live quotes")
+        out = []
+        for p in self._positions_raw():
+            c = p.contract
+            shares = float(getattr(p, "position", 0.0) or 0.0)
+            if abs(shares) < 1e-9:
+                continue
+            avg = float(getattr(p, "avgCost", 0.0) or 0.0)
+            q = self.quote(c)
+            bid, ask = _finite(q.get("bid")), _finite(q.get("ask"))
+            mid = (bid + ask) / 2.0 if (bid and ask) else None
+            px = next((v for v in (_finite(q.get("last")), mid,
+                                   _finite(q.get("close"))) if v), None)
+            out.append(dict(
+                key=sym.key_for_symbol(c.symbol), symbol=c.symbol, shares=shares,
+                avg_cost=avg, market_price=float(px or 0.0),
+                market_value=float(px * shares) if px else 0.0,
+                unrealized_pnl=((px - avg) * shares) if px and avg else None,
+                realized_pnl=None))
         return out
 
     def day_fills_by_symbol(self) -> list[dict]:
@@ -1402,6 +1491,46 @@ class Broker:
             total += mv
         return total
 
+    def refresh_account_updates(self) -> None:
+        """Ask the gateway again for this account's values and portfolio.
+
+        Harmless when the subscription is healthy; when the first request timed
+        out at connect (``account updates request timed out``) this is what
+        gets the prices flowing."""
+        try:
+            self.ib.reqAccountUpdates(self.account)
+        except Exception as e:
+            print(f"    could not re-request account updates ({e})")
+        self.ib.sleep(ACCOUNT_SYNC_WAIT_S)
+
+    def read_value_from_quotes(self) -> float | None:
+        """The positions valued at live quotes, or None if any cannot be priced.
+
+        Independent of the account-updates subscription (positions come from
+        ``reqPositions``, prices from market data), so it can stand in when that
+        subscription never arrives.  None -- not a partial sum -- when a held
+        name has no usable quote: an understated value would wrongly fail the
+        cross-check, an assumed one would wrongly pass it."""
+        total = 0.0
+        for p in self._positions_raw():
+            shares = float(getattr(p, "position", 0.0) or 0.0)
+            if abs(shares) < 1e-9:
+                continue
+            q = self.quote(p.contract)
+            bid, ask = _finite(q.get("bid")), _finite(q.get("ask"))
+            mid = (bid + ask) / 2.0 if (bid and ask) else None
+            price = next((v for v in (_finite(q.get("last")), mid,
+                                      _finite(q.get("close"))) if v), None)
+            if price is None:
+                return None
+            mult = getattr(p.contract, "multiplier", "") or "1"
+            try:
+                mult = float(mult)
+            except (TypeError, ValueError):
+                mult = 1.0
+            total += abs(shares) * price * (mult or 1.0)
+        return total
+
     def holdings(self, net_liq: float | None = None,
                  tol: float = POSITION_READ_TOL) -> dict[str, float]:
         """Current holdings, VERIFIED against the account's gross position value.
@@ -1419,6 +1548,34 @@ class Broker:
             value = 0.0
         gross = self.gross_position_value()
         ok, why = position_read_is_trustworthy(value, gross, nl, tol)
+        if not ok and self._positions_raw():
+            # The account holds positions but the portfolio (their prices) did
+            # not arrive. First give the subscription another chance...
+            for attempt in range(1, ACCOUNT_SYNC_RETRIES + 1):
+                print(f"  Positions: {why}\n  re-requesting account updates "
+                      f"(attempt {attempt}/{ACCOUNT_SYNC_RETRIES})…")
+                self.refresh_account_updates()
+                try:
+                    value = self.read_value()
+                except Exception:
+                    value = 0.0
+                ok, why = position_read_is_trustworthy(value, gross, nl, tol)
+                if ok:
+                    break
+            if not ok:
+                # ...then price the positions off live quotes. Still an
+                # independent comparison against the account's own gross value.
+                qv = self.read_value_from_quotes()
+                if qv is None:
+                    why += " (and the positions could not be priced from live quotes)"
+                else:
+                    ok_q, why_q = position_read_is_trustworthy(qv, gross, nl, tol)
+                    if ok_q:
+                        ok = True
+                        why = (f"{why_q} [valued at live quotes: the account's "
+                               "portfolio subscription did not arrive]")
+                    else:
+                        why = why_q + " [valued at live quotes]"
         print(f"  Positions: {len(current)} name(s) — {why}")
         if not ok:
             raise PositionReadError(why)
@@ -1759,8 +1916,18 @@ class Broker:
         for o in leg_orders:
             contract = sym.ibkr_contract(o.symbol)
             self.ib.qualifyContracts(contract)
-            qty = o.qty if fractional else float(round(o.qty))
+            qty = executable_qty(o.action, o.qty, fractional)
             if qty <= 0:
+                if not fractional and o.qty > 0:
+                    print(f"    SKIP {o.action} {o.qty:g} {o.symbol}: less than one "
+                          "whole share — fractional dust is left for you to sell "
+                          "by hand")
+                    results.append(dict(key=o.key, symbol=o.symbol, action=o.action,
+                                        qty=float(o.qty), price=float(o.price),
+                                        status="SKIPPED-FRACTIONAL", filled=0.0,
+                                        avg_fill_price=0.0, order_type="",
+                                        limit_price=0.0,
+                                        reason=f"{o.reason} [fractional dust]"))
                 continue
             order, used, lmt = self._build_order(o, qty, order_type,
                                                  slippage_cap, contract,
