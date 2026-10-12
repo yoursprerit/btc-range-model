@@ -231,15 +231,41 @@ def test_deploy_cap_tops_sata_up_to_its_cap_and_no_further(env, monkeypatch):
     assert got["SATA"] == pytest.approx(0.30, abs=0.005)
 
 
-def test_a_pre_cap_book_keeps_the_old_behaviour(env, monkeypatch):
-    """A book built before the cap carries no sata_cap: the freed weight parks
-    in SATA as it always did (this is what the first preview, on the 40%-SATA
-    book, showed)."""
+def test_a_pre_cap_book_gets_the_executor_default_cap(env, monkeypatch):
+    """The first live preview: a book published BEFORE the V2 cap (SATA 40 %, no
+    sata_cap) under a 25 % deploy cap used to put 75 % of the account in SATA.
+    The executor now applies its 30 % default: SATA 30 %, the rest cash."""
     _, book = env
     _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
     got = _planned(monkeypatch, book)
     assert got["GDX"] == pytest.approx(0.25, abs=0.005)
-    assert got["SATA"] == pytest.approx(0.75, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
+
+
+def test_pre_cap_book_without_a_deploy_cap_is_trimmed_too(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
+    assert _run(monkeypatch, _argv(book)) == 0
+    (orders, _kw), = _FakeBroker.instances[-1].placed
+    got = {o.symbol: o.qty * o.price / 100_000.0 for o in orders}
+    assert got["GDX"] == pytest.approx(0.60, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
+
+
+def test_the_fallback_can_be_switched_off(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
+    got = _planned(monkeypatch, book, "--default-sata-cap", "-1")
+    assert got["SATA"] == pytest.approx(0.75, abs=0.005)      # the old behaviour
+
+
+def test_a_books_own_cap_beats_the_default(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.50, "SATA": 0.40}, 0.10, sata_cap=0.50)
+    assert _run(monkeypatch, _argv(book)) == 0
+    (orders, _kw), = _FakeBroker.instances[-1].placed
+    got = {o.symbol: o.qty * o.price / 100_000.0 for o in orders}
+    assert got["SATA"] == pytest.approx(0.40, abs=0.005)      # not trimmed to 30 %
 
 
 def test_a_paper_style_book_without_sata_frees_into_cash(env, monkeypatch):
@@ -247,3 +273,29 @@ def test_a_paper_style_book_without_sata_frees_into_cash(env, monkeypatch):
     _book(book, {"GDX": 0.60}, 0.40)
     got = _planned(monkeypatch, book)
     assert got == {"GDX": pytest.approx(0.25, abs=0.005)}
+
+
+def test_effective_sata_cap_rules():
+    assert ic.effective_sata_cap(0.25, 0.30) == (0.25, "book")
+    cap, src = ic.effective_sata_cap(None, 0.30)
+    assert cap == 0.30 and "default" in src
+    assert ic.effective_sata_cap(None, -1) == (None, "none")
+    assert ic.effective_sata_cap(None, None) == (None, "none")
+    cap, src = ic.effective_sata_cap("garbage", 0.30)       # unreadable: cautious
+    assert cap == 0.0 and "unreadable" in src
+    assert ic.effective_sata_cap(float("nan"), 0.30)[0] == 0.0
+
+
+def test_trim_sata_only_touches_an_excess():
+    w, ex = ic.trim_sata({"GDX": 0.5, "SATA": 0.4}, 0.30)
+    assert w["SATA"] == pytest.approx(0.30) and ex == pytest.approx(0.10) and w["GDX"] == 0.5
+    w, ex = ic.trim_sata({"GDX": 0.5, "SATA": 0.2}, 0.30)
+    assert w["SATA"] == 0.2 and ex == 0.0
+    assert ic.trim_sata({"GDX": 1.0}, 0.30)[1] == 0.0
+
+
+def test_default_cap_matches_the_engines_cap():
+    """ibkr_common cannot import the model stack, so the number is copied --
+    this keeps the copy honest."""
+    oc = pytest.importorskip("overall_core")
+    assert ic.DEFAULT_SATA_CAP == oc.SATA_CAP

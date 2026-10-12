@@ -1053,6 +1053,46 @@ def print_plan(orders: list[Order], net_liq: float) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 # MULTI-ACCOUNT + STRICT-MOC GUARDS — pure helpers, unit-tested without a broker.
 # ════════════════════════════════════════════════════════════════════════════
+# Strategy Logic V2 caps SATA at 30 % of the book (overall_core.SATA_CAP; a test
+# keeps the two equal -- this module must stay free of the model stack).  New
+# books carry the cap they were built under (``sata_cap``, signed).  A book
+# published BEFORE the cap carries none, and a stale pre-cap book can still be
+# the one that trades if the next publish is withheld -- so the executor applies
+# this default to such a book rather than park 40 % (or, under a deploy cap,
+# 75 %) of an account in a single preferred.
+DEFAULT_SATA_CAP = 0.30
+
+
+def effective_sata_cap(book_cap, default_cap) -> tuple[float | None, str]:
+    """(cap, where it came from).  The book's own cap wins; a book without one
+    falls back to *default_cap* (``None`` or negative = no fallback, the old
+    behaviour).  A malformed book cap is treated as 0 -- all idle capital stays
+    cash -- the cautious reading of a signed value that cannot be parsed."""
+    if book_cap is not None:
+        try:
+            cap = float(book_cap)
+            if math.isfinite(cap):
+                return max(cap, 0.0), "book"
+        except (TypeError, ValueError):
+            pass
+        return 0.0, "book (unreadable -> 0)"
+    if default_cap is not None and float(default_cap) >= 0:
+        return float(default_cap), "executor default (book predates the V2 SATA cap)"
+    return None, "none"
+
+
+def trim_sata(weights: dict[str, float], cap: float) -> tuple[dict[str, float], float]:
+    """Cap the SATA weight at *cap*; the excess is simply not assigned, i.e.
+    cash.  Returns (new weights, excess trimmed)."""
+    out = dict(weights)
+    excess = max(out.get("SATA", 0.0) - cap, 0.0)
+    if excess > 1e-12:
+        out["SATA"] = cap
+    else:
+        excess = 0.0
+    return out, excess
+
+
 def print_dust(skipped: list[dict]) -> None:
     """Tell the operator what the whole-share plan had to leave alone."""
     for d in skipped or []:

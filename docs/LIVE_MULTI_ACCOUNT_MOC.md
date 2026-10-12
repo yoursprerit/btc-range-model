@@ -191,6 +191,7 @@ an account; `--no-push` skips publishing the reports.
 | Cash-funded buys | no margin unless a margin account opts in |
 | Exposure / turnover / price-drift caps | `max_gross_frac`, `max_turnover_frac`, `max_price_drift` |
 | Deploy cap & per-order cap | `max_deploy_frac`, `max_order_notional` |
+| SATA cap | SATA never exceeds the book's own signed `sata_cap` (V2: 30 %). Weight freed by `max_deploy_frac` goes to SATA only up to that cap; the rest stays **cash**. A book published before the cap has none, so the executor applies a 30 % default (`--default-sata-cap`, `-1` turns it off) — a stale pre-cap book can still be the one that trades if the next publish is withheld. Example: 25 % deploy cap → risk 25 %, SATA 30 %, cash 45 % (not SATA 75 %). |
 | Kill switch | `kill_switch_file` or `IBKR_TRADING_DISABLED=1` |
 | Strict MOC | no fallback, no after-hours catch-up; early-close days handled |
 

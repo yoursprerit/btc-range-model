@@ -246,6 +246,12 @@ def main() -> int:
     ap.add_argument("--confirm-live", action="store_true",
                     help="required with --account-mode live (you are trading REAL money)")
     # ── live safety limits ───────────────────────────────────────────────────
+    ap.add_argument("--default-sata-cap", type=float, default=ic.DEFAULT_SATA_CAP,
+                    help="SATA share of the book to enforce on a book that carries "
+                         "no sata_cap of its own (published before Strategy Logic "
+                         "V2's 30%% cap); the excess stays cash. A book WITH a cap "
+                         "always uses its own. Negative = no fallback (default "
+                         "%(default)s)")
     ap.add_argument("--max-deploy-frac", type=float, default=1.0,
                     help="cap total deployed weight at this fraction of net-liq "
                          "(e.g. 0.25 = never deploy more than 25%%); the rest stays cash")
@@ -532,6 +538,20 @@ def main() -> int:
               + (f", per-order cap ${args.max_order_notional:,.0f}"
                  if args.max_order_notional else "") + ")")
 
+    # ── SATA cap: the book's own (Strategy Logic V2), else the executor default.
+    # A book published before the cap has none -- and a stale one can still be
+    # the book that trades if the next publish is withheld -- so without this a
+    # 40 % SATA book (75 % under a 25 % deploy cap) would be traded as is. ────
+    sata_cap, cap_src = ic.effective_sata_cap(payload.get("sata_cap"),
+                                              args.default_sata_cap)
+    if sata_cap is not None and "SATA" in weights:
+        was = weights["SATA"]
+        weights, excess = ic.trim_sata(weights, sata_cap)
+        if excess:
+            print(f"SATA cap {sata_cap*100:.0f}% ({cap_src}): SATA "
+                  f"{was*100:.1f}% → {sata_cap*100:.1f}%, {excess*100:.1f}% of the "
+                  "book stays cash.")
+
     # ── exposure cap: cap RISK assets at max_deploy_frac; route the freed weight
     # to SATA on a live book (idle → yield park) or to cash otherwise. SATA itself
     # is not counted as risk, so a live book's idle park isn't scaled down. ─────
@@ -547,9 +567,8 @@ def main() -> int:
         if "SATA" in weights:
             # the freed weight parks in SATA only up to the book's own SATA cap
             # (Strategy Logic V2); anything beyond stays cash
-            _cap = payload.get("sata_cap")
-            _room = (max(float(_cap) - weights.get("SATA", 0.0), 0.0)
-                     if _cap is not None else freed)
+            _room = (max(sata_cap - weights.get("SATA", 0.0), 0.0)
+                     if sata_cap is not None else freed)
             weights["SATA"] = weights.get("SATA", 0.0) + min(freed, _room)
             sink = "SATA" if _room >= freed - 1e-12 else "SATA/cash"
         else:
