@@ -83,10 +83,25 @@ def combine_runs(r1: dict, r2: dict, cutover) -> dict:
     version_series = pd.Series(np.where(dates < cut, "v1", "v2"), index=dates)
     # open-position state belongs to whichever generation governs the LAST bar
     tail = r2 if (len(dates) and dates[-1] >= cut) else r1
+    entry_px, entry_date = tail.get("entry_px"), tail.get("entry_date")
+    # A position V2 has held since BEFORE the cut-over, in a sleeve V1 was flat
+    # in (added under V2, e.g. XOP): the spliced book never held it before the
+    # cut-over, so it ENTERED at the last pre-cut close — not at the standalone
+    # V2 run's (possibly years-old) entry.  The price is recovered exactly from
+    # V2's equity curve, which moves 1:1 with price while the trade is open.
+    if (tail is r2 and tail.get("in_pos_now") and entry_px and entry_date is not None
+            and pd.Timestamp(entry_date) < cut):
+        pre = pos1.loc[pos1.index < cut]
+        if len(pre) and pre.iloc[-1] == 0 and pd.Timestamp(entry_date) in d2:
+            i_c = d2.get_loc(pre.index[-1]) if pre.index[-1] in d2 else None
+            i_e = d2.get_loc(pd.Timestamp(entry_date))
+            if i_c is not None and not isinstance(i_c, slice) and i_c >= i_e and s2[i_e] > 0:
+                entry_px = float(entry_px) * float(s2[i_c] / s2[i_e])
+                entry_date = d2[i_c]
     return dict(dates=list(dates.to_numpy()), strat=strat, bh=bh.to_numpy(float),
                 pos=pos.to_numpy(float), trades=trades, trade_log=log,
-                in_pos_now=bool(tail.get("in_pos_now")), entry_px=tail.get("entry_px"),
-                entry_date=tail.get("entry_date"), version_series=version_series,
+                in_pos_now=bool(tail.get("in_pos_now")), entry_px=entry_px,
+                entry_date=entry_date, version_series=version_series,
                 trail_px=tail.get("trail_px"), last_exit_reason=tail.get("last_exit_reason"),
                 version="combined")
 

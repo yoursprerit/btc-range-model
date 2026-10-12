@@ -185,6 +185,40 @@ def test_combine_runs_splices_at_the_cutover():
     assert c["in_pos_now"] is False and c["version"] == "combined"
 
 
+def test_combine_runs_rebases_entry_of_a_sleeve_added_at_the_cutover():
+    """A sleeve V1 never held (XOP) but V2 has held since long before the
+    cut-over: the spliced book entered at the last pre-cut close, not at the
+    standalone V2 run's old entry."""
+    px = np.linspace(100, 150, 20)
+    idx = pd.bdate_range("2026-09-21", periods=20)
+    p = _preds(px); p.index = idx; p["target_date"] = idx
+    r2 = bt.simulate_regime(_cfg(v2_trail_stop=0.10), p, None, "px_close", version="v2")
+    assert r2["in_pos_now"] and pd.Timestamp(r2["entry_date"]) < pd.Timestamp("2026-10-05")
+    r1 = dict(r2, strat=np.ones_like(r2["strat"]), pos=np.zeros_like(r2["pos"]),
+              in_pos_now=False, entry_px=None, entry_date=None, trade_log=[],
+              trades=np.array([]))
+    cut = pd.Timestamp("2026-10-05")
+    c = bt.combine_runs(r1, r2, cut)
+    last_pre = idx[idx < cut][-1]
+    assert pd.Timestamp(c["entry_date"]) == last_pre
+    assert c["entry_px"] == pytest.approx(p["px_close"].loc[last_pre])
+    # a position V1 also held keeps the V2 run's own entry
+    c2 = bt.combine_runs(r2, r2, cut)
+    assert c2["entry_px"] == r2["entry_px"] and c2["entry_date"] == r2["entry_date"]
+
+
+def test_opened_date_normalises_sources():
+    import executed_book as eb
+    assert eb._opened_date("2026-10-09T13:30:00") == "2026-10-09"
+    assert eb._opened_date(pd.Timestamp("2026-10-09")) == "2026-10-09"
+    assert eb._opened_date("/Date(1791504000000)/") == "2026-10-09"
+    assert eb._opened_date(None) is None and eb._opened_date("junk") is None
+    cp = eb.current_positions({"positions": [
+        {"key": "XOP", "symbol": "XOP", "shares": 10, "avg_cost": 100.0,
+         "opened": "2026-10-09"}]}, {"XOP": 110.0})
+    assert cp["rows"][0]["opened"] == "2026-10-09"
+
+
 def test_run_strategy_combined_dispatch(monkeypatch):
     px = np.linspace(100, 150, 20)
     p = _preds(px)

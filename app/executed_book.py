@@ -53,6 +53,7 @@ run, and the app's 🕰️ Historical tab needs the earlier ones.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -615,6 +616,22 @@ def completed_run(report_path, as_of) -> dict | None:
 # 🕰️ Historical one.  Pure and price-source-agnostic so both tabs (and the
 # tests) share one P&L definition.
 
+def _opened_date(v) -> str | None:
+    """A position's open date as ``YYYY-MM-DD`` from whatever the source
+    recorded (ISO string, timestamp, C2's ``/Date(ms)/``), or None."""
+    if v is None or v == "":
+        return None
+    try:
+        s = str(v)
+        if s.startswith("/Date(") and s.endswith(")/"):
+            ms = int(re.match(r"/Date\((-?\d+)", s).group(1))
+            return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%d")
+        ts = pd.Timestamp(v)
+        return None if pd.isna(ts) else ts.strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
 def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
     """Cost-basis positions from an execution report, marked at *prices*.
 
@@ -629,7 +646,9 @@ def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
     realized_account, realized_known, total_pnl, as_of, cash, net_liq,
     account_mode, mode}``; ``rows`` are largest-position-first and each carries
     ``key, symbol, shares, avg_cost, cost_basis, price, price_src, dchg,
-    market_value, pnl, pnl_pct, realized``.
+    market_value, pnl, pnl_pct, realized, opened`` (``opened`` = the date the
+    position was opened as ``YYYY-MM-DD`` when the source records one — C2's
+    open date, the replay's entry date — else None).
 
     On realized P&L: ``realized`` sums what the open positions booked this
     session (a trim's gain), ``realized_account`` is the account-level figure
@@ -686,7 +705,8 @@ def current_positions(payload: dict | None, prices: dict | None = None) -> dict:
             key=key, symbol=p.get("symbol") or key, shares=shares,
             avg_cost=avg_cost, cost_basis=cost_basis, price=px, price_src=src,
             dchg=dchg, market_value=mv, pnl=pnl, pnl_pct=pnl_pct,
-            realized=opt_float(p.get("realized_pnl"))))
+            realized=opt_float(p.get("realized_pnl")),
+            opened=_opened_date(p.get("opened") or p.get("entry_date"))))
 
     rows.sort(key=lambda r: -abs(r["market_value"] or r["cost_basis"]))
     cost = sum(r["cost_basis"] for r in rows)
