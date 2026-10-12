@@ -505,6 +505,15 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/206"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Deploy cap is the total invested across all assets (SATA included)",
+   "description": "--max-deploy-frac / max_deploy_frac now caps the TOTAL the book may deploy, scaling every position including SATA by the same factor and leaving the rest of the account as cash; previously it capped only the risk assets and parked the freed weight in SATA.",
+   "impact": "On the live book with a 25 % cap: invested 55 % (risk 25 % + SATA 30 %) -> 25 % in total (SATA 8.3 %, risk 16.7 %), 75 % cash.",
+   "links": []
   }
  ]
 }

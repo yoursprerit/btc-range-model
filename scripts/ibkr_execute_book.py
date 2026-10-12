@@ -253,8 +253,10 @@ def main() -> int:
                          "always uses its own. Negative = no fallback (default "
                          "%(default)s)")
     ap.add_argument("--max-deploy-frac", type=float, default=1.0,
-                    help="cap total deployed weight at this fraction of net-liq "
-                         "(e.g. 0.25 = never deploy more than 25%%); the rest stays cash")
+                    help="cap the TOTAL the book deploys, across every asset "
+                         "including SATA, at this fraction of net-liq (e.g. 0.25 = "
+                         "at most 25%% of the account invested; every position is "
+                         "scaled down proportionally and the rest stays cash)")
     ap.add_argument("--max-order-notional", type=float, default=0.0,
                     help="clamp any single order to this dollar cap (0 = no cap)")
     ap.add_argument("--max-gross-frac", type=float, default=DEFAULT_MAX_GROSS_FRAC,
@@ -541,7 +543,7 @@ def main() -> int:
     # ── SATA cap: the book's own (Strategy Logic V2), else the executor default.
     # A book published before the cap has none -- and a stale one can still be
     # the book that trades if the next publish is withheld -- so without this a
-    # 40 % SATA book (75 % under a 25 % deploy cap) would be traded as is. ────
+    # 40 % SATA book would be traded as is. ──────────────────────────────────
     sata_cap, cap_src = ic.effective_sata_cap(payload.get("sata_cap"),
                                               args.default_sata_cap)
     if sata_cap is not None and "SATA" in weights:
@@ -552,29 +554,16 @@ def main() -> int:
                   f"{was*100:.1f}% → {sata_cap*100:.1f}%, {excess*100:.1f}% of the "
                   "book stays cash.")
 
-    # ── exposure cap: cap RISK assets at max_deploy_frac; route the freed weight
-    # to SATA on a live book (idle → yield park) or to cash otherwise. SATA itself
-    # is not counted as risk, so a live book's idle park isn't scaled down. ─────
-    risk_keys = [k for k in weights if k != "SATA"]
-    risk_total = sum(weights[k] for k in risk_keys)
-    if args.max_deploy_frac < 1.0 and risk_total > args.max_deploy_frac:
-        scale = args.max_deploy_frac / risk_total
-        freed = 0.0
-        for k in risk_keys:
-            nw = weights[k] * scale
-            freed += weights[k] - nw
-            weights[k] = nw
-        if "SATA" in weights:
-            # the freed weight parks in SATA only up to the book's own SATA cap
-            # (Strategy Logic V2); anything beyond stays cash
-            _room = (max(sata_cap - weights.get("SATA", 0.0), 0.0)
-                     if sata_cap is not None else freed)
-            weights["SATA"] = weights.get("SATA", 0.0) + min(freed, _room)
-            sink = "SATA" if _room >= freed - 1e-12 else "SATA/cash"
-        else:
-            sink = "cash"
-        print(f"Exposure cap: risk {risk_total*100:.0f}% → {args.max_deploy_frac*100:.0f}% "
-              f"of NAV; freed {freed*100:.0f}% → {sink}.")
+    # ── deploy cap: the book may put at most max_deploy_frac of the account to
+    # work IN TOTAL, across every asset it holds (SATA included); the rest of
+    # the account is left untouched as cash. ───────────────────────────────────
+    weights, cap_info = ic.apply_deploy_cap(weights, args.max_deploy_frac)
+    if cap_info:
+        print(f"Deploy cap {args.max_deploy_frac*100:.0f}% of NAV: the book deploys "
+              f"{cap_info['before']*100:.1f}% across all assets (SATA included) — "
+              f"every position scaled ×{cap_info['scale']:.3f} to "
+              f"{cap_info['after']*100:.1f}% in total; the other "
+              f"{(1 - cap_info['after'])*100:.1f}% of the account stays cash.")
 
     # ── kill switch — a manual, instant halt independent of cron/systemd ─────
     if os.environ.get("IBKR_TRADING_DISABLED") or (

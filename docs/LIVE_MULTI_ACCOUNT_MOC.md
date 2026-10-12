@@ -94,7 +94,7 @@ notepad deploy\ibkr_accounts.json
   "kill_switch_file": "STOP_LIVE",  // create this file to halt trading
   "defaults": {                     // every account inherits these…
     "band": 0.01,                   //   no-trade band (fraction of the account's NAV)
-    "max_deploy_frac": 0.25,        //   risk assets ≤ 25% of NAV; the rest parks in SATA (up to the book's 30 % SATA cap; cash beyond)
+    "max_deploy_frac": 0.25,        //   TOTAL invested ≤ 25% of NAV across every asset incl. SATA (scaled proportionally); the other 75% stays cash
     "max_order_notional": 5000,     //   $ cap on any single order
     "max_gross_frac": 1.02, "max_turnover_frac": 1.5, "max_price_drift": 0.25
   },
@@ -190,8 +190,8 @@ an account; `--no-push` skips publishing the reports.
 | Working-orders check | refuses to send into an account that already has orders working (`--ignore-working-orders` to override) |
 | Cash-funded buys | no margin unless a margin account opts in |
 | Exposure / turnover / price-drift caps | `max_gross_frac`, `max_turnover_frac`, `max_price_drift` |
-| Deploy cap & per-order cap | `max_deploy_frac`, `max_order_notional` |
-| SATA cap | SATA never exceeds the book's own signed `sata_cap` (V2: 30 %). Weight freed by `max_deploy_frac` goes to SATA only up to that cap; the rest stays **cash**. A book published before the cap has none, so the executor applies a 30 % default (`--default-sata-cap`, `-1` turns it off) — a stale pre-cap book can still be the one that trades if the next publish is withheld. Example: 25 % deploy cap → risk 25 %, SATA 30 %, cash 45 % (not SATA 75 %). |
+| Deploy cap & per-order cap | `max_deploy_frac` is the **total** the book may put to work, across every asset **including SATA** (all positions scaled by the same factor); the rest of the account is left as cash and never parked anywhere. It is a ceiling: a book that already deploys less is not scaled up. `max_order_notional` clamps any single order. |
+| SATA cap | SATA never exceeds the book's own signed `sata_cap` (V2: 30 %). A book published before the cap has none, so the executor applies a 30 % default first (`--default-sata-cap`, `-1` turns it off) — a stale pre-cap book can still be the one that trades if the next publish is withheld. The deploy cap is applied after it. Example: book risk 60 % + SATA 40 % → SATA trimmed to 30 % → total 90 % → ×(25/90) → every position × 0.278, total 25 %, cash 75 %. |
 | Kill switch | `kill_switch_file` or `IBKR_TRADING_DISABLED=1` |
 | Strict MOC | no fallback, no after-hours catch-up; early-close days handled |
 
