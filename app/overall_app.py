@@ -834,6 +834,35 @@ _EB_PATHS = (*eb.account_report_paths(_EB_DIR),
              _EB_DIR / "executed_book_live.json", _EB_DIR / "executed_book.json")
 
 
+@st.cache_resource(ttl=600, show_spinner=False)
+def _reports_base(bucket: str) -> Path:
+    """Folder holding ``accounts/<ACCT>/`` -- the local one, else the encrypted
+    vault (``data/overall/vault`` or fetched with a read token) opened into a
+    temp folder, exactly as the Executed Book page does.  The passphrase never
+    leaves ``IBKR_VAULT_KEY``."""
+    if eb.account_report_paths(_EB_DIR):
+        return _EB_DIR
+    try:
+        import report_vault as rv
+        pw = rv.passphrase()
+        if not pw:
+            return _EB_DIR
+        vdir = _EB_DIR / rv.VAULT_DIRNAME
+        if not (vdir / rv.MANIFEST).is_file():
+            import tempfile
+            vdir = Path(tempfile.mkdtemp(prefix="vaultfetch-"))
+            rv.fetch_vault(st.secrets["VAULT_REPO"], st.secrets.get("VAULT_BRANCH", "main"),
+                           "data/overall/vault", vdir, st.secrets.get("VAULT_READ_TOKEN"))
+        return rv.open_tree(vdir, pw)
+    except Exception:                    # no/wrong key: fall back to local files
+        return _EB_DIR
+
+
+def _eb_paths(bucket: str) -> tuple:
+    return (*eb.account_report_paths(_reports_base(bucket)),
+            _EB_DIR / "executed_book_live.json", _EB_DIR / "executed_book.json")
+
+
 @st.cache_data(ttl=300, show_spinner=False, max_entries=2)
 def get_executed_report(bucket: str, only_path: str | None = None) -> dict | None:
     """The execution report the IBKR executor commits back after a rebalance —
@@ -845,7 +874,7 @@ def get_executed_report(bucket: str, only_path: str | None = None) -> dict | Non
     are still the account's real holdings and real average costs — only the
     ``trades`` in such a report are hypothetical, and this section shows none."""
     import json as _json
-    for _p in ((Path(only_path),) if only_path else _EB_PATHS):
+    for _p in ((Path(only_path),) if only_path else _eb_paths(bucket)):
         try:
             if not _p.exists():
                 continue
@@ -2275,7 +2304,7 @@ with tab_live:
     _cp_ibkr = get_executed_report(_bucket())
     # one radio entry per IBKR account the multi-account executor trades
     _cp_accts = {}
-    for _ap in eb.account_report_paths(_EB_DIR):
+    for _ap in eb.account_report_paths(_reports_base(_bucket())):
         _ar = get_executed_report(_bucket(), str(_ap))
         if _ar:
             _cp_accts[f"🏦 IBKR Account #{eb.account_id_of(_ap)}"] = _ar
