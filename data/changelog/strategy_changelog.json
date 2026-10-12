@@ -1,0 +1,468 @@
+{
+ "schema": "strategy-changelog/v1",
+ "note": "Every change is logged under its version with its date. 'date' is the day the change reached main (the PR's merge date, UTC); a version's 'effective' date is its first signal day. GitHub has no tags, releases or branches for V1/V2, so the references are the introducing pull requests and the version-history file.",
+ "versions": [
+  {
+   "id": "v2",
+   "label": "Strategy Logic V2",
+   "status": "current",
+   "effective": "2026-10-09",
+   "ended": null,
+   "summary": "Fixes the three drains the 2026-10 loss review found — slow trend sleeves whipsawed after the gold, rare-earth and Bitcoin-miner up-trends broke, a daily priority tilt that re-sized every held sleeve, and stops that never became a CLOSE — then adds portfolio-level guard-rails: an adds-only allocator, a 30 % parent-cluster cap, and (Balanced) a fixed crypto split, a crypto cluster that may add, and a 30 % SATA cap. Net effect on the walk-forward replay: similar return, roughly half the drawdown.",
+   "headline": {
+    "as_of": "2026-10-12 snapshot, production seed, walk-forward replay (V1 → V2)",
+    "rows": [
+     {
+      "profile": "Balanced",
+      "v1": "+1,369 % / −24.0 % / 1.66",
+      "v2": "+1,401 % / −11.5 % / 2.22"
+     },
+     {
+      "profile": "Growth",
+      "v1": "+1,880 % / −29.4 % / 1.57",
+      "v2": "+1,878 % / −17.1 % / 2.06"
+     }
+    ],
+    "columns": "return / max drawdown / Sharpe"
+   },
+   "links": [
+    {
+     "label": "PR #188 — V2 introduction (2026-10-09)",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    },
+    {
+     "label": "PR #189 — 30 % parent-cluster cap",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/189"
+    },
+    {
+     "label": "PR #190 — XOP replaces OIH",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/190"
+    },
+    {
+     "label": "OVERALL_STRATEGY.md §0 — V2 rules and evidence",
+     "url": "https://github.com/yoursprerit/btc-range-model/blob/main/OVERALL_STRATEGY.md"
+    },
+    {
+     "label": "app/strategy_version.py — version history",
+     "url": "https://github.com/yoursprerit/btc-range-model/blob/main/app/strategy_version.py"
+    }
+   ]
+  },
+  {
+   "id": "v1",
+   "label": "Strategy Logic V1",
+   "status": "retired",
+   "effective": "2026-07-31",
+   "ended": "2026-10-08",
+   "summary": "The first stamped logic generation: look-ahead-free, honest-fill sleeve retunes (dual-MA 25/100 gold with −3 % fixed stops, WGMI SMA50 + volatility filter, REMX 50/200 golden cross with a −5 % stop, the XLE crash shield) feeding a daily gated allocator that re-sized every held sleeve each day by anchor × entry-priority, water-filled to per-sleeve caps, with idle capital parked in SATA. Every published book is stamped with its logic version so old and new performance are never conflated.",
+   "links": [
+    {
+     "label": "PR #114 — V1 basis: look-ahead-free back-tests + honest-fill retunes (2026-07-25)",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/114"
+    },
+    {
+     "label": "PR #126 — strategy-version provenance, V1 stamped on every book (2026-07-31)",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/126"
+    },
+    {
+     "label": "PR #130 — V1 as-published record starts 2026-07-31",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/130"
+    },
+    {
+     "label": "app/strategy_version.py — version history",
+     "url": "https://github.com/yoursprerit/btc-range-model/blob/main/app/strategy_version.py"
+    }
+   ]
+  }
+ ],
+ "entries": [
+  {
+   "version": "v1",
+   "date": "2026-07-21",
+   "kind": "execution",
+   "title": "Daily audited refresh and gated Target Book publish",
+   "description": "A 7:15 AM CT job refreshes every signal, audits that each app's bar is fresh, and publishes the signed Target Book only if the audit passes.",
+   "links": [
+    {
+     "label": "PR #97",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/97"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-21",
+   "kind": "sleeve",
+   "title": "Causal daily H/L models and re-tuned divergence thresholds",
+   "description": "Gold and ticker apps' daily high/low models made causal (no look-ahead) and their divergence thresholds re-tuned on honest data.",
+   "links": [
+    {
+     "label": "PR #102",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/102"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-21",
+   "kind": "sleeve",
+   "title": "XLE crash-shield strategy",
+   "description": "Energy sleeve trades the XLE crash shield (exit when XLE falls 30 % below its 52-week high); its beta sleeves (OIH and the 2× ERX) trade off the same signal.",
+   "links": [
+    {
+     "label": "PR #103",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/103"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-21",
+   "kind": "sleeve",
+   "title": "Gold middle path: dual-MA 25/100 for GLDM and UGL, divergence for GDX and NUGT",
+   "description": "Gold trades the 25/100 dual-MA cross (GLDM and UGL); the miners (GDX and NUGT) trade a divergence strategy off the GLDM signal. Split into two apps: Gold Trend and Gold Miners.",
+   "links": [
+    {
+     "label": "PR #105",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/105"
+    },
+    {
+     "label": "PR #106",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/106"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-25",
+   "kind": "data",
+   "title": "Look-ahead bias removed from every back-test; sleeves re-tuned on honest fills",
+   "description": "All app back-tests rebuilt without look-ahead, data refreshed, sleeve parameters re-tuned and the Overall blend rebuilt — the parameter basis of V1 (gold dual-MA 25/100 with −3 % fixed stops, WGMI SMA50 + vol filter, REMX 50/200 golden cross with a −5 % stop).",
+   "impact": "Back-tests no longer flatter the strategy; every later V1/V2 number is measured on this footing.",
+   "links": [
+    {
+     "label": "PR #114",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/114"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-25",
+   "kind": "allocator",
+   "title": "Water-fill fix: spill redistributed when a recipient hit its own cap",
+   "description": "The allocator dropped overflow weight when the sleeve receiving it was itself capped; the spill is now re-spread correctly.",
+   "links": [
+    {
+     "label": "PR #115",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/115"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-31",
+   "kind": "execution",
+   "title": "Strategy-version provenance and the V1 as-published record",
+   "description": "Every published book is stamped with its logic version (and commit); the as-published P&L admits only current-logic books, and the V1 record starts 2026-07-31. A version badge appears on every app.",
+   "impact": "Old-logic and current-logic performance can no longer be conflated.",
+   "links": [
+    {
+     "label": "PR #125",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/125"
+    },
+    {
+     "label": "PR #126",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/126"
+    },
+    {
+     "label": "PR #127",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/127"
+    },
+    {
+     "label": "PR #130",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/130"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-31",
+   "kind": "analytics",
+   "title": "Strategy Health — the four-monitor decay watchdog",
+   "description": "Book-vs-replay tracking, drawdown tripwires, rolling edge vs buy-and-hold and last-20-trade expectancy, computed nightly and committed.",
+   "links": [
+    {
+     "label": "PR #121",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/121"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-07-31",
+   "kind": "data",
+   "title": "Signals generated only from closed sessions",
+   "description": "Signatures use completed sessions only, so intraday prices can no longer flicker a signal.",
+   "links": [
+    {
+     "label": "PR #132",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/132"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-08-01",
+   "kind": "allocator",
+   "title": "Closed-market freeze on the recommended live book",
+   "description": "On weekends and holidays the live recommendation is pinned to the published book; only committed signal changes can move it, so stale sleeves are not re-sized on days they cannot trade.",
+   "links": [
+    {
+     "label": "PR #138",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/138"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-08-03",
+   "kind": "data",
+   "title": "Data-quality gate with pinned snapshots",
+   "description": "Back-test inputs are validated and pinned so results stop drifting intraday; newly added sessions are cross-checked against an independent tape.",
+   "links": [
+    {
+     "label": "PR #143",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/143"
+    },
+    {
+     "label": "PR #146",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/146"
+    }
+   ]
+  },
+  {
+   "version": "v1",
+   "date": "2026-08-03",
+   "kind": "execution",
+   "title": "On-time 7:15 AM CT publishes and committed-signal hardening",
+   "description": "An external scheduler plus a dispatch relay makes the daily publish on-time; committed signals ignore the in-progress bar.",
+   "links": [
+    {
+     "label": "PR #147",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/147"
+    },
+    {
+     "label": "PR #148",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/148"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-09",
+   "kind": "sleeve",
+   "title": "Gold (GLDM, UGL): rising-SMA gate and trailing stops",
+   "description": "The 25/100 cross is taken only while the 100-day SMA is rising; a 10 % (GLDM) / 12 % (UGL) trailing stop replaces the −3 % fixed stop.",
+   "impact": "GLDM +115 % / −22 % / 0.94 → +162 % / −16 % / 1.19; UGL +215 % / −44 % / 0.80 → +366 % / −30 % / 1.04 (out-of-sample, return / max drawdown / Sharpe).",
+   "links": [
+    {
+     "label": "PR #188",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-09",
+   "kind": "sleeve",
+   "title": "WGMI: entry only while BTC is above its 50-day SMA",
+   "description": "A parent-signal gate keeps the miners out of rallies when Bitcoin's own trend is broken.",
+   "impact": "+333 % / −38 % / 1.62 → +395 % / −17 % / 1.88 (2024→).",
+   "links": [
+    {
+     "label": "PR #188",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-09",
+   "kind": "sleeve",
+   "title": "REMX: hold only while SMA20 > SMA100",
+   "description": "Entry is unchanged; the position is held only while the 20-day SMA stays above the 100-day.",
+   "impact": "+97 % / −41 % / 0.55 → +155 % / −27 % / 0.73.",
+   "links": [
+    {
+     "label": "PR #188",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-09",
+   "kind": "allocator",
+   "title": "Adds-only allocator",
+   "description": "A held sleeve is never trimmed by the daily tilt and is added to only when its target rises by 8 percentage points or more (fresh entries and exits unchanged).",
+   "impact": "Fewer resize days and a shallower drawdown: Balanced replay −24.6 % → −17.1 % max drawdown, Sharpe 1.62 → 1.95 at similar return.",
+   "links": [
+    {
+     "label": "PR #188",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-09",
+   "kind": "execution",
+   "title": "Stop and trail hits publish a CLOSE",
+   "description": "A stop or trail that fires at the latest close now publishes CLOSE, so the account sells exactly where the back-test went flat.",
+   "impact": "V1 published ENTER and the position was silently kept — UGL's −3 % stop became a −15 % hold.",
+   "links": [
+    {
+     "label": "PR #188",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-09",
+   "kind": "analytics",
+   "title": "V1 / V2 / Combined views everywhere",
+   "description": "Every P&L, back-test, historical and health view offers Strategy V1, Strategy V2 and Combined (each day under the logic in effect).",
+   "links": [
+    {
+     "label": "PR #188",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/188"
+    },
+    {
+     "label": "PR #191",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/191"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-10",
+   "kind": "allocator",
+   "title": "30 % parent-cluster cap",
+   "description": "Sleeves that trade one parent signal (XLE→XOP/ERX, GLDM→UGL, SOXX→SOXL, GDX→NUGT, BTC→MSTR/MSTU/ETH) can never exceed 30 % of the book combined.",
+   "impact": "Balanced replay (3 seeds): max drawdown −18.7 % → −13.5 %, Sharpe 1.8 → 2.1 at about the same return.",
+   "links": [
+    {
+     "label": "PR #189",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/189"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-10",
+   "kind": "sleeve",
+   "title": "XOP replaces OIH in the energy beta slot",
+   "description": "Same XLE crash-shield signal and no stop, but XOP (oil & gas E&P) keeps OIH's beta to XLE with shallower drawdowns; OIH stays in the XLE app and the V1 record.",
+   "impact": "XLE engine OOS: OIH +127 % / −46 % / 0.57 → XOP +200 % / −40 % / 0.73.",
+   "links": [
+    {
+     "label": "PR #190",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/190"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-10",
+   "kind": "analytics",
+   "title": "Combined replay is a splice of the V1 and V2 replays",
+   "description": "Combined = V1's replay to the day before the cut-over, then V2's logic continuing from the book V1 last held — identical to V1 before 2026-10-09.",
+   "links": [
+    {
+     "label": "PR #193",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/193"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-11",
+   "kind": "execution",
+   "title": "Live multi-account strict-MOC executor (Option C)",
+   "description": "Several live IBKR accounts trade the signed live book at the close with market-on-close orders only.",
+   "links": [
+    {
+     "label": "PR #195",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/195"
+    },
+    {
+     "label": "PR #196",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/196"
+    },
+    {
+     "label": "PR #197",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/197"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-11",
+   "kind": "allocator",
+   "title": "Balanced: fixed crypto-cluster split MSTR 45 / MSTU 30 / BTC 20 / ETH 5",
+   "description": "The crypto cluster's weight is divided by a fixed ordered split instead of the tilt's erratic one (which could put 29 % of the book in BTC or 25 % in ETH).",
+   "impact": "Balanced replay (3 seeds, 5 bp): +885 % → +950 %, Sharpe 1.93 → 1.98; hold-out 2025-07→ +146 % → +149 %.",
+   "profile": "Balanced",
+   "links": [
+    {
+     "label": "PR #198",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/198"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-11",
+   "kind": "allocator",
+   "title": "Balanced: the crypto cluster may add after entry",
+   "description": "The adds-only band for the crypto cluster is 0 pp instead of 8: a held crypto sleeve is added to whenever its target rises and is never trimmed by the tilt (30 % cluster cap still binds).",
+   "impact": "+950 % → +1,062 %, Sharpe 1.98 → 2.00, better on all three seeds; accepted despite a small production-seed hold-out cost (Sharpe 2.89 vs 2.96, ~0.4 pt deeper drawdown).",
+   "profile": "Balanced",
+   "links": [
+    {
+     "label": "PR #199",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/199"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-11",
+   "kind": "allocator",
+   "title": "SATA capped at 30 % of the book, excess held in cash at 0 %",
+   "description": "Idle capital is parked in SATA only up to 30 % of the book (both profiles); the rest stays in cash. The live book carries SATA ≤ 30 % plus cash; the paper book is unchanged. V1 has no cap; Combined applies it from the cut-over.",
+   "impact": "Bounds SATA price exposure. Balanced replay (3 seeds, no costs): +1,241 % → +1,196 %, max drawdown unchanged — the cost is the lost coupon on the cash.",
+   "links": [
+    {
+     "label": "PR #200",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/200"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Strategy Change Log page",
+   "description": "New sidebar page listing V1 and V2 with release dates, GitHub references and a dated log of every change under its version; every future change is logged here (see CLAUDE.md).",
+   "links": [
+    {
+     "label": "PR #201",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/201"
+    }
+   ]
+  }
+ ]
+}

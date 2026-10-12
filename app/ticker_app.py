@@ -71,7 +71,7 @@ bt = backtest_ticker
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
              + ["LEVERAGED", "DAILYAUDIT", "HEALTH", "TARGETBOOK",
-                "EXECUTEDBOOK", "ASSISTANT"])
+                "EXECUTEDBOOK", "ASSISTANT", "CHANGELOG"])
 _APP_LABELS = {"OVERALL": "🧭  Overall Trading",
                "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
                "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
@@ -80,7 +80,8 @@ _APP_LABELS = {"OVERALL": "🧭  Overall Trading",
                "HEALTH": "🩺  Strategy Health",
                "TARGETBOOK": "📋  Target Book (IBKR)",
                "EXECUTEDBOOK": "✅  Executed Book",
-               "ASSISTANT": "🤖  AI Assistant"}
+               "ASSISTANT": "🤖  AI Assistant",
+               "CHANGELOG": "📜  Strategy Change Log"}
 for _k, _c in ticker_config.CONFIGS.items():
     _APP_LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 

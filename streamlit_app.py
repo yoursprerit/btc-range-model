@@ -43,7 +43,7 @@ import ticker_config  # noqa: E402
 
 _ALL_APPS = (["OVERALL", "BTC", "GLDM", "GDXM"] + ticker_config.APP_KEYS
              + ["LEVERAGED", "DAILYAUDIT", "HEALTH", "TARGETBOOK",
-                "EXECUTEDBOOK", "ASSISTANT"])
+                "EXECUTEDBOOK", "ASSISTANT", "CHANGELOG"])
 _LABELS = {"OVERALL": "🧭  Overall Trading",
            "BTC": "₿  Bitcoin (BTC)", "GLDM": "🥇  Gold Trend (GLDM·UGL)",
            "GDXM": "⛏️  Gold Miners (GDX·NUGT)",
@@ -52,7 +52,8 @@ _LABELS = {"OVERALL": "🧭  Overall Trading",
            "HEALTH": "🩺  Strategy Health",
            "TARGETBOOK": "📋  Target Book (IBKR)",
            "EXECUTEDBOOK": "✅  Executed Book",
-           "ASSISTANT": "🤖  AI Assistant"}
+           "ASSISTANT": "🤖  AI Assistant",
+               "CHANGELOG": "📜  Strategy Change Log"}
 for _k, _c in ticker_config.CONFIGS.items():
     _LABELS[_k] = f"{_c.emoji}  {_c.key} · {_c.name.split('(')[0].strip()[:22]}"
 
@@ -190,6 +191,9 @@ def _run_choice():
     elif _choice == "ASSISTANT":
         # Chat grounded in the committed artifacts + the repo's own docs.
         _exec_app(_APP_DIR / "assistant_app.py")
+    elif _choice == "CHANGELOG":
+        # What changed in the strategy, under which version, and when.
+        _exec_app(_APP_DIR / "changelog_app.py")
     elif _choice in ("BTC", "GLDM", "GDXM"):
         # Upgrade the original app's built-in BTC/GLDM selector to the full list,
         # without touching the app source.  Only the ``gldm_active_app`` widget is
