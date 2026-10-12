@@ -1,6 +1,6 @@
 name: Build P&L snapshot
 
-# Precomputes the replays behind the app's 📈 Overall-strategy-P&L section
+# Precomputes the V1/V2 universe runs behind the live cockpit and the replays behind the app's 📈 Overall-strategy-P&L section
 # (every strategy view V1/V2/Combined x every UI risk profile, plus the
 # price-returns matrix, buy-&-hold replay and sleeve prices) and commits them to
 # data/overall/pnl_snapshot.pkl.gz, so the Streamlit app reads them back
@@ -28,7 +28,6 @@ on:
     paths:
       - "app/*.py"
       - "!app/*_app.py"
-      - "!app/pnl_snapshot.py"
       - "models/**"
       - "scripts/build_pnl_snapshot.py"
   workflow_dispatch: {}

@@ -14,6 +14,9 @@ to its original live computation — whenever the snapshot is missing, unreadabl
 its newest bar is older than ``MAX_BAR_AGE_DAYS`` or it was built by different engine code
 (``code_fingerprint``), so a stale file can never be served silently.
 
+The snapshot also carries the V1 / V2 ``run_universe`` results, so the live
+cockpit loads them instead of re-running every instrument's engine.
+
 Only the daily-stable results are stored.  Dollar sizing, date windows, costs
 and taxes are applied by the app on top, per user input.
 """
@@ -109,6 +112,10 @@ def build(profiles: list[str] | None = None, versions=VERSIONS,
           log=print) -> dict:
     """Run every replay the P&L section can ask for and return the payload."""
     profiles = profiles or ui_profiles()
+    # the pinned-data stamp as checked out, BEFORE the engines run: they top up
+    # stale datasets in their own workspace (uncommitted), so the end-of-run
+    # ``vintage`` below never matches the repo the app is deployed from
+    vintage_in = ov.data_vintage()
     cache: dict = {}
     rets_cache: dict = {}
     packs: dict = {}
@@ -130,9 +137,13 @@ def build(profiles: list[str] | None = None, versions=VERSIONS,
         built_at=pd.Timestamp.utcnow().isoformat(),
         fingerprint=code_fingerprint(),
         vintage=ov.data_vintage(),
+        vintage_in=vintage_in,
         last_bar=str(pd.Timestamp(last_bar).date()),
         profiles=list(profiles), versions=list(versions),
         packs=packs, shared=shared,
+        # the per-generation universe runs themselves — the heaviest thing the
+        # web process used to recompute (tens of seconds of CPU every 30 min)
+        results={v: _results(v, cache) for v in ("v1", "v2")},
         price_returns=ov.bh_returns_matrix(v2),
         bh_replay=ov.equal_weight_bh_replay(v2, index=rets_v2.index),
         sleeve_prices=_sleeve_prices(comb),
@@ -148,6 +159,22 @@ def get_pack(snap: dict, version: str, name: str):
         return None
     return dict(wf=p["wf"], rets=sh["rets"], version=version, profile=name,
                 curves={STRAT_CURVE: p["wf"]["equity"], **sh["base_curves"]})
+
+
+def get_results(snap: dict | None, version: str) -> dict | None:
+    """The snapshotted ``run_universe`` output for a single generation
+    (``"v1"`` / ``"v2"``) as ``dict(results=..., computed_at=...)``, or ``None``
+    when it is absent or the pinned datasets have changed since the build
+    (every number is a pure function of strategy version + the data vintage,
+    so an equal vintage means the live computation would be identical).  The
+    comparison is against the stamp taken before the build ran (``vintage_in``)."""
+    try:
+        res = (snap or {}).get("results", {}).get(str(version).lower())
+        if not res or snap.get("vintage_in") != ov.data_vintage():
+            return None
+        return dict(results=res, computed_at=pd.Timestamp(snap["built_at"]))
+    except Exception:
+        return None
 
 
 def rets_match(snap_rets: pd.DataFrame, live_rets: pd.DataFrame) -> bool:

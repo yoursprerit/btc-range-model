@@ -77,6 +77,7 @@ except Exception:
 # CONFIG
 ASSETS_PATH      = str(HOURLY_MODEL)
 REFRESH_SECONDS  = 60           # auto-refresh interval (1 min — rolling forecast)
+IDLE_PAUSE_SECONDS = 30 * 60    # stop the timer loop after this long with no click
 LOOKBACK_HOURS   = 24           # how many past hours to show
 CACHE_TTL        = 300          # data cache lifetime (seconds)
 BAND_PCT         = 0.005        # ±0.5% forecast band (around prediction)
@@ -350,9 +351,22 @@ with st.sidebar:
              format_func=lambda x: "₿  Bitcoin (BTC)" if x == "BTC" else "🥇  Gold (GLDM)",
              key="gldm_active_app")
     st.markdown("---")
+    # A rerun is timer-driven only if the loop at the bottom of this script
+    # raised the flag; anything else is the viewer.  Every open tab re-executes
+    # this whole script each REFRESH_SECONDS (and holds a server thread asleep
+    # in between), so the loop stops after IDLE_PAUSE_SECONDS without a click —
+    # Community Cloud throttles the container on sustained CPU.
+    if st.session_state.pop("_btc_timer_rerun", False):
+        st.session_state["_btc_idle_ticks"] = st.session_state.get("_btc_idle_ticks", 0) + 1
+    else:
+        st.session_state["_btc_idle_ticks"] = 0
     st.markdown(
         "**Auto-refresh:** every "
-        f"{REFRESH_SECONDS // 60} min. Click **Refresh now** to force.")
+        f"{REFRESH_SECONDS // 60} min"
+        + (" — paused (idle); interact to resume." if
+           st.session_state["_btc_idle_ticks"] * REFRESH_SECONDS >= IDLE_PAUSE_SECONDS
+           else ".")
+        + " Click **Refresh now** to force.")
     if st.button("Refresh now", use_container_width=True):
         # Clear BOTH caches so retrained joblibs are picked up too — without
         # this, `cache_resource`-decorated loaders (`load_assets`,
@@ -17698,5 +17712,7 @@ with tab_leading:
         )
 
 # ─────────────────────── timer-driven re-run ──────────────────────────
-time.sleep(REFRESH_SECONDS)
-st.rerun()
+if st.session_state.get("_btc_idle_ticks", 0) * REFRESH_SECONDS < IDLE_PAUSE_SECONDS:
+    st.session_state["_btc_timer_rerun"] = True
+    time.sleep(REFRESH_SECONDS)
+    st.rerun()

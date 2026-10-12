@@ -254,8 +254,21 @@ def get_pnl_snapshot():
     return _load_pnl_snapshot(mt)
 
 
-@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…", max_entries=6)
 def get_results(bucket: str, version: str = "v2"):
+    """Per-instrument strategy results for a view.  Served from the CI-built
+    snapshot when it is fresh and matches the pinned data (the "recompute live"
+    toggle bypasses it, and so does the freshness audit's one-shot retry —
+    if the snapshot's signals were stale the retry must hit live data);
+    otherwise every strategy is run in-process."""
+    _retry = st.session_state.get(f"overall_audit_retry::{_bucket()}")
+    return _get_results(bucket, version, _snap_ok() and not _retry)
+
+
+get_results.clear = lambda: _get_results.clear()      # the audit retry's cache reset
+
+
+@st.cache_data(ttl=1800, show_spinner="Running every strategy live (first load ~30–60s)…", max_entries=6)
+def _get_results(bucket: str, version: str, use_snap: bool):
     # computed_at is cached alongside the results, so it records when the
     # signals were actually (re)generated — not when the page last rendered.
     if str(version).lower() == "combined":
@@ -265,6 +278,12 @@ def get_results(bucket: str, version: str = "v2"):
         v1, v2 = get_results(bucket, "v1"), get_results(bucket, "v2")
         return dict(results=ov.combine_results(v1["results"], v2["results"]),
                     computed_at=max(v1["computed_at"], v2["computed_at"]))
+    if use_snap:
+        # the universe run is the heaviest thing the web process does (tens of
+        # seconds of CPU, repeated every 30 min); CI already did it daily
+        _hit = pnl_snap.get_results(get_pnl_snapshot(), version)
+        if _hit is not None:
+            return _hit
     return dict(results=ov.run_universe(version), computed_at=pd.Timestamp.utcnow())
 
 
@@ -1183,7 +1202,8 @@ with tab_live:
                 f"{len(results)} instruments across {len(parents)} signals{_px_note}",
                 unsafe_allow_html=True)
     st.caption(f"🕒 Signals last updated **{signals_updated.strftime('%b %d, %Y at %I:%M:%S %p %Z')}** — "
-               f"auto-recomputed every ~30 min, or press **Refresh now** in the sidebar.")
+               f"loaded from the daily precomputed build when it is current, else recomputed "
+               f"live (~30 min cache) — **Refresh now** in the sidebar forces a refetch.")
 
     # per-asset-class signal closes + the audit verdict, matching 🕵️ Daily Audit
     _btc_row = next((r for r in _AUDIT["rows"] if r["asset_class"] == "crypto"), None)
