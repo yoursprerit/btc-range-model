@@ -24,6 +24,7 @@
       "id": "U1111111",
       "label": "Taxable margin",
       "type": "margin",
+      "expected_profile": "Balanced",
       "enabled": true
     },
     {

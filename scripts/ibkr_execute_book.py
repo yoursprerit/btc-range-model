@@ -551,6 +551,39 @@ def main() -> int:
     weights = dict(payload.get("weights", {}))
     exec_price = payload.get("exec_price", {})
 
+    # ── is this the book THIS account is meant to trade? ─────────────────────
+    # The signature proves who published it, not that it is right. A pinned
+    # profile is a hard stop; otherwise a profile switch or a jump in new target
+    # weight versus the last book this account saw holds the BUYS for a day.
+    book_profile = str(payload.get("profile") or "")
+    if (args.expected_profile and book_profile != args.expected_profile
+            and not args.refresh_report):
+        msg = (f"the published book is for profile '{book_profile or '?'}' but "
+               f"this account is pinned to '{args.expected_profile}'")
+        print(f"ABORT: {msg}. No orders placed.")
+        if args.execute:
+            ibs.send_alert(f"🔴 {args.account or 'executor'}: run ABORTED — {msg}.")
+        return EXIT_ABORT
+    state_path = ibs.book_state_path(report_out)
+    prev_state = ibs.read_book_state(state_path)
+    as_of = str(payload.get("as_of") or "")
+    change = ibs.book_change(prev_state, as_of, book_profile, weights)
+    book_block, book_notes = ibs.book_hold(
+        change, args.max_book_add, args.accept_large_change,
+        profile_pinned=bool(args.expected_profile))
+    print("Book check: " + "; ".join(book_notes))
+    if book_block:
+        print(f"!! BUYS WILL BE HELD — {book_block}. Sells proceed. Set "
+              "IBKR_ACCEPT_LARGE_CHANGE=1 for one run to override.")
+        if args.execute:
+            ibs.send_alert(f"⚠️ {args.account or 'executor'}: {book_block}. Buys "
+                           "are held for today (sells proceed); set "
+                           "IBKR_ACCEPT_LARGE_CHANGE=1 to trade this book.")
+    elif change and change["cuts"] > args.max_book_add > 0 and args.execute:
+        ibs.send_alert(f"ℹ️ {args.account or 'executor'}: large de-risk today — "
+                       f"the book cuts {change['cuts']*100:.0f}% of NAV vs "
+                       f"{change['base_as_of']}. Proceeding.")
+
     # ── account restrictions: trade the allowed sibling of a restricted name ──
     try:
         subs = ic.parse_substitutions(args.substitute)
@@ -669,6 +702,9 @@ def main() -> int:
         try:
             net_liq = broker.net_liq()
             ibs.arm(broker, args, net_liq, report_out, args.kill_switch_file)
+            if book_block:
+                broker.buy_block = "; ".join(filter(None, [
+                    getattr(broker, "buy_block", None), book_block]))
             try:
                 current = broker.holdings(net_liq)
             except PositionReadError as e:
@@ -702,6 +738,14 @@ def main() -> int:
     try:
         net_liq = broker.net_liq()
         ibs.arm(broker, args, net_liq, report_out, args.kill_switch_file)
+        if book_block:
+            broker.buy_block = "; ".join(filter(None, [
+                getattr(broker, "buy_block", None), book_block]))
+        # Remember this book (the NEXT run compares with it). Written even when
+        # the buys are held, so a legitimate large entry is delayed by one day
+        # and then trades, rather than being blocked until someone intervenes.
+        ibs.write_book_state(state_path, ibs.next_book_state(
+            prev_state, as_of, book_profile, weights))
         try:
             current = broker.holdings(net_liq)
         except PositionReadError as e:

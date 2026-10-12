@@ -61,6 +61,19 @@ def substitutions_for(account_type: str) -> dict[str, str]:
     return dict(ACCOUNT_TYPE_SUBSTITUTIONS.get((account_type or "").lower(), {}))
 
 
+# Names whose ordinary day can be a 10 %+ move — leveraged ETFs, the single-stock
+# bitcoin proxy, spot-crypto ETFs and the miners.  The tighter "soft" price-drift
+# limit (see ``ibkr_safety.DEFAULT_SOFT_PRICE_DRIFT``) is NOT applied to these: a
+# 12 % day there is weather, not evidence of a bad book price.
+VOLATILE_SYMBOLS: frozenset[str] = frozenset({
+    "IBIT", "ETHA", "MSTR", "MSTU", "UGL", "NUGT", "SOXL", "ERX", "WGMI",
+})
+
+
+def is_volatile(symbol: str) -> bool:
+    return str(symbol).upper() in VOLATILE_SYMBOLS
+
+
 # reverse map: IBKR symbol → signal key, so positions read back from the broker
 # can be matched to a target weight.
 KEY_FOR_SYMBOL: dict[str, str] = {v: k for k, v in TRADE_SYMBOL.items()}

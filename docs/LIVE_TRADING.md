@@ -69,6 +69,21 @@ quote) passes — a missing data subscription never blocks a rebalance.
 | **Orders planned, none sent** (every leg withheld or skipped) | Alert naming the reasons. |
 | **SPY halted** | Treated as market-wide stress: buys withheld. |
 
+#### Is this the right book? (profile pin, book-change check, soft price drift)
+
+The signature proves who published the book, not that it is right. Three more checks:
+
+| Guard | Flag / env | Default | What it does |
+|-------|-----------|---------|--------------|
+| **Profile pin** | `--expected-profile` / `IBKR_EXPECTED_PROFILE`; per account in `deploy/ibkr_accounts.json` as `"expected_profile": "Balanced"` | off | A book for any other profile **aborts** that account's run (exit 1, alert). Pin every live account. |
+| **Book-change check** | `--max-book-add` / `IBKR_MAX_BOOK_ADD` | 0.60 | Compares today's book with the last one *this account saw* (kept in a dot-file beside its report, never published). If it **adds** more than 60 % of NAV in new target weight, or the profile changed on an unpinned account, **buys are held for the day** and you are alerted; sells always go, and a big *cut* (a stop-out to cash) is only reported. The book is recorded either way, so a legitimate large entry trades the next day; to trade it today set `IBKR_ACCEPT_LARGE_CHANGE=1` for one run and unset it afterwards. `0` disables. |
+| **Soft price drift** | `--soft-price-drift` / `IBKR_SOFT_PRICE_DRIFT` | 0.10 | An *unlevered* ETF whose live price is 10 %+ from the book's sizing price has its **buy held** (the run is *not* aborted). Leveraged ETFs, MSTR, IBIT/ETHA and WGMI are exempt — their ordinary day exceeds it. The hard `--max-price-drift` abort (25 %, a split) is unchanged. `0` disables. |
+
+A refused closing-auction (MOC) order now raises a webhook alert **immediately**
+(and re-checks every minute), naming the symbol and the 15:50 ET entry cutoff —
+strict MOC has no fallback, so a refused leg is a wrong position until fixed by
+hand in TWS or the next run.
+
 A withheld buy leaves the account under-invested until the next run, and the
 post-trade check will say so (exit 5) — that is the intended loud outcome, not a
 failure to fix. To force a withheld trade, fix the cause or re-run with the

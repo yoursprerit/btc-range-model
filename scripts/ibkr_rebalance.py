@@ -237,7 +237,7 @@ def main() -> int:
                     help="permit a non-DU account (DANGEROUS — disables the paper guard)")
     ap.add_argument("--force", action="store_true",
                     help="ignore the weekend/holiday trading-day guard")
-    ibs.add_arguments(ap)
+    ibs.add_arguments(ap, book_checks=False)
     args = ap.parse_args()
 
     today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
