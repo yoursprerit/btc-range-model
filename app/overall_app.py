@@ -1223,8 +1223,8 @@ with tab_live:
         return None
 
     def _book_alloc(payload: dict) -> tuple[dict, float]:
-        """(risk_weights, idle_weight) from a published book — LIVE books park
-        idle capital as a SATA weight, PAPER books as cash_weight."""
+        """(risk_weights, idle_weight) from a published book — paper and live books park
+        idle capital as a SATA weight (older paper books as cash_weight)."""
         w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
         idle = w.pop("SATA", 0.0) + float(payload.get("cash_weight") or 0.0)
         return w, idle
@@ -2603,7 +2603,7 @@ with tab_live:
         # The as-published record FOLLOWS COLLECTIVE2: the books C2 actually
         # received (c2_book_archive/), from the record reset
         # (C2_RECORD_START), current strategy version only. C2 holds idle
-        # capital as plain cash, so the cash leg earns nothing (no SATA).
+        # capital as plain cash (earning nothing) and the SATA the book buys (coupon).
         # ⚡ the heavy replays come from the snapshot CI rebuilds every day
         # (data/overall/pnl_snapshot.pkl.gz) — instant; the toggle recomputes
         # them live (30–60 s) and is also the automatic fallback whenever the
@@ -2651,11 +2651,12 @@ with tab_live:
         _px_rets = get_price_returns(_bucket(), _use_snap)
         _bookrep = (ov.published_book_replay(
                         _px_rets if _px_rets is not None else _PFV["rets"],
-                        _books, sata_daily=0.0, version_map=_vmap,
+                        _books, sata_daily=ov.SATA_DAILY, version_map=_vmap,
                         only_version=_sv.versions_for_view(_pnl_ver),
                         min_as_of=ov.C2_RECORD_START,
                         fill_on_sessions=True,   # C2 trades US sessions only
-                        fill_on_publish=True)    # …and the session AFTER as_of
+                        fill_on_publish=True,    # …and the session AFTER as_of
+                        sata_held_only=True)     # coupon only on a held SATA leg
                     if _books else None)
         _n_c2 = sum(1 for b in _books
                     if str(b.get("as_of")) >= ov.C2_RECORD_START)
@@ -2698,7 +2699,7 @@ with tab_live:
                  "(the first book sent after C2 became the account of "
                  "record); earlier books are not counted, and a day C2 "
                  "missed keeps the previous book, just like the account. "
-                 "Idle capital is held as cash and earns nothing. "
+                 "The SATA leg the books hold earns its coupon; idle cash earns nothing. "
                  "**Walk-forward replay** — a look-ahead-free simulation "
                  "of the current rules over the full back-test "
                  "history (longer window, but a reconstruction, not the "
@@ -2837,8 +2838,8 @@ with tab_live:
                        f"book{'s' if _n_books != 1 else ''} sent to C2 "
                        f"(`data/overall/c2_book_archive/`) since the record "
                        f"reset on **{_c2_start}**, strategy version "
-                       f"{_ver_up}, compounded at official closes. Idle "
-                       "capital is held as cash and earns nothing, as on "
+                       f"{_ver_up}, compounded at official closes. The SATA "
+                       "leg earns its coupon; idle cash earns nothing, as on "
                        "C2. The optimizer re-sizes the book "
                        "every morning, so **every daily trim/re-size that "
                        "really happened flows through every figure and "
@@ -3008,7 +3009,7 @@ with tab_live:
                 get_sleeve_prices(_bucket(), _use_snap), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
-                sata_daily=0.0 if _actual else ov.SATA_DAILY,
+                sata_daily=ov.SATA_DAILY,
                 cash_w=_wf.get("cash"))
             if _fx_sim is not None:
                 _a0 = _fx_sim["net"].index[0]
@@ -3461,7 +3462,7 @@ with tab_live:
                 st.caption("📌 The **as-published record**: each day compounds "
                            "the book Collective2 actually received from the "
                            "previous bar's close — weights, daily optimizer "
-                           "trims and cash remainder (held as cash, earning "
+                           "trims, SATA leg (coupon) and cash remainder (earning "
                            "nothing) exactly as sent. Marked at official "
                            "closes, gross of commissions/fills (the ✅ Executed "
                            "Book app's C2 view is the fills-level record). "
@@ -5145,13 +5146,13 @@ with tab_live:
                     "Gross of brokerage costs and taxes, like the "
                     "attribution tables; the percentages are independent of "
                     "the 💼 portfolio value.")
-                # the record holds idle capital as plain cash (no SATA) —
-                # match the headline, which is measured on that curve
+                # the record earns the SATA coupon only on the SATA leg the
+                # books actually hold — match the headline's curve
                 _de = ov.daily_edge_by_sleeve(
                     _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                     cluster_of={k: (_meta_of(k).get("parent") or k)
                                 for k in _wf["weights"].columns},
-                    sata_daily=0.0 if _actual else ov.SATA_DAILY)
+                    sata_daily=ov.SATA_DAILY)
                 if _de is None:
                     st.info("No day with risk deployed in this window — the "
                             "book sat fully in cash, so there is no edge to "

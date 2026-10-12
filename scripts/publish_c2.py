@@ -128,6 +128,38 @@ def build_positions(weights: dict[str, float], exec_price: dict[str, float],
     return positions, dropped
 
 
+def check_book_mode(payload: dict) -> tuple[bool, str]:
+    """(ok, reason) — C2 mirrors the PAPER book only.  The paper and live books
+    carry the same weights (SATA included) and differ in ``book_mode``; a book
+    labelled anything else (e.g. ``live``, or no label) is refused so the two
+    destinations cannot be swapped by accident."""
+    mode = payload.get("book_mode")
+    if mode != "paper":
+        return False, f"book_mode={mode!r}, not 'paper' — C2 mirrors the paper book only"
+    return True, "paper book"
+
+
+def check_sata_sized(weights: dict[str, float], positions: list[dict],
+                     exec_price: dict[str, float], capital: float,
+                     cash_buffer: float = DEFAULT_CASH_BUFFER) -> tuple[bool, str]:
+    """(ok, reason) — the book's SATA leg must size to at least one share.
+
+    SATA is the idle-cash park, so silently dropping it (``build_positions``
+    just lists it under *dropped*) would leave that capital in cash and the
+    C2 record off the book.  The reason names the capital the strategy needs
+    for one share at the book's weight and price."""
+    w = float(weights.get("SATA") or 0.0)
+    if w <= 0 or any(p["key"] == "SATA" for p in positions):
+        return True, "ok"
+    price = exec_price.get("SATA")
+    if not price or price <= 0:
+        return False, "book holds SATA but carries no SATA price — cannot size it"
+    need = price / (w * (1.0 - cash_buffer))
+    return False, (f"SATA {w*100:.1f}% of ${capital:,.0f} is less than one share at "
+                   f"${price:,.2f} — the C2 strategy needs about ${need:,.0f} of "
+                   "capital (raise its starting capital)")
+
+
 def check_positions(weights: dict[str, float], positions: list[dict],
                     allow_flat: bool) -> tuple[bool, str]:
     """(ok, reason) — refuse any request that would wrongly liquidate the strategy.
@@ -608,6 +640,10 @@ def main(argv: list[str] | None = None) -> int:
     if not ok:
         print("ABORT: book failed validation")
         return 2
+    ok, why = check_book_mode(payload)
+    if not ok:
+        print(f"ABORT: {why}")
+        return 2
 
     if args.execute:
         ok, why = ic.is_trading_day(today)
@@ -675,6 +711,11 @@ def main(argv: list[str] | None = None) -> int:
     for d in dropped:
         print(f"  dropped: {d}")
 
+    ok, why = check_sata_sized(weights, positions, payload.get("exec_price") or {},
+                               capital, args.cash_buffer)
+    if not ok:
+        print(f"ABORT: {why}")
+        return 2
     ok, why = check_positions(weights, positions, args.allow_flat)
     if not ok:
         print(f"ABORT: {why}")

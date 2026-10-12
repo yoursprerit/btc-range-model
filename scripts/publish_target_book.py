@@ -297,17 +297,12 @@ def main() -> int:
     else:
         print("Signed with OVERALL_BOOK_SECRET (HMAC-SHA256).")
 
-    # ── PAPER book — undeployed remainder is held as CASH (no SATA leg) ──────
-    paper = tb.build_payload(
-        as_of=book.as_of, profile=args.profile, weights=book.weights,
-        cash_weight=book.cash_weight, exec_price=book.exec_price,
-        actions=book.actions, book_mode="paper", sata_cap=book.sata_cap)
-
-    # ── LIVE book — the SAME risk weights, but the idle remainder is parked in
-    # a real SATA position (Strive preferred, ~13% yield) instead of cash. ─────
+    # ── Idle remainder → a real SATA position (Strive preferred, ~13% yield) ──
     # Strategy Logic V2 caps the SATA position at ``book.sata_cap`` of the book:
     # the idle remainder is parked in SATA only up to the cap, the excess stays
-    # in cash (``cash_weight`` of the live book, 0 % yield).
+    # in cash (0 % yield).  The PAPER and LIVE books now carry these SAME
+    # weights; they differ only in ``book_mode``, which the executors and the
+    # Collective2 publisher use to keep the two destinations apart.
     live_weights = dict(book.weights)
     live_exec = dict(book.exec_price)
     live_sata, live_cash = oc.split_idle(book.cash_weight, book.sata_cap)
@@ -318,6 +313,10 @@ def main() -> int:
         except Exception:
             sata_px = None
         live_exec[SATA_KEY] = float(sata_px) if sata_px else float(oc.SATA["par"])
+    paper = tb.build_payload(
+        as_of=book.as_of, profile=args.profile, weights=live_weights,
+        cash_weight=live_cash, exec_price=live_exec,
+        actions=book.actions, book_mode="paper", sata_cap=book.sata_cap)
     live = tb.build_payload(
         as_of=book.as_of, profile=args.profile, weights=live_weights,
         cash_weight=live_cash, exec_price=live_exec, actions=book.actions,
@@ -374,10 +373,10 @@ def main() -> int:
                  skip_reason=None)
 
     print(f"\nTarget books (as-of {book.as_of}, profile {args.profile}):")
-    print("  PAPER (idle → cash):")
-    for k in sorted(book.weights, key=lambda k: -book.weights[k]):
-        print(f"    {k:5s} {book.weights[k]*100:5.1f}%")
-    print(f"    CASH  {book.cash_weight*100:5.1f}%")
+    print("  PAPER (same weights as LIVE — idle → SATA):")
+    for k in sorted(live_weights, key=lambda k: -live_weights[k]):
+        print(f"    {k:5s} {live_weights[k]*100:5.1f}%")
+    print(f"    CASH  {live_cash*100:5.1f}%")
     _cap_note = (f", SATA capped at {book.sata_cap*100:.0f}% — excess stays cash"
                  if book.sata_cap is not None else "")
     print(f"  LIVE  (idle → SATA{_cap_note}):")

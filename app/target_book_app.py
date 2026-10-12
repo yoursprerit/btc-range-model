@@ -246,7 +246,7 @@ def _render_book(payload: dict, *, source: str) -> None:
     c[1].metric("Risk profile", payload.get("profile", "—"))
     gen = payload.get("generated_at_utc", "—")
 
-    acct_txt = "🔴 LIVE book — idle → SATA" if is_live else "🧪 PAPER book — idle → cash"
+    acct_txt = "🔴 LIVE book — idle → SATA" if is_live else "🧪 PAPER book — idle → SATA (same weights as live)"
     acct_col = "#dc2626" if is_live else "#0ea5e9"
     signed = bool(payload.get("signature"))
     if not secret:
@@ -416,8 +416,7 @@ def _render_book(payload: dict, *, source: str) -> None:
         st.dataframe(adf, hide_index=True, use_container_width=True)
 
     # ── downloads: original + (if edited) an adjusted, re-signed book ──────────
-    # live keeps idle in the SATA weight up to its cap (the excess in cash_weight);
-    # paper keeps it all as cash.
+    # both books keep idle in the SATA weight up to the cap (the excess in cash_weight).
     if is_live:
         dl_weights = dict(adj_risk)
         if sata_after > 1e-9:
@@ -513,8 +512,8 @@ if not (hasattr(_sv, "render_badge") and hasattr(_sv, "BADGE_COLOR")):
     _sv = importlib.reload(_sv)                # server kept an older import)
 _sv.render_badge()
 st.caption("The signed allocation the IBKR executor trades — mapped to the "
-           "instruments actually traded (BTC → IBIT). **Paper** parks idle capital "
-           "as cash; **Live** parks it in a SATA position. Published **once "
+           "instruments actually traded (BTC → IBIT). Paper and **Live** "
+           "books carry the same weights: idle capital is parked in a SATA position." Published **once "
            "daily at ≈7:15 AM CT** (after the daily audit) and then **frozen "
            "until the next morning** — only the 🚀 button below replaces it "
            "intraday.")
@@ -534,8 +533,8 @@ if _src.startswith("📦"):
     if len(_avail) > 1:
         _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
                          key="tb_account",
-                         help="Paper (idle → cash) and Live (idle → SATA) are "
-                              "published as separate books; the executor picks the "
+                         help="Paper and Live carry the same weights (idle → SATA) and are "
+                              "published as separate, differently-labelled books; the executor picks the "
                               "one matching its --account-mode.")
         _path = dict(_avail)[_pick]
     else:

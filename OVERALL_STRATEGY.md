@@ -162,8 +162,8 @@ SATA only **up to 30 % of the book** (`overall_core.SATA_CAP`;
 SATA is the allocator's residual, so the cap moves **no sleeve weight** — it only
 changes where the idle remainder sits and so how much of it earns the coupon.  It
 applies everywhere the book is built or replayed: `signal_gated_allocation`
-returns `sata` (≤ cap), `cash` (the excess) and `idle` (their sum — what a
-**paper** book still holds entirely as cash); the closed-market freeze re-splits
+returns `sata` (≤ cap), `cash` (the excess) and `idle` (their sum — the idle
+remainder both the paper and live books park in SATA/cash); the closed-market freeze re-splits
 the pinned book; `replay_gated_allocation(sata_cap=…)` /
 `walkforward_gated_replay(sata_cap=…)` return a `cash` series next to `sata` (from
 the cut-over in the Combined view; V1 has no cap), and since the P&L maths accrue

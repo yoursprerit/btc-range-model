@@ -279,8 +279,8 @@ def main() -> int:
                          "is still unfilled after the closing auction")
     ap.add_argument("--allow-paper-book", action="store_true",
                     help="allow --account-mode live to trade a book that is not "
-                         "the live one (target_book_live.json parks idle capital "
-                         "in SATA; the paper book holds it as cash)")
+                         "the live one (the live and paper books share weights but "
+                         "differ in book_mode)")
     ap.add_argument("--ignore-working-orders", action="store_true",
                     help="send the book even though the account already has "
                          "orders working (normally refused: it would double "
@@ -414,9 +414,9 @@ def main() -> int:
         return 1
 
     # ── the right book for the mode ──────────────────────────────────────────
-    # The publisher emits two books from one engine run: paper (idle -> cash)
-    # and live (idle -> SATA). A live account handed the paper book would sit on
-    # the idle 40% instead of parking it, silently.
+    # The publisher emits two books from one engine run: paper and live,
+    # which carry the same weights (idle -> SATA) and differ in book_mode; a live
+    # account only trades the book labelled for it.
     if live and payload.get("book_mode") != "live" and not args.allow_paper_book:
         print(f"ABORT: --account-mode live but this book is "
               f"book_mode={payload.get('book_mode')!r}, not 'live' "

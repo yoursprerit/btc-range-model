@@ -13,8 +13,8 @@ see on screen — and never re-implements any signal logic:
     gate_live = overall_core.signal_gated_allocation(results, weights, force_exit=exits)
     targets   = gate_live["target"]        # {signal-key: portfolio weight}
 
-The remaining (undeployed) weight is **held as cash** — there is no SATA leg in
-the live book, by design.  Sizing uses each traded instrument's own live quote
+The remaining (undeployed) weight is parked in SATA (up to the V2 cap) by the
+published books; this standalone script itself holds it as cash.  Sizing uses each traded instrument's own live quote
 (so the BTC sleeve is sized on IBIT's price, not spot BTC), IBKR is used only to
 read positions / net-liquidation and to place orders, and orders are sequenced
 **sells-first** so freed capital funds the buys.
@@ -73,7 +73,7 @@ from ibkr_common import (                        # noqa: E402  shared broker/ord
 class TargetBook:
     as_of: str                       # freshest completed signal bar (YYYY-MM-DD)
     weights: dict[str, float]        # signal-key → target portfolio weight (0..1)
-    cash_weight: float               # undeployed remainder (ALL idle capital) → held as cash on the paper book
+    cash_weight: float               # undeployed remainder (ALL idle capital) → SATA up to the cap, the rest cash (this script holds it all as cash)
     exec_price: dict[str, float]     # traded-symbol live price used for sizing
     actions: list[dict]              # the gate's per-asset action rows (for logging)
     equity_close: str = ""           # last COMPLETED 4:00-PM-ET close behind it

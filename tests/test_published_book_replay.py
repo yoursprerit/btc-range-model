@@ -292,3 +292,18 @@ def test_c2_record_reads_its_own_archive_from_the_reset(tmp_path):
     assert rep["ret"].iloc[0] == 0.0                   # the reset bar is the basis
     assert np.allclose(rep["ret"].iloc[1:], 0.01)      # half AAA, cash earns 0
     assert oc.C2_BOOK_ARCHIVE_DIR.name == "c2_book_archive"
+
+
+def test_sata_held_only_accrues_on_the_held_leg_not_on_cash():
+    # C2 record: an old paper book (idle = cash_weight, no SATA entry) earns
+    # nothing on that cash; a new paper book's SATA entry earns the coupon
+    rets = _rets(IDX, AAA=pd.Series(0.0, index=IDX))
+    old = [_book("2026-07-06", {"AAA": 0.4}, 0.6, mode="paper")]
+    rep = oc.published_book_replay(rets, old, sata_daily=0.001, sata_held_only=True)
+    assert np.allclose(rep["ret"], 0.0) and rep["sata"].iloc[0] == 0.0
+    assert np.isclose(rep["cash"].iloc[0], 0.6)
+    new = [_book("2026-07-06", {"AAA": 0.4, "SATA": 0.5}, 0.1, mode="paper")]
+    rep = oc.published_book_replay(rets, new, sata_daily=0.001, sata_held_only=True)
+    assert np.allclose(rep["ret"].iloc[1:], 0.5 * 0.001)
+    assert rep["sata"].iloc[0] == 0.5 and np.isclose(rep["cash"].iloc[0], 0.1)
+    assert rep["dropped"] == []
