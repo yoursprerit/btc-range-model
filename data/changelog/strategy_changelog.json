@@ -527,7 +527,12 @@
    "title": "Live executor production hardening",
    "description": "Per-order sanity limits (no oversell, buy <= 40 % of NAV, <= 25 orders), PC-vs-IBKR clock check, USD-only accounts, holiday-calendar expiry guard, post-trade verdict (exit 5 + alert), gateway-connect retry, order tags, atomic report writes, reports published without sweeping in other staged files, log rotation, runtime versions logged, and scheduled tasks no longer run as administrator.",
    "impact": "Closes the gaps found in the executor security / production review; no change to what the strategy trades.",
-   "links": []
+   "links": [
+    {
+     "label": "PR #208",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/208"
+    }
+   ]
   }
  ]
 }
