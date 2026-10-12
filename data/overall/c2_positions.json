@@ -1,12 +1,12 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-10-10T00:00:08+00:00",
+ "fetched_at_utc": "2026-10-12T19:31:33+00:00",
  "strategy_id": 157874453,
- "book_as_of": "2026-10-08",
- "model_account_value": 100749.0,
+ "book_as_of": "2026-10-11",
+ "model_account_value": 101087.0,
  "starting_cash": 100000.0,
  "cash": 53612.0,
- "c2_return": 0.55,
+ "c2_return": 0.88,
  "c2_return_label": "Cumul. Return",
  "positions": [
   {
@@ -19,23 +19,23 @@
   {
    "key": "XLE",
    "symbol": "XLE",
-   "shares": 459.0,
+   "shares": 280.0,
    "avg_cost": 64.92662,
    "opened": "2026-10-07T19:30:39Z"
   },
   {
-   "key": "OIH",
-   "symbol": "OIH",
-   "shares": 46.0,
-   "avg_cost": 384.96609,
-   "opened": "2026-10-07T19:30:35Z"
-  },
-  {
    "key": "ERX",
    "symbol": "ERX",
-   "shares": 92.0,
+   "shares": 54.0,
    "avg_cost": 106.56,
    "opened": "2026-10-07T19:30:30Z"
+  },
+  {
+   "key": "XOP",
+   "symbol": "XOP",
+   "shares": 29.0,
+   "avg_cost": 194.17,
+   "opened": "2026-10-12T19:30:30Z"
   }
  ],
  "closed_trades": [
@@ -77,6 +77,19 @@
    "closed": "2026-10-09T19:30:30Z",
    "pnl": 402.05,
    "commission": 4.3
+  },
+  {
+   "trade_id": 157882969,
+   "key": "OIH",
+   "symbol": "OIH",
+   "side": "long",
+   "quantity": 46.0,
+   "entry_px": 384.966086956522,
+   "exit_px": 388.0,
+   "opened": "2026-10-07T19:30:35Z",
+   "closed": "2026-10-12T19:30:31Z",
+   "pnl": 138.64,
+   "commission": 0.92
   }
  ]
 }

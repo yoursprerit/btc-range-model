@@ -1,0 +1,95 @@
+{
+ "schema": "c2-positions/v1",
+ "fetched_at_utc": "2026-10-12T19:31:33+00:00",
+ "strategy_id": 157874453,
+ "book_as_of": "2026-10-11",
+ "model_account_value": 101087.0,
+ "starting_cash": 100000.0,
+ "cash": 53612.0,
+ "c2_return": 0.88,
+ "c2_return_label": "Cumul. Return",
+ "positions": [
+  {
+   "key": "GRID",
+   "symbol": "GRID",
+   "shares": 168.0,
+   "avg_cost": 179.88833,
+   "opened": "2026-10-07T19:30:33Z"
+  },
+  {
+   "key": "XLE",
+   "symbol": "XLE",
+   "shares": 280.0,
+   "avg_cost": 64.92662,
+   "opened": "2026-10-07T19:30:39Z"
+  },
+  {
+   "key": "ERX",
+   "symbol": "ERX",
+   "shares": 54.0,
+   "avg_cost": 106.56,
+   "opened": "2026-10-07T19:30:30Z"
+  },
+  {
+   "key": "XOP",
+   "symbol": "XOP",
+   "shares": 29.0,
+   "avg_cost": 194.17,
+   "opened": "2026-10-12T19:30:30Z"
+  }
+ ],
+ "closed_trades": [
+  {
+   "trade_id": 157882959,
+   "key": "ARTY",
+   "symbol": "ARTY",
+   "side": "long",
+   "quantity": 365.0,
+   "entry_px": 80.49,
+   "exit_px": 78.04,
+   "opened": "2026-10-07T19:30:28Z",
+   "closed": "2026-10-08T19:30:32Z",
+   "pnl": -901.55,
+   "commission": 7.3
+  },
+  {
+   "trade_id": 157882963,
+   "key": "GLDM",
+   "symbol": "GLDM",
+   "side": "long",
+   "quantity": 214.0,
+   "entry_px": 81.4929906542056,
+   "exit_px": 82.98,
+   "opened": "2026-10-07T19:30:32Z",
+   "closed": "2026-10-09T19:30:29Z",
+   "pnl": 313.94,
+   "commission": 4.28
+  },
+  {
+   "trade_id": 157882971,
+   "key": "UGL",
+   "symbol": "UGL",
+   "side": "long",
+   "quantity": 215.0,
+   "entry_px": 44.56,
+   "exit_px": 46.45,
+   "opened": "2026-10-07T19:30:37Z",
+   "closed": "2026-10-09T19:30:30Z",
+   "pnl": 402.05,
+   "commission": 4.3
+  },
+  {
+   "trade_id": 157882969,
+   "key": "OIH",
+   "symbol": "OIH",
+   "side": "long",
+   "quantity": 46.0,
+   "entry_px": 384.966086956522,
+   "exit_px": 388.0,
+   "opened": "2026-10-07T19:30:35Z",
+   "closed": "2026-10-12T19:30:31Z",
+   "pnl": 138.64,
+   "commission": 0.92
+  }
+ ]
+}
