@@ -50,6 +50,7 @@ for _p in (str(_APP_DIR), str(_REPO_ROOT), str(_REPO_ROOT / "scripts")):
 import overall_core as ov                 # noqa: E402
 import ticker_config                       # noqa: E402
 import target_book as tb                   # noqa: E402  (shared HMAC verify)
+import report_label as _rl                 # noqa: E402  (a vault copy sits outside the repo)
 import executed_book as eb                 # noqa: E402
 import ibkr_symbols as sym                 # noqa: E402  (BTC→IBIT mapping)
 
@@ -537,7 +538,7 @@ def _render_history(report_path: Path) -> None:
                 f"(signal bar {rec['as_of']})")
     _sv.render_version_pill(_sv.version_for_date(rec["as_of"]),
                             note=f"strategy logic in effect for signal bar {rec['as_of']}")
-    _render(rec["payload"], source=f"`{rec['path'].relative_to(_REPO_ROOT)}`",
+    _render(rec["payload"], source=_rl.source_label(rec["path"], _REPO_ROOT),
             historical=True)
 
     # ── the whole archive at a glance ────────────────────────────────────────
@@ -798,7 +799,7 @@ def _render_c2_history() -> None:
     _sv.render_version_pill(_sv.version_for_date(rec["as_of"] or rec["executed_on"]),
                             note="strategy logic in effect for that book")
     _render_c2(rec["payload"], historical=True,
-               source=f"`{rec['path'].relative_to(_REPO_ROOT)}`")
+               source=_rl.source_label(rec["path"], _REPO_ROOT))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -912,13 +913,13 @@ with _tab_now:
             _sv.render_version_pill(
                 _sv.version_for_date(payload.get("as_of") or _sv.STRATEGY_VERSION_START),
                 note=f"strategy logic in effect for signal bar {payload.get('as_of', '—')}")
-            _render(payload, source=f"`{_path.relative_to(_REPO_ROOT)}`")
+            _render(payload, source=_rl.source_label(_path, _REPO_ROOT))
         except Exception as e:
             st.error(f"Could not read the execution report: {e}")
     else:
         _reset = eb.read_reset(_path)
         st.warning("No execution report found at "
-                   f"`{_path.relative_to(_REPO_ROOT)}`.")
+                   f"{_rl.source_label(_path, _REPO_ROOT)}.")
         st.markdown(
             (f"The record was **reset on {str(_reset.get('reset_at_utc'))[:10]}** "
              f"({_reset.get('reason')}) — the previous account's runs were retired "
