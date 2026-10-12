@@ -109,6 +109,9 @@ notepad deploy\ibkr_accounts.json
 }
 ```
 
+* `expected_profile` (optional, per account, e.g. `"Balanced"`): the risk profile this account
+  follows. A published book for any other profile **aborts that account's run** with an alert.
+  Recommended for every live account — see "Is this the right book?" in `LIVE_TRADING.md`.
 * `type`: `margin`, `ira`, or `cash`. `allow_margin: true` is accepted **only**
   on `margin`; an IRA/cash account can never be configured to borrow.
 * The file is validated before anything runs: duplicate ids, paper (`D…`) ids,

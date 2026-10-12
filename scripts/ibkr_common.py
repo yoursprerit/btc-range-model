@@ -901,6 +901,45 @@ def price_drift_check(broker, orders: list[Order], tol: float,
                   f"({checked} checked, worst {worst[0]*100:.1f}%)")
 
 
+def live_price(quote: dict) -> float | None:
+    """The price the drift checks compare with: last, else close, ask, bid."""
+    return next((float(quote[k]) for k in ("last", "close", "ask", "bid")
+                 if _finite(quote.get(k))), None)
+
+
+def soft_drift_flags(broker, orders: list[Order], soft_tol: float
+                     ) -> dict[str, str]:
+    """{symbol: reason} for BUYS of unlevered names whose live price is more than
+    *soft_tol* from the book's sizing price.
+
+    This is the tighter, gentler sibling of :func:`price_drift_check`: that one
+    aborts the whole run at 25 % (a split), this one only holds the BUY of the
+    one name — sells are never held, and leveraged / single-stock / crypto names
+    (whose ordinary day can exceed it) are exempt.  Uses the cached quotes, so it
+    costs no extra market-data calls; a name that cannot be quoted is not
+    flagged."""
+    if soft_tol <= 0:
+        return {}
+    out: dict[str, str] = {}
+    for o in orders:
+        if o.action != "BUY" or sym.is_volatile(o.symbol):
+            continue
+        try:
+            q = broker.quote_by_symbol(o.symbol)
+        except Exception:
+            continue
+        live = live_price(q or {})
+        if live is None:
+            continue
+        d = price_drift(o.price, live)
+        if d > soft_tol:
+            out[o.symbol] = (f"{o.symbol} quotes ${live:,.2f} vs the book's "
+                             f"${float(o.price):,.2f} ({d*100:.0f}% away, soft "
+                             f"limit {soft_tol*100:.0f}%) — a wrong book price "
+                             "would size the buy wrong")
+    return out
+
+
 def preflight(broker, orders: list[Order], current: dict[str, float],
               exec_price: dict[str, float], net_liq: float,
               guards: Guards) -> tuple[bool, str]:
@@ -955,6 +994,8 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
                       + (f" [{'; '.join(st.notes)}]" if st.notes else ""))
                 for why in st.names.values():
                     print(f"  ! buy withheld: {why}")
+            for why in soft_drift_flags(broker, orders, lim.soft_price_drift).values():
+                print(f"  ! buy withheld: {why}")
         except Exception as e:
             print(f"  · stress check unavailable ({e}) — not blocking")
     failed = ""
@@ -2002,6 +2043,27 @@ class Broker:
                         f"({self.account}).")
         return why
 
+    def _alert_moc_rejections(self, trades: list, alerted: set) -> None:
+        """Print AND alert on every MOC the broker refused, once per symbol.
+
+        The old behaviour printed the refusal to the log only; the first message
+        a human got was the end-of-run summary AFTER the auction — hours after
+        the 15:50 ET entry cutoff, the only window in which anyone could still
+        fix it.  Strict MOC has no fallback, so a refused leg is a wrong
+        position until the next run."""
+        for symbol, st, msg in moc_rejections(trades):
+            if symbol in alerted:
+                continue
+            alerted.add(symbol)
+            line = (f"MOC {symbol} was {st} by the broker"
+                    + (f": {msg}" if msg else ""))
+            print(f"    !! {line} — nothing was substituted; act in TWS before "
+                  "the cutoff")
+            self._alert(f"🔴 {self.account}: {line}. Strict MOC has no fallback: "
+                        "the position is now WRONG until fixed by hand in TWS "
+                        f"before the {MOC_CUTOFF_ET[0]}:{MOC_CUTOFF_ET[1]:02d} ET "
+                        "entry cutoff, or until the next run.")
+
     def _unsafe_quote(self, symbol: str, action: str, quote: dict) -> str | None:
         lim = getattr(self, "safety", None)
         if lim is None:
@@ -2050,7 +2112,9 @@ class Broker:
         st = self.stress_assessment(buys)
         if st is None:
             return why_all, {}
-        return why_all or st.block_buys, dict(st.names)
+        per_name = soft_drift_flags(self, buys, self.safety.soft_price_drift)
+        per_name.update(st.names)                         # a stress reason wins
+        return why_all or st.block_buys, per_name
 
     def funding_price(self, o: Order,
                       slippage_cap: float = DEFAULT_SLIPPAGE_CAP) -> float:
@@ -2482,20 +2546,24 @@ class Broker:
             # operator the minutes before the cutoff to act, instead of
             # discovering it from the 4 PM report.
             self.ib.sleep(5.0)
-            for symbol, st, msg in moc_rejections(trades):
-                print(f"    !! MOC {symbol} was {st} by the broker"
-                      + (f": {msg}" if msg else "")
-                      + " — nothing was substituted; act in TWS before the cutoff")
+            alerted: set[str] = set()
+            self._alert_moc_rejections(trades, alerted)
             deadline = moc_wait_seconds(now)
             print(f"    waiting {deadline/60:.0f} min for the closing "
                   f"auction to print…")
         else:
             deadline = wait              # wait for this leg before the next
+        ticks = 0
         while deadline > 0 and any(not t.isDone() for *_, t in trades):
             if self._halt_reason():
                 break
             self.ib.sleep(1.0)
             deadline -= 1.0
+            ticks += 1
+            if order_type == ORDER_MOC and ticks % 60 == 0:
+                # a refusal can arrive minutes after submission; still worth
+                # hearing about while the cutoff has not passed
+                self._alert_moc_rejections(trades, alerted)
         if self._halt_reason():
             self._cancel_working(trades)
         if order_type == ORDER_MARKETABLE_LIMIT:

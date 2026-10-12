@@ -50,6 +50,8 @@ DEFAULT_STRESS_VIX = 50.0          # VIX above 50 (Apr-2025 peak close was ~52)
 DEFAULT_STRESS_NAME_MOVE = 0.40    # a single ordered name moved >40% on the day
 DEFAULT_MAX_NAV_DROP = 0.15        # net-liq >15% below where the last run left it
 DEFAULT_MIN_MARGIN_CUSHION = 0.05  # excess liquidity under 5% of net-liq: don't trade
+DEFAULT_MAX_BOOK_ADD = 0.60        # >60% of NAV of NEW target weight in one day: suspicious
+DEFAULT_SOFT_PRICE_DRIFT = 0.10    # unlevered name 10%+ off its book price: hold its buy
 BASELINE_MAX_AGE_DAYS = 7          # an older report is not a "yesterday" baseline
 
 
@@ -75,6 +77,7 @@ class SafetyLimits:
     stress_name_move: float = DEFAULT_STRESS_NAME_MOVE
     max_nav_drop: float = DEFAULT_MAX_NAV_DROP
     min_margin_cushion: float = DEFAULT_MIN_MARGIN_CUSHION
+    soft_price_drift: float = DEFAULT_SOFT_PRICE_DRIFT
     outside_rth: bool = False
     # → reason string while trading is halted, else None.  Called between orders.
     halt_check: Callable[[], str | None] | None = field(default=None, repr=False)
@@ -86,7 +89,7 @@ class SafetyLimits:
         s = cls(halt_check=halt_check, alert=alert)
         for f in ("max_spread", "max_fill_slippage", "stress_spy_move",
                   "stress_vix", "stress_name_move", "max_nav_drop",
-                  "min_margin_cushion"):
+                  "min_margin_cushion", "soft_price_drift"):
             v = getattr(args, f, None)
             if v is not None:
                 setattr(s, f, float(v))
@@ -94,9 +97,11 @@ class SafetyLimits:
         return s
 
 
-def add_arguments(ap) -> None:
+def add_arguments(ap, book_checks: bool = True) -> None:
     """Register the safety flags on an argparse parser (shared by both entry
-    points so they expose — and default — the same limits)."""
+    points so they expose — and default — the same limits).  *book_checks* adds
+    the published-book flags; the paper rebalancer builds its own book and has
+    no previous one to compare with, so it leaves them out."""
     g = ap.add_argument_group("market-stress & execution-quality guards (0 = off)")
     g.add_argument("--max-spread", type=float,
                    default=env_float("IBKR_MAX_SPREAD", DEFAULT_MAX_SPREAD),
@@ -143,6 +148,34 @@ def add_arguments(ap) -> None:
                         "liquidation, so the executor never trades against the "
                         "broker's own risk system (default %(default)s; env "
                         "IBKR_MIN_MARGIN_CUSHION; unreadable = pass)")
+    g.add_argument("--soft-price-drift", type=float,
+                   default=env_float("IBKR_SOFT_PRICE_DRIFT",
+                                     DEFAULT_SOFT_PRICE_DRIFT),
+                   help="hold the BUY (sells proceed, the run is NOT aborted) of "
+                        "an unlevered ETF whose live price is this far from the "
+                        "book's sizing price; leveraged, single-stock and crypto "
+                        "names are exempt. The hard --max-price-drift abort is "
+                        "unchanged (default %(default)s; env IBKR_SOFT_PRICE_DRIFT)")
+    if not book_checks:
+        return
+    g.add_argument("--expected-profile", default=os.environ.get(
+                       "IBKR_EXPECTED_PROFILE", "").strip() or None,
+                   help="abort unless the published book is for this risk profile "
+                        "(e.g. Balanced). Without it a profile switch at the "
+                        "publisher silently re-targets the account (env "
+                        "IBKR_EXPECTED_PROFILE)")
+    g.add_argument("--max-book-add", type=float,
+                   default=env_float("IBKR_MAX_BOOK_ADD", DEFAULT_MAX_BOOK_ADD),
+                   help="when today's book ADDS more than this fraction of NAV of "
+                        "new target weight versus the last book this account saw "
+                        "(or the profile changed), hold the buys for a day and "
+                        "alert; cuts are never held (default %(default)s; env "
+                        "IBKR_MAX_BOOK_ADD; 0 disables)")
+    g.add_argument("--accept-large-change", action="store_true",
+                   default=os.environ.get("IBKR_ACCEPT_LARGE_CHANGE", "") == "1",
+                   help="trade today's book even though it trips --max-book-add "
+                        "(env IBKR_ACCEPT_LARGE_CHANGE=1). Meant for ONE day — "
+                        "unset it afterwards")
 
 
 # ── small helpers ────────────────────────────────────────────────────────────
@@ -414,3 +447,120 @@ def nothing_sent(results: list[dict], planned: int) -> str | None:
     kinds = sorted({str(r.get("status", "")) for r in results})
     return (f"{planned} order(s) were planned but NONE was sent "
             f"({', '.join(kinds) or 'no legs reported'})")
+
+
+# ── published-book change guard ──────────────────────────────────────────────
+# The signature proves the book came from the publisher; it cannot prove the
+# publisher was right.  These compare today's book with the last one THIS
+# account saw: a profile switch, or a jump in new target weight, is held for a
+# day (buys only) and reported, so a corrupted or mis-generated book that is
+# still arithmetically valid cannot buy a large position unseen.  Cuts are never
+# held — a stop-out that moves to cash is the safe direction and must go through.
+def read_book_state(path) -> dict | None:
+    try:
+        d = json.loads(Path(path).read_text())
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
+def _clean(weights: dict) -> dict[str, float]:
+    out = {}
+    for k, v in (weights or {}).items():
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(f):
+            out[str(k)] = f
+    return out
+
+
+def book_change(state: dict | None, as_of: str, profile: str, weights: dict
+                ) -> dict | None:
+    """How today's book differs from the last distinct book this account saw, or
+    None when there is nothing to compare with.  A re-run of the same ``as_of``
+    is compared with the book BEFORE it, so a second run cannot slip past a
+    first run's hold."""
+    if not state or not as_of:
+        return None
+    if state.get("as_of") == as_of:
+        base_w, base_p, base_d = (state.get("prev_weights"),
+                                  state.get("prev_profile"), state.get("prev_as_of"))
+    else:
+        base_w, base_p, base_d = (state.get("weights"), state.get("profile"),
+                                  state.get("as_of"))
+    if not isinstance(base_w, dict):
+        return None
+    old, new = _clean(base_w), _clean(weights)
+    keys = set(old) | set(new)
+    adds = sum(max(new.get(k, 0.0) - old.get(k, 0.0), 0.0) for k in keys)
+    cuts = sum(max(old.get(k, 0.0) - new.get(k, 0.0), 0.0) for k in keys)
+    return dict(adds=adds, cuts=cuts, base_as_of=base_d, base_profile=base_p,
+                new_profile=profile,
+                profile_changed=bool(base_p and profile and base_p != profile))
+
+
+def next_book_state(state: dict | None, as_of: str, profile: str, weights: dict
+                    ) -> dict:
+    """The state to store after seeing this book (keeps the previous distinct
+    book so a same-day re-run is still judged against it)."""
+    cur = dict(as_of=as_of, profile=profile or "", weights=_clean(weights))
+    if state and state.get("as_of") == as_of:
+        cur.update(prev_as_of=state.get("prev_as_of"),
+                   prev_profile=state.get("prev_profile"),
+                   prev_weights=state.get("prev_weights"))
+    elif state and state.get("as_of"):
+        cur.update(prev_as_of=state.get("as_of"), prev_profile=state.get("profile"),
+                   prev_weights=state.get("weights"))
+    return cur
+
+
+def write_book_state(path, state: dict) -> bool:
+    """Atomic best-effort write; a failure must never stop a run."""
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
+        os.replace(tmp, p)
+        return True
+    except Exception:
+        return False
+
+
+def book_state_path(report_path) -> Path:
+    """Dot-named, so the report vault (which skips dotfiles) never seals it."""
+    p = Path(report_path)
+    return p.with_name("." + p.stem + ".bookstate.json")
+
+
+def book_hold(change: dict | None, max_add: float, accepted: bool,
+              profile_pinned: bool) -> tuple[str | None, list[str]]:
+    """(reason to hold this run's BUYS or None, notes for the log/alert).
+
+    A pinned profile that matches makes a profile change impossible, so the
+    profile rule only applies to an unpinned account."""
+    if max_add <= 0:
+        return None, ["book check disabled"]
+    if not change:
+        return None, ["no previous book on record for this account — nothing to compare"]
+    notes = [f"book vs {change['base_as_of']}: adds {change['adds']*100:.1f}% / "
+             f"cuts {change['cuts']*100:.1f}% of NAV"]
+    reasons = []
+    if change["profile_changed"] and not profile_pinned:
+        reasons.append(f"profile changed {change['base_profile']} → "
+                       f"{change.get('new_profile')}")
+    if change["adds"] > max_add:
+        reasons.append(f"the book adds {change['adds']*100:.0f}% of NAV in new "
+                       f"target weight (limit {max_add*100:.0f}%)")
+    if reasons and accepted:
+        notes.append("large change ACCEPTED by --accept-large-change / "
+                     "IBKR_ACCEPT_LARGE_CHANGE — unset it after today")
+        return None, notes
+    if reasons:
+        return "book check — " + "; ".join(reasons), notes
+    if change["cuts"] > max_add:
+        notes.append(f"large de-risk ({change['cuts']*100:.0f}% of NAV cut) — "
+                     "proceeding; sells are never held")
+    return None, notes

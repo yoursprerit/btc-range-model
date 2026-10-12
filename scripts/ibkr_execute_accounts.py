@@ -88,6 +88,9 @@ class Account:
     limits: dict = field(default_factory=dict)
     # restricted key -> key traded instead (an IRA cannot buy UGL -> GLDM)
     substitutions: dict = field(default_factory=dict)
+    # the risk profile this account is meant to follow ("" = not pinned). A book
+    # published for any other profile aborts this account's run.
+    expected_profile: str = ""
 
 
 @dataclass
@@ -162,6 +165,11 @@ def validate_config(raw: dict) -> tuple[Config | None, list[str]]:
                     type=str(it.get("type", "margin")).lower(),
                     enabled=bool(it.get("enabled", True)),
                     allow_margin=bool(it.get("allow_margin", False)))
+        ep = it.get("expected_profile", "")
+        if not isinstance(ep, str):
+            errs.append(f"{where}: expected_profile must be a string")
+        else:
+            a.expected_profile = ep.strip()
         if a.type not in ACCOUNT_TYPES:
             errs.append(f"{where}: type must be one of {', '.join(ACCOUNT_TYPES)}")
         if a.allow_margin and a.type != "margin":
@@ -179,7 +187,7 @@ def validate_config(raw: dict) -> tuple[Config | None, list[str]]:
             if k in DEFAULT_LIMITS:
                 lim[k] = v
             elif k not in ("id", "label", "type", "enabled", "allow_margin",
-                           "substitutions"):
+                           "substitutions", "expected_profile"):
                 errs.append(f"{where}: unknown setting '{k}'")
         for k, v in lim.items():
             if isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -241,6 +249,8 @@ def child_argv(cfg: Config, acct: Account, index: int, *, execute: bool,
             "--max-price-drift", str(lim["max_price_drift"])]
     if cfg.kill_switch_file:
         argv += ["--kill-switch-file", cfg.kill_switch_file]
+    if acct.expected_profile:
+        argv += ["--expected-profile", acct.expected_profile]
     if acct.allow_margin and acct.type == "margin":
         argv.append("--allow-margin")
     for src, dst in sorted(acct.substitutions.items()):
