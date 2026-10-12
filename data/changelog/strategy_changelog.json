@@ -617,6 +617,14 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/213"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "IRA accounts trade GLDM in place of UGL",
+   "description": "IBKR IRAs cannot buy UGL. Accounts of type \"ira\" now re-assign any UGL weight to GLDM at execution (same capital, added to any GLDM already in the book); the published book also carries GLDM's price whenever UGL is held. Overridable per account via \"substitutions\" in ibkr_accounts.json.",
+   "impact": "Gold-trend capital in an IRA stays invested at 1x instead of the UGL order being rejected; margin accounts are unchanged."
   }
  ]
 }

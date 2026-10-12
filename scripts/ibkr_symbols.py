@@ -45,6 +45,22 @@ TRADE_SYMBOL: dict[str, str] = {
     "ARTY": "ARTY",
 }
 
+# ── per-account-type substitutions ────────────────────────────────────────────
+# The book is published once and shared by every account, but some account types
+# cannot hold some instruments: an IBKR IRA may not buy leveraged ETFs (UGL), so
+# an IRA trades the unlevered 1× sibling instead.  The executor re-assigns the
+# restricted key's weight to its substitute (same capital, so the gold exposure
+# is 1× rather than 2×) before sizing — see ``ibkr_common.apply_substitutions``.
+ACCOUNT_TYPE_SUBSTITUTIONS: dict[str, dict[str, str]] = {
+    "ira": {"UGL": "GLDM"},
+}
+
+
+def substitutions_for(account_type: str) -> dict[str, str]:
+    """Default restricted-key → substitute-key map for an account ``type``."""
+    return dict(ACCOUNT_TYPE_SUBSTITUTIONS.get((account_type or "").lower(), {}))
+
+
 # reverse map: IBKR symbol → signal key, so positions read back from the broker
 # can be matched to a target weight.
 KEY_FOR_SYMBOL: dict[str, str] = {v: k for k, v in TRADE_SYMBOL.items()}

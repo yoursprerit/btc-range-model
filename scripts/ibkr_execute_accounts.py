@@ -52,6 +52,7 @@ sys.path.insert(0, str(_REPO / "app"))
 import pandas as pd                                    # noqa: E402
 
 import ibkr_common as ic                               # noqa: E402
+import ibkr_symbols as sym                             # noqa: E402
 import ibkr_heartbeat as hbeat                         # noqa: E402
 
 DEFAULT_CONFIG = _REPO / "deploy" / "ibkr_accounts.json"
@@ -85,6 +86,8 @@ class Account:
     enabled: bool = True
     allow_margin: bool = False
     limits: dict = field(default_factory=dict)
+    # restricted key -> key traded instead (an IRA cannot buy UGL -> GLDM)
+    substitutions: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -163,11 +166,20 @@ def validate_config(raw: dict) -> tuple[Config | None, list[str]]:
             errs.append(f"{where}: type must be one of {', '.join(ACCOUNT_TYPES)}")
         if a.allow_margin and a.type != "margin":
             errs.append(f"{where}: allow_margin is only valid for a margin account")
+        # type defaults (ira: UGL -> GLDM), overridable per account; an empty
+        # {} turns the default off.
+        subs = it.get("substitutions", sym.substitutions_for(a.type))
+        try:
+            a.substitutions = ic.parse_substitutions(
+                [f"{k}={v}" for k, v in dict(subs).items()])
+        except (ValueError, TypeError) as e:
+            errs.append(f"{where}: substitutions: {e}")
         lim = dict(defaults)
         for k, v in it.items():
             if k in DEFAULT_LIMITS:
                 lim[k] = v
-            elif k not in ("id", "label", "type", "enabled", "allow_margin"):
+            elif k not in ("id", "label", "type", "enabled", "allow_margin",
+                           "substitutions"):
                 errs.append(f"{where}: unknown setting '{k}'")
         for k, v in lim.items():
             if isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -231,6 +243,8 @@ def child_argv(cfg: Config, acct: Account, index: int, *, execute: bool,
         argv += ["--kill-switch-file", cfg.kill_switch_file]
     if acct.allow_margin and acct.type == "margin":
         argv.append("--allow-margin")
+    for src, dst in sorted(acct.substitutions.items()):
+        argv += ["--substitute", f"{src}={dst}"]
     if execute:
         argv.append("--execute")
     else:

@@ -1146,6 +1146,45 @@ def trim_sata(weights: dict[str, float], cap: float) -> tuple[dict[str, float], 
     return out, excess
 
 
+def apply_substitutions(weights: dict[str, float], subs: dict[str, str]
+                        ) -> tuple[dict[str, float], list[tuple[str, str, float]]]:
+    """Re-assign a restricted instrument's weight to its tradeable substitute.
+
+    ``subs`` maps a signal key the account cannot hold (UGL in an IBKR IRA) to
+    the key it trades instead (GLDM).  The weight moves one-for-one -- same
+    capital, so a 2x sleeve becomes 1x exposure -- and ADDS to the substitute if
+    the book already holds it (GLDM and UGL are both on when gold trends).
+    Total deployed weight is unchanged.  Returns ``(new weights, moves)`` where
+    each move is ``(from_key, to_key, weight)``.  The input is not modified."""
+    out = dict(weights)
+    moves: list[tuple[str, str, float]] = []
+    for src, dst in subs.items():
+        w = out.pop(src, 0.0)
+        if w > 0:
+            out[dst] = out.get(dst, 0.0) + w
+            moves.append((src, dst, w))
+    return out, moves
+
+
+def parse_substitutions(items) -> dict[str, str]:
+    """``["UGL=GLDM", ...]`` -> ``{"UGL": "GLDM"}``; raises ValueError on a bad
+    pair, an unmapped key, or a chain/loop (a substitute that is itself
+    substituted)."""
+    subs: dict[str, str] = {}
+    for it in items or []:
+        src, sep, dst = str(it).partition("=")
+        src, dst = src.strip().upper(), dst.strip().upper()
+        if not sep or not src or not dst or src == dst:
+            raise ValueError(f"bad substitution {it!r} (want KEY=KEY, e.g. UGL=GLDM)")
+        for k in (src, dst):
+            if not sym.trade_symbol(k):
+                raise ValueError(f"substitution {it!r}: {k} is not a tradeable key")
+        subs[src] = dst
+    if any(d in subs for d in subs.values()):
+        raise ValueError("a substitute may not itself be substituted")
+    return subs
+
+
 def apply_deploy_cap(weights: dict[str, float], max_deploy_frac: float
                      ) -> tuple[dict[str, float], dict | None]:
     """Cap the TOTAL the book may deploy at *max_deploy_frac* of the account.
