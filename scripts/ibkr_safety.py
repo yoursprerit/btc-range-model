@@ -49,6 +49,7 @@ DEFAULT_STRESS_SPY_MOVE = 0.08     # |SPY vs prior close| beyond 8%
 DEFAULT_STRESS_VIX = 50.0          # VIX above 50 (Apr-2025 peak close was ~52)
 DEFAULT_STRESS_NAME_MOVE = 0.40    # a single ordered name moved >40% on the day
 DEFAULT_MAX_NAV_DROP = 0.15        # net-liq >15% below where the last run left it
+DEFAULT_MIN_MARGIN_CUSHION = 0.05  # excess liquidity under 5% of net-liq: don't trade
 BASELINE_MAX_AGE_DAYS = 7          # an older report is not a "yesterday" baseline
 
 
@@ -73,6 +74,7 @@ class SafetyLimits:
     stress_vix: float = DEFAULT_STRESS_VIX
     stress_name_move: float = DEFAULT_STRESS_NAME_MOVE
     max_nav_drop: float = DEFAULT_MAX_NAV_DROP
+    min_margin_cushion: float = DEFAULT_MIN_MARGIN_CUSHION
     outside_rth: bool = False
     # → reason string while trading is halted, else None.  Called between orders.
     halt_check: Callable[[], str | None] | None = field(default=None, repr=False)
@@ -83,7 +85,8 @@ class SafetyLimits:
     def from_args(cls, args, halt_check=None, alert=None) -> "SafetyLimits":
         s = cls(halt_check=halt_check, alert=alert)
         for f in ("max_spread", "max_fill_slippage", "stress_spy_move",
-                  "stress_vix", "stress_name_move", "max_nav_drop"):
+                  "stress_vix", "stress_name_move", "max_nav_drop",
+                  "min_margin_cushion"):
             v = getattr(args, f, None)
             if v is not None:
                 setattr(s, f, float(v))
@@ -131,6 +134,15 @@ def add_arguments(ap) -> None:
                         "report left it (default %(default)s; env "
                         "IBKR_MAX_NAV_DROP). A large withdrawal trips it too — "
                         "the alert says so")
+    g.add_argument("--min-margin-cushion", type=float,
+                   default=env_float("IBKR_MIN_MARGIN_CUSHION",
+                                     DEFAULT_MIN_MARGIN_CUSHION),
+                   help="abort the run, with an alert, when the account's excess "
+                        "liquidity is at or below zero (a margin deficiency — "
+                        "IBKR may be liquidating) or under this fraction of net "
+                        "liquidation, so the executor never trades against the "
+                        "broker's own risk system (default %(default)s; env "
+                        "IBKR_MIN_MARGIN_CUSHION; unreadable = pass)")
 
 
 # ── small helpers ────────────────────────────────────────────────────────────
@@ -264,6 +276,12 @@ def stress_assessment(spy_quote: dict | None, vix_quote: dict | None,
     skipped — see the module docstring."""
     out = Stress()
     reasons: list[str] = []
+    spy_halt = (spy_quote or {}).get("halted")
+    try:
+        if spy_halt is not None and math.isfinite(float(spy_halt)) and float(spy_halt) > 0:
+            reasons.append("SPY is halted (market-wide halt?)")
+    except (TypeError, ValueError):
+        pass
     if lim.stress_spy_move > 0:
         mv = day_move(spy_quote or {})
         if mv is None:
@@ -356,3 +374,43 @@ def arm(broker, args, net_liq: float, report_path=None,
             broker.buy_block = f"NAV brake — {why}"
             send_alert(f"⚠️ {getattr(broker, 'account', '?')}: {why}. "
                        "Running de-risk only: buys will be withheld, sells proceed.")
+
+
+# ── account health / run outcome ─────────────────────────────────────────────
+def margin_problem(excess_liquidity, net_liq: float, min_cushion: float
+                   ) -> str | None:
+    """Why the account is too close to (or in) a margin call to trade, or None.
+
+    Measured on ExcessLiquidity — the figure IBKR itself liquidates on — as a
+    share of net liquidation.  A cash or IRA account with no leverage sits near
+    100 %.  An unreadable figure is "unknown", never a reason to stop."""
+    if min_cushion <= 0:
+        return None
+    try:
+        ex = float(excess_liquidity)
+        nl = float(net_liq)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(ex) and math.isfinite(nl)) or nl <= 0:
+        return None
+    if ex <= 0:
+        return (f"excess liquidity is ${ex:,.0f} — a margin deficiency; IBKR may "
+                "be liquidating positions and this run must not fight it")
+    if ex / nl < min_cushion:
+        return (f"excess liquidity ${ex:,.0f} is only {ex/nl*100:.1f}% of net "
+                f"liquidation (minimum {min_cushion*100:.0f}%) — close to a "
+                "margin call")
+    return None
+
+
+def nothing_sent(results: list[dict], planned: int) -> str | None:
+    """Reason to call the run out loud when orders were planned but not one was
+    actually sent (every leg withheld or skipped), else None."""
+    if planned <= 0:
+        return None
+    sent = [r for r in results if not str(r.get("status", "")).startswith("SKIPPED")]
+    if sent:
+        return None
+    kinds = sorted({str(r.get("status", "")) for r in results})
+    return (f"{planned} order(s) were planned but NONE was sent "
+            f"({', '.join(kinds) or 'no legs reported'})")

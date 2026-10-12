@@ -625,6 +625,11 @@ def _run(argv: list[str] | None, hb: Heartbeat) -> int:
     if os.environ.get("IBKR_TRADING_DISABLED") or (
             cfg.kill_switch_file and Path(cfg.kill_switch_file).exists()):
         print("ABORT: trading is DISABLED (kill switch active). Nothing sent.")
+        # Benign for the heartbeat (the task did fire), but never silent: a
+        # switch thrown in a panic and forgotten loses every later session.
+        alert("🛑 IBKR live run skipped: the kill switch is ACTIVE "
+              f"({cfg.kill_switch_file or 'IBKR_TRADING_DISABLED'}). No orders "
+              "were placed for any account — clear it to resume trading.")
         hb.benign, hb.detail = True, "kill switch active — nothing sent"
         return EXIT_SKIPPED
 

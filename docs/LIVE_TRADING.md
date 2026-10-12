@@ -59,6 +59,16 @@ quote) passes — a missing data subscription never blocks a rebalance.
 | **NAV brake** | `--max-nav-drop` / `IBKR_MAX_NAV_DROP` | 15 % | Net-liq more than this below the previous execution report (≤ 7 days old) → de-risk only. A large withdrawal trips it too; the alert says so. |
 | **Live kill switch** | `--kill-switch-file` / `IBKR_TRADING_DISABLED` | — | Now also re-read *between orders*: remaining orders are skipped (`SKIPPED-KILLSWITCH`), orders still working are cancelled, nothing is escalated. |
 
+### Run-health alerts
+
+| Situation | What happens |
+|-----------|--------------|
+| **Run dies after orders were sent** (e.g. gateway drops between the sell and buy legs) | `PARTIAL RUN` alert, the real fills are written to the report, exit code 5, the send lock is kept so nothing is re-sent. Reconcile in TWS. |
+| **Margin trouble** — excess liquidity ≤ 0, or under `--min-margin-cushion` (5 %) of net-liq | Pre-flight aborts with an alert; the executor never trades against IBKR's own risk system. `0` disables; an unreadable figure passes. |
+| **Kill switch left armed** | An alert on every run while it is armed (the heartbeat still counts the run as having fired). |
+| **Orders planned, none sent** (every leg withheld or skipped) | Alert naming the reasons. |
+| **SPY halted** | Treated as market-wide stress: buys withheld. |
+
 A withheld buy leaves the account under-invested until the next run, and the
 post-trade check will say so (exit 5) — that is the intended loud outcome, not a
 failure to fix. To force a withheld trade, fix the cause or re-run with the

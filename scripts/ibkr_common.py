@@ -618,6 +618,26 @@ def check_account_state(net_liq: float, cash: float, gross_value: float,
                   f"{gross_value/net_liq:.2f}x net liq)")
 
 
+def check_margin_health(broker, net_liq: float, min_cushion: float
+                        ) -> tuple[bool, str]:
+    """(ok, reason) — is the broker's own risk system quiet?  Best-effort: a
+    broker that cannot report excess liquidity passes (see
+    :func:`ibkr_safety.margin_problem`)."""
+    read = getattr(broker, "excess_liquidity", None)
+    if min_cushion <= 0 or not callable(read):
+        return True, "margin-health check disabled"
+    try:
+        ex = read()
+    except Exception:
+        ex = None
+    if not isinstance(ex, (int, float)):
+        return True, "margin health not verified (excess liquidity unreadable)"
+    why = safety.margin_problem(ex, net_liq, min_cushion)
+    if why:
+        return False, why
+    return True, f"margin healthy (excess liquidity ${ex:,.0f})"
+
+
 def check_turnover(orders: list[Order], net_liq: float,
                    max_frac: float = 1.5) -> tuple[bool, str]:
     """(ok, reason) — refuse a plan that churns implausibly much of the account.
@@ -809,6 +829,7 @@ class Guards:
     outside_rth: bool = False
     max_buy_frac: float = DEFAULT_MAX_BUY_FRAC
     max_orders: int = DEFAULT_MAX_ORDERS
+    min_margin_cushion: float = safety.DEFAULT_MIN_MARGIN_CUSHION
 
     @classmethod
     def from_args(cls, args) -> "Guards":
@@ -817,7 +838,7 @@ class Guards:
         g = cls()
         for f in ("max_gross_frac", "max_turnover_frac", "max_price_drift",
                   "slippage_cap", "allow_margin", "outside_rth",
-                  "max_buy_frac", "max_orders"):
+                  "max_buy_frac", "max_orders", "min_margin_cushion"):
             v = getattr(args, f, None)
             if v is not None:
                 setattr(g, f, v)
@@ -904,6 +925,7 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
     checks = [
         check_account_state(net_liq, cash, gross, guards.allow_margin,
                             guards.max_gross_frac),
+        check_margin_health(broker, net_liq, guards.min_margin_cushion),
         market_session_open(allow_outside=guards.outside_rth),
         check_order_sanity(orders, current, net_liq, guards.max_buy_frac,
                            guards.max_orders),
@@ -1566,6 +1588,19 @@ class Broker:
             if v.tag == "TotalCashValue":
                 return float(v.value)
         return 0.0
+
+    def excess_liquidity(self) -> float | None:
+        """ExcessLiquidity in USD — the cushion IBKR liquidates on — or None."""
+        for src in (lambda: self.ib.accountSummary(self.account),
+                    lambda: self.ib.accountValues(self.account)):
+            try:
+                for v in src():
+                    if v.tag == "ExcessLiquidity" and \
+                            (getattr(v, "currency", "") or "USD").upper() in ("USD", "BASE"):
+                        return float(v.value)
+            except Exception:
+                continue
+        return None
 
     def realized_pnl(self) -> float | None:
         """The account's SESSION realized P&L, or None if IBKR won't say.
@@ -2436,6 +2471,7 @@ class Broker:
             if getattr(self, "order_ref", ""):
                 order.orderRef = self.order_ref
             trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
+            self.orders_sent = getattr(self, "orders_sent", 0) + 1
             print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}] "
                   f"-> {self.account}" + (" outsideRth" if outside_rth else ""))
         if not trades:

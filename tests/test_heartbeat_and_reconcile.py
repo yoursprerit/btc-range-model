@@ -154,6 +154,17 @@ def test_an_armed_kill_switch_is_not_an_alarm(tmp_path, ready, pings):
     assert [k for k, _ in pings] == ["start", "ok"]
 
 
+def test_an_armed_kill_switch_still_tells_a_human(tmp_path, ready, pings, monkeypatch):
+    """Not an alarm for the dead-man's switch (the task did fire), but never
+    silent: a switch thrown in a panic and forgotten loses every later session."""
+    sent = []
+    monkeypatch.setattr(acc, "alert", sent.append)
+    ks = tmp_path / "STOP"
+    ks.write_text("")
+    acc.main(["--execute", "--config", _runner_cfg(tmp_path, ks)])
+    assert len(sent) == 1 and "kill switch" in sent[0].lower() and "ACTIVE" in sent[0]
+
+
 def test_starting_after_the_cutoff_pings_fail(tmp_path, ready, pings, monkeypatch):
     monkeypatch.setattr(ic, "moc_entry_open", lambda now=None, cutoff=None: (False, "late"))
     assert acc.main(["--execute", "--config", _runner_cfg(tmp_path)]) == acc.EXIT_SKIPPED
