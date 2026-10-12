@@ -603,6 +603,20 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/212"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Live positions quote held names outside current sleeves",
+   "description": "The Live positions section now fetches spot quotes for any held symbol that is not a current sleeve (e.g. OIH after the V2 swap to XOP), instead of showing it unpriced with $0 value and no P&L.",
+   "impact": "A not-yet-sold retired holding is marked to market rather than excluded from P&L.",
+   "links": [
+    {
+     "label": "PR #213",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/213"
+    }
+   ]
   }
  ]
 }
