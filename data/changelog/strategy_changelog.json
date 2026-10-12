@@ -485,7 +485,12 @@
    "title": "Live executor: every gateway request has a deadline (no hang on a silent gateway)",
    "description": "Account-updates, positions, open-orders, quotes and contract lookups now run with a timeout instead of ib_async's wait-forever blocking calls; an account whose feed the gateway never serves falls back to live quotes, and a contract that cannot be resolved skips only that order.",
    "impact": "The first retry in the position cross-check (PR #202) called a blocking request and hung the preview on accounts whose account-updates the gateway does not serve.",
-   "links": []
+   "links": [
+    {
+     "label": "PR #204",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/204"
+    }
+   ]
   }
  ]
 }
