@@ -57,8 +57,20 @@
    "summary": "The first stamped logic generation: look-ahead-free, honest-fill sleeve retunes (dual-MA 25/100 gold with −3 % fixed stops, WGMI SMA50 + volatility filter, REMX 50/200 golden cross with a −5 % stop, the XLE crash shield) feeding a daily gated allocator that re-sized every held sleeve each day by anchor × entry-priority, water-filled to per-sleeve caps, with idle capital parked in SATA. Every published book is stamped with its logic version so old and new performance are never conflated.",
    "links": [
     {
-     "label": "PR #213",
-     "url": "https://github.com/yoursprerit/btc-range-model/pull/213"
+     "label": "PR #114 — V1 basis: look-ahead-free back-tests + honest-fill retunes (2026-07-25)",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/114"
+    },
+    {
+     "label": "PR #126 — strategy-version provenance, V1 stamped on every book (2026-07-31)",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/126"
+    },
+    {
+     "label": "PR #130 — V1 as-published record starts 2026-07-31",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/130"
+    },
+    {
+     "label": "app/strategy_version.py — version history",
+     "url": "https://github.com/yoursprerit/btc-range-model/blob/main/app/strategy_version.py"
     }
    ]
   }
@@ -598,7 +610,13 @@
    "kind": "ui",
    "title": "Live positions quote held names outside current sleeves",
    "description": "The Live positions section now fetches spot quotes for any held symbol that is not a current sleeve (e.g. OIH after the V2 swap to XOP), instead of showing it unpriced with $0 value and no P&L.",
-   "impact": "A not-yet-sold retired holding is marked to market rather than excluded from P&L."
+   "impact": "A not-yet-sold retired holding is marked to market rather than excluded from P&L.",
+   "links": [
+    {
+     "label": "PR #213",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/213"
+    }
+   ]
   }
  ]
 }
