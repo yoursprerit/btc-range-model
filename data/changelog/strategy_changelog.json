@@ -491,6 +491,15 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/204"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Live executor applies the 30 % SATA cap to books published before it",
+   "description": "A book without a signed sata_cap now gets the executor's 30 % default (excess stays cash), so a deploy cap can no longer push a pre-cap book to 75 % SATA; a book's own cap still wins and the fallback can be switched off.",
+   "impact": "First live preview on the pre-cap 40 %-SATA book: 25 % deploy cap -> SATA 75 %; now SATA 30 %, risk 25 %, cash 45 %.",
+   "links": []
   }
  ]
 }
