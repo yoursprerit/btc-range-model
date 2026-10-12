@@ -275,6 +275,13 @@ def get_spot(minute_bucket: str):
     return ov.fetch_spot()
 
 
+@st.cache_data(ttl=60, show_spinner=False, max_entries=4)
+def get_extra_spot(minute_bucket: str, symbols: tuple):
+    """Live quotes for held names that are not current sleeves (e.g. OIH after
+    the V2 swap to XOP), so a leftover holding is still marked to market."""
+    return ov.fetch_spot({s: s for s in symbols}) if symbols else {}
+
+
 @st.cache_data(ttl=60, show_spinner=False, max_entries=2)
 def get_sata_spot(minute_bucket: str):
     """Live SATA quote (price, day-change, P&L vs $100 par), refreshed ~1/min."""
@@ -2273,6 +2280,18 @@ with tab_live:
     _cp_default = 0 if _cp_c2 else _cp_opts.index(_CP_WF)
     _cp_marks = {r["key"]: {"price": r["last_close"], "dchg": r["dchg"]}
                  for r in results}
+    # an account can still hold a name no current sleeve trades (retired
+    # sleeve, not yet sold) — quote it too rather than leave it unpriced
+    _cp_extra = sorted({(p.get("symbol") or p.get("key") or "")
+                        for _rep in (_cp_ibkr, _cp_c2) if _rep
+                        for p in (_rep.get("positions") or [])}
+                       - set(_cp_marks) - {""})
+    try:
+        for _k, _q in get_extra_spot(_spot_ts, tuple(_cp_extra)).items():
+            if _q.get("price"):
+                _cp_marks[_k] = {"price": float(_q["price"]), "dchg": _q.get("dchg")}
+    except Exception:
+        pass
     _cp_books = get_published_books(_bucket())
 
     def _replay_positions_report():
