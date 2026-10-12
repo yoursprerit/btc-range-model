@@ -611,7 +611,12 @@
    "title": "Executed book explains unfilled orders",
    "description": "Each trade now records IBKR's own refusal/cancel message (broker_msg) when it does not fill, and the Executed book trades table shows the Reason (including SKIPPED-… causes) and Broker message columns.",
    "impact": "An order that fails (e.g. an IRA restriction) can be diagnosed from the book instead of the executor log.",
-   "links": []
+   "links": [
+    {
+     "label": "PR #223",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/223"
+    }
+   ]
   },
   {
    "version": "v2",
