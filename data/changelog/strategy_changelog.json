@@ -755,6 +755,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/222"
    }
   ]
+ },
+  {
+  "version": "v2",
+  "date": "2026-10-12",
+  "kind": "analytics",
+  "title": "Walk-forward replay: entry price of a sleeve added at the cut-over, and entry dates in Current Positions",
+  "description": "In the Combined view a sleeve V1 never held (XOP) took its entry price from the standalone V2 run, which could be years old, so the replay's Current Positions showed a stale cost and an inflated P&L. The spliced book now enters it at the last pre-cut close. Every Current Positions card also shows the date the position was opened (broker/replay date, else the engine's entry date tagged engine).",
+  "impact": "XOP replay cost moves from $70.62 (old standalone entry) to the 2026-10-08 close; its open P&L and share count are no longer overstated."
  }
  ]
 }

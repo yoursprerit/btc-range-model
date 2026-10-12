@@ -966,7 +966,21 @@ def _pos_meta(key: str, meta_by_key: dict) -> dict:
         kind=row.get("kind") or am.get("kind") or "core",
         parent=row.get("parent") or key,
         accent=row.get("accent") or "#94a3b8",
-        known=bool(row))
+        known=bool(row),
+        engine_entry=((row.get("pos") or {}).get("entry_date")
+                      if (row.get("pos") or {}).get("in_pos") else None))
+
+
+def _opened_line(r: dict, m: dict) -> str:
+    """The card's "since <date>" line: the broker's / replay's own open date
+    when it recorded one, else the sleeve engine's entry date for the signal
+    (tagged ``engine`` — the account's real fill date may differ), else a dash."""
+    d, tag = r.get("opened"), ""
+    if not d and m.get("engine_entry") is not None:
+        d, tag = eb._opened_date(m["engine_entry"]), " <span style='color:#94a3b8'>(engine)</span>"
+    if not d:
+        return "🗓️ opened <span style='color:#94a3b8'>—</span><br>"
+    return f"🗓️ opened <b>{pd.Timestamp(d):%b %d, %Y}</b>{tag}<br>"
 
 
 def _render_current_positions(cp: dict, meta_by_key: dict, *,
@@ -1064,6 +1078,7 @@ def _render_current_positions(cp: dict, meta_by_key: dict, *,
                     f"📍 <b>LONG</b> {r['shares']:,.0f} sh @ ${r['avg_cost']:,.2f} "
                     f"<span style='color:#94a3b8'>cost</span> · "
                     f"${r['cost_basis']:,.0f}<br>"
+                    f"{_opened_line(r, m)}"
                     f"P&amp;L <b style='color:{rc}'>{_pct(r['pnl_pct'], 2)}</b> "
                     f"<b style='color:{rc}'>({_money(r['pnl'])})</b> · value "
                     f"${r['market_value']:,.0f}</div>",
@@ -2348,7 +2363,8 @@ with tab_live:
                 continue
             _poss.append({"key": _k, "symbol": _k,
                           "shares": _wt * portfolio_value / float(_ep),
-                          "avg_cost": float(_ep), "market_price": 0.0})
+                          "avg_cost": float(_ep), "market_price": 0.0,
+                          "opened": _p.get("entry_date")})
         return {"schema": eb.SCHEMA, "as_of": str(_wf["weights"].index[-1].date()),
                 "generated_at_utc": "", "account_mode": "replay",
                 "mode": "simulated", "positions": _poss}

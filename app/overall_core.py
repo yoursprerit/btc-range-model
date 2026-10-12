@@ -860,7 +860,33 @@ def combine_results(res_v1: list[dict], res_v2: list[dict],
                      trade_log=rr["trade_log"], in_pos_now=rr["in_pos_now"],
                      version_series=rr["version_series"])
         res["r"] = rdict
+        res["pos"] = _rebase_entry(res.get("pos"), rr.get("entry_px"), rr.get("entry_date"))
         out.append(res)
+    return out
+
+
+def _rebase_entry(pos: dict | None, entry_px, entry_date) -> dict | None:
+    """``pos`` with its entry moved to the SPLICED book's entry (``combine_runs``
+    re-bases a position V2 held before the cut-over onto the last pre-cut close
+    when V1 was flat).  Entry-relative fields — open P&L, days held, a fixed
+    stop's price and distance — follow it; a trailing stop is price-based and
+    stays put.  Unchanged when the entry did not move."""
+    if not pos or not pos.get("in_pos") or not pos.get("entry_px") or not entry_px:
+        return pos
+    old_px = float(pos["entry_px"])
+    if abs(float(entry_px) - old_px) < 1e-9:
+        return pos
+    ratio = float(entry_px) / old_px
+    out = dict(pos, entry_px=float(entry_px), entry_date=entry_date)
+    if pos.get("upnl") is not None:
+        out["upnl"] = ((1 + pos["upnl"] / 100.0) / ratio - 1) * 100
+    if pos.get("days") is not None and pos.get("entry_date") is not None:
+        out["days"] = max(0, int(pos["days"]) - (pd.Timestamp(entry_date)
+                                               - pd.Timestamp(pos["entry_date"])).days)
+    if pos.get("stop_px") and not pos.get("trail_px"):
+        out["stop_px"] = float(pos["stop_px"]) * ratio
+        if pos.get("dist_stop") is not None:
+            out["dist_stop"] = ((1 + pos["dist_stop"] / 100.0) / ratio - 1) * 100
     return out
 
 
