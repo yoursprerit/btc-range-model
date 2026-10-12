@@ -108,7 +108,7 @@ def test_fingerprint_changes_when_the_book_is_republished():
 # ── end to end (network stubbed) ────────────────────────────────────────────
 def test_execute_sends_once_then_skips_the_same_book(tmp_path, monkeypatch):
     import json
-    book = {"schema": "overall-target-book/v1", "as_of": None,
+    book = {"schema": "overall-target-book/v1", "book_mode": "paper", "as_of": None,
             "weights": {"XLE": 0.5}, "exec_price": {"XLE": 50.0}}
     import pandas as pd
     book["as_of"] = str(pd.Timestamp.now().normalize().date())
@@ -149,7 +149,7 @@ def test_missing_credentials_abort_without_capital(tmp_path, monkeypatch, capsys
     import json
     import pandas as pd
     f = tmp_path / "book.json"
-    f.write_text(json.dumps({"schema": "overall-target-book/v1",
+    f.write_text(json.dumps({"schema": "overall-target-book/v1", "book_mode": "paper",
                              "as_of": str(pd.Timestamp.now().normalize().date()),
                              "weights": {"XLE": 0.5}, "exec_price": {"XLE": 50.0}}))
     monkeypatch.delenv("C2_API_KEY", raising=False)
@@ -213,7 +213,7 @@ def test_unchanged_book_sends_nothing_but_is_recorded(tmp_path, monkeypatch):
     import json
     import pandas as pd
     f = tmp_path / "book.json"
-    f.write_text(json.dumps({"schema": "overall-target-book/v1",
+    f.write_text(json.dumps({"schema": "overall-target-book/v1", "book_mode": "paper",
                              "as_of": str(pd.Timestamp.now().normalize().date()),
                              "weights": {"XLE": 0.5}, "exec_price": {"XLE": 50.0}}))
     state = tmp_path / "state.json"
@@ -298,7 +298,7 @@ def test_a_rejected_send_archives_nothing(tmp_path, monkeypatch):
     import json
     import pandas as pd
     f = tmp_path / "book.json"
-    f.write_text(json.dumps({"schema": "overall-target-book/v1",
+    f.write_text(json.dumps({"schema": "overall-target-book/v1", "book_mode": "paper",
                              "as_of": str(pd.Timestamp.now().normalize().date()),
                              "weights": {"XLE": 0.5}, "exec_price": {"XLE": 50.0}}))
     monkeypatch.setattr(pc, "set_desired_positions", lambda key, body: {
@@ -405,3 +405,16 @@ def test_first_read_after_the_close_is_rewritten_once():
     later = dict(close, fetched_at_utc="2026-09-28T20:31:00+00:00",
                  model_account_value=48_610.0)
     assert not pc.snapshot_changed(close, later)
+
+
+def test_c2_accepts_only_the_paper_labelled_book():
+    assert pc.check_book_mode({"book_mode": "paper"})[0]
+    ok, why = pc.check_book_mode({"book_mode": "live"})
+    assert not ok and "live" in why
+    assert not pc.check_book_mode({})[0]
+
+
+def test_paper_book_with_a_sata_weight_is_sized_normally():
+    positions, dropped = pc.build_positions({"BTC": 0.5, "SATA": 0.5},
+                                            {"BTC": 100.0, "SATA": 25.0}, 100_000)
+    assert {p["symbol"] for p in positions} == {"IBIT", "SATA"} and not dropped

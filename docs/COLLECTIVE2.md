@@ -91,13 +91,16 @@ C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py --snapshot
 | Trading day + regular hours | C2 cannot adjust positions while the market is shut (`--outside-rth` overrides the hours). |
 | Once per book | `data/overall/c2_publish_state.json` records the last book sent; a re-run skips it (`--force` re-sends), so intraday price moves cannot churn the model account. |
 | No-trade band (`--band`, default 1% of capital) | Same as the executor's `IBKR_BAND`: a name C2 already holds keeps its quantity when the resize would move less than 1% of capital, so an unchanged book places no orders. New positions and exits always go through; the band is dropped for a run if holding would exceed 100% of capital. Over the last 15 archived books it cut C2 orders from 63 to 29. |
+| Paper label only | `check_book_mode` refuses a book whose `book_mode` is not `paper`. |
 | Rejected signals fail the run | A C2 rejection (e.g. an unsupported symbol) exits non-zero and is not recorded as sent. |
 
 ## Notes
 
 * The BTC and ETH sleeves trade through **IBIT** / **ETHA**, as on IBKR
   (`scripts/ibkr_symbols.py`).
-* Use the **paper** book (the default). The live book parks idle cash in SATA,
-  which is not part of the published strategy.
+* C2 mirrors the **paper** book only; `publish_c2.py` aborts on any other
+  `book_mode`. The paper and live books now carry the **same weights**, idle
+  cash parked in SATA up to the V2 cap included, so C2 buys SATA like the live
+  account does. They differ only in the `book_mode` label.
 * Set the C2 strategy's starting capital high enough that the smallest weights
   still size to at least one share; dropped names are listed in the output.

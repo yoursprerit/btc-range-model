@@ -128,6 +128,17 @@ def build_positions(weights: dict[str, float], exec_price: dict[str, float],
     return positions, dropped
 
 
+def check_book_mode(payload: dict) -> tuple[bool, str]:
+    """(ok, reason) — C2 mirrors the PAPER book only.  The paper and live books
+    carry the same weights (SATA included) and differ in ``book_mode``; a book
+    labelled anything else (e.g. ``live``, or no label) is refused so the two
+    destinations cannot be swapped by accident."""
+    mode = payload.get("book_mode")
+    if mode != "paper":
+        return False, f"book_mode={mode!r}, not 'paper' — C2 mirrors the paper book only"
+    return True, "paper book"
+
+
 def check_positions(weights: dict[str, float], positions: list[dict],
                     allow_flat: bool) -> tuple[bool, str]:
     """(ok, reason) — refuse any request that would wrongly liquidate the strategy.
@@ -607,6 +618,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"book: {why} · profile {payload.get('profile')} · mode {payload.get('book_mode')}")
     if not ok:
         print("ABORT: book failed validation")
+        return 2
+    ok, why = check_book_mode(payload)
+    if not ok:
+        print(f"ABORT: {why}")
         return 2
 
     if args.execute:

@@ -148,8 +148,8 @@ def build_payload(*, as_of: str, profile: str, weights: dict[str, float],
 
     ``actions`` are trimmed to the fields the executor / audit log care about, so
     the artifact stays compact and stable regardless of engine-internal extras.
-    ``book_mode`` is ``paper`` (idle → cash) or ``live`` (idle → a SATA position
-    up to ``sata_cap`` of the book, the excess in ``cash_weight``).  ``sata_cap``
+    ``book_mode`` labels the destination: ``paper`` or ``live``. Both published
+    books carry the same weights (idle → a SATA position up to ``sata_cap`` of the book, the excess in ``cash_weight``).  ``sata_cap``
     (Strategy Logic V2) is stamped into the signed payload when set, so every
     consumer — the as-published replay, the executor — reads the cap the book
     was built under; books published before the cap carry none.

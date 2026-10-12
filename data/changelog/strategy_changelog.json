@@ -575,6 +575,14 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/211"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Paper book carries the SATA leg; C2 refuses non-paper books",
+   "description": "The published paper book now has the same weights as the live book, idle cash parked in SATA up to the V2 cap; the two differ only in book_mode. publish_c2.py aborts unless book_mode is 'paper'.",
+   "impact": "C2 and the paper record hold the same book as live (including the SATA coupon) while the live/paper separation guards stay intact."
   }
  ]
 }
