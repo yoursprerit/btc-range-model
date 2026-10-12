@@ -605,6 +605,11 @@ def main() -> int:
     if os.environ.get("IBKR_TRADING_DISABLED") or (
             args.kill_switch_file and Path(args.kill_switch_file).exists()):
         print("ABORT: trading is DISABLED (kill switch active). No orders placed.")
+        # A switch thrown in a panic and forgotten silently turns every later
+        # day into a no-trade day; say so each run until someone clears it.
+        ibs.send_alert("🛑 Executor skipped: the kill switch is ACTIVE "
+                       f"({args.kill_switch_file or 'IBKR_TRADING_DISABLED'}). "
+                       "No orders were placed — clear it to resume trading.")
         return 0
 
     account_kwargs = dict(account_mode=args.account_mode,
@@ -714,6 +719,8 @@ def main() -> int:
                                     Guards.from_args(args))
         if not ok_pre:
             print(f"ABORT: {why_pre} No orders placed.")
+            if "excess liquidity" in why_pre:
+                ibs.send_alert(f"🔴 {broker.account}: run ABORTED — {why_pre}.")
             return EXIT_ABORT
         fills: list[dict] = []
         if orders:
@@ -746,6 +753,11 @@ def main() -> int:
                                      outside_rth=args.outside_rth,
                                      allow_margin=args.allow_margin,
                                      moc_strict=args.strict_moc)
+                none_sent = ibs.nothing_sent(fills, len(orders))
+                if none_sent:
+                    print(f"\n!! {none_sent}")
+                    ibs.send_alert(f"⚠️ {broker.account}: {none_sent}. The account "
+                                   "was left as it was — see the run log for why.")
             except ic.MocUnavailable as e:
                 # Raised before any order was built — release the lock so a
                 # legitimate re-run (if still before the cutoff) is not blocked.
@@ -755,6 +767,29 @@ def main() -> int:
                     pass
                 print(f"SKIP SESSION: {e}")
                 return EXIT_MOC_SKIPPED
+            except Exception as e:
+                sent = getattr(broker, "orders_sent", 0)
+                if not sent:
+                    raise                       # nothing reached the broker: as before
+                # The run died AFTER orders were transmitted — typically the
+                # gateway dropped between the sell leg and the buy leg. The
+                # account is now somewhere between the old book and the new
+                # one, and the send lock is deliberately kept so a re-run
+                # cannot double up. Say so, and record what really filled.
+                msg = (f"PARTIAL RUN on {broker.account}: crashed after {sent} "
+                       f"order(s) were sent ({type(e).__name__}: {str(e)[:200]}). "
+                       "The account may hold sells without their buys — "
+                       "reconcile in TWS; nothing was re-sent.")
+                print(f"\n!! {msg}")
+                ibs.send_alert("🔴 " + msg)
+                try:
+                    if not args.no_report:
+                        _write_report(broker, payload, "execute",
+                                      broker.day_fills_by_symbol(), report_out,
+                                      secret, args.account_mode)
+                except Exception as e2:
+                    print(f"  (could not write the partial-run report: {e2})")
+                return EXIT_POST_TRADE
         if not args.no_report:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,
@@ -765,6 +800,8 @@ def main() -> int:
             rc = EXIT_POST_TRADE
             print(f"\n!! POST-TRADE CHECK FAILED — {why_post}. Nothing was "
                   "re-sent; reconcile the account in TWS.")
+            ibs.send_alert(f"🔴 {broker.account}: orders went out but the account "
+                           f"did NOT land on target — {why_post}. Reconcile in TWS.")
         if args.strict_moc:
             open_legs = [f for f in fills
                          if not str(f.get("status", "")).startswith("SKIPPED")

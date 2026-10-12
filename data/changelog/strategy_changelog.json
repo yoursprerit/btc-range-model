@@ -645,6 +645,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/215"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-12",
+  "kind": "execution",
+  "title": "Executor run-health: partial-run alert, margin-call check, forgotten kill switch, all-legs-withheld alert",
+  "description": "The executor now (1) alerts loudly and records the real fills when a run dies after orders were transmitted (sells without their buys), keeping the send lock so nothing is re-sent; (2) refuses to trade, with an alert, when the account's excess liquidity is at or below zero or under 5 % of net liquidation, so it never fights IBKR's own margin system (--min-margin-cushion / IBKR_MIN_MARGIN_CUSHION, 0 disables, unreadable passes); (3) alerts every run while the kill switch is armed instead of skipping silently; (4) alerts when orders were planned but every leg was withheld; (5) treats a halted SPY as market-wide stress (buys withheld).",
+  "impact": "Closes the silent failure modes around the market-stress guards: the guards decide what may be sent, these make sure a half-done, blocked or withheld run is reported rather than looking like a quiet success. No change to an ordinary day.",
+  "links": [
+   {
+    "label": "PR #216",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/216"
+   }
+  ]
  }
  ]
 }
