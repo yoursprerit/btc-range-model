@@ -1499,6 +1499,26 @@ def skipped_result(o: Order, status: str, why: str, qty: float | None = None) ->
                 limit_price=0.0, reason=f"{o.reason} [{why}]")
 
 
+def broker_message(trade, status: str | None = None) -> str:
+    """The broker's last explanatory message for an order that did not fill.
+
+    IBKR states why it refused or cancelled an order (restricted product, IRA
+    rule, no permission, price outside the collar…) in the trade log; the
+    execution report used to drop it.  Empty for a clean fill, or when the
+    broker said nothing."""
+    try:
+        st = status if status is not None else trade.orderStatus.status
+        if st == "Filled":
+            return ""
+        for entry in reversed(getattr(trade, "log", None) or []):
+            msg = (getattr(entry, "message", "") or "").strip()
+            if msg:
+                return msg[:300]
+    except Exception:
+        pass
+    return ""
+
+
 def moc_rejections(trades) -> list[tuple[str, str, str]]:
     """(symbol, status, last log message) for MOC orders the broker already
     refused or cancelled — visible within seconds of submission, long before
@@ -2599,7 +2619,8 @@ class Broker:
                                 qty=float(qty), price=float(o.price), status=st,
                                 filled=filled, avg_fill_price=avg,
                                 order_type=used, limit_price=lmt,
-                                reason=o.reason))
+                                reason=o.reason,
+                                broker_msg=broker_message(t, st)))
         return results
 
     def disconnect(self) -> None:

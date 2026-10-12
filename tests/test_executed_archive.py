@@ -272,3 +272,17 @@ def test_the_expected_session_flips_at_the_slot_plus_grace():
 def test_a_wrong_schema_is_still_refused():
     ok, why = eb.validate({"schema": "something-else/v1"}, pd.Timestamp("2026-08-24"))
     assert not ok and "unexpected schema" in why
+
+
+def test_broker_msg_round_trips_and_defaults_empty():
+    import executed_book as eb
+    p = eb.build_payload(
+        as_of="2026-10-12", profile="Balanced", mode="execute", account="DU1",
+        net_liq=1.0, cash=0.0, positions=[],
+        trades=[{"key": "XLE", "symbol": "XLE", "action": "BUY", "qty": 5,
+                 "price": 90, "status": "Inactive",
+                 "broker_msg": "Order rejected - reason: restricted"},
+                {"key": "XOP", "symbol": "XOP", "action": "BUY", "qty": 1,
+                 "price": 10, "status": "Filled"}])
+    assert p["trades"][0]["broker_msg"].startswith("Order rejected")
+    assert p["trades"][1]["broker_msg"] == ""

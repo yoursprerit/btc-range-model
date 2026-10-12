@@ -18,7 +18,8 @@ Schema ``executed-book/v1``:
       "cash": 42000.0,
       "realized_pnl": 127.6,       # account, this session (null = not recorded)
       "trades":    [ {key, symbol, action, qty, price, value, status, filled,
-                      avg_fill_price, order_type, limit_price, reason} … ],
+                      avg_fill_price, order_type, limit_price, reason,
+                      broker_msg} … ],
       "positions": [ {key, symbol, shares, avg_cost, market_price, market_value,
                       unrealized_pnl, realized_pnl} … ],
       "signature": { "alg": "HMAC-SHA256", "value": "…" }   # optional
@@ -107,6 +108,9 @@ def build_payload(*, as_of: str, profile: str, mode: str, account: str,
             "order_type": t.get("order_type") or "",
             "limit_price": float(t.get("limit_price") or 0.0),
             "reason": t.get("reason"),
+            # IBKR's own explanation for an order that did not fill (refusal /
+            # cancel text). Empty for fills; older reports omit it.
+            "broker_msg": t.get("broker_msg") or "",
         }
 
     def _pos(p: dict) -> dict:
