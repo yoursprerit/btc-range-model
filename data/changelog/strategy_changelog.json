@@ -463,6 +463,20 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/201"
     }
    ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Live executor: whole-share sells never exceed holdings; tolerates a slow account subscription",
+   "description": "Whole-share MOC plans round sells down (never above what the account holds) and report the fractional dust they cannot close; the positions cross-check retries a slow account-updates subscription and falls back to valuing positions at live quotes instead of refusing a good account.",
+   "impact": "Found in the first multi-account preview: a 22.8672-share close was sent as 23 shares, and two of three accounts aborted with 'positions read explains $0'.",
+   "links": [
+    {
+     "label": "PR #202",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/202"
+    }
+   ]
   }
  ]
 }
