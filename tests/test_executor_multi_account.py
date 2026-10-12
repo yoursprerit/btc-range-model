@@ -191,3 +191,59 @@ def test_a_live_run_refuses_the_paper_book(env, monkeypatch):
     assert _run(monkeypatch, _argv(book)) == ex.EXIT_ABORT
     assert _FakeBroker.instances == []
     assert _run(monkeypatch, _argv(book, "--allow-paper-book")) == 0
+
+
+# ── the deploy cap and the V2 SATA cap ──────────────────────────────────────
+def _book(path, weights, cash, sata_cap=None):
+    d = json.loads(path.read_text())
+    d.update(weights=weights, cash_weight=cash,
+             exec_price={k: 100.0 for k in weights})
+    if sata_cap is None:
+        d.pop("sata_cap", None)
+    else:
+        d["sata_cap"] = sata_cap
+    path.write_text(json.dumps(d))
+
+
+def _planned(monkeypatch, book, *extra):
+    assert _run(monkeypatch, _argv(book, "--max-deploy-frac", "0.25", *extra)) == 0
+    (orders, _kw), = _FakeBroker.instances[-1].placed
+    return {o.symbol: o.qty * o.price / 100_000.0 for o in orders}
+
+
+def test_deploy_cap_frees_weight_into_sata_only_up_to_the_books_cap(env, monkeypatch):
+    """Book built under the V2 SATA cap: risk 60% -> 25%, SATA stays at its 30%
+    cap, the rest (45%) is cash -- NOT 75% in SATA."""
+    _, book = env
+    _book(book, {"GDX": 0.60, "SATA": 0.30}, 0.10, sata_cap=0.30)
+    got = _planned(monkeypatch, book)
+    assert got["GDX"] == pytest.approx(0.25, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
+    assert sum(got.values()) == pytest.approx(0.55, abs=0.01)    # 45% left in cash
+
+
+def test_deploy_cap_tops_sata_up_to_its_cap_and_no_further(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.80, "SATA": 0.10}, 0.10, sata_cap=0.30)
+    got = _planned(monkeypatch, book)
+    assert got["GDX"] == pytest.approx(0.25, abs=0.005)
+    # freed 55% would fill SATA 10% -> 65%; the cap stops it at 30%
+    assert got["SATA"] == pytest.approx(0.30, abs=0.005)
+
+
+def test_a_pre_cap_book_keeps_the_old_behaviour(env, monkeypatch):
+    """A book built before the cap carries no sata_cap: the freed weight parks
+    in SATA as it always did (this is what the first preview, on the 40%-SATA
+    book, showed)."""
+    _, book = env
+    _book(book, {"GDX": 0.60, "SATA": 0.40}, 0.0, sata_cap=None)
+    got = _planned(monkeypatch, book)
+    assert got["GDX"] == pytest.approx(0.25, abs=0.005)
+    assert got["SATA"] == pytest.approx(0.75, abs=0.005)
+
+
+def test_a_paper_style_book_without_sata_frees_into_cash(env, monkeypatch):
+    _, book = env
+    _book(book, {"GDX": 0.60}, 0.40)
+    got = _planned(monkeypatch, book)
+    assert got == {"GDX": pytest.approx(0.25, abs=0.005)}
