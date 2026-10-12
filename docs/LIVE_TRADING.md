@@ -207,7 +207,7 @@ in the same run. Keep that on for live: it is the only thing standing between a
 bad quote and an unbounded fill price, and it costs nothing when the book is
 normal. `IBKR_ORDER_TYPE=moc` in `executor-live.env` switches to the 4:00 PM ET
 closing auction (see IBKR_PAPER_TRADING.md § Order routing) — if you do, keep
-`TimeoutStartSec` above ~35 min so the run isn't killed mid-auction.
+`TimeoutStartSec` above the 60-minute MOC wait ceiling (it ships at 4500) so the run isn't killed mid-auction.
 
 ---
 

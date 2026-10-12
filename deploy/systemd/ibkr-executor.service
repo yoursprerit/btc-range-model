@@ -30,4 +30,4 @@ ExecStart=/home/ubuntu/btc-range-model/scripts/ibkr_execute_daily.sh
 # submits at 2:30 PM CT and then holds the connection until the 4:00 PM ET
 # auction prints (~32 min), so the old 900 s ceiling would have killed the run
 # mid-auction, leaving orders live and no execution report written.
-TimeoutStartSec=3600
+TimeoutStartSec=4500

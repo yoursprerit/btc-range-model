@@ -125,7 +125,13 @@ ET_TZ = "America/New_York"
 # After the auction prints, give IBKR a moment to report the fills back.
 MOC_CLOSE_BUFFER_S = 120.0
 # Hard ceiling on the post-submit wait, so a stuck run can never hang forever.
-MOC_MAX_WAIT_S = 2400.0
+# It must cover the whole stretch from the scheduled start to the auction print:
+# the 2:15 PM CT task (3:15 PM ET) places its orders about 2 minutes in and then
+# waits ~44 minutes for the 4:00 PM ET close plus the reporting buffer. The old
+# 40-minute ceiling expired ~3 minutes BEFORE the auction, so the execution
+# report was written while every leg still read "Submitted" and the run exited
+# "not fully filled". 60 minutes covers a start as early as ~3:00 PM ET.
+MOC_MAX_WAIT_S = 3600.0
 
 # US equity-market full-day closures (NYSE/Nasdaq).  Extend as needed.  The
 # publisher workflow runs EVERY day (BTC trades on weekends/holidays too), so
@@ -1172,6 +1178,16 @@ def moc_wait_seconds(now=None, buffer_s: float = MOC_CLOSE_BUFFER_S,
     close = et.normalize() + pd.Timedelta(hours=h, minutes=m)
     secs = (close - et).total_seconds() + buffer_s
     return float(min(max(secs, 0.0), max_wait_s))
+
+
+def moc_wait_capped(now=None, buffer_s: float = MOC_CLOSE_BUFFER_S,
+                    max_wait_s: float = MOC_MAX_WAIT_S) -> bool:
+    """True when :func:`moc_wait_seconds` would stop waiting BEFORE the auction
+    has printed (the ceiling bit) — the report would then be written pre-fill."""
+    et = _et_now(now)
+    h, m = session_close_et(et)
+    close = et.normalize() + pd.Timedelta(hours=h, minutes=m)
+    return ((close - et).total_seconds() + buffer_s) > max_wait_s
 
 
 def print_plan(orders: list[Order], net_liq: float) -> None:
@@ -2551,6 +2567,11 @@ class Broker:
             deadline = moc_wait_seconds(now)
             print(f"    waiting {deadline/60:.0f} min for the closing "
                   f"auction to print…")
+            if moc_wait_capped(now):
+                print(f"    !! the {MOC_MAX_WAIT_S/60:.0f}-minute wait ceiling ends BEFORE "
+                      "the auction prints (this run started very early): the report "
+                      "will be written before the fills — the after-the-close "
+                      "reconcile task restates it from the broker's real fills.")
         else:
             deadline = wait              # wait for this leg before the next
         ticks = 0

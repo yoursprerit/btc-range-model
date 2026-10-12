@@ -192,8 +192,8 @@ Two VM-specific consequences:
   `IBKR_SLIPPAGE_CAP=0.015`.
 - **`IBKR_ORDER_TYPE=moc`** fills in the 4:00 PM ET closing auction — the price
   the backtest books against — but the executor then **holds the connection
-  ~32 minutes** waiting for the print. Keep `TimeoutStartSec` in
-  `ibkr-executor.service` comfortably above that; it ships at `3600`. MOC also
+  ~32 minutes** waiting for the print (the wait ceiling is 60 minutes). Keep
+  `TimeoutStartSec` in `ibkr-executor.service` above that; it ships at `4500`. MOC also
   requires entry before the **15:50 ET** cutoff (the 2:30-PM-CT slot clears it by
   20 min; past it the executor falls back to a marketable limit) and accepts
   **whole shares only** — `--fractional` / `IBKR_EXTRA=--fractional` is ignored
