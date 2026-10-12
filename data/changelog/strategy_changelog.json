@@ -631,6 +631,15 @@
      "url": "https://github.com/yoursprerit/btc-range-model/pull/214"
     }
    ]
-  }
+  },
+ {
+  "version": "v2",
+  "date": "2026-10-12",
+  "kind": "execution",
+  "title": "Executor guards for broken markets: quote sanity, stress gate, fill tripwire, NAV brake, live kill switch",
+  "description": "The IBKR executor now (1) skips a leg whose live quote is halted, crossed or too wide (buys 2 %, sells 4 %) and never escalates an unfilled limit into a MARKET order against such a book; (2) withholds all buys - sells still go - when SPY is more than 8 % from its prior close, VIX is above 50, or a single ordered name has moved more than 40 %; (3) stops sending buys and alerts when a sell fills more than 1 % through the touch it was priced off; (4) runs de-risk-only when net liquidation is more than 15 % below the previous execution report; (5) re-reads the kill switch between orders and cancels orders still working. Every limit is a flag/env var and 0 turns it off; unmeasurable inputs (no VIX feed, no quote) never block a run.",
+  "impact": "Protects against bad prices and catastrophic-day execution without changing an ordinary day: thresholds are set to stay silent on normal volatility (the April-2025 VIX peak close was about 52).",
+  "links": []
+ }
  ]
 }

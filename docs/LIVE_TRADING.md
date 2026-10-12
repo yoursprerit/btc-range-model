@@ -43,6 +43,27 @@ Cloud publisher → target_book.json (paper) + target_book_live.json (live)
 All the paper guards still apply too: signature verification, freshness, weekend/
 holiday skip, and the no-trade band.
 
+### Market-stress & execution-quality guards
+
+The guards above stop a wrong book or a wrong share count. These stop a run from
+trading into a market that is broken *right now*. Each is a flag with an
+environment fallback, `0` switches it off, and the defaults are set to stay
+silent on an ordinary bad day. Anything that cannot be measured (no VIX feed, no
+quote) passes — a missing data subscription never blocks a rebalance.
+
+| Guard | Flag / env | Default | What it does |
+|-------|-----------|---------|--------------|
+| **Quote sanity** | `--max-spread` / `IBKR_MAX_SPREAD` | 2 % (sells 4 %) | Just before each order: a halted, crossed or too-wide book skips *that leg* (`SKIPPED-UNSAFE-QUOTE`, alert). An unfilled limit is also never escalated to a MARKET order into such a book. Outside RTH only a halt counts. |
+| **Stress gate** | `--stress-spy-move`, `--stress-vix`, `--stress-name-move` / `IBKR_STRESS_*` | SPY ±8 %, VIX 50, name ±40 % | Withholds **buys** (`SKIPPED-STRESS`, alert); sells always proceed. Shown in the pre-flight, so a dry-run previews it. |
+| **Fill tripwire** | `--max-fill-slippage` / `IBKR_MAX_FILL_SLIPPAGE` | 1 % through the touch | If a sell fills worse than this against the touch it was priced off, the buys are not sent (`SKIPPED-TRIPWIRE`, alert). Not applied to MOC. |
+| **NAV brake** | `--max-nav-drop` / `IBKR_MAX_NAV_DROP` | 15 % | Net-liq more than this below the previous execution report (≤ 7 days old) → de-risk only. A large withdrawal trips it too; the alert says so. |
+| **Live kill switch** | `--kill-switch-file` / `IBKR_TRADING_DISABLED` | — | Now also re-read *between orders*: remaining orders are skipped (`SKIPPED-KILLSWITCH`), orders still working are cancelled, nothing is escalated. |
+
+A withheld buy leaves the account under-invested until the next run, and the
+post-trade check will say so (exit 5) — that is the intended loud outcome, not a
+failure to fix. To force a withheld trade, fix the cause or re-run with the
+relevant limit raised or `0`.
+
 ### The guards added after the 2026-08-18 incident
 
 On 2026-08-18 the **paper** account was bought four times over: three runs each
