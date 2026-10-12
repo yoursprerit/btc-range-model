@@ -762,7 +762,13 @@
   "kind": "ui",
   "title": "Overall: cut CPU use to stop Streamlit Cloud throttling",
   "description": "The Overall page's auto-refresh now ticks every 120s instead of 45s, pauses after 30 minutes without a click (resuming on the next interaction), and renders only the selected tab on each run instead of all four. No signal, allocation or P&L logic changed.",
-  "impact": "Streamlit Community Cloud throttled the app for CPU; every open tab re-executed the whole page, including ~1,000 lines of hidden-tab charts, every 45s."
+  "impact": "Streamlit Community Cloud throttled the app for CPU; every open tab re-executed the whole page, including ~1,000 lines of hidden-tab charts, every 45s.",
+  "links": [
+   {
+    "label": "PR #224",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+   }
+  ]
  },
  {
   "version": "v2",
@@ -770,14 +776,26 @@
   "kind": "execution",
   "title": "Overall: live cockpit loads the CI-built strategy results",
   "description": "The daily snapshot build now also stores the V1 and V2 per-instrument strategy results, and the Overall page loads them instead of re-running every instrument's engine in the web process (the 30–60s CPU spike every 30 minutes). It falls back to computing live if the snapshot is missing, stale, built by different code, or the pinned data changed since the build; the Recompute-live toggle and the freshness-audit retry also bypass it. No signal or allocation logic changed.",
-  "impact": "Removes the heaviest CPU job in the Streamlit Cloud container (~22s of CPU per generation per cache expiry)."
+  "impact": "Removes the heaviest CPU job in the Streamlit Cloud container (~22s of CPU per generation per cache expiry).",
+  "links": [
+   {
+    "label": "PR #224",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+   }
+  ]
  },
  {
   "version": "v2",
   "date": "2026-10-12",
   "kind": "ui",
   "title": "BTC page: stop the 60-second reload loop when idle",
-  "description": "The BTC page re-ran its whole script every 60s forever, holding a server thread asleep in between. It now stops after 30 minutes without a click and resumes on the next interaction."
+  "description": "The BTC page re-ran its whole script every 60s forever, holding a server thread asleep in between. It now stops after 30 minutes without a click and resumes on the next interaction.",
+  "links": [
+   {
+    "label": "PR #224",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+   }
+  ]
  },
  {
   "version": "v2",
@@ -785,7 +803,13 @@
   "kind": "data",
   "title": "P&L snapshot moves off main and shrinks 3x",
   "description": "The daily P&L/results snapshot is now xz-compressed (about 1 MB instead of 2.9 MB gzip) and published to a force-pushed single-commit data-snapshots branch instead of being committed to main; the app downloads it every 30 minutes and still falls back to computing live if it is missing or stale. No signal or allocation logic changed.",
-  "impact": "Stops ~25–50 MB/month of unreclaimable binary growth in the repository history."
+  "impact": "Stops ~25–50 MB/month of unreclaimable binary growth in the repository history.",
+  "links": [
+   {
+    "label": "PR #224",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+   }
+  ]
  }
  ]
 }
