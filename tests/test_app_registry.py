@@ -28,12 +28,12 @@ _SELECTOR_FILES = [
     *(_ROOT / "app" / n for n in (
         "overall_app.py", "ticker_app.py", "daily_audit_app.py", "health_app.py",
         "target_book_app.py", "executed_book_app.py", "assistant_app.py",
-        "leveraged_app.py")),
+        "leveraged_app.py", "changelog_app.py")),
 ]
 
 #: The apps that are not config-driven tickers, in sidebar order.
 _FIXED = ["OVERALL", "BTC", "GLDM", "GDXM", "LEVERAGED", "DAILYAUDIT",
-          "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT"]
+          "HEALTH", "TARGETBOOK", "EXECUTEDBOOK", "ASSISTANT", "CHANGELOG"]
 
 _LIST_RE = re.compile(
     r"_ALL_APPS\s*=\s*\((\[[^\]]*\])\s*\+\s*ticker_config\.APP_KEYS\s*\+\s*(\[[^\]]*\])\)",

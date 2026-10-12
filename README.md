@@ -54,6 +54,7 @@ model and backtest machinery.
 | 📋 **Target Book (IBKR)** | `app/target_book_app.py` | Human-readable viewer for the signed target-allocation artifact the rebalancer trades. |
 | ✅ **Executed Book** | `app/executed_book_app.py` | Post-rebalance report: trades executed + current IBKR positions vs target, with the **realised P&L** each run banked. A **🕰️ Historical** tab replays any earlier run by date from `data/overall/executed_archive/`. |
 | 🤖 **AI Assistant** | `app/assistant_app.py` | Chat that answers questions about the numbers on any tab, the calculations behind them and the design decisions in this repo — grounded in the committed artifacts plus read-only search over the working tree. See **[AI Assistant](#-ai-assistant)**. |
+| 📜 **Strategy Change Log** | `app/changelog_app.py` | What changed in the strategy, **under which version, and when** — Strategy Logic V2 (current) and V1 with the days they were in force, links to the GitHub pull requests that introduced them, and a dated log of every change (each change has its own release date, even inside one version). The log is data — `data/changelog/strategy_changelog.json` — and every future change is added under its version (see `CLAUDE.md`). |
 
 Each **signal app** produces **one** signal but may trade several instruments
 off it — its 1× primary plus higher-beta / leveraged siblings, exactly as a desk
@@ -558,6 +559,7 @@ mode + guards) · **[`docs/option_c_architecture.md`](docs/option_c_architecture
 | Overall strategy — walk-forward performance | [`OVERALL_OOS_WALKFORWARD_EVAL.md`](OVERALL_OOS_WALKFORWARD_EVAL.md) |
 | Overall strategy — Balanced crypto-cluster split (baseline vs new replay) | [`CRYPTO_CLUSTER_MIX_EVAL.md`](CRYPTO_CLUSTER_MIX_EVAL.md) · `scripts/eval_cluster_mix.py` |
 | Overall strategy — SATA cap (uncapped vs capped replay) | [`SATA_CAP_EVAL.md`](SATA_CAP_EVAL.md) · `scripts/eval_sata_cap.py` |
+| Strategy change log — every change under its version and date | the 📜 **Strategy Change Log** page · `data/changelog/strategy_changelog.json` |
 | Strategy decay monitor (🩺 Strategy Health) | [`STRATEGY_HEALTH.md`](STRATEGY_HEALTH.md) |
 | IBKR execution | [`IBKR_PAPER_TRADING.md`](IBKR_PAPER_TRADING.md) · [`IBKR_OPTION_C_WINDOWS.md`](IBKR_OPTION_C_WINDOWS.md) · [`docs/CLOUD_EXECUTOR.md`](docs/CLOUD_EXECUTOR.md) · [`docs/LIVE_TRADING.md`](docs/LIVE_TRADING.md) |
 | Signal distribution | [`docs/COLLECTIVE2.md`](docs/COLLECTIVE2.md) (mirror the book onto a Collective2 strategy) · [`docs/COLLECTIVE2_SETUP.md`](docs/COLLECTIVE2_SETUP.md) (setup + testing runbook) |
