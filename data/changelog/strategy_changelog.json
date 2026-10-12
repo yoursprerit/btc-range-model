@@ -709,7 +709,12 @@
   "title": "Executed Book: live accounts are judged against the live target book",
   "description": "The allocation-drift table compared every execution report with target_book.json, the PAPER book, which has no SATA and holds 40 % cash. Each live IBKR account therefore showed SATA target 0 % (drift +30 pp) and cash target 40 % (drift -30 pp) although the executor had traded the live book (SATA 30 %, cash 10 %). The Latest-run tab now picks the book by the report's account mode (small helper in scripts/drift_target.py, outside the hashed app modules), says so when the live book is missing instead of silently using the paper one, and flags a live report compared with a paper book. The Historical tab already used the live book archive and is unchanged.",
   "impact": "For a live account that holds the book, every row now reads ~0 pp drift (checked on a rendered page: SATA 30.0 / 30.0, cash 10.0 / 10.0) instead of +30 / -30.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #220",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/220"
+   }
+  ]
  }
  ]
 }
