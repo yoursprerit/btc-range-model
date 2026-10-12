@@ -61,4 +61,4 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-10,sleeve,UGL,red,-0.426,4.27,,17.0
 2026-10-10,sleeve,WGMI,red,-0.3783,-5.58,,19.0
 2026-10-10,sleeve,XLE,warming,-0.0129,0.0,,3.0
-2026-10-10,tracking,book_vs_replay,yellow,,-2.6,,71.0
+2026-10-10,tracking,book_vs_replay,yellow,,-2.5,,71.0

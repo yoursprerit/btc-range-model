@@ -39,8 +39,8 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-09,sleeve,WGMI,warming,-0.1072,33.59,,15.0
 2026-10-09,sleeve,XLE,warming,-0.0129,0.0,,3.0
 2026-10-09,sleeve,XOP,warming,-0.041,-0.0,,3.0
-2026-10-10,profile,Balanced,green,-0.0183,,,
-2026-10-10,profile,Growth,red,-0.0207,,,
+2026-10-10,profile,Balanced,green,-0.0196,,,
+2026-10-10,profile,Growth,red,-0.0257,,,
 2026-10-10,sleeve,ARTY,yellow,-0.0786,-27.46,75.8,90.0
 2026-10-10,sleeve,BTC,yellow,-0.0197,-32.79,,8.0
 2026-10-10,sleeve,ERX,warming,-0.0234,0.0,,3.0

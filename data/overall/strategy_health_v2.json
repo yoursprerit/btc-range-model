@@ -1,6 +1,6 @@
 {
  "schema": "strategy-health/v1",
- "generated_at_utc": "2026-10-11T12:20:05+00:00",
+ "generated_at_utc": "2026-10-12T05:54:27+00:00",
  "as_of": "2026-10-10",
  "live_anchor": "2026-10-09",
  "thresholds": {
@@ -34,30 +34,30 @@
   "profiles": {
    "Balanced": {
     "metrics": {
-     "total_ret": 12.5716,
-     "cagr": 0.5726,
-     "mdd": -0.1138,
-     "sharpe": 2.193,
-     "vol": 0.1793
+     "total_ret": 14.0083,
+     "cagr": 0.6003,
+     "mdd": -0.1147,
+     "sharpe": 2.2156,
+     "vol": 0.1844
     },
     "status": "green",
-    "value": -0.0183,
-    "ref_mdd": -0.1138,
+    "value": -0.0196,
+    "ref_mdd": -0.1147,
     "cur_uw_days": 27,
-    "ref_max_uw_days": 93,
+    "ref_max_uw_days": 92,
     "first_breach_date": null,
     "need": null
    },
    "Growth": {
     "metrics": {
-     "total_ret": 19.4862,
-     "cagr": 0.6891,
+     "total_ret": 18.7783,
+     "cagr": 0.6789,
      "mdd": -0.1715,
-     "sharpe": 2.084,
+     "sharpe": 2.0606,
      "vol": 0.2213
     },
     "status": "red",
-    "value": -0.0207,
+    "value": -0.0257,
     "ref_mdd": -0.1715,
     "cur_uw_days": 110,
     "ref_max_uw_days": 109,

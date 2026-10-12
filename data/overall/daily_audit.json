@@ -1,21 +1,28 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-10-11T12:17:53+00:00",
- "generated_at_ct": "Oct 11, 2026 at 7:17:53 AM CDT",
+ "generated_at_utc": "2026-10-12T05:52:08+00:00",
+ "generated_at_ct": "Oct 12, 2026 at 12:52:08 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
   "as_of": "2026-10-10",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-10-11T12:17:53+00:00"
+  "computed_at_utc": "2026-10-12T05:52:08+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-10-11T12:17:52+00:00",
-  "checked_at_ct": "Oct 11, 2026 at 7:17:52 AM CDT",
-  "passed": true,
-  "stale_apps": [],
-  "stale_assets": [],
+  "checked_at_utc": "2026-10-12T05:52:08+00:00",
+  "checked_at_ct": "Oct 12, 2026 at 12:52:08 AM CDT",
+  "passed": false,
+  "stale_apps": [
+   "BTC"
+  ],
+  "stale_assets": [
+   "BTC",
+   "MSTR",
+   "MSTU",
+   "ETH"
+  ],
   "rows": [
    {
     "app": "BTC",
@@ -27,11 +34,11 @@
      "ETH"
     ],
     "actual_asof": "2026-10-10",
-    "expected_asof": "2026-10-10",
+    "expected_asof": "2026-10-11",
     "actual_close": "Oct 11, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
-    "expected_close": "Oct 11, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
-    "fresh": true,
-    "age_days": 0
+    "expected_close": "Oct 12, 2026, 7:00 AM CDT (Bitcoin daily-bar close, 12:00 UTC)",
+    "fresh": false,
+    "age_days": 1
    },
    {
     "app": "GLDM",
@@ -230,14 +237,10 @@
   ]
  },
  "target_book": {
-  "published": true,
-  "skip_reason": null,
-  "withheld_since_ct": null,
-  "consecutive_withheld_days": 0,
-  "generated_at_utc": "2026-10-11T12:17:53+00:00",
-  "as_of": "2026-10-10",
-  "profile": "Balanced",
-  "signed": true
+  "published": false,
+  "skip_reason": "signal-freshness audit failed: stale ['BTC']",
+  "withheld_since_ct": "2026-10-12",
+  "consecutive_withheld_days": 1
  },
  "strategy_version": "v2",
  "execution": {
