@@ -755,6 +755,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/222"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-12",
+  "kind": "ui",
+  "title": "Overall: cut CPU use to stop Streamlit Cloud throttling",
+  "description": "The Overall page's auto-refresh now ticks every 120s instead of 45s, pauses after 30 minutes without a click (resuming on the next interaction), and renders only the selected tab on each run instead of all four. No signal, allocation or P&L logic changed.",
+  "impact": "Streamlit Community Cloud throttled the app for CPU; every open tab re-executed the whole page, including ~1,000 lines of hidden-tab charts, every 45s."
  }
  ]
 }
