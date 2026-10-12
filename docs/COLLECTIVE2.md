@@ -51,7 +51,7 @@ a second choice.
 `data/overall/c2_book_archive/<as_of>.json`. The Overall app's **📈 Overall
 strategy P&L → 🎯 As-published record** compounds these books. That record
 was reset on 2026-10-07 for a new C2 strategy (old files: `data/overall/legacy_c2_157698006/`; `C2_RECORD_START` in
-`app/overall_core.py`), and idle cash earns nothing, as on C2. Each
+`app/overall_core.py`), and the SATA leg earns its coupon while idle cash earns nothing, as on C2. Each
 rewritten snapshot is also copied to
 `data/overall/c2_positions_archive/<date>.json` (New-York date, last copy of
 the day wins). This is what the **✅ Executed Book** app's Collective2 view
@@ -91,6 +91,7 @@ C2_API_KEY=… C2_STRATEGY_ID=… python scripts/publish_c2.py --snapshot
 | Trading day + regular hours | C2 cannot adjust positions while the market is shut (`--outside-rth` overrides the hours). |
 | Once per book | `data/overall/c2_publish_state.json` records the last book sent; a re-run skips it (`--force` re-sends), so intraday price moves cannot churn the model account. |
 | No-trade band (`--band`, default 1% of capital) | Same as the executor's `IBKR_BAND`: a name C2 already holds keeps its quantity when the resize would move less than 1% of capital, so an unchanged book places no orders. New positions and exits always go through; the band is dropped for a run if holding would exceed 100% of capital. Over the last 15 archived books it cut C2 orders from 63 to 29. |
+| SATA sizes to a share | A book with a SATA weight that sizes to under one share (strategy capital too small) is refused, with the capital needed. |
 | Paper label only | `check_book_mode` refuses a book whose `book_mode` is not `paper`. |
 | Rejected signals fail the run | A C2 rejection (e.g. an unsupported symbol) exits non-zero and is not recorded as sent. |
 

@@ -2265,7 +2265,7 @@ def signal_gated_allocation(results: list[dict], base_weights: dict[str, float],
     (:func:`sata_cap_for`; ``None`` = all idle capital is SATA, and always
     ``None`` for V1 results).  The idle remainder is split by
     :func:`split_idle`: ``sata`` (≤ cap) and ``cash`` (the excess, 0 %
-    yield); ``idle`` is their sum — what a paper book holds as cash.
+    yield); ``idle`` is their sum — the idle remainder both published books park in SATA/cash.
 
     Capital is deployed only to instruments the strategy is long (or opening a
     fresh entry).  Among those, the size of each slice is the historically
@@ -4061,7 +4061,8 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
                           only_version: str | None = None,
                           min_as_of=None,
                           fill_on_sessions: bool = False,
-                          fill_on_publish: bool = False) -> dict | None:
+                          fill_on_publish: bool = False,
+                          sata_held_only: bool = False) -> dict | None:
     """Compound the ACTUALLY-PUBLISHED daily books — the exact historical
     record, daily optimiser trims included — into the same shapes the
     walk-forward replay returns (``ret``/``equity``/``weights``/``sata``), so
@@ -4096,6 +4097,12 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     with no ``generated_at_utc``, rolls to the next day; ``fill_on_sessions``
     then moves it to a US trading day.
 
+    ``sata_held_only`` — for the C2 record, which holds only what a book
+    really bought: the coupon accrues on the book's ``SATA`` weights entry
+    (paper and live books now carry one), while ``cash_weight`` — and the
+    idle capital of older books that held none — stays plain cash earning
+    nothing, instead of being treated as SATA retroactively.
+
     A LIVE book parks its idle remainder as a real ``SATA`` weights entry
     (``cash_weight`` 0 — see the publisher); that leg is folded back into the
     cash/SATA term here so it accrues the coupon instead of being dropped as
@@ -4128,11 +4135,14 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
             w = {k: float(v) for k, v in (b.get("weights") or {}).items()}
             # live books hold idle capital as an actual SATA position — that
             # IS the cash/SATA leg, not a market sleeve
-            cash = float(b.get("cash_weight", 0.0) or 0.0) + w.pop("SATA", 0.0)
+            cash_w0 = float(b.get("cash_weight", 0.0) or 0.0)
+            held = w.pop("SATA", 0.0)
+            cash = cash_w0 + held
             _sc = b.get("sata_cap")                 # stamped by the V2 SATA-cap publisher
             side = version_map.get(str(as_of.date()), {})
             parsed.append(dict(
                 as_of=as_of, weights=w, cash=cash,
+                held=held, cash_only=cash_w0,
                 sata_cap=(float(_sc) if _sc is not None else None),
                 profile=str(b.get("profile") or "—"),
                 book_mode=str(b.get("book_mode") or "paper"),
@@ -4188,7 +4198,10 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
         # idle capital = SATA up to the book's stamped cap (books published
         # before the cap carry none → all of it is SATA, as they always were),
         # the excess in cash earning 0 %
-        sata_w[t], cash_w[t] = split_idle(b["cash"], b.get("sata_cap"))
+        if sata_held_only:
+            sata_w[t], cash_w[t] = b["held"], b["cash_only"]
+        else:
+            sata_w[t], cash_w[t] = split_idle(b["cash"], b.get("sata_cap"))
         if t > 0:
             port[t] = float(np.dot(W[t], R[t])) + \
                 (sata_w[t] * sata_daily if biz[t] else 0.0)

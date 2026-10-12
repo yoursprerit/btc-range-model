@@ -418,3 +418,15 @@ def test_paper_book_with_a_sata_weight_is_sized_normally():
     positions, dropped = pc.build_positions({"BTC": 0.5, "SATA": 0.5},
                                             {"BTC": 100.0, "SATA": 25.0}, 100_000)
     assert {p["symbol"] for p in positions} == {"IBIT", "SATA"} and not dropped
+
+
+def test_sata_leg_must_size_to_a_share():
+    w, px = {"BTC": 0.5, "SATA": 0.3}, {"BTC": 100.0, "SATA": 25.0}
+    pos, _ = pc.build_positions(w, px, 100_000)
+    assert pc.check_sata_sized(w, pos, px, 100_000)[0]
+    pos, _ = pc.build_positions(w, px, 50)             # 0.3 × 49.5 = $14.85 < $25
+    ok, why = pc.check_sata_sized(w, pos, px, 50)
+    assert not ok and "less than one share" in why and "$" in why
+    assert pc.check_sata_sized({"BTC": 1.0}, [], px, 50)[0]     # no SATA leg → fine
+    ok, why = pc.check_sata_sized(w, [], {}, 100_000)
+    assert not ok and "no SATA price" in why
