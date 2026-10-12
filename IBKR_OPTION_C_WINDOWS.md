@@ -482,7 +482,7 @@ $set = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
         -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 
 Register-ScheduledTask -TaskName "IBKR Option C executor" `
-    -Action $act -Trigger $trg -Settings $set -RunLevel Highest -Description `
+    -Action $act -Trigger $trg -Settings $set -RunLevel Limited -Description `
     "Pull the published target book and rebalance the IBKR paper account."
 ```
 
@@ -500,7 +500,9 @@ Notes:
   machine is not. To run signed-out, re-register with
   `-User "$env:USERNAME" -LogonType S4U`, but note that S4U breaks DPAPI — which
   breaks Git Credential Manager, so pair it with the SSH deploy key in §8.
-- **Registering the task needs an elevated PowerShell** (`-RunLevel Highest`).
+- **The task runs with normal (limited) rights**, not as administrator: it only needs to
+  place orders and write logs, so it gets no more privilege than that. Registering it is
+  simplest from an elevated PowerShell.
   If your `-All` run died before phase 7, the task does not exist; re-run
   `... setup_windows_option_c.ps1 -Task` as Administrator.
 - **`-StartWhenAvailable` re-fires a missed run, but by itself it cannot trade.**

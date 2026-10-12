@@ -192,6 +192,17 @@ an account; `--no-push` skips publishing the reports.
 | Exposure / turnover / price-drift caps | `max_gross_frac`, `max_turnover_frac`, `max_price_drift` |
 | Deploy cap & per-order cap | `max_deploy_frac` is the **total** the book may put to work, across every asset **including SATA** (all positions scaled by the same factor); the rest of the account is left as cash and never parked anywhere. It is a ceiling: a book that already deploys less is not scaled up. `max_order_notional` clamps any single order. |
 | SATA cap | SATA never exceeds the book's own signed `sata_cap` (V2: 30 %). A book published before the cap has none, so the executor applies a 30 % default first (`--default-sata-cap`, `-1` turns it off) — a stale pre-cap book can still be the one that trades if the next publish is withheld. The deploy cap is applied after it. Example: book risk 60 % + SATA 40 % → SATA trimmed to 30 % → total 90 % → ×(25/90) → every position × 0.278, total 25 %, cash 75 %. |
+| Per-order limits | Independent of the book: no SELL larger than the shares held; no single BUY above `--max-buy-frac` (40 %) of net liquidation; no more than `--max-orders` (25) orders in a run. |
+| Clock | The PC clock must be within 30 s of IBKR's server clock (the MOC cutoff and trading-day tests read it). Fix: `w32tm /resync`. |
+| Currency | The account's NetLiquidation must be in USD; any other base currency is refused. |
+| Market calendar | The holiday / early-close tables end in 2027 (`CALENDAR_LAST_YEAR`). The runner warns 120 days before and **refuses to trade** once past them, so a holiday is never mistaken for a trading day. A test fails ~120 days ahead as a reminder to extend them. |
+| Post-trade verdict | After the auction the account is re-read; gearing above the cap or an allocation more than 5 pp off target makes the account exit **5** and raises an alert (nothing is re-sent). |
+| Gateway retry | A gateway that isn't answering is retried every 30 s for up to 10 min (stopping 6 min before the cutoff) before the session is given up. |
+| Order tag | Every order carries `orderRef = btc-range:<book date>` so the bot's orders are recognisable in TWS and audits. |
+| Atomic reports | Reports, archives and reset markers are written to a temp file and renamed, so a crash cannot leave half a file. |
+| Report publishing | Commits **only** the report files (anything else you have staged is left alone) and refuses to push from a detached HEAD. |
+| Logs | Per-account and wrapper logs rotate at 5 MB (3 kept); each run logs the Python / `ib_async` / `pandas` / `numpy` versions. |
+| Least privilege | The scheduled tasks run with normal user rights, not as administrator. |
 | Kill switch | `kill_switch_file` or `IBKR_TRADING_DISABLED=1` |
 | Strict MOC | no fallback, no after-hours catch-up; early-close days handled |
 
@@ -227,6 +238,31 @@ executed run yet (or only previews) gets no option.
 * Costs/taxes toggles and the per-asset tables below the headline scale the
   account's balance at the start date (they don't model the deposits).
 
+## Security checklist (things only you can do)
+
+* **Apply the lower-privilege task.** Existing tasks keep the old (administrator)
+  setting. Re-register them once: `setup_windows_option_c.ps1 -LiveTask`
+  (and `-Task` if you still use the paper one); `-Force` replaces them.
+* **Repo is private?** Execution reports hold account ids, balances and holdings:
+  GitHub → Settings → General → Danger Zone must say *private*.
+* **Protect `main`.** The wrapper runs whatever code is on `main` each morning, so
+  require pull-request review and passing checks and block direct pushes
+  (Settings → Branches). Turn on 2FA / a passkey for the GitHub account, give the
+  cron-job.org token an expiry, and rotate `OVERALL_BOOK_SECRET` now and then.
+* **IBC config holds the password in clear text.** Restrict it to your user:
+  `icacls "C:\Users\<you>\Documents\IBC\config-live.ini" /inheritance:r /grant:r "$($env:USERNAME):(R)"`
+* **IBKR login:** use a dedicated username with trading permission only (no
+  funds transfer), turn on its IP restriction if you can, and keep API access to
+  `127.0.0.1` (Gateway → API → Settings → trusted IP `127.0.0.1`; never open
+  port 4001 in the firewall).
+* **Windows:** BitLocker on; set Windows Update active hours so no restart lands
+  between about 2 and 4:15 PM Central.
+* **Lock the dependency versions** once a rehearsal looks right:
+  `.\.venv\Scripts\python.exe -m pip freeze > requirements-ibkr.lock` and install
+  from it (`pip install -r requirements-ibkr.lock`); occasionally run
+  `pip install pip-audit; pip-audit` to check for known vulnerabilities. Each run
+  logs the versions it used, so a behaviour change can be traced.
+
 ## Where things live
 
 | Thing | Path |
@@ -245,7 +281,8 @@ executed run yet (or only previews) gets no option.
 
 `0` all good · `1` an account failed / didn't fully fill / a configured account
 isn't managed by the login · `2` gateway or config problem, **nothing traded** ·
-`3` session skipped (past the MOC cutoff, holiday, kill switch).
+`3` session skipped (past the MOC cutoff, holiday, kill switch). Per account:
+`4` orders sent but not fully filled · `5` filled but the account did not land on target.
 
 ## Troubleshooting
 

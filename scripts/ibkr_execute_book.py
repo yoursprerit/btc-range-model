@@ -79,6 +79,7 @@ ACCOUNTS_DIR = _REPO / "data" / "overall" / "accounts"
 EXIT_ABORT = 1          # a guard refused the run; nothing was sent
 EXIT_MOC_SKIPPED = 3    # strict MOC: past the cutoff, session skipped, nothing sent
 EXIT_MOC_UNFILLED = 4   # strict MOC: orders were sent but did not all fill
+EXIT_POST_TRADE = 5     # orders filled but the account did not land on target
 
 
 def _write_report(broker, payload: dict, mode: str, trades: list[dict],
@@ -108,8 +109,7 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
         trades=trades, positions=positions, account_mode=account_mode,
         realized_pnl=realized)
     out = Path(out_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(tb.dumps(report, secret))
+    eb.write_atomic(out, tb.dumps(report, secret))
     print(f"Wrote execution report → {out_path} "
           f"({len(trades)} trade(s), {len(positions)} position(s))")
     # dated copy (executed_archive/<as_of>[_live].json) — the live report file
@@ -257,6 +257,13 @@ def main() -> int:
                          "including SATA, at this fraction of net-liq (e.g. 0.25 = "
                          "at most 25%% of the account invested; every position is "
                          "scaled down proportionally and the rest stays cash)")
+    ap.add_argument("--max-buy-frac", type=float, default=ic.DEFAULT_MAX_BUY_FRAC,
+                    help="abort when a single BUY would exceed this share of net "
+                         "liquidation (default %(default)s) -- a wrong price or "
+                         "account value sizes a buy absurdly")
+    ap.add_argument("--max-orders", type=int, default=ic.DEFAULT_MAX_ORDERS,
+                    help="abort when a plan has more orders than this (default "
+                         "%(default)s; 0 disables)")
     ap.add_argument("--max-order-notional", type=float, default=0.0,
                     help="clamp any single order to this dollar cap (0 = no cap)")
     ap.add_argument("--max-gross-frac", type=float, default=DEFAULT_MAX_GROSS_FRAC,
@@ -356,6 +363,7 @@ def main() -> int:
     if args.push_report is None:
         args.push_report = not os.environ.get("IBKR_NO_PUSH_REPORT")
 
+    print("Runtime: " + ic.runtime_versions())
     live = args.account_mode == "live"
     if args.port is None:
         args.port = DEFAULT_LIVE_PORT if live else DEFAULT_PORT
@@ -421,6 +429,15 @@ def main() -> int:
     if not ok_day and not args.force:
         print(f"Not trading: {day_why} (use --force to override).")
         return 0
+    # The holiday / early-close tables are hand-maintained and end in some year;
+    # past it every market holiday would look like a trading day.
+    if not ic.calendar_covers(today) and not args.force:
+        print(f"ABORT: {ic.calendar_warning(today)}. No orders placed "
+              "(--force overrides).")
+        return EXIT_ABORT
+    _cal_note = ic.calendar_warning(today)
+    if _cal_note:
+        print(f"NOTE: {_cal_note}")
     ok_val, val_why = tb.validate(payload, today, max_gen_age_hours=args.max_age_hours)
     print(f"Freshness: {val_why}")
     if not ok_val and not args.force:
@@ -655,6 +672,7 @@ def main() -> int:
 
     # ── execute ──────────────────────────────────────────────────────────────
     broker = Broker(args.host, args.port, args.client_id, **account_kwargs)
+    broker.order_ref = f"btc-range:{payload.get('as_of', '')}"
     rc = 0
     try:
         net_liq = broker.net_liq()
@@ -720,13 +738,18 @@ def main() -> int:
             # positions read AFTER the fills → the report shows the resulting book
             _write_report(broker, payload, "execute", fills, report_out, secret,
                           args.account_mode)
-        post_trade_check(broker, weights, exec_price, Guards.from_args(args))
+        ok_post, why_post = post_trade_check(broker, weights, exec_price,
+                                             Guards.from_args(args))
+        if not ok_post:
+            rc = EXIT_POST_TRADE
+            print(f"\n!! POST-TRADE CHECK FAILED — {why_post}. Nothing was "
+                  "re-sent; reconcile the account in TWS.")
         if args.strict_moc:
             open_legs = [f for f in fills
                          if not str(f.get("status", "")).startswith("SKIPPED")
                          and f.get("filled", 0.0) + 1e-9 < f.get("qty", 0.0)]
             if open_legs:
-                rc = EXIT_MOC_UNFILLED
+                rc = EXIT_MOC_UNFILLED       # takes precedence: it explains the drift
                 print("\n!! MOC NOT FULLY FILLED — "
                       + ", ".join(f"{f['action']} {f['symbol']} "
                                   f"{f.get('filled', 0):g}/{f['qty']:g} "

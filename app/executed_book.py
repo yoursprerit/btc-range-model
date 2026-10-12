@@ -359,6 +359,34 @@ def book_pnl_pct(payload: dict | None) -> tuple[float | None, float | None]:
 ARCHIVE_DIRNAME = "executed_archive"
 
 
+def write_atomic(path, text: str) -> None:
+    """Write *text* to *path* so a reader (or a crash) never sees half a file.
+
+    Written to a temp file in the same directory, flushed to disk, then renamed
+    over the target in one step (``os.replace`` is atomic on Windows and POSIX).
+    A failure leaves the previous file untouched and the temp file removed.  The
+    execution report is the account's record of what was traded; a power cut
+    mid-write must not leave it truncated."""
+    import os
+    import tempfile
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def variant(report_path) -> str:
     """``''`` for the paper report, ``'_live'`` for the live one."""
     return "_live" if Path(report_path).stem.endswith("_live") else ""
@@ -392,8 +420,7 @@ def archive_report(payload: dict, report_path, secret: str | None = None) -> Pat
         if (payload.get("mode") or "").lower() != "execute":
             return None                              # a preview, not a record
         p = archive_path(report_path, as_of)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(tb.dumps(payload, secret))
+        write_atomic(p, tb.dumps(payload, secret))
         return p
     except Exception:
         return None
@@ -521,8 +548,7 @@ def write_reset(report_path, cutoff_as_of, reason: str = "account reset") -> Pat
     """Record that runs up to and including *cutoff_as_of* belong to a previous
     account and must never be shown or restored."""
     p = reset_marker_path(report_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({
+    write_atomic(p, json.dumps({
         "schema": RESET_SCHEMA,
         "reset_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "cutoff_as_of": str(pd.Timestamp(cutoff_as_of).date()),

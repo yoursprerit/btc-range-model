@@ -39,6 +39,15 @@ STALE_BAR_DAYS = 4                # abort if the freshest signal bar is older th
 # read, a duplicate run), not a decision. 1.02 leaves room for whole-share
 # rounding and a fill printing through the sizing price.
 DEFAULT_MAX_GROSS_FRAC = 1.02
+# Per-order sanity limits (independent of the book's own weights). A single BUY
+# larger than this share of net liquidation, or a plan with more orders than the
+# universe could need, means a wrong price, a wrong NAV or a wrong plan -- not a
+# decision. SELLs are bounded separately: never more than is held.
+DEFAULT_MAX_BUY_FRAC = 0.40
+DEFAULT_MAX_ORDERS = 25
+# How far the PC clock may be from IBKR's server clock. The MOC cutoff, the
+# trading-day test and the session test all read the PC clock.
+MAX_CLOCK_SKEW_S = 30.0
 # Buys are funded from settled cash + the proceeds the sell leg actually
 # realised. The buffer keeps a fill printing above its limit from tipping the
 # account into a margin loan.
@@ -137,6 +146,30 @@ US_EARLY_CLOSES = {
     "2026-11-27": (13, 0), "2026-12-24": (13, 0), "2027-11-26": (13, 0),
 }
 MOC_CUTOFF_LEAD_MIN = 10          # minutes before the bell MOC entry stops
+
+# The tables above are hand-maintained and end at some year. Past that year the
+# executor would treat every market holiday as a trading day and send MOC orders
+# into a closed market, so it refuses to trade (see ``calendar_covers``) rather
+# than guess.
+CALENDAR_LAST_YEAR = max(int(d[:4]) for d in (*US_MARKET_HOLIDAYS, *US_EARLY_CLOSES))
+
+
+def calendar_covers(day) -> bool:
+    """Is *day* inside the years the holiday / early-close tables cover?"""
+    return pd.Timestamp(day).year <= CALENDAR_LAST_YEAR
+
+
+def calendar_warning(today, within_days: int = 120) -> str | None:
+    """A heads-up (not a block) when the tables are close to running out."""
+    end = pd.Timestamp(year=CALENDAR_LAST_YEAR, month=12, day=31)
+    left = (end - pd.Timestamp(today).normalize()).days
+    if left < 0:
+        return (f"the market-holiday table ends in {CALENDAR_LAST_YEAR}; trading "
+                "is refused until US_MARKET_HOLIDAYS / US_EARLY_CLOSES are extended")
+    if left <= within_days:
+        return (f"the market-holiday table ends {end:%b %d, %Y} ({left} days) — "
+                "extend US_MARKET_HOLIDAYS / US_EARLY_CLOSES in scripts/ibkr_common.py")
+    return None
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -773,6 +806,8 @@ class Guards:
     slippage_cap: float = DEFAULT_SLIPPAGE_CAP
     allow_margin: bool = False
     outside_rth: bool = False
+    max_buy_frac: float = DEFAULT_MAX_BUY_FRAC
+    max_orders: int = DEFAULT_MAX_ORDERS
 
     @classmethod
     def from_args(cls, args) -> "Guards":
@@ -780,7 +815,8 @@ class Guards:
         any flag a given entry point does not expose."""
         g = cls()
         for f in ("max_gross_frac", "max_turnover_frac", "max_price_drift",
-                  "slippage_cap", "allow_margin", "outside_rth"):
+                  "slippage_cap", "allow_margin", "outside_rth",
+                  "max_buy_frac", "max_orders"):
             v = getattr(args, f, None)
             if v is not None:
                 setattr(g, f, v)
@@ -868,11 +904,19 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
         check_account_state(net_liq, cash, gross, guards.allow_margin,
                             guards.max_gross_frac),
         market_session_open(allow_outside=guards.outside_rth),
+        check_order_sanity(orders, current, net_liq, guards.max_buy_frac,
+                           guards.max_orders),
         check_turnover(orders, net_liq, guards.max_turnover_frac),
         check_exposure(exposure, guards.max_gross_frac),
         price_drift_check(broker, orders, guards.max_price_drift,
                           guards.slippage_cap),
     ]
+    skew_fn = getattr(broker, "clock_skew", None)
+    if callable(skew_fn):
+        try:
+            checks.append(check_clock(skew_fn()))
+        except Exception as e:
+            checks.append((True, f"clock not verified ({e})"))
     failed = ""
     for ok, why in checks:
         print(f"  {'✓' if ok else '✗'} {why}")
@@ -882,33 +926,42 @@ def preflight(broker, orders: list[Order], current: dict[str, float],
 
 
 def post_trade_check(broker, weights: dict[str, float],
-                     exec_price: dict[str, float], guards: Guards) -> None:
-    """Re-read the account AFTER trading and say whether it landed on target.
+                     exec_price: dict[str, float], guards: Guards,
+                     max_drift_pp: float = 5.0) -> tuple[bool, str]:
+    """Re-read the account AFTER trading and say whether it landed on target:
+    ``(ok, reason)``.
 
-    Nothing is auto-corrected here — a second corrective round of orders is
-    exactly the reflex that compounds a bad read.  This reports, loudly, so the
-    run's log and the next run's guards can act on it."""
+    Nothing is auto-corrected here -- a second corrective round of orders is
+    exactly the reflex that compounds a bad read.  This reports, loudly, and
+    returns a verdict the caller turns into an exit code and an alert, so a run
+    that ended badly cannot look identical to a good one."""
     print("\nPost-trade:")
     try:
         net_liq = broker.net_liq()
         after = broker.positions_by_key()
     except Exception as e:
         print(f"  could not verify the resulting account ({e})")
-        return
+        return False, f"could not verify the resulting account ({e})"
     gross = gross_value(broker, after, exec_price)
     lev = gross / net_liq if net_liq > 0 else 0.0
     print(f"  {'✗' if lev > guards.max_gross_frac else '✓'} gross ${gross:,.0f} = "
           f"{lev:.2f}x net liq ${net_liq:,.0f}")
+    problems = []
     if lev > guards.max_gross_frac:
         print("  WARNING: the account is geared above the cap after this run — "
               "do NOT re-run the executor; reconcile the account first.")
+        problems.append(f"gross {lev:.2f}x net liq (cap {guards.max_gross_frac:.2f}x)")
     rows = weight_drift(realised_weights(after, exec_price, net_liq), weights)
     for key, tgt, got, dpp in rows[:3]:
         print(f"    {key:6} target {tgt*100:5.1f}%  actual {got*100:5.1f}%  "
               f"drift {dpp:+.1f} pp")
-    if rows and abs(rows[0][3]) > 5.0:
+    if rows and abs(rows[0][3]) > max_drift_pp:
         print(f"  WARNING: largest allocation drift is {rows[0][3]:+.1f} pp on "
               f"{rows[0][0]} — check the fills above.")
+        problems.append(f"{rows[0][0]} drifted {rows[0][3]:+.1f} pp from target")
+    if problems:
+        return False, "; ".join(problems)
+    return True, "account landed on target"
 
 
 def _finite(x) -> float | None:
@@ -1113,6 +1166,63 @@ def apply_deploy_cap(weights: dict[str, float], max_deploy_frac: float
     return out, dict(before=total, after=max_deploy_frac, scale=scale)
 
 
+def check_clock(skew_s, limit: float = MAX_CLOCK_SKEW_S) -> tuple[bool, str]:
+    """(ok, reason) -- is the PC clock close enough to IBKR's server clock?
+
+    *skew_s* is local minus server in seconds (None = could not be measured,
+    which is reported but is not a failure: the gateway answered everything
+    else)."""
+    if skew_s is None:
+        return True, "clock not verified (the gateway did not return its time)"
+    if abs(skew_s) > limit:
+        return False, (f"this PC's clock is {skew_s:+.0f}s from IBKR's server clock "
+                       f"(limit {limit:g}s) -- the MOC cutoff and trading-day tests "
+                       "would be wrong; sync Windows time (w32tm /resync)")
+    return True, f"clock within {abs(skew_s):.1f}s of IBKR's server"
+
+
+def check_order_sanity(orders: list, current: dict[str, float], net_liq: float,
+                       max_buy_frac: float = DEFAULT_MAX_BUY_FRAC,
+                       max_orders: int = DEFAULT_MAX_ORDERS) -> tuple[bool, str]:
+    """(ok, reason) -- limits that hold whatever the book says.
+
+    * no SELL larger than the shares held (a short, or a rejected order);
+    * no single BUY larger than *max_buy_frac* of net liquidation (a wrong
+      price or NAV sizes a buy absurdly; SELLs are bounded by holdings);
+    * no more than *max_orders* orders in one run."""
+    if max_orders and len(orders) > max_orders:
+        return False, (f"{len(orders)} orders in one run (limit {max_orders}) -- "
+                       "implausible for a daily rebalance")
+    for o in orders:
+        if o.action == "SELL":
+            held = float(current.get(o.key, 0.0))
+            if o.qty > held + 1e-6:
+                return False, (f"SELL {o.qty:g} {o.symbol} exceeds the {held:g} "
+                               "shares held -- refusing to sell what the account "
+                               "does not own")
+        elif o.action == "BUY" and net_liq > 0 and max_buy_frac:
+            frac = o.qty * (o.price or 0.0) / net_liq
+            if frac > max_buy_frac:
+                return False, (f"BUY {o.qty:g} {o.symbol} is {frac*100:.0f}% of net "
+                               f"liq (limit {max_buy_frac*100:.0f}%) -- check the "
+                               "book price and the account value")
+    return True, f"{len(orders)} order(s) within the per-order limits"
+
+
+def runtime_versions() -> str:
+    """One line naming the interpreter and the libraries the run used, so a
+    behaviour change after an upgrade can be traced from the log."""
+    import platform
+    from importlib import metadata
+    parts = [f"python {platform.python_version()}"]
+    for pkg in ("ib_async", "pandas", "numpy"):
+        try:
+            parts.append(f"{pkg} {metadata.version(pkg)}")
+        except Exception:
+            parts.append(f"{pkg} ?")
+    return ", ".join(parts)
+
+
 def print_dust(skipped: list[dict]) -> None:
     """Tell the operator what the whole-share plan had to leave alone."""
     for d in skipped or []:
@@ -1311,6 +1421,10 @@ class Broker:
         self.account = chosen
         print(f"  {why}" + (f" (login manages {len(accts)})" if len(accts) > 1 else ""))
         self.account_mode = account_mode
+        # stamped on every order this run sends (set by the caller, e.g.
+        # "btc-range:2026-10-09") so the bot's orders are recognisable in TWS
+        # and in audits
+        self.order_ref = ""
         self._enforce_account_guard(account_mode, expected_account or account,
                                     confirm_live)
 
@@ -1347,13 +1461,38 @@ class Broker:
         raise RuntimeError(msg)
 
     def net_liq(self) -> float:
+        """NetLiquidation in USD. The executor sizes every order in dollars, so
+        an account whose base currency is not USD is refused rather than read
+        as if its number were dollars."""
+        seen = None
         for v in self.ib.accountSummary(self.account):
             if v.tag == "NetLiquidation":
-                return float(v.value)
+                cur = (getattr(v, "currency", "") or "USD").upper()
+                if cur == "USD":
+                    return float(v.value)
+                seen = cur
         for v in self.ib.accountValues(self.account):
-            if v.tag == "NetLiquidation" and v.currency in ("USD", "BASE"):
+            if v.tag == "NetLiquidation" and \
+                    (getattr(v, "currency", "") or "USD").upper() == "USD":
                 return float(v.value)
+        if seen:
+            raise RuntimeError(f"the account's NetLiquidation is in {seen}, not USD "
+                               "-- the executor sizes in dollars; refusing to trade")
         raise RuntimeError("could not read NetLiquidation from the account")
+
+    def clock_skew(self) -> float | None:
+        """This PC's clock minus IBKR's server clock, in seconds (None if the
+        gateway did not return its time)."""
+        try:
+            done, t = self._bounded("reqCurrentTime", timeout=GATEWAY_REQUEST_TIMEOUT_S)
+        except Exception:
+            return None
+        if not done or t is None:
+            return None
+        t = pd.Timestamp(t)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        return float((pd.Timestamp.now(tz="UTC") - t).total_seconds())
 
     def cash(self) -> float:
         """Total cash value (best-effort; 0.0 if the tag isn't present)."""
@@ -1904,6 +2043,8 @@ class Broker:
                         f"{o.reason} (escalated from unfilled limit)")
             mkt = MarketOrder(o.action, rem)
             mkt.account = self.account
+            if getattr(self, "order_ref", ""):
+                mkt.orderRef = self.order_ref
             extra.append((esc, rem, ORDER_MARKET, 0.0,
                           self.ib.placeOrder(contract, mkt)))
         if extra:
@@ -2071,6 +2212,8 @@ class Broker:
             # unstamped order to its DEFAULT account, which is not necessarily
             # the one this run was told to trade.
             order.account = self.account
+            if getattr(self, "order_ref", ""):
+                order.orderRef = self.order_ref
             trades.append((o, qty, used, lmt, self.ib.placeOrder(contract, order)))
             print(f"    sent  {o.action:4s} {qty:g} {o.symbol} [{used}] "
                   f"-> {self.account}" + (" outsideRth" if outside_rth else ""))
