@@ -52,6 +52,7 @@ sys.path.insert(0, str(_REPO / "app"))
 import pandas as pd                                    # noqa: E402
 
 import ibkr_common as ic                               # noqa: E402
+import ibkr_heartbeat as hbeat                         # noqa: E402
 
 DEFAULT_CONFIG = _REPO / "deploy" / "ibkr_accounts.json"
 EXECUTOR = _HERE / "ibkr_execute_book.py"
@@ -271,8 +272,8 @@ MOC_RETRY_MARGIN_MIN = 6       # stop retrying this close to the exchange cutoff
 
 def verify_gateway(cfg: Config, retry_s: float = 0.0,
                    every_s: float = GATEWAY_RETRY_EVERY_S,
-                   sleep=time.sleep, now=None, clock=time.monotonic
-                   ) -> tuple[list[str] | None, str]:
+                   sleep=time.sleep, now=None, clock=time.monotonic,
+                   respect_cutoff: bool = True) -> tuple[list[str] | None, str]:
     """(managed accounts, reason), retrying for up to *retry_s* seconds.
 
     A gateway that is momentarily unavailable (restarting, a slow login) must not
@@ -287,7 +288,7 @@ def verify_gateway(cfg: Config, retry_s: float = 0.0,
         if accts is not None or retry_s <= 0:
             return accts, why
         waited = clock() - t0
-        late = not ic.moc_entry_open(
+        late = respect_cutoff and not ic.moc_entry_open(
             (pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now))
             + pd.Timedelta(minutes=MOC_RETRY_MARGIN_MIN))[0]
         if waited + every_s > retry_s or late:
@@ -496,7 +497,50 @@ def alert(msg: str) -> None:
 
 
 # ── main ────────────────────────────────────────────────────────────────────
+class Heartbeat:
+    """The run's dead-man's-switch pings (see ``ibkr_heartbeat``).
+
+    Pings only for a real scheduled-style run (``--execute``): a preview or a
+    ``--check`` typed by hand must never stand in for the missing daily run.  A
+    run that had nothing to do for a normal reason (weekend, market holiday, kill
+    switch) is a SUCCESS -- the task fired as scheduled -- while a skipped
+    session (late), a gateway/config failure or any failed account is a FAIL."""
+
+    def __init__(self):
+        self.active = False
+        self.benign = False          # a normal "nothing to do" skip
+        self.detail = ""
+
+    def begin(self):
+        self.active = True
+        hbeat.ping("start", "run started")
+
+    def finish(self, code: int):
+        if not self.active:
+            return
+        ok = code == EXIT_OK or (code == EXIT_SKIPPED and self.benign)
+        hbeat.ping("ok" if ok else "fail",
+                   self.detail or {EXIT_OK: "all accounts ok", EXIT_FAILED: "failed",
+                                   EXIT_SETUP: "gateway or config problem",
+                                   EXIT_SKIPPED: "session skipped"}.get(code, f"exit {code}"))
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run, then report the outcome to the dead-man's switch."""
+    hb = Heartbeat()
+    try:
+        code = _run(argv, hb)
+    except SystemExit:
+        raise
+    except BaseException as e:
+        if hb.active:
+            hbeat.ping("fail", f"crashed: {type(e).__name__}: {str(e)[:200]}")
+        raise
+    hb.finish(code)
+    return code
+
+
+def _run(argv: list[str] | None, hb: Heartbeat) -> int:
     ap = argparse.ArgumentParser(
         description="Trade the live Option-C book in every configured IBKR "
                     "account as market-on-close orders")
@@ -511,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="do not commit/push the reports (env IBKR_NO_PUSH_REPORT=1 "
                          "does the same)")
     args = ap.parse_args(argv)
+    if args.execute and not args.check:
+        hb.begin()
 
     cfg, errs = load_config(Path(args.config))
     if errs or cfg is None:
@@ -540,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
     if os.environ.get("IBKR_TRADING_DISABLED") or (
             cfg.kill_switch_file and Path(cfg.kill_switch_file).exists()):
         print("ABORT: trading is DISABLED (kill switch active). Nothing sent.")
+        hb.benign, hb.detail = True, "kill switch active — nothing sent"
         return EXIT_SKIPPED
 
     if args.execute and not args.check:
@@ -559,6 +606,7 @@ def main(argv: list[str] | None = None) -> int:
         ok_day, why_day = ic.is_trading_day(today)
         if not ok_day:
             print(f"Not trading: {why_day}.")
+            hb.benign, hb.detail = True, f"not trading: {why_day}"
             return EXIT_SKIPPED
         ok_moc, why_moc = ic.moc_entry_open()
         print(f"MOC window: {why_moc}")
@@ -567,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
                   "no account is touched (no limit/market fallback by design).")
             alert("🟠 IBKR live MOC run SKIPPED — started after the MOC cutoff "
                   f"({why_moc}). No orders were placed today.")
+            hb.detail = f"SKIPPED — started after the MOC cutoff ({why_moc})"
             return EXIT_SKIPPED
 
     managed, why = verify_gateway(
@@ -574,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Gateway: {why}")
     if managed is None:
         alert(f"🔴 IBKR live MOC run ABORTED — {why}. Nothing was traded.")
+        hb.detail = f"gateway: {why[:300]}"
         return EXIT_SETUP
     runnable, missing = split_by_availability(cfg, managed)
     for a in missing:
@@ -595,13 +645,16 @@ def main(argv: list[str] | None = None) -> int:
     code = overall_exit(results, missing)
 
     if args.execute and not args.no_push and not os.environ.get("IBKR_NO_PUSH_REPORT"):
-        traded = [r.acct for r in results if r.rc in (0, 4)]
+        traded = [r.acct for r in results if r.rc in (0, 4, 5)]
         print("\nPublishing execution reports …")
         push_reports(traded)
     if code == EXIT_FAILED:
         bad = [f"{r.acct.id}: {describe(r.rc)}" for r in results if r.rc not in (0, 3)]
         bad += [f"{a.id}: not managed by login" for a in missing]
         alert("🔴 IBKR live MOC run finished with problems — " + "; ".join(bad))
+    hb.detail = "; ".join(
+        [f"{hbeat.mask_account(r.acct.id)} {describe(r.rc)}" for r in results]
+        + [f"{hbeat.mask_account(a.id)} not managed by login" for a in missing])
     return code
 
 
