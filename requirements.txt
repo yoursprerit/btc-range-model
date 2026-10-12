@@ -60,3 +60,4 @@ anthropic>=0.69,<2
 # builders under notebooks/builders/ still need it; install it directly
 # (`pip install nbformat`) when regenerating those notebooks.
 
+cryptography>=42

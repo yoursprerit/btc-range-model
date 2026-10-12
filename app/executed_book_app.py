@@ -814,8 +814,31 @@ _BROKER_C2, _BROKER_IBKR = "📡 Collective2", "🏦 IBKR"
 # One radio entry per IBKR account the multi-account executor trades, labelled
 # with the account number ("🏦 IBKR Account #U1234567"); each has its own report
 # and history under data/overall/accounts/<ACCT>/.
+def _report_base_dir() -> Path:
+    """Folder holding ``accounts/<ACCT>/`` -- the local one, else the encrypted
+    vault (``data/overall/vault`` or fetched with a read token) opened into a
+    temp folder.  The passphrase never leaves ``IBKR_VAULT_KEY``."""
+    if eb.account_report_paths(REPORT_PATH.parent):
+        return REPORT_PATH.parent
+    import report_vault as rv
+    pw = rv.passphrase()
+    if not pw:
+        return REPORT_PATH.parent
+    try:
+        vdir = REPORT_PATH.parent / rv.VAULT_DIRNAME
+        if not (vdir / rv.MANIFEST).is_file():
+            import tempfile
+            vdir = Path(tempfile.mkdtemp(prefix="vaultfetch-"))
+            rv.fetch_vault(st.secrets["VAULT_REPO"], st.secrets.get("VAULT_BRANCH", "main"),
+                           "data/overall/vault", vdir, st.secrets.get("VAULT_READ_TOKEN"))
+        return rv.open_tree(vdir, pw)
+    except Exception as e:                    # no/wrong key: show nothing, not a traceback
+        st.caption(f"🔒 Encrypted reports unavailable ({type(e).__name__}).")
+        return REPORT_PATH.parent
+
+
 _acct_paths = {f"🏦 IBKR Account #{eb.account_id_of(_p)}": _p
-               for _p in eb.account_report_paths(REPORT_PATH.parent)}
+               for _p in eb.account_report_paths(_report_base_dir())}
 if _acct_paths:
     # the paper control (and a pre-multi-account live report, if any) stay
     # reachable, named for what they are
