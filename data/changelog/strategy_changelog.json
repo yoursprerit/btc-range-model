@@ -456,8 +456,13 @@
    "date": "2026-10-12",
    "kind": "ui",
    "title": "Strategy Change Log page",
-   "description": "New sidebar page listing V1 and V2 with release dates, links and a dated log of every change under its version.",
-   "links": []
+   "description": "New sidebar page listing V1 and V2 with release dates, GitHub references and a dated log of every change under its version; every future change is logged here (see CLAUDE.md).",
+   "links": [
+    {
+     "label": "PR #201",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/201"
+    }
+   ]
   }
  ]
 }
