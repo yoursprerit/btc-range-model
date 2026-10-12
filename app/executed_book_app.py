@@ -200,6 +200,8 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
                 Value=f"${qty * px:,.0f}",
                 Status=t.get("status") or "—",
                 Filled=(f"{filled:g}" if filled else ("—" if t.get('status') == 'PLANNED' else "0")),
+                Reason=t.get("reason") or "—",
+                **{"Broker message": t.get("broker_msg") or "—"},
             ))
         tdf = pd.DataFrame(trows)
         n_buy = sum(1 for t in trades if t.get("action") == "BUY")
