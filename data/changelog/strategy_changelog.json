@@ -540,7 +540,13 @@
    "kind": "execution",
    "title": "Dead-man's switch and 4:15 PM reconcile",
    "description": "Each scheduled run pings an outside monitor (healthchecks.io / Uptime Kuma) so a PC that is off or a lapsed gateway login raises an alarm. A new read-only reconcile task at 4:15 PM ET checks every account's fills against its executed book, repairs a missing/stale report from IBKR executions, and alerts on unfilled or still-working orders.",
-   "impact": "Closes the silent-failure gaps: a run that never started, and a run that died before recording its fills."
+   "impact": "Closes the silent-failure gaps: a run that never started, and a run that died before recording its fills.",
+   "links": [
+    {
+     "label": "PR #209",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/209"
+    }
+   ]
   }
  ]
 }
