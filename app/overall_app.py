@@ -835,16 +835,17 @@ _EB_PATHS = (*eb.account_report_paths(_EB_DIR),
 
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=2)
-def get_executed_report(bucket: str) -> dict | None:
+def get_executed_report(bucket: str, only_path: str | None = None) -> dict | None:
     """The execution report the IBKR executor commits back after a rebalance —
     the LIVE account's when one exists, else the paper account's (the same
-    live-first order the published Targetbook uses).
+    live-first order the published Targetbook uses).  ``only_path`` pins one
+    specific account's report instead (the per-account radio).
 
     Dry-runs are kept: they place no orders, but the ``positions`` they report
     are still the account's real holdings and real average costs — only the
     ``trades`` in such a report are hypothetical, and this section shows none."""
     import json as _json
-    for _p in _EB_PATHS:
+    for _p in ((Path(only_path),) if only_path else _EB_PATHS):
         try:
             if not _p.exists():
                 continue
@@ -2272,7 +2273,13 @@ with tab_live:
     # the executor commits back), both marked at the live spot that already
     # drives every other price on this tab.
     _cp_ibkr = get_executed_report(_bucket())
-    _cp_c2 = eb.from_c2_snapshot(get_c2_snapshot(_bucket()))
+    # one radio entry per IBKR account the multi-account executor trades
+    _cp_accts = {}
+    for _ap in eb.account_report_paths(_EB_DIR):
+        _ar = get_executed_report(_bucket(), str(_ap))
+        if _ar:
+            _cp_accts[f"🏦 IBKR Account #{eb.account_id_of(_ap)}"] = _ar
+    _cp_c2 =eb.from_c2_snapshot(get_c2_snapshot(_bucket()))
     _CP_C2, _CP_IBKR = "📡 Collective2 model account", "🏦 IBKR account"
     _CP_WF = "🧪 Walk-forward replay"
     _cp_opts = [_CP_C2, _CP_IBKR, _CP_WF]
@@ -2283,7 +2290,7 @@ with tab_live:
     # an account can still hold a name no current sleeve trades (retired
     # sleeve, not yet sold) — quote it too rather than leave it unpriced
     _cp_extra = sorted({(p.get("symbol") or p.get("key") or "")
-                        for _rep in (_cp_ibkr, _cp_c2) if _rep
+                        for _rep in (_cp_ibkr, _cp_c2, *_cp_accts.values()) if _rep
                         for p in (_rep.get("positions") or [])}
                        - set(_cp_marks) - {""})
     try:
@@ -2333,8 +2340,21 @@ with tab_live:
                                 "the engine's entry prices.")
         _cp_is_c2 = _cp_src == _CP_C2
         _cp_is_wf = _cp_src == _CP_WF
+        _cp_ibkr_sel = _cp_ibkr
+        if _cp_src == _CP_IBKR and len(_cp_accts) > 1:
+            _cp_acct_opts = list(_cp_accts)
+            if st.session_state.get("overall_cp_ibkr_acct") not in _cp_acct_opts:
+                st.session_state.pop("overall_cp_ibkr_acct", None)
+            _cp_acct_pick = st.radio(
+                "IBKR account", _cp_acct_opts, horizontal=True,
+                key="overall_cp_ibkr_acct",
+                help="Each IBKR account the executor trades has its own "
+                     "execution report and cost basis.")
+            _cp_ibkr_sel = _cp_accts[_cp_acct_pick]
+        elif _cp_src == _CP_IBKR and len(_cp_accts) == 1:
+            _cp_ibkr_sel = next(iter(_cp_accts.values()))
         _cp_report = (_cp_c2 if _cp_is_c2 else
-                      _replay_positions_report() if _cp_is_wf else _cp_ibkr)
+                      _replay_positions_report() if _cp_is_wf else _cp_ibkr_sel)
         _cp_broker = "C2" if _cp_is_c2 else ("Replay" if _cp_is_wf else "IBKR")
         if not _cp_report:
             st.info({
