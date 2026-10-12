@@ -240,13 +240,21 @@ def _snap_ok() -> bool:
 
 
 def get_pnl_snapshot():
-    """The precomputed P&L replays (data/overall/pnl_snapshot.pkl.gz, rebuilt
-    daily by CI), or None when absent / stale / built by different engine code
-    / bypassed with the "recompute live" toggle — every caller then falls back
-    to the live computation below.  Keyed on the file's mtime so a redeploy
-    that ships a new snapshot is picked up without a manual cache clear."""
+    """The precomputed P&L replays and strategy results, built daily by CI and
+    published to the ``data-snapshots`` branch (downloaded to
+    data/overall/pnl_snapshot.pkl.xz, re-checked every 30 min), or None when
+    absent / stale / built by different engine code / bypassed with the
+    "recompute live" toggle — every caller then falls back to the live
+    computation below.  Keyed on the file's mtime so a newly downloaded
+    snapshot is picked up without a manual cache clear."""
     if st.session_state.get("overall_pnl_live"):
         return None
+    try:                                # private repo: optional read-only token
+        _tok = (st.secrets.get("SNAPSHOT_READ_TOKEN")
+                or st.secrets.get("VAULT_READ_TOKEN"))
+    except Exception:
+        _tok = None
+    pnl_snap.fetch_remote(token=_tok)   # no-op within the TTL; never raises
     try:
         mt = pnl_snap.SNAPSHOT_PATH.stat().st_mtime
     except OSError:
@@ -2729,7 +2737,7 @@ with tab_live:
         # (C2_RECORD_START), current strategy version only. C2 holds idle
         # capital as plain cash (earning nothing) and the SATA the book buys (coupon).
         # ⚡ the heavy replays come from the snapshot CI rebuilds every day
-        # (data/overall/pnl_snapshot.pkl.gz) — instant; the toggle recomputes
+        # (published by CI to the data-snapshots branch) — instant; the toggle recomputes
         # them live (30–60 s) and is also the automatic fallback whenever the
         # snapshot is missing, stale or built by different engine code
         _live_cols = st.columns([3, 2])

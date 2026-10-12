@@ -618,11 +618,19 @@ the equal-weight buy-&-hold replay and the sleeve price table) only change when 
 new daily bar lands, so they are built once a day rather than on every cold
 start:
 
-* `scripts/build_pnl_snapshot.py` → `data/overall/pnl_snapshot.pkl.gz` (~1.5 MB),
-  run by `.github/workflows/build-pnl-snapshot.yml` after the daily publish, on
-  backstop cron slots, and on any push that changes engine code. It commits
-  nothing unless the code, data vintage or last bar changed.
-* `app/pnl_snapshot.py` loads it. The app **ignores** a snapshot that is missing,
+* `scripts/build_pnl_snapshot.py` → `pnl_snapshot.pkl.xz` (~1 MB, xz — about a
+  third of the old gzip size), run by `.github/workflows/build-pnl-snapshot.yml`
+  after the daily publish, on backstop cron slots, and on any push that changes
+  engine code. It also stores the V1 / V2 per-instrument strategy results, so the
+  live cockpit does not re-run every engine in the web process. The workflow
+  **force-pushes it to a one-commit `data-snapshots` branch, not to `main`**, so
+  the repository does not accrue a binary per build (a superseded snapshot's blob
+  becomes unreachable and is garbage-collected). It publishes nothing unless the
+  code, data vintage or last bar changed.
+* `app/pnl_snapshot.py` downloads it (`fetch_remote`: at most every 30 min, 5-min
+  back-off after a failure, public repos via raw.githubusercontent.com, private
+  ones via a read-only `SNAPSHOT_READ_TOKEN` / `VAULT_READ_TOKEN` secret) into the
+  git-ignored `data/overall/pnl_snapshot.pkl.xz` and loads it. The app **ignores** a snapshot that is missing,
   unreadable, whose newest bar is > 4 days old, or that was built by different
   engine code (`code_fingerprint` = hash of every `app/*.py` except the page
   modules) and recomputes live exactly as before — a missed CI run costs speed,
@@ -633,7 +641,8 @@ start:
 * The P&L section shows which path served it and has a **🔄 Recompute live**
   toggle to cross-check. Cold full-page load: ~118 s → ~33 s (the rest is the
   live tab's own universe runs).
-* Git-history cost is ~1.5 MB per daily commit; squash or prune the file's
-  history periodically if the repository size matters.
+* Git-history cost: none on `main`. Past `data/overall/pnl_snapshot.pkl.gz`
+  commits remain in history until it is rewritten (`git filter-repo`), which is
+  optional.
 
 Tests: `tests/test_pnl_snapshot.py`.

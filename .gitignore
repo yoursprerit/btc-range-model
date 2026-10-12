@@ -78,3 +78,8 @@ data/gldm/macro_daily_manifest.json
 runtime/freshness_log.json
 # per-deployment dataset audit trail (app/data_gate.py) — server-local state
 runtime/dataset_audit.json
+
+# local cache of the CI-built P&L snapshot (downloaded from the data-snapshots
+# branch by app/pnl_snapshot.py — never committed to main, see DATA_CONSISTENCY.md)
+data/overall/pnl_snapshot.pkl.xz
+data/overall/pnl_snapshot.pkl.xz.*.tmp

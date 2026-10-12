@@ -7,9 +7,11 @@ when a new daily bar lands, yet the app used to recompute them (tens of seconds)
 on every cold start / 30-minute cache expiry.
 
 ``scripts/build_pnl_snapshot.py`` (run daily by .github/workflows/
-build-pnl-snapshot.yml) calls :func:`build` and commits the result to
-``data/overall/pnl_snapshot.pkl``; the app calls :func:`load` and reads it back
-in well under a second.  :func:`load` returns ``None`` — and the app falls back
+build-pnl-snapshot.yml) calls :func:`build` and publishes the result to the
+single-commit ``data-snapshots`` branch — NOT to ``main``, so the repository
+does not accrue a ~1 MB binary per build.  The app downloads it with
+:func:`fetch_remote` into ``data/overall/pnl_snapshot.pkl.xz`` (git-ignored
+local cache) and calls :func:`load` to read it back in well under a second.  :func:`load` returns ``None`` — and the app falls back
 to its original live computation — whenever the snapshot is missing, unreadable,
 its newest bar is older than ``MAX_BAR_AGE_DAYS`` or it was built by different engine code
 (``code_fingerprint``), so a stale file can never be served silently.
@@ -22,9 +24,12 @@ and taxes are applied by the app on top, per user input.
 """
 from __future__ import annotations
 
-import gzip
 import hashlib
+import lzma
+import os
 import pickle
+import time
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -33,9 +38,17 @@ import pandas as pd
 import overall_core as ov
 
 _APP_DIR = Path(__file__).resolve().parent
-SNAPSHOT_PATH = _APP_DIR.parent / "data" / "overall" / "pnl_snapshot.pkl.gz"
+SNAPSHOT_PATH = _APP_DIR.parent / "data" / "overall" / "pnl_snapshot.pkl.xz"
 
-SCHEMA = 1
+# where CI publishes it (a one-commit branch, force-pushed each build)
+REMOTE_REPO = "yoursprerit/btc-range-model"
+REMOTE_BRANCH = "data-snapshots"
+REMOTE_FILE = "pnl_snapshot.pkl.xz"
+REMOTE_TTL_SECS = 30 * 60   # re-check the branch at most this often
+_RETRY_SECS = 5 * 60        # …and wait this long after a failed download
+_last_failure = [0.0]
+
+SCHEMA = 2                  # 2: xz-compressed, results added (1 was gzip)
 MAX_BAR_AGE_DAYS = 4        # newest bar older than this = the daily pipeline is broken
 VERSIONS = ("v1", "v2", "combined")
 
@@ -202,10 +215,59 @@ def content_key(payload: dict) -> str:
 def save(payload: dict, path: Path = SNAPSHOT_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "wb") as raw, \
-            gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=9, mtime=0) as fh:
+    # xz is ~3x smaller than gzip on these frames/arrays (1.0 vs 2.9 MB) and
+    # lossless, so nothing the app reads changes
+    with lzma.open(tmp, "wb", preset=6) as fh:
         pickle.dump(payload, fh, protocol=4)
     tmp.replace(path)
+
+
+def read(path: Path = SNAPSHOT_PATH) -> dict:
+    """The raw payload at *path* (no freshness checks); raises if unreadable."""
+    with lzma.open(path, "rb") as fh:
+        return pickle.load(fh)
+
+
+def fetch_remote(dest: Path = SNAPSHOT_PATH, token: str | None = None,
+                 repo: str = REMOTE_REPO, branch: str = REMOTE_BRANCH,
+                 ttl: float = REMOTE_TTL_SECS, timeout: float = 30) -> str:
+    """Make sure *dest* holds a recent copy of the CI-published snapshot.
+
+    Returns ``"fresh"`` (local copy younger than *ttl*), ``"downloaded"``,
+    ``"backoff"`` (a recent attempt failed) or ``"failed"``; on any failure the
+    previous local copy, if any, is left untouched — :func:`load` and the app's
+    live computation take it from there, so this never raises.  A public repo
+    is read from raw.githubusercontent.com; with a *token* (private repo) the
+    contents API is used instead."""
+    now = time.time()
+    try:
+        if dest.exists() and now - dest.stat().st_mtime < ttl:
+            return "fresh"
+    except OSError:
+        pass
+    if now - _last_failure[0] < _RETRY_SECS:
+        return "backoff"
+    try:
+        if token:
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{repo}/contents/{REMOTE_FILE}"
+                f"?ref={branch}",
+                headers={"Accept": "application/vnd.github.raw+json",
+                         "Authorization": f"Bearer {token}"})
+        else:
+            req = urllib.request.Request(
+                f"https://raw.githubusercontent.com/{repo}/{branch}/{REMOTE_FILE}")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            blob = r.read()
+        pickle.loads(lzma.decompress(blob))        # reject a truncated / wrong file
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + f".{os.getpid()}.tmp")
+        tmp.write_bytes(blob)
+        tmp.replace(dest)
+        return "downloaded"
+    except Exception:
+        _last_failure[0] = now
+        return "failed"
 
 
 def load(path: Path = SNAPSHOT_PATH, now: pd.Timestamp | None = None,
@@ -213,8 +275,7 @@ def load(path: Path = SNAPSHOT_PATH, now: pd.Timestamp | None = None,
     """The snapshot payload, or ``None`` if absent / unreadable / stale /
     built by different engine code."""
     try:
-        with gzip.open(path, "rb") as fh:
-            snap = pickle.load(fh)
+        snap = read(path)
         if snap.get("schema") != SCHEMA:
             return None
         if check_code and snap.get("fingerprint") != code_fingerprint():

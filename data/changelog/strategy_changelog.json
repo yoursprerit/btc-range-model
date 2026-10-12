@@ -778,6 +778,14 @@
   "kind": "ui",
   "title": "BTC page: stop the 60-second reload loop when idle",
   "description": "The BTC page re-ran its whole script every 60s forever, holding a server thread asleep in between. It now stops after 30 minutes without a click and resumes on the next interaction."
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-12",
+  "kind": "data",
+  "title": "P&L snapshot moves off main and shrinks 3x",
+  "description": "The daily P&L/results snapshot is now xz-compressed (about 1 MB instead of 2.9 MB gzip) and published to a force-pushed single-commit data-snapshots branch instead of being committed to main; the app downloads it every 30 minutes and still falls back to computing live if it is missing or stale. No signal or allocation logic changed.",
+  "impact": "Stops ~25–50 MB/month of unreclaimable binary growth in the repository history."
  }
  ]
 }
