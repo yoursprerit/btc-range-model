@@ -1031,21 +1031,19 @@ def _pos_meta(key: str, meta_by_key: dict) -> dict:
         kind=row.get("kind") or am.get("kind") or "core",
         parent=row.get("parent") or key,
         accent=row.get("accent") or "#94a3b8",
-        known=bool(row),
-        engine_entry=((row.get("pos") or {}).get("entry_date")
-                      if (row.get("pos") or {}).get("in_pos") else None))
+        known=bool(row))
 
 
 def _opened_line(r: dict, m: dict) -> str:
-    """The card's "since <date>" line: the broker's / replay's own open date
-    when it recorded one, else the sleeve engine's entry date for the signal
-    (tagged ``engine`` — the account's real fill date may differ), else a dash."""
-    d, tag = r.get("opened"), ""
-    if not d and m.get("engine_entry") is not None:
-        d, tag = eb._opened_date(m["engine_entry"]), " <span style='color:#94a3b8'>(engine)</span>"
+    """The card's "opened <date>" line: the date the SOURCE recorded — the
+    executed book's (C2 / IBKR) own open date, or the walk-forward replay's
+    engine entry date (the replay report carries it as ``opened``).  An
+    executed-book position never borrows the engine's date: when the book
+    has none the line says so."""
+    d = r.get("opened")
     if not d:
-        return "🗓️ opened <span style='color:#94a3b8'>—</span><br>"
-    return f"🗓️ opened <b>{pd.Timestamp(d):%b %d, %Y}</b>{tag}<br>"
+        return ("🗓️ opened <span style='color:#94a3b8'>not available</span><br>")
+    return f"🗓️ opened <b>{pd.Timestamp(d):%b %d, %Y}</b><br>"
 
 
 def _render_current_positions(cp: dict, meta_by_key: dict, *,
