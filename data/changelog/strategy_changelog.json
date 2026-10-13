@@ -889,6 +889,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/230"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "analytics",
+  "title": "Strategy P&L (C2 record): figures follow C2's executed fills",
+  "description": "With the Collective2 account picked, Portfolio value now, P&L, CAGR, drawdown, Sharpe and the other metrics are computed from C2's actual fills (entry/exit prices, shares, commissions) marked daily at official closes instead of compounding the archived target books. The books remain the fallback, and a reference line shows books vs executed.",
+  "impact": "Removes the gap between the C2 account card and Portfolio value now: both rest on the same executed fills.",
+  "links": [
+   {
+    "label": "PR #231",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/231"
+   }
+  ]
  }
  ]
 }

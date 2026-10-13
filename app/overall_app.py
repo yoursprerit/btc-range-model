@@ -3056,11 +3056,39 @@ with tab_live:
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
                             **_PFV["curves"]}
             _curve_all = _bookrep["equity"]
+            # The figures follow what C2 EXECUTED: its fills, marked daily at
+            # official closes, replace the target-book curve for every metric
+            # (portfolio value, CAGR, drawdown, Sharpe…).  The books remain the
+            # fallback while no fills can be marked, and the reconciliation
+            # line below shows the gap between the two.
+            _exec_eq = ov.c2_executed_equity(
+                get_c2_snapshot(_bucket()), get_c2_archive(_bucket()),
+                get_sleeve_prices(_bucket(), _use_snap))
+            if _exec_eq is not None and len(_exec_eq) >= 2:
+                _bk = _bookrep["equity"].reindex(_exec_eq.index).ffill().dropna()
+                _book_end = (float(_bk.iloc[-1] / _bk.iloc[0])
+                             if len(_bk) else float("nan"))
+                _curve_all = _exec_eq
+                _curves_view = {STRAT_CURVE_ACTUAL: _exec_eq, **_PFV["curves"]}
+                st.caption(
+                    "🧾 **Figures below follow C2's executed fills** (entry and "
+                    "exit prices, share counts, commissions), marked at official "
+                    f"closes through **{_exec_eq.index[-1]:%b %d, %Y}** — not the "
+                    "target books. For reference, compounding the books alone over "
+                    f"the same bars gives {(_book_end - 1) * 100:+.2f}% vs "
+                    f"{(float(_exec_eq.iloc[-1]) - 1) * 100:+.2f}% executed; the "
+                    "gap is fill timing/prices, commissions and share rounding. "
+                    "Commissions are already inside the fills, so there is no "
+                    "separate brokerage-cost option for this record.")
+            else:
+                st.caption("⚠️ No marked C2 fills yet — figures fall back to the "
+                           "target books (modelled, not executed).")
             _render_c2_account(portfolio_value)
-            # ── realism toggles: IBKR Pro costs and capital-gains taxes ──
+            # ── realism toggles: capital-gains taxes (and IBKR costs, which
+            # the executed fills already include) ──
             _fx_cols = st.columns(2)
             with _fx_cols[0]:
-                _fx_costs = _cost_controls()
+                _fx_costs = False       # C2's fills already carry commissions
             with _fx_cols[1]:
                 _fx_taxes, _fx_income = _tax_controls()
             if _bookrep["dropped"]:
