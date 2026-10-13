@@ -2663,7 +2663,7 @@ with tab_live:
                     "A gap means deposits/withdrawals differ from the schedule "
                     "above, or fills drifted from the published books.")
 
-    def _render_c2_account(pv):
+    def _render_c2_account(pv, exec_ret=None):
         """📡 The Collective2 model account — C2's own account value, fills
         and P&L — re-scaled from its starting cash to the 💼 portfolio value
         (default $100,000), so every dollar reads as that account size."""
@@ -2680,10 +2680,18 @@ with tab_live:
             f"📡 Collective2 account — calibrated to "
             f"${pv:,.0f} initial capital</div>", unsafe_allow_html=True)
         cm = st.columns(6)
+        if exec_ret is not None:
+            # same executed-fills curve as "Portfolio value now" below, at the
+            # last official close, so the two cards agree to the dollar
+            acct = dict(acct, total_ret=exec_ret, value=1.0 + exec_ret)
         _pl = acct["total_ret"] * pv
         cm[0].metric("Total portfolio value", f"${acct['value'] * pv:,.0f}",
                      delta=f"{_sd(_pl)} ({acct['total_ret']*100:+.2f}%)",
-                     help=("C2's reported figure disagrees with its own "
+                     help=("C2's fills marked at the last official close — the "
+                           "same executed-fills curve as **Portfolio value "
+                           "now** below, from initial capital."
+                           if exec_ret is not None else
+                           "C2's reported figure disagrees with its own "
                            "fills, so this is the account **rebuilt from C2's "
                            "fills**: initial capital + realized P&L + open "
                            "positions marked at the live / last price."
@@ -2919,6 +2927,7 @@ with tab_live:
         if _c2_pending:
             _actual = False
             _ibkr = None        # no books to measure an account against yet
+        _exec_on = False        # C2 figures rebuilt from executed fills
         _fx_costs, _fx_taxes, _fx_income = False, False, fx.INCOME_DEFAULT
         def _cost_controls() -> bool:
             """Brokerage-costs radio shared by the replay and as-published
@@ -3067,7 +3076,8 @@ with tab_live:
                 columns=(list(_px_rets.columns) if _px_rets is not None
                          else None))
             _exec_eq = _exec["equity"] if _exec is not None else None
-            if _exec_eq is not None and len(_exec_eq) >= 2:
+            _exec_on = _exec_eq is not None and len(_exec_eq) >= 2
+            if _exec_on:
                 _bk = _bookrep["equity"].reindex(_exec_eq.index).ffill().dropna()
                 _book_end = (float(_bk.iloc[-1] / _bk.iloc[0])
                              if len(_bk) else float("nan"))
@@ -3091,7 +3101,9 @@ with tab_live:
             else:
                 st.caption("⚠️ No marked C2 fills yet — figures fall back to the "
                            "target books (modelled, not executed).")
-            _render_c2_account(portfolio_value)
+            _render_c2_account(portfolio_value,
+                               exec_ret=(float(_exec_eq.iloc[-1]) - 1.0
+                                         if _exec_on else None))
             # ── realism toggles: capital-gains taxes (and IBKR costs, which
             # the executed fills already include) ──
             _fx_cols = st.columns(2)
@@ -3131,6 +3143,12 @@ with tab_live:
         _c2_src = _actual or _c2_pending
         _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START if _c2_src
                                       else "2026-03-01").date()
+        if _exec_on:
+            # the executed curve opens at the account's starting capital (the
+            # bar before C2's first fill) — default to it so the P&L counts the
+            # fills' own move to the first close and the opening commissions,
+            # exactly like the Collective2 account card above
+            _default_start = _d0
         if _ibkr is not None:
             # an IBKR account's record starts the day IT first traded the
             # book — Collective2's start date plays no part
