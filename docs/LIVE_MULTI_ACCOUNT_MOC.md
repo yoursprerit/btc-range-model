@@ -251,10 +251,12 @@ live; push races → one report commit per run, rebased once if rejected.
 
 ## Strategy P&L per account, with monthly deposits
 
-On the **Overall → 📈 Strategy P&L** section the *Performance source* radio has
-**As-published record (C2)** and, once an account has **executed** the book,
-**As-published record (IBKR #…)** — one per account. An account that has no
-executed run yet (or only previews) gets no option.
+On the **Overall → 📈 Strategy P&L** section, choosing **As-published record** as
+the *Performance source* shows an **Account** picker: **Collective2 model account**
+and, once an account has **executed** the book, **IBKR #…** — one per account
+(read from the local `accounts/` folder or the encrypted vault, like 💼 Current
+Positions). An account that has no executed run yet (or only previews) gets no
+option.
 
 * The percentage figures are time-weighted, so cash you add never moves them.
 * The dollar figures replay the account from the day it first traded the book,

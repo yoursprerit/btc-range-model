@@ -2832,45 +2832,46 @@ with tab_live:
         _n_c2 = sum(1 for b in _books
                     if str(b.get("as_of")) >= ov.C2_RECORD_START)
         _ver_up = _pnl_view.upper()
-        _SRC_ACTUAL = "🎯 As-published record (C2)"
+        _SRC_ACTUAL = "🎯 As-published record"
         _SRC_REPLAY = "🧪 Walk-forward replay (simulated)"
-        # One as-published option per IBKR account that has really EXECUTED the
-        # book (an archived execution report exists). An account with no
-        # executed run yet — or only previews — gets no option.
+        # The as-published record can be measured on Collective2's model
+        # account or on any IBKR account that has really EXECUTED the book
+        # (an archived execution report exists — previews do not count).  The
+        # per-account reports live in the encrypted vault on the deployed app,
+        # so they are found the same way 💼 Current Positions finds them.
+        _ACCT_C2 = "📡 Collective2 model account"
         _ibkr_src = {}
-        for _rp in eb.account_report_paths(_EB_DIR):
-            _ri = acpnl.record_info(_rp)
+        try:
+            _pnl_rep_base = _reports_base(_bucket())
+        except Exception:
+            _pnl_rep_base = _EB_DIR
+        for _rp in eb.account_report_paths(_pnl_rep_base):
+            try:
+                _ri = acpnl.record_info(_rp)
+            except Exception:
+                _ri = None
             if _ri:
-                _ibkr_src[f"🎯 As-published record (IBKR #{_ri['account']})"] = _ri
+                _ibkr_src[f"🏦 IBKR #{_ri['account']}"] = _ri
         _SRC_BH = "⚖️ Equal-weight buy & hold"
         _bhrep = get_bh_replay(_bucket(), _use_snap)
         # the buy-&-hold source is the "do nothing" alternative measured over
         # the identical window — always offered, since it needs no archive and
-        # no profile.  The as-published option only exists once books do.
-        _src_opts = ([_SRC_ACTUAL, *_ibkr_src, _SRC_REPLAY]
+        # no profile.
+        _src_opts = ([_SRC_ACTUAL, _SRC_REPLAY]
                      + ([_SRC_BH] if _bhrep is not None else []))
-        # a remembered choice can vanish from the list (first archived book,
-        # or none at all) — clear it rather than let the widget error
+        # a remembered choice can vanish from the list — clear it rather than
+        # let the widget error
         if st.session_state.get("overall_pnl_source") not in _src_opts:
             st.session_state.pop("overall_pnl_source", None)
         _pnl_src = st.radio(
             "Performance source", _src_opts,
             index=_src_opts.index(_SRC_ACTUAL),
             horizontal=True, key="overall_pnl_source",
-            help="**As-published record (IBKR #…)** — the same published books, "
-                 "measured from the day that IBKR account first executed them, "
-                 "with the account's own **monthly deposit** (amount and day of "
-                 "month, set below) taken out of the dollar P&L. Listed only "
-                 "once the account has an executed run. "
-                 "**As-published record (C2)** — compounds the target books "
-                 "**Collective2 actually received** (one archived JSON per "
-                 "signal day, `data/overall/c2_book_archive/`), so the daily "
-                 "optimizer's trims and re-sizes are exactly the ones C2 "
-                 f"traded. **The record was reset to start on {_c2_start}** "
-                 "(the first book sent after C2 became the account of "
-                 "record); earlier books are not counted, and a day C2 "
-                 "missed keeps the previous book, just like the account. "
-                 "The SATA leg the books hold earns its coupon; idle cash earns nothing. "
+            help="**As-published record** — compounds the target books "
+                 "actually published each signal day (one archived JSON per "
+                 "day, `data/overall/c2_book_archive/`), so the daily "
+                 "optimizer's trims and re-sizes are exactly the ones traded. "
+                 "Pick the account it is measured on below. "
                  "**Walk-forward replay** — a look-ahead-free simulation "
                  "of the current rules over the full back-test "
                  "history (longer window, but a reconstruction, not the "
@@ -2881,8 +2882,30 @@ with tab_live:
                  "cash. Same dates, same instruments, no strategy — the "
                  "sections below switch to the ones that mean something "
                  "for a book that never trades.")
-        _ibkr = _ibkr_src.get(_pnl_src)
-        _actual = _pnl_src == _SRC_ACTUAL or _ibkr is not None
+        _ibkr = None
+        if _pnl_src == _SRC_ACTUAL:
+            _acct_opts = [_ACCT_C2, *_ibkr_src]
+            if st.session_state.get("overall_pnl_account") not in _acct_opts:
+                st.session_state.pop("overall_pnl_account", None)
+            _acct_pick = st.radio(
+                "Account", _acct_opts, index=0, horizontal=True,
+                key="overall_pnl_account",
+                help="**Collective2 model account** — the books C2 received, "
+                     f"from the record reset (**{_c2_start}**, the first book "
+                     "sent after C2 became the account of record); earlier "
+                     "books are not counted, and a day C2 missed keeps the "
+                     "previous book, just like the account. The SATA leg the "
+                     "books hold earns its coupon; idle cash earns nothing. "
+                     "**IBKR #…** — the same published books, measured from "
+                     "the day that IBKR account first executed them, with the "
+                     "account's own **monthly deposit** (amount and day of "
+                     "month, set below) taken out of the dollar P&L. An IBKR "
+                     "account is listed once it has an executed run.")
+            _ibkr = _ibkr_src.get(_acct_pick)
+            if not _ibkr_src:
+                st.caption("No IBKR account has an executed run on record yet "
+                           "— only the Collective2 record is available.")
+        _actual = _pnl_src == _SRC_ACTUAL
         _bh_src = _pnl_src == _SRC_BH
         # the C2 record hasn't covered 2 bars yet: stay on this source (its
         # own start date, no figures) rather than quietly showing the replay
