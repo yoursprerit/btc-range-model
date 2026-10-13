@@ -123,3 +123,25 @@ def test_fetch_remote_rejects_a_corrupt_download(tmp_path, monkeypatch):
     monkeypatch.setattr(ps, "_last_failure", [0.0])
     dest = tmp_path / "local.pkl.xz"
     assert ps.fetch_remote(dest) == "failed" and not dest.exists()
+
+
+# ── optimiser output rides in each pack ──────────────────────────────────────
+def _snap_with_pack(opt):
+    rets = pd.DataFrame({"A": [0.01, -0.02]}, index=pd.to_datetime(["2026-10-09", "2026-10-12"]))
+    wf = dict(equity=pd.Series([1.0, 1.01]))
+    pack = dict(wf=wf) if opt is None else dict(wf=wf, opt=opt)
+    return dict(packs={("v2", "Balanced"): pack},
+                shared={"v2": dict(rets=rets, base_curves={})}), rets
+
+
+def test_get_pack_exposes_the_stored_optimiser_output():
+    snap, rets = _snap_with_pack({"optimal": {"weights": {"A": 1.0}}, "cols": ["A"]})
+    got = ps.get_pack(snap, "V2", "Balanced")
+    assert got["opt"]["cols"] == ["A"]
+    assert ps.rets_match(got["rets"], rets)
+
+
+def test_get_pack_opt_is_none_for_a_snapshot_built_before_it_was_stored():
+    snap, _ = _snap_with_pack(None)
+    got = ps.get_pack(snap, "v2", "Balanced")
+    assert got is not None and got["opt"] is None

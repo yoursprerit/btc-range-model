@@ -416,9 +416,18 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
                    BH_CURVE: bm["bh_equal"]["equity"]}
     prof = ov.RISK_PROFILES[name]
     caps = ov.caps_for(name)
-    opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
-                              mdd_floor=prof["mdd_floor"], objective=prof["objective"],
-                              fundamental=False)
+    # the CI-built snapshot also holds this profile's optimiser output and walk-
+    # forward replay; both are reused only when computed on exactly this returns
+    # matrix (never mixes data vintages), otherwise computed live
+    _snap = get_pnl_snapshot() if use_snap else None
+    _sp = pnl_snap.get_pack(_snap, version, name) if _snap is not None else None
+    if _sp is not None and not pnl_snap.rets_match(_sp["rets"], rets):
+        _sp = None
+    opt = _sp["opt"] if _sp is not None else None
+    if opt is None:
+        opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
+                                  mdd_floor=prof["mdd_floor"],
+                                  objective=prof["objective"], fundamental=False)
     w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
     # Combined = V1's replay to the cut-over, then V2's logic continuing from
     # the book V1 last held — spliced from the two cached generations
@@ -427,11 +436,7 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
     # the walk-forward replay is the slow part and only changes with a new daily
     # bar: reuse the CI-built one when it was computed on exactly this returns
     # matrix, otherwise replay live (never mixes data vintages)
-    wf = None
-    _snap = get_pnl_snapshot() if use_snap else None
-    _sp = pnl_snap.get_pack(_snap, version, name) if _snap is not None else None
-    if _sp is not None and pnl_snap.rets_match(_sp["rets"], rets):
-        wf = _sp["wf"]
+    wf = _sp["wf"] if _sp is not None else None
     if wf is None:
         wf = ov.walkforward_gated_replay(results, caps=caps,
                                          mdd_floor=prof["mdd_floor"],

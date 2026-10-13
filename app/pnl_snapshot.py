@@ -105,7 +105,16 @@ def _pack(version: str, name: str, cache: dict, rets_cache: dict) -> dict:
         version=version, gens=gens, cluster_mix=ov.cluster_mix_for(name, version),
         adds_only_cluster=ov.cluster_adds_band_for(name, version),
         sata_cap=ov.sata_cap_for(version))
-    return dict(wf=wf)
+    # the weight optimiser (seeded Monte-Carlo, a few seconds per profile) is
+    # the other heavy step the cockpit repeats on every cold cache; same inputs
+    # as ``get_profile_pack`` feeds it, so the app can reuse it under the same
+    # returns-matrix match as the replay
+    pos = ov.position_matrix(results, rets.index)
+    opt = ov.optimize_weights(rets, caps=ov.caps_for(name), pos=pos,
+                              sata_daily=ov.SATA_DAILY,
+                              mdd_floor=prof["mdd_floor"],
+                              objective=prof["objective"], fundamental=False)
+    return dict(wf=wf, opt=opt)
 
 
 def _sleeve_prices(results: list[dict]):
@@ -165,13 +174,14 @@ def build(profiles: list[str] | None = None, versions=VERSIONS,
 
 def get_pack(snap: dict, version: str, name: str):
     """One (view, profile) portfolio in the shape the P&L section reads
-    (``wf`` / ``curves`` / ``rets``), or ``None`` if it was not snapshotted."""
+    (``wf`` / ``opt`` / ``curves`` / ``rets``), or ``None`` if it was not
+    snapshotted.  ``opt`` is ``None`` for a snapshot built before it was stored."""
     p = snap["packs"].get((str(version).lower(), name))
     sh = snap["shared"].get(str(version).lower())
     if not p or not sh:
         return None
-    return dict(wf=p["wf"], rets=sh["rets"], version=version, profile=name,
-                curves={STRAT_CURVE: p["wf"]["equity"], **sh["base_curves"]})
+    return dict(wf=p["wf"], opt=p.get("opt"), rets=sh["rets"], version=version,
+                profile=name, curves={STRAT_CURVE: p["wf"]["equity"], **sh["base_curves"]})
 
 
 def get_results(snap: dict | None, version: str) -> dict | None:
