@@ -875,6 +875,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/229"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "ui",
+  "title": "Strategy P&L: IBKR records no longer borrow Collective2 wording or data",
+  "description": "With an IBKR account picked, the start-date default, notices, chart caption and help text now refer to that account's first executed day instead of Collective2, and the trade log no longer lists C2's fills.",
+  "impact": "Keeps each account's record self-contained, so an IBKR result is never explained with the C2 account's dates or fills.",
+  "links": [
+   {
+    "label": "PR #230",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/230"
+   }
+  ]
  }
  ]
 }
