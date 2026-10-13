@@ -826,7 +826,13 @@
   "kind": "execution",
   "title": "Overall: optimiser output comes from the CI snapshot too",
   "description": "The daily snapshot now also stores each view/profile's weight-optimiser result, and the Overall page reuses it (under the same returns-matrix match as the replay) instead of re-running the optimiser on every cold cache, which is what the \"Optimising the allocation and replaying the back-test…\" spinner was waiting on. Verified identical to a live recompute for V2 and Combined, Balanced and Growth. No signal or allocation logic changed.",
-  "impact": "Removes about 6–10 s of CPU per cache miss (about 2 s Balanced + 4 s Growth locally, more on the throttled cloud container); snapshot grows by about 10 KB."
+  "impact": "Removes about 6–10 s of CPU per cache miss (about 2 s Balanced + 4 s Growth locally, more on the throttled cloud container); snapshot grows by about 10 KB.",
+  "links": [
+   {
+    "label": "PR #226",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/226"
+   }
+  ]
  }
  ]
 }
