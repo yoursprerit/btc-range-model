@@ -288,7 +288,8 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
         st.caption((f"Total unrealised P&L: **${tot_upnl:,.0f}**"
                     + ("" if _u_pct_tot is None else f" (**{_u_pct_tot:+.2f}%**)")
                     + f" · invested **${mv_total:,.0f}**"
-                    + (f" · cash **${cash:,.0f}**" if cash else "")
+                    + (f" · cash **${_reconciled_cash(float(payload.get('net_liq') or 0.0), sum(float(p.get('market_value') or 0.0) for p in positions), cash)[0]:,.0f}**"
+                       if cash else "")
                     + ("" if _rl_tot is None else
                        f" · **realised this run ${_rl_tot:,.2f}"
                        + ("" if _r_pct_tot is None else f" ({_r_pct_tot:+.2f}%)")
@@ -300,8 +301,11 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
                 positions, key=lambda x: -abs(float(x.get("market_value") or 0.0)))]
             vals = [abs(float(p.get("market_value") or 0.0)) for p in sorted(
                 positions, key=lambda x: -abs(float(x.get("market_value") or 0.0)))]
-            if cash > 0:
-                labels += ["CASH"]; vals += [cash]
+            _nl = float(payload.get("net_liq") or 0.0)
+            _cash_d, _ = _reconciled_cash(_nl, sum(
+                float(p.get("market_value") or 0.0) for p in positions), cash)
+            if _cash_d > 0:
+                labels += ["CASH"]; vals += [_cash_d]
             fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.55,
                                    sort=False, textinfo="label+percent"))
             fig.update_layout(height=340, margin=dict(t=10, b=10, l=10, r=10),
@@ -313,6 +317,20 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
 
     _drift_section(payload, historical=historical)
     _download(payload, secret, historical=historical)
+
+
+def _reconciled_cash(net_liq: float, held: float, cash: float) -> tuple[float, bool]:
+    """Cash consistent with the rest of the report. ``net_liq`` and ``cash`` are
+    separate IBKR reads (NetLiquidation / TotalCashValue); when
+    ``net_liq - held`` disagrees with the reported cash by more than 2 % of net
+    liq the cash tag is stale or mis-scoped, and the implied figure is the one
+    that makes the rows add up. Returns (cash, was_overridden)."""
+    if net_liq <= 0:
+        return cash, False
+    implied = net_liq - held
+    if abs(cash - implied) > 0.02 * net_liq:
+        return implied, True
+    return cash, False
 
 
 def _drift_section(payload: dict, *, historical: bool = False,
@@ -386,7 +404,11 @@ def _drift_section(payload: dict, *, historical: bool = False,
         k = p.get("key") or p.get("symbol")
         actual_val[k] = actual_val.get(k, 0.0) + _val(p)
 
-    denom = net_liq if net_liq > 0 else (sum(actual_val.values()) + cash)
+    held = sum(actual_val.values())
+    cash_fixed = False
+    if net_liq > 0 and held > 0:
+        cash, cash_fixed = _reconciled_cash(net_liq, held, cash)
+    denom = net_liq if net_liq > 0 else (held + cash)
     if denom <= 0:
         st.caption("Not enough account data to compute drift on this run.")
         return
@@ -413,6 +435,14 @@ def _drift_section(payload: dict, *, historical: bool = False,
             "Target": st.column_config.NumberColumn("Target %", format="%.1f%%"),
             "Actual": st.column_config.NumberColumn("Actual %", format="%.1f%%"),
             "Drift": st.column_config.NumberColumn("Drift (pp)", format="%+.1f")})
+    tot_actual = sum(r["Actual"] for r in rows)
+    if cash_fixed:
+        st.caption(f"⚠️ The report's cash figure disagreed with net liquidation "
+                   f"minus holdings, so cash is shown as net liq − holdings "
+                   f"(Actual column totals {tot_actual:.1f}%).")
+    elif abs(tot_actual - 100.0) > 2.0:
+        st.caption(f"⚠️ Actual % totals {tot_actual:.1f}%, not 100% — the report's "
+                   "net liq, holdings and cash are not consistent.")
     max_drift = max((abs(r["Drift"]) for r in rows), default=0.0)
     st.caption(f"Largest drift **{max_drift:.1f} pp**. Expected sources: whole-share "
                "rounding, the no-trade band, and fills vs the sizing price. A large "
