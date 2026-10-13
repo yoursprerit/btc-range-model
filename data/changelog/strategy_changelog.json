@@ -931,6 +931,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/233"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "ui",
+  "title": "Executed Book: drift table and donut reconcile cash with net liq",
+  "description": "The report's cash (TotalCashValue) and net liq (NetLiquidation) are separate IBKR reads. When cash disagrees with net liq minus holdings by more than 2% of net liq, the drift table and donut now show cash as net liq minus holdings and say so; a caption flags any Actual column that does not total ~100%.",
+  "impact": "U23154574 showed Actual % totalling 121.8% and a +21.5 pp cash drift while holdings were 90.3% of net liq (target 90%).",
+  "links": []
  }
  ]
 }
