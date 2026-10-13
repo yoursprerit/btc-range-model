@@ -3078,8 +3078,8 @@ with tab_live:
                     f"the same bars gives {(_book_end - 1) * 100:+.2f}% vs "
                     f"{(float(_exec_eq.iloc[-1]) - 1) * 100:+.2f}% executed; the "
                     "gap is fill timing/prices, commissions and share rounding. "
-                    "Brokerage costs are already inside the fills, so that "
-                    "toggle is off here.")
+                    "Commissions are already inside the fills, so there is no "
+                    "separate brokerage-cost option for this record.")
             else:
                 st.caption("⚠️ No marked C2 fills yet — figures fall back to the "
                            "target books (modelled, not executed).")
@@ -3088,10 +3088,7 @@ with tab_live:
             # the executed fills already include) ──
             _fx_cols = st.columns(2)
             with _fx_cols[0]:
-                if _exec_eq is not None and len(_exec_eq) >= 2:
-                    _fx_costs = False
-                else:
-                    _fx_costs = _cost_controls()
+                _fx_costs = False       # C2's fills already carry commissions
             with _fx_cols[1]:
                 _fx_taxes, _fx_income = _tax_controls()
             if _bookrep["dropped"]:
