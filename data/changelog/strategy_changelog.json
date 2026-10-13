@@ -959,6 +959,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/235"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "ui",
+  "title": "Collective2 card shows C2's own Total Portfolio value",
+  "description": "The Collective2 account card's Total portfolio value now displays the value C2 itself reports (ModelAccountValue), scaled to the initial capital, instead of the value rebuilt from fills.",
+  "impact": "The C2 card is the published record, so it reads the figure C2 shows.",
+  "links": []
  }
  ]
 }
