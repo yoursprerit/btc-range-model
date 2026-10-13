@@ -96,6 +96,8 @@ def _write_report(broker, payload: dict, mode: str, trades: list[dict],
         positions = broker.portfolio_snapshot()
     except Exception:
         positions = []
+    # the cash tag can lag fills the positions and net liq already include
+    cash = ic.consistent_cash(net_liq, positions, cash)
     # Session realized P&L, read right after the rebalance: what its trims and
     # closes actually banked. Account-level because a name closed out entirely
     # vanishes from the portfolio snapshot, so the per-position figures alone

@@ -945,6 +945,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/234"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "execution",
+  "title": "Execution report: cash no longer recorded stale after MOC fills",
+  "description": "The executor read TotalCashValue separately from NetLiquidation and the portfolio, and the cash tag can lag fills. The report now records net liq minus holdings when the cash tag disagrees by more than 2% of net liq (ibkr_common.consistent_cash).",
+  "impact": "U23154574 on 2026-10-13 recorded cash $145,084 (31.5%) against an implied $44,591 (9.7%): the ~$100k gap was that day's two MOC buys.",
+  "links": []
  }
  ]
 }

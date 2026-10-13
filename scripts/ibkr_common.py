@@ -188,6 +188,26 @@ def calendar_warning(today, within_days: int = 120) -> str | None:
 _PNL_UNAVAILABLE = 1e30
 
 
+def consistent_cash(net_liq: float, positions: list[dict], cash: float,
+                    tol: float = 0.02) -> float:
+    """The cash figure an execution report should record.
+
+    ``TotalCashValue`` and ``NetLiquidation`` are separate account-summary
+    reads, and the cash tag can lag the portfolio: right after a MOC fill the
+    positions and net liq include it while cash still shows the pre-fill
+    balance (U23154574, 2026-10-13: cash overstated by ~$100k, 21.8% of net
+    liq). When ``net_liq - sum(market_value)`` disagrees with the reported cash
+    by more than ``tol`` of net liq, the implied figure is returned instead.
+    Needs a real net liq and priced positions; otherwise the reading is kept.
+    Short positions carry a negative market value, so a plain sum is right."""
+    if net_liq <= 0 or not positions:
+        return cash
+    if any(not float(p.get("market_value") or 0.0) for p in positions):
+        return cash                       # unpriced name: implied cash is unreliable
+    implied = net_liq - sum(float(p["market_value"]) for p in positions)
+    return implied if abs(cash - implied) > tol * net_liq else cash
+
+
 def _pnl_value(raw) -> float | None:
     """A P&L field from IBKR as a float, or None when IBKR withholds it.
 
