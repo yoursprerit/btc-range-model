@@ -4064,6 +4064,58 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
         start_date=(min(firsts) if firsts else None), log=log)
 
 
+def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
+                       closes: pd.DataFrame | None) -> pd.Series | None:
+    """The C2 model account's daily equity curve (start = 1.0) rebuilt from
+    what it actually EXECUTED — C2's fills, not the target books.
+
+    Each bar's value is ``1 + realized + unrealized``, per $1 of starting
+    cash: ``realized`` sums C2's net P&L (commission included) on every round
+    trip closed on/before the bar; ``unrealized`` marks every position held
+    through the bar's close (filled on/before it, not yet exited) from its
+    fill price to that bar's official close.  The curve opens at 1.0 on the
+    last bar before the first fill.  A position C2 dropped whose closing
+    fill has not landed yet (``pending``) has no exit price, so the curve
+    stops the bar before the earliest such exit.  ``closes`` is a daily close
+    frame by sleeve key (a missing close carries the last one forward, else
+    the fill price).  ``None`` when there are no fills or no closes."""
+    if not snap or closes is None or not len(closes):
+        return None
+    log = c2_trade_log(snap, archive)
+    dated = [r for r in log if r["entry_date"] is not None]
+    if not dated:
+        return None
+    cash0 = c2_starting_cash(snap)
+    first = min(r["entry_date"] for r in dated)
+    bars = closes.index
+    prior = bars[bars < first]
+    base = prior[-1] if len(prior) else first - pd.Timedelta(days=1)
+    idx = bars[bars >= base]
+    cut = min((r["exit_date"] for r in dated if r["pending"]
+               and r["exit_date"] is not None), default=None)
+    if cut is not None:
+        idx = idx[idx < cut]
+    if not len(idx):
+        return None
+    px = closes.ffill().reindex(idx)
+    vals = []
+    for d in idx:
+        eq = 1.0
+        for r in dated:
+            if r["entry_date"] > d:
+                continue
+            if r["open"] or r["exit_date"] is None or r["exit_date"] > d:
+                p = px[r["key"]].get(d) if r["key"] in px.columns else None
+                p = float(p) if p is not None and np.isfinite(p) and p > 0 \
+                    else r["entry_px"]
+                sign = -1.0 if r["side"] == "short" else 1.0
+                eq += sign * r["shares"] * (p - r["entry_px"]) / cash0
+            elif not r["pending"]:
+                eq += r["pnl_usd"]
+        vals.append(eq)
+    return pd.Series(vals, index=idx, name="C2 executed")
+
+
 def load_published_books(archive_dir: Path | None = None) -> list[dict]:
     """Every archived as-published target book, parsed and sorted by
     ``as_of``.  Unreadable files are skipped; a record needs at least an

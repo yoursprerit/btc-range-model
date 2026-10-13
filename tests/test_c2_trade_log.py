@@ -156,3 +156,37 @@ def test_c2_replay_trades_a_book_the_session_it_is_published():
     late = [dict(books[0], generated_at_utc="2026-10-07T21:00:00+00:00"), books[1]]
     lt = oc.published_book_replay(rets, late, sata_daily=0.0, fill_on_publish=True)
     assert lt["equity"].index[0] == pd.Timestamp("2026-10-08")
+
+
+# ── executed-fills equity curve ─────────────────────────────────────────────
+def _closes():
+    idx = pd.to_datetime(["2026-09-23", "2026-09-24", "2026-09-25", "2026-09-28"])
+    return pd.DataFrame({"WGMI": [50.0, 49.0, 48.0, 46.05],
+                         "GRID": [177.0, 178.0, 179.0, 180.0]}, index=idx)
+
+
+def test_executed_equity_marks_fills_to_official_closes():
+    mon = _snap("2026-09-28T19:45:00+00:00", [_pos("GRID", 82, 177.99)],
+                closed=[WGMI_CLOSED], value=48_803.0)
+    mon["positions"][0]["opened"] = "2026-09-24T14:01:58Z"
+    eq = oc.c2_executed_equity(mon, [FRI, mon], _closes())
+    assert eq.index[0] == pd.Timestamp("2026-09-23") and eq.iloc[0] == 1.0
+    # day of the fill: WGMI 178 sh from 49.59 -> 49.00, GRID 82 sh 177.99 -> 178
+    d1 = 178 * (49.0 - 49.59) + 82 * (178.0 - 177.99)
+    assert np.isclose((eq.loc["2026-09-24"] - 1) * 50_000, d1)
+    # WGMI closed on the 28th: its net P&L is realized, GRID marked at 180
+    last = -631.12 + 82 * (180.0 - 177.99)
+    assert np.isclose((eq.iloc[-1] - 1) * 50_000, last)
+
+
+def test_executed_equity_stops_before_a_pending_exit():
+    mon = _snap("2026-09-28T19:31:34+00:00", [_pos("GRID", 82, 177.99)],
+                value=48_803.0)
+    eq = oc.c2_executed_equity(mon, [FRI, mon], _closes())
+    assert eq.index[-1] == pd.Timestamp("2026-09-25")
+
+
+def test_executed_equity_none_without_fills_or_closes():
+    assert oc.c2_executed_equity(_snap("2026-09-28T19:45:00+00:00", []),
+                                 [], _closes()) is None
+    assert oc.c2_executed_equity(FRI, [], None) is None
