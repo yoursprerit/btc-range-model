@@ -387,3 +387,11 @@ def test_proxy_etf_is_never_marked_at_the_underlying_price():
         {"BTC": 110_000.0})
     r = cp["rows"][0]
     assert r["price"] == 61.0 and r["price_src"] == "report"
+
+
+def test_opened_line_uses_only_the_sources_own_date():
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[1] / "app" / "overall_app.py"
+    text = src.read_text()
+    assert "engine_entry" not in text
+    assert "not available" in text

@@ -646,207 +646,221 @@
     }
    ]
   },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "execution",
-  "title": "Executor guards for broken markets: quote sanity, stress gate, fill tripwire, NAV brake, live kill switch",
-  "description": "The IBKR executor now (1) skips a leg whose live quote is halted, crossed or too wide (buys 2 %, sells 4 %) and never escalates an unfilled limit into a MARKET order against such a book; (2) withholds all buys - sells still go - when SPY is more than 8 % from its prior close, VIX is above 50, or a single ordered name has moved more than 40 %; (3) stops sending buys and alerts when a sell fills more than 1 % through the touch it was priced off; (4) runs de-risk-only when net liquidation is more than 15 % below the previous execution report; (5) re-reads the kill switch between orders and cancels orders still working. Every limit is a flag/env var and 0 turns it off; unmeasurable inputs (no VIX feed, no quote) never block a run.",
-  "impact": "Protects against bad prices and catastrophic-day execution without changing an ordinary day: thresholds are set to stay silent on normal volatility (the April-2025 VIX peak close was about 52).",
-  "links": [
-   {
-    "label": "PR #215",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/215"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "execution",
-  "title": "Executor run-health: partial-run alert, margin-call check, forgotten kill switch, all-legs-withheld alert",
-  "description": "The executor now (1) alerts loudly and records the real fills when a run dies after orders were transmitted (sells without their buys), keeping the send lock so nothing is re-sent; (2) refuses to trade, with an alert, when the account's excess liquidity is at or below zero or under 5 % of net liquidation, so it never fights IBKR's own margin system (--min-margin-cushion / IBKR_MIN_MARGIN_CUSHION, 0 disables, unreadable passes); (3) alerts every run while the kill switch is armed instead of skipping silently; (4) alerts when orders were planned but every leg was withheld; (5) treats a halted SPY as market-wide stress (buys withheld).",
-  "impact": "Closes the silent failure modes around the market-stress guards: the guards decide what may be sent, these make sure a half-done, blocked or withheld run is reported rather than looking like a quiet success. No change to an ordinary day.",
-  "links": [
-   {
-    "label": "PR #216",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/216"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "execution",
-  "title": "Executor book checks: profile pin, book-change hold, soft price drift, immediate MOC-refusal alert",
-  "description": "The executor now (1) aborts when the published book's profile differs from the account's pinned expected_profile; (2) holds the day's BUYS, with an alert, when the book adds more than 60 % of NAV in new target weight versus the last book that account saw, or an unpinned account's profile changed - sells and de-risking are never held, and IBKR_ACCEPT_LARGE_CHANGE=1 overrides for one run; (3) holds the buy of an unlevered ETF quoting 10 %+ from its book price instead of aborting the run (leveraged, single-stock and crypto names exempt; the 25 % hard abort is unchanged); (4) alerts immediately, and re-checks every minute, when the broker refuses a MOC order.",
-  "impact": "A signed-but-wrong book (profile switch, corrupted weights) can no longer open large positions unseen, and a refused closing-auction order is reported while it can still be fixed before the 15:50 ET cutoff. Nothing is held on an ordinary day.",
-  "links": [
-   {
-    "label": "PR #217",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/217"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "execution",
-  "title": "Executor: report publishing needs cryptography, and the MOC wait now reaches the auction",
-  "description": "Two failures seen on the first live run: (1) the runner traded and then crashed with \"No module named 'cryptography'\" while publishing the encrypted reports, because requirements-ibkr.txt (what the executor host installs) did not list it - it does now, and a test scans the executor's import chain (including lazy imports) against that file; (2) the post-submit wait was capped at 40 minutes, so a 2:15 PM CT start stopped waiting about 3 minutes before the 4:00 PM ET auction and wrote the report with every leg still Submitted - the ceiling is now 60 minutes, an early start that would still be capped prints a warning, the per-account child timeout is floored at the ceiling plus 5 minutes (an old config value of 3000 is raised), and the systemd unit allows 4500 s.",
-  "impact": "Reports are written after the fills rather than before them, the run no longer ends in a false 'not fully filled' exit, and a missing dependency on the executor host can no longer slip in unnoticed.",
-  "links": [
-   {
-    "label": "PR #218",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/218"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "ui",
-  "title": "Executed Book page: fix crash when reading reports from the encrypted vault",
-  "description": "The first time the Streamlit app read the encrypted report vault, every IBKR account page failed with \"ValueError: ... is not in the subpath of '/mount/src/btc-range-model'\": the decrypted reports sit in a temp folder outside the repo and the page labelled them with Path.relative_to. A small tested helper (scripts/report_label.py, kept out of the hashed app modules so the P&L snapshot fingerprint is untouched) now labels a vault copy as 'encrypted vault: accounts/<ACCT>/...' and leaves repo-relative labels unchanged.",
-  "impact": "IBKR executed books published through the vault now render in the Streamlit app, in both the Latest run and Historical tabs.",
-  "links": [
-   {
-    "label": "PR #219",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/219"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "ui",
-  "title": "Executed Book: live accounts are judged against the live target book",
-  "description": "The allocation-drift table compared every execution report with target_book.json, the PAPER book, which has no SATA and holds 40 % cash. Each live IBKR account therefore showed SATA target 0 % (drift +30 pp) and cash target 40 % (drift -30 pp) although the executor had traded the live book (SATA 30 %, cash 10 %). The Latest-run tab now picks the book by the report's account mode (small helper in scripts/drift_target.py, outside the hashed app modules), says so when the live book is missing instead of silently using the paper one, and flags a live report compared with a paper book. The Historical tab already used the live book archive and is unchanged.",
-  "impact": "For a live account that holds the book, every row now reads ~0 pp drift (checked on a rendered page: SATA 30.0 / 30.0, cash 10.0 / 10.0) instead of +30 / -30.",
-  "links": [
-   {
-    "label": "PR #220",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/220"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "ui",
-  "title": "Overall: per-account IBKR picker in Current Positions",
-  "description": "The Current Positions section on the Overall page always showed the first IBKR account's report. With the IBKR source selected it now offers one radio option per IBKR account (\"IBKR Account #<id>\"), each showing that account's own cost basis and cash.",
-  "links": [
-   {
-    "label": "PR #221",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/221"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "ui",
-  "title": "Overall: Current Positions reads the encrypted IBKR account reports",
-  "description": "The per-account IBKR picker only looked in local data/overall/accounts, but the account reports live in the encrypted vault, so no accounts were found. The Overall page now opens the vault the same way the Executed Book page does, so each IBKR account appears as its own option.",
-  "links": [
-   {
-    "label": "PR #222",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/222"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "ui",
-  "title": "Overall: cut CPU use to stop Streamlit Cloud throttling",
-  "description": "The Overall page's auto-refresh now ticks every 120s instead of 45s, pauses after 30 minutes without a click (resuming on the next interaction), and renders only the selected tab on each run instead of all four. No signal, allocation or P&L logic changed.",
-  "impact": "Streamlit Community Cloud throttled the app for CPU; every open tab re-executed the whole page, including ~1,000 lines of hidden-tab charts, every 45s.",
-  "links": [
-   {
-    "label": "PR #224",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "execution",
-  "title": "Overall: live cockpit loads the CI-built strategy results",
-  "description": "The daily snapshot build now also stores the V1 and V2 per-instrument strategy results, and the Overall page loads them instead of re-running every instrument's engine in the web process (the 30–60s CPU spike every 30 minutes). It falls back to computing live if the snapshot is missing, stale, built by different code, or the pinned data changed since the build; the Recompute-live toggle and the freshness-audit retry also bypass it. No signal or allocation logic changed.",
-  "impact": "Removes the heaviest CPU job in the Streamlit Cloud container (~22s of CPU per generation per cache expiry).",
-  "links": [
-   {
-    "label": "PR #224",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "ui",
-  "title": "BTC page: stop the 60-second reload loop when idle",
-  "description": "The BTC page re-ran its whole script every 60s forever, holding a server thread asleep in between. It now stops after 30 minutes without a click and resumes on the next interaction.",
-  "links": [
-   {
-    "label": "PR #224",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "data",
-  "title": "P&L snapshot moves off main and shrinks 3x",
-  "description": "The daily P&L/results snapshot is now xz-compressed (about 1 MB instead of 2.9 MB gzip) and published to a force-pushed single-commit data-snapshots branch instead of being committed to main; the app downloads it every 30 minutes and still falls back to computing live if it is missing or stale. No signal or allocation logic changed.",
-  "impact": "Stops ~25–50 MB/month of unreclaimable binary growth in the repository history.",
-  "links": [
-   {
-    "label": "PR #224",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
-   }
-  ]
- },
   {
-  "version": "v2",
-  "date": "2026-10-12",
-  "kind": "analytics",
-  "title": "Walk-forward replay: entry price of a sleeve added at the cut-over, and entry dates in Current Positions",
-  "description": "In the Combined view a sleeve V1 never held (XOP) took its entry price from the standalone V2 run, which could be years old, so the replay's Current Positions showed a stale cost and an inflated P&L. The spliced book now enters it at the last pre-cut close. Every Current Positions card also shows the date the position was opened (broker/replay date, else the engine's entry date tagged engine).",
-  "impact": "XOP replay cost moves from $70.62 (old standalone entry) to the 2026-10-08 close; its open P&L and share count are no longer overstated.",
-  "links": [{"label": "PR #225", "url": "https://github.com/yoursprerit/btc-range-model/pull/225"}]
- },
- {
-  "version": "v2",
-  "date": "2026-10-13",
-  "kind": "execution",
-  "title": "Overall: optimiser output comes from the CI snapshot too",
-  "description": "The daily snapshot now also stores each view/profile's weight-optimiser result, and the Overall page reuses it (under the same returns-matrix match as the replay) instead of re-running the optimiser on every cold cache, which is what the \"Optimising the allocation and replaying the back-test…\" spinner was waiting on. Verified identical to a live recompute for V2 and Combined, Balanced and Growth. No signal or allocation logic changed.",
-  "impact": "Removes about 6–10 s of CPU per cache miss (about 2 s Balanced + 4 s Growth locally, more on the throttled cloud container); snapshot grows by about 10 KB.",
-  "links": [
-   {
-    "label": "PR #226",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/226"
-   }
-  ]
- },
- {
-  "version": "v2",
-  "date": "2026-10-13",
-  "kind": "execution",
-  "title": "Overall: lighter CPU use to avoid Streamlit throttling",
-  "description": "The live-price auto-refresh now ticks every 5 min (was 2 min) and pauses after 15 min idle (was 30). \"Recompute live (slow)\" switches itself off after 10 minutes and suspends the auto-refresh while on. No signal or allocation logic changed.",
-  "impact": "Cuts timer-driven script re-runs by about 2.5x and stops a forgotten live-recompute toggle from re-running the heavy replays; aimed at the Community Cloud CPU throttle.",
-  "links": [
-   {
-    "label": "PR #227",
-    "url": "https://github.com/yoursprerit/btc-range-model/pull/227"
-   }
-  ]
- }
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Executor guards for broken markets: quote sanity, stress gate, fill tripwire, NAV brake, live kill switch",
+   "description": "The IBKR executor now (1) skips a leg whose live quote is halted, crossed or too wide (buys 2 %, sells 4 %) and never escalates an unfilled limit into a MARKET order against such a book; (2) withholds all buys - sells still go - when SPY is more than 8 % from its prior close, VIX is above 50, or a single ordered name has moved more than 40 %; (3) stops sending buys and alerts when a sell fills more than 1 % through the touch it was priced off; (4) runs de-risk-only when net liquidation is more than 15 % below the previous execution report; (5) re-reads the kill switch between orders and cancels orders still working. Every limit is a flag/env var and 0 turns it off; unmeasurable inputs (no VIX feed, no quote) never block a run.",
+   "impact": "Protects against bad prices and catastrophic-day execution without changing an ordinary day: thresholds are set to stay silent on normal volatility (the April-2025 VIX peak close was about 52).",
+   "links": [
+    {
+     "label": "PR #215",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/215"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Executor run-health: partial-run alert, margin-call check, forgotten kill switch, all-legs-withheld alert",
+   "description": "The executor now (1) alerts loudly and records the real fills when a run dies after orders were transmitted (sells without their buys), keeping the send lock so nothing is re-sent; (2) refuses to trade, with an alert, when the account's excess liquidity is at or below zero or under 5 % of net liquidation, so it never fights IBKR's own margin system (--min-margin-cushion / IBKR_MIN_MARGIN_CUSHION, 0 disables, unreadable passes); (3) alerts every run while the kill switch is armed instead of skipping silently; (4) alerts when orders were planned but every leg was withheld; (5) treats a halted SPY as market-wide stress (buys withheld).",
+   "impact": "Closes the silent failure modes around the market-stress guards: the guards decide what may be sent, these make sure a half-done, blocked or withheld run is reported rather than looking like a quiet success. No change to an ordinary day.",
+   "links": [
+    {
+     "label": "PR #216",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/216"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Executor book checks: profile pin, book-change hold, soft price drift, immediate MOC-refusal alert",
+   "description": "The executor now (1) aborts when the published book's profile differs from the account's pinned expected_profile; (2) holds the day's BUYS, with an alert, when the book adds more than 60 % of NAV in new target weight versus the last book that account saw, or an unpinned account's profile changed - sells and de-risking are never held, and IBKR_ACCEPT_LARGE_CHANGE=1 overrides for one run; (3) holds the buy of an unlevered ETF quoting 10 %+ from its book price instead of aborting the run (leveraged, single-stock and crypto names exempt; the 25 % hard abort is unchanged); (4) alerts immediately, and re-checks every minute, when the broker refuses a MOC order.",
+   "impact": "A signed-but-wrong book (profile switch, corrupted weights) can no longer open large positions unseen, and a refused closing-auction order is reported while it can still be fixed before the 15:50 ET cutoff. Nothing is held on an ordinary day.",
+   "links": [
+    {
+     "label": "PR #217",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/217"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Executor: report publishing needs cryptography, and the MOC wait now reaches the auction",
+   "description": "Two failures seen on the first live run: (1) the runner traded and then crashed with \"No module named 'cryptography'\" while publishing the encrypted reports, because requirements-ibkr.txt (what the executor host installs) did not list it - it does now, and a test scans the executor's import chain (including lazy imports) against that file; (2) the post-submit wait was capped at 40 minutes, so a 2:15 PM CT start stopped waiting about 3 minutes before the 4:00 PM ET auction and wrote the report with every leg still Submitted - the ceiling is now 60 minutes, an early start that would still be capped prints a warning, the per-account child timeout is floored at the ceiling plus 5 minutes (an old config value of 3000 is raised), and the systemd unit allows 4500 s.",
+   "impact": "Reports are written after the fills rather than before them, the run no longer ends in a false 'not fully filled' exit, and a missing dependency on the executor host can no longer slip in unnoticed.",
+   "links": [
+    {
+     "label": "PR #218",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/218"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Executed Book page: fix crash when reading reports from the encrypted vault",
+   "description": "The first time the Streamlit app read the encrypted report vault, every IBKR account page failed with \"ValueError: ... is not in the subpath of '/mount/src/btc-range-model'\": the decrypted reports sit in a temp folder outside the repo and the page labelled them with Path.relative_to. A small tested helper (scripts/report_label.py, kept out of the hashed app modules so the P&L snapshot fingerprint is untouched) now labels a vault copy as 'encrypted vault: accounts/<ACCT>/...' and leaves repo-relative labels unchanged.",
+   "impact": "IBKR executed books published through the vault now render in the Streamlit app, in both the Latest run and Historical tabs.",
+   "links": [
+    {
+     "label": "PR #219",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/219"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Executed Book: live accounts are judged against the live target book",
+   "description": "The allocation-drift table compared every execution report with target_book.json, the PAPER book, which has no SATA and holds 40 % cash. Each live IBKR account therefore showed SATA target 0 % (drift +30 pp) and cash target 40 % (drift -30 pp) although the executor had traded the live book (SATA 30 %, cash 10 %). The Latest-run tab now picks the book by the report's account mode (small helper in scripts/drift_target.py, outside the hashed app modules), says so when the live book is missing instead of silently using the paper one, and flags a live report compared with a paper book. The Historical tab already used the live book archive and is unchanged.",
+   "impact": "For a live account that holds the book, every row now reads ~0 pp drift (checked on a rendered page: SATA 30.0 / 30.0, cash 10.0 / 10.0) instead of +30 / -30.",
+   "links": [
+    {
+     "label": "PR #220",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/220"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Overall: per-account IBKR picker in Current Positions",
+   "description": "The Current Positions section on the Overall page always showed the first IBKR account's report. With the IBKR source selected it now offers one radio option per IBKR account (\"IBKR Account #<id>\"), each showing that account's own cost basis and cash.",
+   "links": [
+    {
+     "label": "PR #221",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/221"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Overall: Current Positions reads the encrypted IBKR account reports",
+   "description": "The per-account IBKR picker only looked in local data/overall/accounts, but the account reports live in the encrypted vault, so no accounts were found. The Overall page now opens the vault the same way the Executed Book page does, so each IBKR account appears as its own option.",
+   "links": [
+    {
+     "label": "PR #222",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/222"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "Overall: cut CPU use to stop Streamlit Cloud throttling",
+   "description": "The Overall page's auto-refresh now ticks every 120s instead of 45s, pauses after 30 minutes without a click (resuming on the next interaction), and renders only the selected tab on each run instead of all four. No signal, allocation or P&L logic changed.",
+   "impact": "Streamlit Community Cloud throttled the app for CPU; every open tab re-executed the whole page, including ~1,000 lines of hidden-tab charts, every 45s.",
+   "links": [
+    {
+     "label": "PR #224",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "execution",
+   "title": "Overall: live cockpit loads the CI-built strategy results",
+   "description": "The daily snapshot build now also stores the V1 and V2 per-instrument strategy results, and the Overall page loads them instead of re-running every instrument's engine in the web process (the 30–60s CPU spike every 30 minutes). It falls back to computing live if the snapshot is missing, stale, built by different code, or the pinned data changed since the build; the Recompute-live toggle and the freshness-audit retry also bypass it. No signal or allocation logic changed.",
+   "impact": "Removes the heaviest CPU job in the Streamlit Cloud container (~22s of CPU per generation per cache expiry).",
+   "links": [
+    {
+     "label": "PR #224",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "ui",
+   "title": "BTC page: stop the 60-second reload loop when idle",
+   "description": "The BTC page re-ran its whole script every 60s forever, holding a server thread asleep in between. It now stops after 30 minutes without a click and resumes on the next interaction.",
+   "links": [
+    {
+     "label": "PR #224",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "data",
+   "title": "P&L snapshot moves off main and shrinks 3x",
+   "description": "The daily P&L/results snapshot is now xz-compressed (about 1 MB instead of 2.9 MB gzip) and published to a force-pushed single-commit data-snapshots branch instead of being committed to main; the app downloads it every 30 minutes and still falls back to computing live if it is missing or stale. No signal or allocation logic changed.",
+   "impact": "Stops ~25–50 MB/month of unreclaimable binary growth in the repository history.",
+   "links": [
+    {
+     "label": "PR #224",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/224"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-12",
+   "kind": "analytics",
+   "title": "Walk-forward replay: entry price of a sleeve added at the cut-over, and entry dates in Current Positions",
+   "description": "In the Combined view a sleeve V1 never held (XOP) took its entry price from the standalone V2 run, which could be years old, so the replay's Current Positions showed a stale cost and an inflated P&L. The spliced book now enters it at the last pre-cut close. Every Current Positions card also shows the date the position was opened (broker/replay date, else the engine's entry date tagged engine).",
+   "impact": "XOP replay cost moves from $70.62 (old standalone entry) to the 2026-10-08 close; its open P&L and share count are no longer overstated.",
+   "links": [
+    {
+     "label": "PR #225",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/225"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-13",
+   "kind": "execution",
+   "title": "Overall: optimiser output comes from the CI snapshot too",
+   "description": "The daily snapshot now also stores each view/profile's weight-optimiser result, and the Overall page reuses it (under the same returns-matrix match as the replay) instead of re-running the optimiser on every cold cache, which is what the \"Optimising the allocation and replaying the back-test…\" spinner was waiting on. Verified identical to a live recompute for V2 and Combined, Balanced and Growth. No signal or allocation logic changed.",
+   "impact": "Removes about 6–10 s of CPU per cache miss (about 2 s Balanced + 4 s Growth locally, more on the throttled cloud container); snapshot grows by about 10 KB.",
+   "links": [
+    {
+     "label": "PR #226",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/226"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-13",
+   "kind": "execution",
+   "title": "Overall: lighter CPU use to avoid Streamlit throttling",
+   "description": "The live-price auto-refresh now ticks every 5 min (was 2 min) and pauses after 15 min idle (was 30). \"Recompute live (slow)\" switches itself off after 10 minutes and suspends the auto-refresh while on. No signal or allocation logic changed.",
+   "impact": "Cuts timer-driven script re-runs by about 2.5x and stops a forgotten live-recompute toggle from re-running the heavy replays; aimed at the Community Cloud CPU throttle.",
+   "links": [
+    {
+     "label": "PR #227",
+     "url": "https://github.com/yoursprerit/btc-range-model/pull/227"
+    }
+   ]
+  },
+  {
+   "version": "v2",
+   "date": "2026-10-13",
+   "kind": "ui",
+   "title": "Current Positions: open dates come only from the book",
+   "description": "Executed-book (C2 / IBKR) positions show the open date the book recorded, or \"not available\"; they no longer borrow the engine's entry date. The walk-forward replay still takes its date from the strategy engine.",
+   "impact": "Avoids showing an engine date as if it were the account's real fill date.",
+   "links": []
+  }
  ]
 }
