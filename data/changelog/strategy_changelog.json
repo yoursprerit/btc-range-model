@@ -861,6 +861,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/228"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "ui",
+  "title": "Strategy P&L: pick C2 or an IBKR account for the as-published record",
+  "description": "The Performance source radio now has one \"As-published record\" option with an Account picker under it: the Collective2 model account or any IBKR account that has executed the book. IBKR accounts are now found in the encrypted vault as well as the local folder, the same way Current Positions finds them.",
+  "impact": "On the deployed app the per-account reports live only in the vault, so IBKR accounts never appeared in the P&L source list before.",
+  "links": [
+   {
+    "label": "PR #229",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/229"
+   }
+  ]
  }
  ]
 }
