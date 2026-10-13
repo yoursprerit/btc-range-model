@@ -371,3 +371,19 @@ def test_a_refresh_report_ignores_the_profile_pin(env, monkeypatch, alerts):
     monkeypatch.setattr(ex, "Broker", B)
     _run(monkeypatch, argv)
     assert B.instances, "a refresh reads the account; it places no orders, so the pin is moot"
+
+
+def test_consistent_cash_overrides_stale_cash_tag():
+    """U23154574 2026-10-13: cash read before the MOC fills posted."""
+    pos = [dict(market_value=v) for v in (29159.41, 136730.75, 215.13,
+                                          137739.84, 85654.74, 27173.31)]
+    got = ic.consistent_cash(461264.12, pos, 145083.9)
+    assert abs(got - 44590.94) < 0.01
+
+
+def test_consistent_cash_keeps_consistent_or_unverifiable_readings():
+    pos = [dict(market_value=90000.0)]
+    assert ic.consistent_cash(100000.0, pos, 10500.0) == 10500.0      # within 2 %
+    assert ic.consistent_cash(0.0, pos, 5.0) == 5.0                   # no net liq
+    assert ic.consistent_cash(100000.0, [], 77.0) == 77.0             # no positions
+    assert ic.consistent_cash(100000.0, pos + [dict(market_value=0.0)], 60000.0) == 60000.0
