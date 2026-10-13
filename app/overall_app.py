@@ -2680,33 +2680,16 @@ with tab_live:
             f"📡 Collective2 account — calibrated to "
             f"${pv:,.0f} initial capital</div>", unsafe_allow_html=True)
         cm = st.columns(6)
-        if exec_ret is not None:
-            # same executed-fills curve as "Portfolio value now" below, at the
-            # last official close, so the two cards agree to the dollar
-            acct = dict(acct, total_ret=exec_ret, value=1.0 + exec_ret)
-        _pl = acct["total_ret"] * pv
-        cm[0].metric("Total portfolio value", f"${acct['value'] * pv:,.0f}",
-                     delta=f"{_sd(_pl)} ({acct['total_ret']*100:+.2f}%)",
-                     help=("C2's fills marked at the last official close — the "
-                           "same executed-fills curve as **Portfolio value "
-                           "now** below, from initial capital."
-                           if exec_ret is not None else
-                           "C2's reported figure disagrees with its own "
-                           "fills, so this is the account **rebuilt from C2's "
-                           "fills**: initial capital + realized P&L + open "
-                           "positions marked at the live / last price."
-                           if acct["c2_mismatch"] else
-                           "Initial capital grown by **C2's own reported "
-                           "return**"
-                           + (f" ({acct['c2_return_label']})"
-                              if acct["c2_return_label"] else "")
-                           + " — the figure C2's site shows." if
-                           acct["c2_return"] is not None else
-                           "C2's model-account value (open positions marked "
-                           "by C2, plus cash) at its latest snapshot, scaled "
-                           "from its starting cash to the 💼 portfolio value "
-                           "(C2's own return figure arrives with the next "
-                           "sync)."))
+        # C2's OWN reported Total Portfolio value (GetStrategyDetails
+        # ModelAccountValue), scaled from C2's starting cash to the 💼 value
+        _c2_v = acct["value_ret"] + 1.0
+        _c2_pl = acct["value_ret"] * pv
+        cm[0].metric("Total portfolio value", f"${_c2_v * pv:,.0f}",
+                     delta=f"{_sd(_c2_pl)} ({acct['value_ret']*100:+.2f}%)",
+                     help="C2's own reported **Total Portfolio Value** "
+                          "(its model-account value at the latest sync), "
+                          "scaled from C2's starting cash to the 💼 portfolio "
+                          "value. The published record, as C2 shows it.")
         cm[1].metric("Initial capital", f"${pv:,.0f}",
                      delta=(f"since {acct['start_date']:%b %d, %Y}"
                             if acct["start_date"] is not None else None),
