@@ -833,6 +833,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/226"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "execution",
+  "title": "Overall: lighter CPU use to avoid Streamlit throttling",
+  "description": "The live-price auto-refresh now ticks every 5 min (was 2 min) and pauses after 15 min idle (was 30). \"Recompute live (slow)\" switches itself off after 10 minutes and suspends the auto-refresh while on. No signal or allocation logic changed.",
+  "impact": "Cuts timer-driven script re-runs by about 2.5x and stops a forgotten live-recompute toggle from re-running the heavy replays; aimed at the Community Cloud CPU throttle."
  }
  ]
 }
