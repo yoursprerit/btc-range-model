@@ -44,6 +44,7 @@ try:
 except Exception:
     pass
 
+import time
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -111,8 +112,9 @@ except Exception:
     st_autorefresh = None
 
 N_ALL = len(ov.SPOT_SYMBOLS)          # total instruments the universe spans
-_AUTOREFRESH_SECS = 120               # re-run cadence so the live price column ticks
-_IDLE_PAUSE_SECS = 30 * 60            # stop auto-refreshing after this long with no click
+_AUTOREFRESH_SECS = 300               # re-run cadence so the live price column ticks
+_IDLE_PAUSE_SECS = 15 * 60            # stop auto-refreshing after this long with no click
+_LIVE_RECOMPUTE_MAX_SECS = 10 * 60    # "Recompute live" switches itself off after this
 
 
 # ── app registry (shared with the router / other apps) ────────────────────
@@ -199,12 +201,23 @@ with st.sidebar:
 # the viewer's next interaction.  Session state (risk profile, portfolio value)
 # is preserved across the rerun.
 _ss = st.session_state
+# "Recompute live (slow)" re-runs every replay (tens of seconds of CPU each
+# cold start), so it is a short-lived cross-check: it switches itself off
+# after _LIVE_RECOMPUTE_MAX_SECS, and no timer ticks run while it is on.
+if _ss.get("overall_pnl_live"):
+    _live_since = _ss.setdefault("overall_pnl_live_since", time.time())
+    if time.time() - _live_since > _LIVE_RECOMPUTE_MAX_SECS:
+        _ss["overall_pnl_live"] = False
+        _ss.pop("overall_pnl_live_since", None)
+else:
+    _ss.pop("overall_pnl_live_since", None)
 if _ss.get("overall_tick_paused"):
     # the component is unmounted while paused, so any rerun now is the viewer's
     _ss.update(overall_tick_paused=False, overall_tick_idle=0, overall_tick_seen=0)
 elif _ss.get("overall_tick_idle", 0) * _AUTOREFRESH_SECS >= _IDLE_PAUSE_SECS:
     _ss["overall_tick_paused"] = True       # drop the component on this run
-if st_autorefresh is not None and not _ss.get("overall_tick_paused"):
+if (st_autorefresh is not None and not _ss.get("overall_tick_paused")
+        and not _ss.get("overall_pnl_live")):
     _tick_n = st_autorefresh(interval=_AUTOREFRESH_SECS * 1000,
                              key="overall_spot_tick")
     if _tick_n != _ss.get("overall_tick_seen", 0):      # timer-driven rerun
@@ -213,7 +226,8 @@ if st_autorefresh is not None and not _ss.get("overall_tick_paused"):
         _ss["overall_tick_idle"] = 0
     _ss["overall_tick_seen"] = _tick_n
 _AUTOREFRESH_ON = (st_autorefresh is not None
-                   and not _ss.get("overall_tick_paused"))
+                   and not _ss.get("overall_tick_paused")
+                   and not _ss.get("overall_pnl_live"))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2771,7 +2785,9 @@ with tab_live:
                       help="Ignore the precomputed daily snapshot and re-run "
                            "every replay from the engine right now (~30–60 s "
                            "on a cold start). Same code, so the figures match; "
-                           "use it to cross-check the snapshot.")
+                           "use it to cross-check the snapshot. Heavy on the "
+                           "shared server, so it switches itself off after "
+                           "10 minutes and pauses the price auto-refresh.")
         _snap_info = get_pnl_snapshot()
         _use_snap = _snap_info is not None
         with _live_cols[0]:
