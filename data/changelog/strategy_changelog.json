@@ -855,7 +855,12 @@
   "title": "Current Positions: open dates come only from the book",
   "description": "Executed-book (C2 / IBKR) positions show the open date the book recorded, or \"not available\"; they no longer borrow the engine's entry date. The walk-forward replay still takes its date from the strategy engine.",
   "impact": "Avoids showing an engine date as if it were the account's real fill date.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #228",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/228"
+   }
+  ]
  }
  ]
 }
