@@ -917,6 +917,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/232"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "analytics",
+  "title": "Strategy P&L (C2 record): Total portfolio value and Portfolio value now agree",
+  "description": "The executed-fills record now defaults its start to the account's opening bar (starting capital) instead of the first fill day's close, so the first day's fill-to-close move and opening commissions are counted. The Collective2 card's Total portfolio value reads the same executed curve, at the last official close.",
+  "impact": "The two cards differed because one was measured from the Oct 7 close as cost basis and the other from initial capital, and because one was marked live and the other at the last close."
  }
  ]
 }
