@@ -3061,15 +3061,23 @@ with tab_live:
             # (portfolio value, CAGR, drawdown, Sharpe…).  The books remain the
             # fallback while no fills can be marked, and the reconciliation
             # line below shows the gap between the two.
-            _exec_eq = ov.c2_executed_equity(
+            _exec = ov.c2_executed_replay(
                 get_c2_snapshot(_bucket()), get_c2_archive(_bucket()),
-                get_sleeve_prices(_bucket(), _use_snap))
+                get_sleeve_prices(_bucket(), _use_snap),
+                columns=(list(_px_rets.columns) if _px_rets is not None
+                         else None))
+            _exec_eq = _exec["equity"] if _exec is not None else None
             if _exec_eq is not None and len(_exec_eq) >= 2:
                 _bk = _bookrep["equity"].reindex(_exec_eq.index).ffill().dropna()
                 _book_end = (float(_bk.iloc[-1] / _bk.iloc[0])
                              if len(_bk) else float("nan"))
                 _curve_all = _exec_eq
                 _curves_view = {STRAT_CURVE_ACTUAL: _exec_eq, **_PFV["curves"]}
+                # weights, SATA and cash are what C2 actually HELD each day, so
+                # the trade log, win rates, attribution and sleeve tables below
+                # follow the fills too
+                _wf = {"weights": _exec["weights"], "sata": _exec["sata"],
+                       "cash": _exec["cash"], "active": None}
                 st.caption(
                     "🧾 **Figures below follow C2's executed fills** (entry and "
                     "exit prices, share counts, commissions), marked at official "
@@ -3091,10 +3099,12 @@ with tab_live:
                 _fx_costs = False       # C2's fills already carry commissions
             with _fx_cols[1]:
                 _fx_taxes, _fx_income = _tax_controls()
-            if _bookrep["dropped"]:
-                st.caption("⚠️ Book keys not in today's universe (weight "
+            _drop = (_exec["dropped"] if _exec_eq is not None and len(_exec_eq) >= 2
+                     else _bookrep["dropped"])
+            if _drop:
+                st.caption("⚠️ Keys not in today's universe (weight "
                            "earns nothing): "
-                           + ", ".join(f"`{k}`" for k in _bookrep["dropped"]))
+                           + ", ".join(f"`{k}`" for k in _drop))
         else:
             if not _c2_pending:
                 st.caption(f"P&L, performance and risk of the **daily-gated Overall "

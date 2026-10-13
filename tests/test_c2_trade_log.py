@@ -190,3 +190,22 @@ def test_executed_equity_none_without_fills_or_closes():
     assert oc.c2_executed_equity(_snap("2026-09-28T19:45:00+00:00", []),
                                  [], _closes()) is None
     assert oc.c2_executed_equity(FRI, [], None) is None
+
+
+def test_executed_replay_weights_are_start_of_bar_holdings():
+    mon = _snap("2026-09-28T19:45:00+00:00", [_pos("GRID", 82, 177.99)],
+                closed=[WGMI_CLOSED], value=48_803.0)
+    mon["positions"][0]["opened"] = "2026-09-24T14:01:58Z"
+    rep = oc.c2_executed_replay(mon, [FRI, mon], _closes(),
+                                columns=["WGMI", "GRID", "XLE"])
+    w, eq = rep["weights"], rep["equity"]
+    assert list(w.columns) == ["WGMI", "GRID", "XLE"] and rep["dropped"] == []
+    assert (w.loc["2026-09-23"] == 0).all()          # nothing held before the fills
+    # bar 25 earns what was held at the 24th close, over the account then
+    d = pd.Timestamp("2026-09-24")
+    assert np.isclose(w.loc["2026-09-25", "WGMI"], 178 * 49.0 / 50_000 / eq.loc[d])
+    assert np.isclose(w.loc["2026-09-25", "GRID"], 82 * 178.0 / 50_000 / eq.loc[d])
+    # WGMI is gone after its 28th exit; cash is the remainder everywhere
+    assert w.loc["2026-09-28", "WGMI"] > 0 and rep["ret"].iloc[0] == 0
+    assert np.allclose(w.sum(axis=1) + rep["sata"] + rep["cash"], 1.0)
+    assert np.allclose(rep["ret"], eq.pct_change().fillna(0))

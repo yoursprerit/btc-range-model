@@ -4064,21 +4064,31 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
         start_date=(min(firsts) if firsts else None), log=log)
 
 
-def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
-                       closes: pd.DataFrame | None) -> pd.Series | None:
-    """The C2 model account's daily equity curve (start = 1.0) rebuilt from
-    what it actually EXECUTED — C2's fills, not the target books.
+def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
+                       closes: pd.DataFrame | None,
+                       columns: list | None = None) -> dict | None:
+    """The C2 model account rebuilt from what it actually EXECUTED — C2's
+    fills, not the target books — in the same shape ``published_book_replay``
+    returns (``ret``/``equity``/``weights``/``sata``/``cash``), so every figure
+    under the P&L date pickers can run off either unchanged.
 
-    Each bar's value is ``1 + realized + unrealized``, per $1 of starting
-    cash: ``realized`` sums C2's net P&L (commission included) on every round
-    trip closed on/before the bar; ``unrealized`` marks every position held
-    through the bar's close (filled on/before it, not yet exited) from its
-    fill price to that bar's official close.  The curve opens at 1.0 on the
-    last bar before the first fill.  A position C2 dropped whose closing
-    fill has not landed yet (``pending``) has no exit price, so the curve
-    stops the bar before the earliest such exit.  ``closes`` is a daily close
-    frame by sleeve key (a missing close carries the last one forward, else
-    the fill price).  ``None`` when there are no fills or no closes."""
+    ``equity`` (start = 1.0, per $1 of starting cash) is, at each bar,
+    ``1 + realized + unrealized``: ``realized`` sums C2's net P&L (commission
+    included) on every round trip closed on/before the bar; ``unrealized``
+    marks every position held through the bar's close (filled on/before it,
+    not yet exited) from its fill price to that bar's official close.  The
+    curve opens at 1.0 on the last bar before the first fill.  A position C2
+    dropped whose closing fill has not landed yet (``pending``) has no exit
+    price, so the curve stops the bar before the earliest such exit.
+
+    ``weights`` follow the ``published_book_replay`` convention — row *t* is
+    what the account held at the close of bar *t-1* (the weights that earn bar
+    *t*), as a share of the account's value then.  A held ``SATA`` position is
+    the ``sata`` leg; ``cash`` is the rest.  ``columns`` fixes the weight
+    columns (the price-return sleeves); executed keys outside them are listed
+    under ``dropped``.  ``closes`` is a daily close frame by sleeve key (a
+    missing close carries the last one forward, else the fill price).
+    ``None`` when there are no fills or no closes."""
     if not snap or closes is None or not len(closes):
         return None
     log = c2_trade_log(snap, archive)
@@ -4095,12 +4105,13 @@ def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
                and r["exit_date"] is not None), default=None)
     if cut is not None:
         idx = idx[idx < cut]
-    if not len(idx):
+    if len(idx) < 2:
         return None
     px = closes.ffill().reindex(idx)
-    vals = []
+    keys = sorted({r["key"] for r in dated})
+    vals, held = [], []                  # equity and $ value per key, per bar
     for d in idx:
-        eq = 1.0
+        eq, hv = 1.0, dict.fromkeys(keys, 0.0)
         for r in dated:
             if r["entry_date"] > d:
                 continue
@@ -4110,10 +4121,31 @@ def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
                     else r["entry_px"]
                 sign = -1.0 if r["side"] == "short" else 1.0
                 eq += sign * r["shares"] * (p - r["entry_px"]) / cash0
+                hv[r["key"]] += sign * r["shares"] * p / cash0
             elif not r["pending"]:
                 eq += r["pnl_usd"]
         vals.append(eq)
-    return pd.Series(vals, index=idx, name="C2 executed")
+        held.append(hv)
+    equity = pd.Series(vals, index=idx, name="C2 executed")
+    hv = pd.DataFrame(held, index=idx)
+    # start-of-bar weights = the previous close's holdings ÷ the account then
+    w_all = hv.div(equity, axis=0).shift(1).fillna(0.0)
+    sata = (w_all.pop("SATA") if "SATA" in w_all.columns
+            else pd.Series(0.0, index=idx))
+    cols = list(columns) if columns is not None else list(w_all.columns)
+    dropped = sorted(k for k in w_all.columns if k not in cols)
+    weights = w_all.reindex(columns=cols, fill_value=0.0)
+    cash = (1.0 - weights.sum(axis=1) - sata).clip(lower=0.0)
+    ret = equity.pct_change().fillna(0.0)
+    return dict(ret=ret, equity=equity, metrics=curve_metrics(equity),
+                weights=weights, sata=sata, cash=cash, dropped=dropped)
+
+
+def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
+                       closes: pd.DataFrame | None) -> pd.Series | None:
+    """Just the equity curve of ``c2_executed_replay`` (``None`` without one)."""
+    rep = c2_executed_replay(snap, archive, closes)
+    return rep["equity"] if rep is not None else None
 
 
 def load_published_books(archive_dir: Path | None = None) -> list[dict]:
