@@ -2912,6 +2912,10 @@ with tab_live:
         # under the as-published label — the replay's series only sizes the
         # date widgets below, and every figure is withheld
         _c2_pending = _actual and _bookrep is None
+        # the account the as-published record is measured on, kept for the
+        # wording even while the record is still pending (never mix the C2
+        # account's story into an IBKR account's view)
+        _rec_ibkr = _ibkr
         if _c2_pending:
             _actual = False
             _ibkr = None        # no books to measure an account against yet
@@ -3090,9 +3094,10 @@ with tab_live:
         _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START if _c2_src
                                       else "2026-03-01").date()
         if _ibkr is not None:
-            # an IBKR account's record cannot start before it first traded
+            # an IBKR account's record starts the day IT first traded the
+            # book — Collective2's start date plays no part
             _d0 = min(max(_d0, _ibkr["start"].date()), _d1)
-            _default_start = max(_default_start, _d0)
+            _default_start = _d0
         # a record still waiting on its first close may start after the
         # data's last bar — let the start field hold that date
         _d1_start = max(_d1, _default_start) if _c2_pending else _d1
@@ -3132,9 +3137,13 @@ with tab_live:
                 min_value=_d0, max_value=_d1_start, key="overall_pnl_start",
                 help="First strategy bar on/after this date becomes the cost-basis "
                      "anchor (weekends/holidays roll forward). Defaults to "
-                     + (f"{pd.Timestamp(ov.C2_PNL_DEFAULT_START):%B %-d, %Y} — "
-                        "the day Collective2 first traded the record — for the "
-                        "as-published record, "
+                     + ((f"{_ibkr['start']:%B %-d, %Y} — the day IBKR "
+                         f"#{_ibkr['account']} first executed the book — for "
+                         "this account's as-published record, ")
+                        if _ibkr is not None else
+                        (f"{pd.Timestamp(ov.C2_PNL_DEFAULT_START):%B %-d, %Y} — "
+                         "the day Collective2 first traded the record — for the "
+                         "as-published record, ")
                         if _c2_src else "")
                      + "March 1, 2026"
                      + (" for the other sources." if _c2_src else "."))
@@ -3223,7 +3232,15 @@ with tab_live:
             _ibkr_sim = acpnl.simulate_account(_curve_all, _ibkr["start"],
                                                _dep_initial, _dep_monthly, _dep_day)
             _ibkr_sum = acpnl.window_summary(_ibkr_sim, _start_sel, _end_ts)
-        if _c2_pending:
+        if _c2_pending and _rec_ibkr is not None:
+            st.info(f"🎯 IBKR #{_rec_ibkr['account']}'s as-published record "
+                    f"is measured from the day the account first executed the "
+                    f"book (**{_rec_ibkr['start']:%b %d, %Y}**), but no "
+                    f"published book of strategy version {_ver_up} is on "
+                    "record for it yet — P&L, performance and risk appear "
+                    "here once one is. Pick **🧪 Walk-forward replay** above "
+                    "for the full-history back-test meanwhile.")
+        elif _c2_pending:
             st.info(f"🎯 The as-published record **follows the books "
                     f"Collective2 receives** and was reset to start on "
                     f"**{_c2_start}**; it is measured from the "
@@ -3234,6 +3251,13 @@ with tab_live:
                     "close after the start is in the data (normally the next "
                     "morning's refresh). Pick **🧪 Walk-forward replay** above "
                     "for the full-history back-test meanwhile.")
+        elif _sm is None and _ibkr is not None and _start_sel >= _d1:
+            st.info(f"🎯 IBKR #{_ibkr['account']}'s as-published record is "
+                    f"measured from the **{_start_sel:%b %d, %Y}** close, when "
+                    "the account first executed the book, so there is no P&L "
+                    "until the next completed close is in the data. Pick an "
+                    f"earlier start (from {_d0}) to include the record's "
+                    "opening bar.")
         elif _sm is None and _actual and _start_sel >= _d1:
             st.info("🎯 The as-published record is measured from the "
                     f"**{_start_sel:%b %d, %Y}** close, when Collective2 "
@@ -3652,6 +3676,16 @@ with tab_live:
                            "a dotted line is one with less history, re-based "
                            "at its own first bar, not comparable across the "
                            "full span. Not investment advice.")
+            elif _ibkr is not None:
+                st.caption(f"📌 IBKR #{_ibkr['account']}'s **as-published "
+                           "record**: each day compounds the published book "
+                           "from the previous bar's close — weights, daily "
+                           "optimizer trims, SATA leg (coupon) and cash "
+                           "remainder — from the day the account first "
+                           "executed it. Marked at official closes, gross of "
+                           "commissions/fills (the ✅ Executed Book app's IBKR "
+                           "view is the fills-level record). Not investment "
+                           "advice.")
             elif _actual:
                 st.caption("📌 The **as-published record**: each day compounds "
                            "the book Collective2 actually received from the "
@@ -4103,8 +4137,11 @@ with tab_live:
                 # the as-published record trades on Collective2: list C2's
                 # own fills (dates, prices, net P&L) rather than the book's
                 # weight diffs priced at official closes
+                # (the C2 account only — an IBKR account's log never shows
+                # Collective2's fills)
                 _c2_snap, _c2_arch, _c2_px = (_c2_snapshot_with_prices()
-                                              if _actual else (None, [], {}))
+                                              if _actual and _ibkr is None
+                                              else (None, [], {}))
                 _pl_c2 = _c2_snap is not None
                 if _pl_c2:
                     _w0, _w1 = pd.Timestamp(_start_sel), _end_ts
