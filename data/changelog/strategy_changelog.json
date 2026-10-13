@@ -903,6 +903,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/231"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-13",
+  "kind": "analytics",
+  "title": "Strategy P&L (C2 record): everything under the dates follows C2's executed positions",
+  "description": "The daily weights, SATA/cash legs, trade log, win rates, attribution and sleeve tables under the date pickers are now rebuilt from the positions C2 actually held each day (its fills), not the archived target books, so they agree with Portfolio value now and the headline metrics.",
+  "impact": "Before, only the headline curve used the fills; the figures beneath it still came from the modelled books."
  }
  ]
 }
