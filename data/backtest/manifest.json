@@ -1,7 +1,7 @@
 {
   "version": "v3",
   "pull_date": "2026-10-15",
-  "pull_ts_utc": "2026-10-15T16:49:51Z",
+  "pull_ts_utc": "2026-10-15T17:41:51Z",
   "generated_by": "scripts/pull_backtest_data.py",
   "qc_all_passed": true,
   "btc_bar_anchor": "12:00 UTC (7am CT) \u2014 BTC OHLCV rebucketed from Binance hourly to match the daily model and live view. Macro/on-chain remain calendar-date joined. Equities (MSTR/MSTU) remain exchange-session daily.",
@@ -39,7 +39,7 @@
       "rows": 1079,
       "date_from": "2023-11-01",
       "date_to": "2026-10-14",
-      "checksum_sha256": "b35ef54ed982d122",
+      "checksum_sha256": "973ec9276fb1c31e",
       "qc_passed": true
     },
     "btc_usd_daily": {
@@ -58,7 +58,7 @@
       "rows": 741,
       "date_from": "2023-11-01",
       "date_to": "2026-10-15",
-      "checksum_sha256": "0a60290000d05bf0",
+      "checksum_sha256": "0c157dc9be0d58f4",
       "qc_passed": true
     },
     "mstu_daily": {
@@ -67,7 +67,7 @@
       "rows": 521,
       "date_from": "2024-09-18",
       "date_to": "2026-10-15",
-      "checksum_sha256": "08bd7921d3ffef0d",
+      "checksum_sha256": "fb901535c264bcde",
       "qc_passed": true
     },
     "mstu_synthetic_daily": {
