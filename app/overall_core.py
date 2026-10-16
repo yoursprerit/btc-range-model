@@ -4148,6 +4148,98 @@ def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
     return rep["equity"] if rep is not None else None
 
 
+def ibkr_executed_replay(holdings: list[dict] | None,
+                         closes: pd.DataFrame | None,
+                         columns: list | None = None,
+                         sata_daily: float = SATA_DAILY) -> dict | None:
+    """An IBKR account's as-published record rebuilt from what its executed
+    playbook HELD — the shares in each run's report — not from the target
+    books, in the same shape ``c2_executed_replay`` returns.
+
+    ``holdings`` is ``account_pnl.holdings_from_records`` (oldest first: the
+    shares, prices and implied cash left by each executed run).  The curve
+    opens at 1.0 on the first run's date, when the account's value IS its
+    reported net liquidation.  Every later bar moves by what the account held
+    going INTO it, at official closes:
+
+        equity_d = equity_{d-1} × (cash + Σ shares_prev × close_d) / value_{d-1}
+
+    where ``shares_prev`` is the latest run dated before *d* and ``value_{d-1}``
+    is the account after the previous bar's trades.  Fills that missed their
+    target (an unfilled MOC), stub positions and rounded share counts are
+    therefore all in the curve; what is left out is the cost of trading — the
+    commission, fees and fill-vs-close slippage on the run's own orders — so
+    the figure differs from reported net liquidation by exactly that, which the
+    IBKR Pro costs toggle then takes out.  Deposits and withdrawals never move
+    it (they change cash, not the market move on the holdings).
+
+    A key absent from ``closes`` (``SATA``, a retired sleeve) is marked at the
+    price an executed run reported on that day; between runs ``SATA`` accrues
+    ``sata_daily`` per business day from its last reported price and any other
+    missing close carries the run's own price.  ``weights``/``sata``/``cash``
+    follow the ``published_book_replay`` convention (row *t* = what was held
+    at the close of bar *t-1*, over the account then); ``columns`` fixes the
+    weight columns and the keys outside it are listed under ``dropped``.
+    ``None`` with no holdings, no closes, or fewer than two bars."""
+    if not holdings or closes is None or not len(closes):
+        return None
+    runs = sorted(holdings, key=lambda h: h["date"])
+    bars = closes.index[closes.index >= runs[0]["date"]]
+    if len(bars) < 2:
+        return None
+    px = closes.ffill().reindex(bars)
+    run_dates = [h["date"] for h in runs]
+    by_date = {h["date"]: h for h in runs}
+
+    def _held(day, strict):
+        """The latest run dated before (strict) / on-or-before *day*."""
+        n = sum(1 for d in run_dates if (d < day if strict else d <= day))
+        return runs[n - 1] if n else None
+
+    def _price(key, day, h):
+        if key in px.columns:
+            v = px[key].get(day)
+            if v is not None and np.isfinite(v) and v > 0:
+                return float(v)
+        r = by_date.get(day)
+        if r is not None and key in r["price"]:
+            return r["price"][key]            # the run's own mark (SATA, exits)
+        if key == "SATA":
+            n = int(np.busday_count(h["date"].date(), day.date()))
+            return h["price"][key] * (1.0 + sata_daily) ** max(n, 0)
+        return h["price"][key]
+
+    def _value(h, day):
+        hv = {k: q * _price(k, day, h) for k, q in h["shares"].items()}
+        return h["cash"] + sum(hv.values()), hv
+
+    equity, w_rows, v_post = [1.0], [], []
+    v0, hv0 = _value(_held(bars[0], strict=False), bars[0])
+    v_post.append(v0)
+    w_rows.append(hv0)
+    for i in range(1, len(bars)):
+        d = bars[i]
+        v_pre, _ = _value(_held(d, strict=True), d)
+        equity.append(equity[-1] * v_pre / v_post[-1])
+        v_new, hv = _value(_held(d, strict=False), d)
+        v_post.append(v_new)
+        w_rows.append(hv)
+    equity = pd.Series(equity, index=bars, name="IBKR executed")
+    keys = sorted({k for hv in w_rows for k in hv})
+    hv = pd.DataFrame(w_rows, index=bars).reindex(columns=keys).fillna(0.0)
+    w_all = hv.div(pd.Series(v_post, index=bars), axis=0).shift(1).fillna(0.0)
+    sata = (w_all.pop("SATA") if "SATA" in w_all.columns
+            else pd.Series(0.0, index=bars))
+    cols = list(columns) if columns is not None else list(w_all.columns)
+    dropped = sorted(k for k in w_all.columns if k not in cols)
+    weights = w_all.reindex(columns=cols, fill_value=0.0)
+    cash = (1.0 - weights.sum(axis=1) - sata).clip(lower=0.0)
+    ret = equity.pct_change().fillna(0.0)
+    return dict(ret=ret, equity=equity, metrics=curve_metrics(equity),
+                weights=weights, sata=sata, cash=cash, dropped=dropped,
+                net_liq=pd.Series(v_post, index=bars))
+
+
 def load_published_books(archive_dir: Path | None = None) -> list[dict]:
     """Every archived as-published target book, parsed and sorted by
     ``as_of``.  Unreadable files are skipped; a record needs at least an

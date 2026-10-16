@@ -52,7 +52,44 @@ def record_info(report_path) -> dict | None:
                 start=pd.Timestamp(first["executed_on"]).normalize(),
                 first_as_of=first["as_of"], first_net_liq=_nl(first),
                 last_executed_on=pd.Timestamp(last["executed_on"]).normalize(),
-                last_net_liq=_nl(last), n_runs=len(recs))
+                last_net_liq=_nl(last), n_runs=len(recs),
+                holdings=holdings_from_records(recs))
+
+
+def holdings_from_records(recs: list[dict]) -> list[dict]:
+    """What the account held after each executed run, oldest first.
+
+    ``recs`` is ``eb.archived_records`` output (newest first).  Each entry is
+    ``{date, net_liq, cash, shares, price}``: ``shares``/``price`` by sleeve
+    key from the run's positions, and ``cash`` = net liquidation − the
+    positions' market value.  The report's own ``TotalCashValue`` tag is a
+    separate read that can lag an MOC fill, so the implied figure is the one
+    that makes the account add up.  A run with no usable net liquidation is
+    skipped."""
+    out = []
+    for r in reversed(recs):
+        pl = r["payload"]
+        try:
+            nl = float(pl.get("net_liq") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if nl <= 0:
+            continue
+        shares, price, held = {}, {}, 0.0
+        for p in pl.get("positions") or []:
+            try:
+                key = str(p.get("key") or p.get("symbol"))
+                q, px = float(p["shares"]), float(p["market_price"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if q == 0 or not np.isfinite(px) or px <= 0:
+                continue
+            shares[key] = shares.get(key, 0.0) + q
+            price[key] = px
+            held += q * px
+        out.append(dict(date=pd.Timestamp(r["executed_on"]).normalize(),
+                        net_liq=nl, cash=nl - held, shares=shares, price=price))
+    return out
 
 
 def load_deposit_defaults(path) -> dict[str, dict]:

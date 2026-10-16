@@ -973,6 +973,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/236"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-16",
+  "kind": "analytics",
+  "title": "Strategy P&L (IBKR as-published): follows the executed playbook's holdings",
+  "description": "The IBKR as-published record is now rebuilt from the shares each executed run actually held, marked at official closes, instead of compounding the target books. Portfolio value therefore tracks the Executed Book's net liquidation and differs only by the cost of trading, which the IBKR Pro costs toggle takes out.",
+  "impact": "Live accounts 2026-10-12 to 10-16: replay vs reported net liquidation was +0.0% to +1.2% (U23154574 missed two unfilled first-day MOC buys, XLE and ERX); now within 0.07% on all three.",
+  "links": [
+   {
+    "label": "PR #237",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/237"
+   }
+  ]
  }
  ]
 }

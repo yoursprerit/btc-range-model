@@ -2660,8 +2660,10 @@ with tab_live:
                     f"🔎 Check: IBKR reported net liquidation **${rep_v:,.0f}** after "
                     f"the {info['last_executed_on']:%b %d, %Y} run; this replay "
                     f"has the account at **${mod_v:,.0f}** that day ({gap:+.1f}%). "
-                    "A gap means deposits/withdrawals differ from the schedule "
-                    "above, or fills drifted from the published books.")
+                    "The replay follows the shares the account held, so a gap is "
+                    "the cost of trading (commissions, fees, fill-vs-close "
+                    "slippage — pick **With IBKR Pro costs**) or deposits and "
+                    "withdrawals that differ from the schedule above.")
 
     def _render_c2_account(pv, exec_ret=None):
         """📡 The Collective2 model account — C2's own account value, fills
@@ -3010,16 +3012,38 @@ with tab_live:
             _curves_view = {STRAT_CURVE_ACTUAL: _bookrep["equity"],
                             **_PFV["curves"]}
             _curve_all = _bookrep["equity"]
+            # The figures follow what the account HELD: the shares in each
+            # executed run's report, marked daily at official closes, replace
+            # the target-book curve (as for C2 above).  Portfolio value then
+            # differs from the Executed Book's net liquidation only by the
+            # cost of trading, which the IBKR Pro costs toggle takes out.
+            _ix = ov.ibkr_executed_replay(
+                _ibkr.get("holdings"), get_sleeve_prices(_bucket(), _use_snap),
+                columns=(list(_px_rets.columns) if _px_rets is not None else None))
+            _ix_on = _ix is not None and len(_ix["equity"]) >= 2
+            if _ix_on:
+                _curve_all = _ix["equity"]
+                _curves_view = {STRAT_CURVE_ACTUAL: _ix["equity"], **_PFV["curves"]}
+                _wf = {"weights": _ix["weights"], "sata": _ix["sata"],
+                       "cash": _ix["cash"], "active": None}
+                st.caption(
+                    f"🧾 **Figures below follow what IBKR #{_ibkr['account']} "
+                    "actually held** — the shares in each executed run, marked "
+                    f"at official closes through **{_ix['equity'].index[-1]:%b %d, %Y}**"
+                    " — not the target books. Portfolio value therefore matches "
+                    "the Executed Book's net liquidation apart from brokerage "
+                    "costs: pick **With IBKR Pro costs** to take them out.")
             _dep_monthly, _dep_day, _dep_initial = _render_ibkr_deposits(_ibkr, portfolio_value)
             _fx_cols = st.columns(2)
             with _fx_cols[0]:
                 _fx_costs = _cost_controls()
             with _fx_cols[1]:
                 _fx_taxes, _fx_income = _tax_controls()
-            if _bookrep["dropped"]:
+            _ix_drop = _ix["dropped"] if _ix_on else _bookrep["dropped"]
+            if _ix_drop:
                 st.caption("⚠️ Book keys not in today's universe (weight "
                            "earns nothing): "
-                           + ", ".join(f"`{k}`" for k in _bookrep["dropped"]))
+                           + ", ".join(f"`{k}`" for k in _ix_drop))
         elif _actual:
             _n_books = len(_bookrep["books"])
             st.caption(f"P&L, performance and risk of the **as-published "
