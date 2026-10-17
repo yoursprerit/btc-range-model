@@ -355,7 +355,7 @@ def check_moc_slot() -> None:
     except ImportError:                                    # pragma: no cover
         _add("WARN", "task-slot", "zoneinfo unavailable -- cannot check the timezone")
         return
-    task_time = os.environ.get("IBKR_TASK_TIME", "14:15")
+    task_time = os.environ.get("IBKR_TASK_TIME", "14:20")
     try:
         hh, mm = (int(x) for x in task_time.split(":"))
     except ValueError:
@@ -374,7 +374,7 @@ def check_moc_slot() -> None:
                                            "(or before the open); strict MOC would skip every session")
     elif mins_to_cutoff < 20:
         _add("WARN", "task-slot", detail + " -- thin margin for a slow gateway or "
-                                           "git pull; 2:15 PM US Central is recommended")
+                                           "git pull; 2:20 PM US Central is recommended")
     else:
         _add("PASS", "task-slot", detail)
 

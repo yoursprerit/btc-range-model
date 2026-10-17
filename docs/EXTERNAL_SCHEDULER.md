@@ -110,3 +110,22 @@ PAT (it already has **Actions: Read and write** on this repo):
 A dispatch bypasses only the workflow's 2:30 PM guard; `publish_c2.py` still
 skips a book already sent, a non-trading day, and anything outside regular
 hours — so a holiday fire or an overlap with a backup slot is harmless.
+
+## Intraday stop check (2:00 PM CT)
+
+`.github/workflows/intraday-stop-check.yml` checks the held sleeves' stops
+against live prices and, only on a breach, re-publishes the day's books
+(see [`LIVE_MULTI_ACCOUNT_MOC.md`](LIVE_MULTI_ACCOUNT_MOC.md) § Intraday stop
+check). It must land **before the executor's 2:20 PM CT slot**, and GitHub's own
+cron is far too late for that, so add a third cron-job.org job with the same PAT:
+
+| Setting | Value |
+| --- | --- |
+| URL | `https://api.github.com/repos/yoursprerit/btc-range-model/actions/workflows/intraday-stop-check.yml/dispatches` |
+| Schedule | **Monday–Friday at 2:00 PM**, timezone **America/Chicago** |
+| Request method / body / headers | Same as the jobs above (`POST`, `{"ref":"main"}`, the three headers) |
+
+The script refuses to act outside 13:45–14:12 CT, on a non-trading day, on a
+book that is not today's, or on a failed freshness audit — so a late backup cron
+fire, a holiday fire or an overlap is harmless. If your executor slot moves, set
+`INTRADAY_STOP_LATEST` (default `14:12`) in the workflow to stay ahead of it.

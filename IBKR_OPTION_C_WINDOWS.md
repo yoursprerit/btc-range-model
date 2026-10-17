@@ -788,11 +788,11 @@ Short version:
 3. `setx OVERALL_BOOK_SECRET …` (same as the publisher; live **requires** a
    verified signature).
 4. Register the live task (elevated): 
-   `powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LiveTask -LiveTaskTime 14:15`
+   `powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LiveTask -LiveTaskTime 14:20`
 5. `... -LivePreflight`, then `... -LiveRehearse` (reads every account, sends
    nothing), then enable **one** account with a small deploy cap first.
 
-What it does at 2:15 PM US Central: pulls `target_book_live.json`, checks the
+What it does at 2:20 PM US Central: pulls `target_book_live.json`, checks the
 gateway login manages every configured account, then starts one executor per
 account **together**, each sending whole-share **MOC** orders stamped with its
 account id (**no limit/market fallback; a run past the 15:50 ET cutoff skips the

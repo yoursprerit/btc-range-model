@@ -118,7 +118,7 @@ param(
     [string]$Branch   = 'main',
     [string]$Port     = '4002',
     [string]$LivePort = '4001',
-    [string]$LiveTaskTime = '14:15',
+    [string]$LiveTaskTime = '14:20',
     [string]$ReconcileTaskTime = '15:15',
     [string]$KillSwitchFile = 'C:\IBC\HALT_TRADING'
 )
@@ -510,7 +510,7 @@ if ($LiveTask) {
 # -- 7R. LIVE after-the-close reconcile task ------------------------------------
 # 4:15 PM US Eastern = 3:15 PM US Central: 15 minutes after the closing auction.
 # Checks each account that had orders sent today against the broker, rebuilds a
-# report the 2:15 PM run never got to write, and alerts on unfilled legs or
+# report the 2:20 PM run never got to write, and alerts on unfilled legs or
 # orders still working. It never sends or cancels an order.
 if ($ReconcileTask) {
     Section "Task Scheduler - LIVE after-the-close reconcile"

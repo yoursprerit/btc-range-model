@@ -23,6 +23,10 @@ name: Publish target book (IBKR Option C)
 # The only way to publish a new book intraday is an explicit user action: the
 # 🚀 "Publish new target book" button in the Target Book app (or a manual
 # workflow_dispatch from the Actions tab), both of which bypass the guard.
+# The one scheduled exception is intraday-stop-check.yml: at ~2:00 PM CT it
+# re-publishes both books (same signing, no *_prev rotation) ONLY when a held
+# sleeve's live price has breached its stop. It shares this workflow's
+# concurrency group, and a manual 🚀 publish afterwards drops its amendment.
 #
 # GitHub's `on: schedule` is BEST-EFFORT: fires are routinely delayed 1–2 h and
 # are sometimes dropped entirely (observed: no scheduled fire at all on some

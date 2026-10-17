@@ -1,5 +1,11 @@
 """Multi-account Option-C runner — trade the published live book in EVERY
-configured IBKR account on this PC, as market-on-close orders.
+configured IBKR account on this PC.
+
+Order type is the config's ``order_type``: ``"marketable-limit"`` (default,
+for the 2:20 PM CT slot) = a limit priced a fraction through the touch that
+escalates to a market order if unfilled; ``"moc"`` = strict market-on-close,
+entered before the 15:50 ET cutoff (the original flow, which the notes below
+describe); ``"market"`` = plain market orders.
 
     # preview (default — no orders):
     python scripts/ibkr_execute_accounts.py
@@ -102,6 +108,13 @@ class Config:
     child_timeout_s: float = 3900.0   # = ic.MOC_MAX_WAIT_S + 300 (enforced below)
     stagger_s: float = 10.0
     market_data_type: int = 1      # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen
+    # How the book is traded.  "marketable-limit" (the default) / "market"
+    # trade at the touch during the regular session (the 2:20 PM CT slot);
+    # "moc" = strict market-on-close, entered before the 15:50 ET cutoff — see
+    # docs/LIVE_MULTI_ACCOUNT_MOC.md § Order type.
+    order_type: str = ic.ORDER_MARKETABLE_LIMIT
+    slippage_cap: float = ic.DEFAULT_SLIPPAGE_CAP   # marketable-limit: how far THROUGH the touch
+    fill_timeout_s: float = 0.0    # per-leg wait before a limit escalates (0 = executor default)
     kill_switch_file: str = ""
     accounts: list[Account] = field(default_factory=list)
 
@@ -120,7 +133,8 @@ def validate_config(raw: dict) -> tuple[Config | None, list[str]]:
     for k, cast in (("host", str), ("book", str), ("kill_switch_file", str),
                     ("port", int), ("client_id_base", int),
                     ("child_timeout_s", float), ("stagger_s", float),
-                    ("market_data_type", int)):
+                    ("market_data_type", int), ("order_type", str),
+                    ("slippage_cap", float), ("fill_timeout_s", float)):
         if k in raw:
             try:
                 setattr(cfg, k, cast(raw[k]))
@@ -132,6 +146,13 @@ def validate_config(raw: dict) -> tuple[Config | None, list[str]]:
         errs.append("client_id_base must be >= 1")
     if cfg.market_data_type not in (1, 2, 3, 4):
         errs.append("market_data_type must be 1 (live), 2, 3 (delayed) or 4")
+    cfg.order_type = cfg.order_type.strip().lower()
+    if cfg.order_type not in ic.ORDER_TYPES:
+        errs.append(f"order_type must be one of {', '.join(ic.ORDER_TYPES)}")
+    if not 0 < cfg.slippage_cap <= 0.05:
+        errs.append("slippage_cap must be in (0, 0.05] (a fraction: 0.005 = 0.5 %)")
+    if not 0 <= cfg.fill_timeout_s <= 600:
+        errs.append("fill_timeout_s must be 0 (default) or at most 600 seconds")
     if cfg.child_timeout_s < 600:
         errs.append("child_timeout_s must allow for the closing auction (>= 600)")
     # Never kill an executor that is still waiting for the auction: whatever the
@@ -243,7 +264,7 @@ def child_argv(cfg: Config, acct: Account, index: int, *, execute: bool,
             "--client-id", str(cfg.client_id_base + index),
             "--account", acct.id, "--expected-account", acct.id,
             "--account-mode", "live", "--confirm-live",
-            "--order-type", ic.ORDER_MOC, "--strict-moc",
+            "--order-type", cfg.order_type,
             "--require-signature", "--no-push-report",
             "--market-data-type", str(cfg.market_data_type),
             "--band", str(lim["band"]),
@@ -252,6 +273,12 @@ def child_argv(cfg: Config, acct: Account, index: int, *, execute: bool,
             "--max-gross-frac", str(lim["max_gross_frac"]),
             "--max-turnover-frac", str(lim["max_turnover_frac"]),
             "--max-price-drift", str(lim["max_price_drift"])]
+    if cfg.order_type == ic.ORDER_MOC:
+        argv.append("--strict-moc")       # MOC or nothing: no limit/market fallback
+    else:
+        argv += ["--slippage-cap", str(cfg.slippage_cap)]
+        if cfg.fill_timeout_s:
+            argv += ["--fill-timeout", str(cfg.fill_timeout_s)]
     if cfg.kill_switch_file:
         argv += ["--kill-switch-file", cfg.kill_switch_file]
     if acct.expected_profile:
@@ -594,6 +621,42 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
+STOP_MARKER = _REPO / "data" / "overall" / "intraday_stop_check.json"
+
+
+def stop_check_status(marker: Path, today_ct: date) -> tuple[str, str]:
+    """(status, detail) of today's 2:00-PM-CT intraday stop check, read from the
+    marker it commits (``scripts/intraday_stop_check.py``).  Informational only:
+    the executor trades whatever signed book is on disk either way — this just
+    makes a missing or failed check visible instead of silent.  ``status`` is
+    ``"ok"`` (the check ran today: clear or amended), ``"missing"`` (no marker
+    from today) or ``"failed"`` (it ran but could not complete)."""
+    try:
+        m = json.loads(Path(marker).read_text())
+    except Exception:
+        return "missing", "no intraday stop-check marker found"
+    try:
+        when = pd.Timestamp(m.get("checked_at_utc")).tz_convert("America/Chicago")
+    except Exception:
+        return "missing", "stop-check marker has no readable timestamp"
+    if when.date() != today_ct:
+        return "missing", f"last stop check was {when:%Y-%m-%d %H:%M} CT, not today"
+    st = str(m.get("status"))
+    if st in ("error", "audit_failed", "no_book", "no_current_book"):
+        return "failed", f"today's stop check ended '{st}': {m.get('reason', '')}"
+    return "ok", f"stop check {when:%H:%M} CT: {st}"
+
+
+def _check_stop_marker(alert) -> None:
+    status, detail = stop_check_status(
+        STOP_MARKER, pd.Timestamp.now(tz="America/Chicago").date())
+    print(f"Intraday stop check: {detail}")
+    if status != "ok":
+        alert("🟠 IBKR live run: the 2 PM intraday stop check did not complete "
+              f"today ({detail}) — trading the morning book as published; a "
+              "stop breached today is NOT reflected in it.")
+
+
 def _run(argv: list[str] | None, hb: Heartbeat) -> int:
     ap = argparse.ArgumentParser(
         description="Trade the live Option-C book in every configured IBKR "
@@ -627,7 +690,7 @@ def _run(argv: list[str] | None, hb: Heartbeat) -> int:
             a.enabled = a.enabled and a.id in args.only
 
     mode = "EXECUTE" if args.execute else "preview (no orders)"
-    print(f"Multi-account MOC runner — {mode}")
+    print(f"Multi-account runner ({cfg.order_type}) — {mode}")
     print("Runtime: " + ic.runtime_versions())
     print(f"  gateway {cfg.host}:{cfg.port}, book {cfg.book}, "
           f"{len(cfg.enabled())} account(s) enabled")
@@ -667,21 +730,30 @@ def _run(argv: list[str] | None, hb: Heartbeat) -> int:
             print(f"Not trading: {why_day}.")
             hb.benign, hb.detail = True, f"not trading: {why_day}"
             return EXIT_SKIPPED
-        ok_moc, why_moc = ic.moc_entry_open()
-        print(f"MOC window: {why_moc}")
-        if not ok_moc:
-            print("SKIP SESSION: strict MOC and the exchange cutoff has passed — "
-                  "no account is touched (no limit/market fallback by design).")
-            alert("🟠 IBKR live MOC run SKIPPED — started after the MOC cutoff "
-                  f"({why_moc}). No orders were placed today.")
-            hb.detail = f"SKIPPED — started after the MOC cutoff ({why_moc})"
+        moc = cfg.order_type == ic.ORDER_MOC
+        ok_win, why_win = ic.moc_entry_open() if moc else ic.regular_entry_open()
+        print(f"{'MOC window' if moc else 'Session window'} ({cfg.order_type}): {why_win}")
+        if not ok_win:
+            if moc:
+                print("SKIP SESSION: strict MOC and the exchange cutoff has passed — "
+                      "no account is touched (no limit/market fallback by design).")
+                alert("🟠 IBKR live MOC run SKIPPED — started after the MOC cutoff "
+                      f"({why_win}). No orders were placed today.")
+                hb.detail = f"SKIPPED — started after the MOC cutoff ({why_win})"
+            else:
+                print(f"SKIP SESSION: {cfg.order_type} orders need the regular session "
+                      "— no account is touched.")
+                alert(f"🟠 IBKR live {cfg.order_type} run SKIPPED — {why_win}. "
+                      "No orders were placed today.")
+                hb.detail = f"SKIPPED — {why_win}"
             return EXIT_SKIPPED
+        _check_stop_marker(alert)
 
     managed, why = verify_gateway(
         cfg, retry_s=GATEWAY_RETRY_S if (args.execute and not args.check) else 0.0)
     print(f"Gateway: {why}")
     if managed is None:
-        alert(f"🔴 IBKR live MOC run ABORTED — {why}. Nothing was traded.")
+        alert(f"🔴 IBKR live {cfg.order_type} run ABORTED — {why}. Nothing was traded.")
         hb.detail = f"gateway: {why[:300]}"
         return EXIT_SETUP
     runnable, missing = split_by_availability(cfg, managed)
@@ -712,7 +784,7 @@ def _run(argv: list[str] | None, hb: Heartbeat) -> int:
     if code == EXIT_FAILED:
         bad = [f"{r.acct.id}: {describe(r.rc)}" for r in results if r.rc not in (0, 3)]
         bad += [f"{a.id}: not managed by login" for a in missing]
-        alert("🔴 IBKR live MOC run finished with problems — " + "; ".join(bad))
+        alert(f"🔴 IBKR live {cfg.order_type} run finished with problems — " + "; ".join(bad))
     hb.detail = "; ".join(
         [f"{hbeat.mask_account(r.acct.id)} {describe(r.rc)}" for r in results]
         + [f"{hbeat.mask_account(a.id)} not managed by login" for a in missing])

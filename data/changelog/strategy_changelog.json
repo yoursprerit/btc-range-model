@@ -987,6 +987,34 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/237"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "execution",
+  "title": "2:00 PM CT intraday stop check: a breached stop now reaches today's book",
+  "description": "About 20 minutes before the executor, every held sleeve that carries a stop (fixed −3…−10 % or the 10 %/12 % gold trail) is priced at its live quote. If one is at/below its stop level, both signed books (paper and live) are re-published in place without that sleeve (adds-only pinned to the morning book, nothing else trimmed), so the IBKR executor, the 2:30 PM Collective2 send and the as-published record all see the stop-out the same day instead of the next morning. A clear day touches only a status marker.",
+  "impact": "Backtest stops read the same bar's close and fill at it; a live book can only act on the previous close, so a breach used to cost a full extra session. Limits: the rule is a close rule, so a 2:00 PM breach that recovers into the close is sold anyway; a manual 🚀 publish afterwards drops the amendment.",
+  "links": [
+   {
+    "label": "PR #238",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/238"
+   }
+  ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "execution",
+  "title": "Live executor: configurable order type, 2:20 PM CT slot (marketable limit recommended)",
+  "description": "The multi-account live runner gains an order_type setting — marketable-limit (the new default: a limit priced 0.5 % through the touch that escalates to market if unfilled), moc (the previous strict market-on-close flow, now opt-in) or market — and its shipped schedule moves from 2:15 PM to 2:20 PM CT. Non-MOC runs use a regular-session window instead of the MOC cutoff, send sells first and size the buys from realised proceeds, and alert when the 2 PM stop check did not complete.",
+  "impact": "Replay on the common hourly window (2024-06-18 → 2026-06-15, Balanced book with the 30 % cluster cap): fills at the 4 PM close +329 %, ~10 AM ET +307 %, the open +286 % — close ahead but not statistically significant (daily t = −0.6 / −1.1), so the move to a mid-afternoon slot trades a small, unproven backtest-fidelity cost for same-day stop handling.",
+  "links": [
+   {
+    "label": "PR #238",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/238"
+   }
+  ]
  }
  ]
 }

@@ -180,6 +180,48 @@ def _publish_sha() -> str:
     return (sha or "unknown")[:12]
 
 
+def assemble_payloads(book, profile: str, *, audit_stamp: dict, basis: dict,
+                      generated_at_utc: str | None = None
+                      ) -> tuple[dict, dict, dict, float]:
+    """Build the PAPER and LIVE book payloads (unsigned) from a computed
+    ``TargetBook``; returns ``(paper, live, live_weights, live_cash)``.
+
+    Shared by the 7:15-AM-CT publisher and the 2:00-PM-CT intraday stop check
+    (``scripts/intraday_stop_check.py``) so both emit byte-for-byte the same
+    structure.  The idle remainder becomes a real SATA position up to the V2
+    cap (``book.sata_cap``), the excess stays cash; PAPER and LIVE carry the
+    SAME weights and differ only in ``book_mode``.  ``audit_stamp`` (the
+    signal-freshness verdict) and ``basis`` (the exact closes the book was
+    built from) are stamped INTO both payloads — they are covered by the HMAC
+    signature — together with the strategy-logic provenance."""
+    live_weights = dict(book.weights)
+    live_exec = dict(book.exec_price)
+    live_sata, live_cash = oc.split_idle(book.cash_weight, book.sata_cap)
+    if live_sata > 1e-6:
+        live_weights[SATA_KEY] = live_weights.get(SATA_KEY, 0.0) + live_sata
+        try:
+            sata_px = oc.fetch_sata().get("price")
+        except Exception:
+            sata_px = None
+        live_exec[SATA_KEY] = float(sata_px) if sata_px else float(oc.SATA["par"])
+    paper = tb.build_payload(
+        as_of=book.as_of, profile=profile, weights=live_weights,
+        cash_weight=live_cash, exec_price=live_exec,
+        actions=book.actions, book_mode="paper", sata_cap=book.sata_cap,
+        generated_at_utc=generated_at_utc)
+    live = tb.build_payload(
+        as_of=book.as_of, profile=profile, weights=live_weights,
+        cash_weight=live_cash, exec_price=live_exec, actions=book.actions,
+        book_mode="live", generated_at_utc=paper["generated_at_utc"],
+        sata_cap=book.sata_cap)
+    for _bk in (paper, live):
+        _bk["signal_audit"] = dict(audit_stamp)
+        _bk["signal_basis"] = dict(basis)
+        _bk["strategy_version"] = oc.STRATEGY_VERSION
+        _bk["code_sha"] = _publish_sha()
+    return paper, live, live_weights, live_cash
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Publish the Overall target books (Option C)")
     ap.add_argument("--profile", default=oc.DEFAULT_PROFILE,
@@ -297,58 +339,16 @@ def main() -> int:
     else:
         print("Signed with OVERALL_BOOK_SECRET (HMAC-SHA256).")
 
-    # ── Idle remainder → a real SATA position (Strive preferred, ~13% yield) ──
-    # Strategy Logic V2 caps the SATA position at ``book.sata_cap`` of the book:
-    # the idle remainder is parked in SATA only up to the cap, the excess stays
-    # in cash (0 % yield).  The PAPER and LIVE books now carry these SAME
-    # weights; they differ only in ``book_mode``, which the executors and the
-    # Collective2 publisher use to keep the two destinations apart.
-    live_weights = dict(book.weights)
-    live_exec = dict(book.exec_price)
-    live_sata, live_cash = oc.split_idle(book.cash_weight, book.sata_cap)
-    if live_sata > 1e-6:
-        live_weights[SATA_KEY] = live_weights.get(SATA_KEY, 0.0) + live_sata
-        try:
-            sata_px = oc.fetch_sata().get("price")
-        except Exception:
-            sata_px = None
-        live_exec[SATA_KEY] = float(sata_px) if sata_px else float(oc.SATA["par"])
-    paper = tb.build_payload(
-        as_of=book.as_of, profile=args.profile, weights=live_weights,
-        cash_weight=live_cash, exec_price=live_exec,
-        actions=book.actions, book_mode="paper", sata_cap=book.sata_cap)
-    live = tb.build_payload(
-        as_of=book.as_of, profile=args.profile, weights=live_weights,
-        cash_weight=live_cash, exec_price=live_exec, actions=book.actions,
-        book_mode="live", generated_at_utc=paper["generated_at_utc"],
-        sata_cap=book.sata_cap)
-
-    # Stamp the audit verdict INTO both books (covered by the HMAC signature),
-    # so any consumer can see the signals were verified fresh at publish time.
     _audit_stamp = dict(passed=bool(audit["passed"]),
                         checked_at_utc=audit["checked_at_utc"],
                         stale_apps=list(audit["stale_apps"]))
-    paper["signal_audit"] = _audit_stamp
-    live["signal_audit"] = dict(_audit_stamp)
-
-    # Stamp the DATA BASIS too (also signature-covered): the exact closes this
-    # book was built from — the UI donut captions read this instead of
-    # guessing from the publish time.
     _basis = dict(
         anchor_ct=fr.fmt_ct(anchor),
         equity_close=str(fr.expected_equity_asof(anchor).date()),
         btc_bar_close_utc=fr.close_moment(
             "crypto", fr.expected_crypto_asof(anchor)).isoformat())
-    paper["signal_basis"] = _basis
-    live["signal_basis"] = dict(_basis)
-
-    # Stamp the STRATEGY-LOGIC PROVENANCE (signature-covered): the deliberate
-    # strategy version plus the publishing commit, so the as-published P&L
-    # record can segment on logic changes instead of silently conflating
-    # books produced by different generations of the strategy.
-    for _bk in (paper, live):
-        _bk["strategy_version"] = oc.STRATEGY_VERSION
-        _bk["code_sha"] = _publish_sha()
+    paper, live, live_weights, live_cash = assemble_payloads(
+        book, args.profile, audit_stamp=_audit_stamp, basis=_basis)
 
     outdir = Path(args.out).parent
     outdir.mkdir(parents=True, exist_ok=True)

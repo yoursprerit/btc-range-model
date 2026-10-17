@@ -120,6 +120,7 @@ def ready(monkeypatch):
     monkeypatch.delenv("IBKR_TRADING_DISABLED", raising=False)
     monkeypatch.setattr(ic, "is_trading_day", lambda d: (True, "trading day"))
     monkeypatch.setattr(ic, "moc_entry_open", lambda now=None, cutoff=None: (True, "15:20 ET"))
+    monkeypatch.setattr(ic, "regular_entry_open", lambda now=None, margin_min=10: (True, "15:20 ET"))
     monkeypatch.setattr(acc, "alert", lambda m: None)
     monkeypatch.setattr(acc, "push_reports", lambda a, b=None: True)
     monkeypatch.setattr(acc, "verify_gateway", lambda cfg, **k: (["U1111111"], "ok"))
@@ -167,6 +168,7 @@ def test_an_armed_kill_switch_still_tells_a_human(tmp_path, ready, pings, monkey
 
 def test_starting_after_the_cutoff_pings_fail(tmp_path, ready, pings, monkeypatch):
     monkeypatch.setattr(ic, "moc_entry_open", lambda now=None, cutoff=None: (False, "late"))
+    monkeypatch.setattr(ic, "regular_entry_open", lambda now=None, margin_min=10: (False, "late"))
     assert acc.main(["--execute", "--config", _runner_cfg(tmp_path)]) == acc.EXIT_SKIPPED
     assert [k for k, _ in pings] == ["start", "fail"]
 

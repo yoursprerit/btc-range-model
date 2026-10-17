@@ -14,8 +14,8 @@
     closing auction fills them all. The runner commits and pushes every
     account's execution report in ONE push at the end.
 
-    Schedule it ~15 minutes before the cutoff-safe slot, e.g. 2:15 PM US
-    Central (3:15 PM ET): MOC orders fill at the close whenever they are
+    Schedule it ~15 minutes before the cutoff-safe slot, e.g. 2:20 PM US
+    Central (3:20 PM ET): MOC orders fill at the close whenever they are
     entered, so starting earlier costs nothing and buys margin against a slow
     gateway or git pull. See IBKR_OPTION_C_WINDOWS.md section 13.
 
