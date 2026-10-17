@@ -3081,7 +3081,9 @@ with tab_live:
                 get_c2_snapshot(_bucket()), get_c2_archive(_bucket()),
                 get_sleeve_prices(_bucket(), _use_snap),
                 columns=(list(_px_rets.columns) if _px_rets is not None
-                         else None))
+                         else None),
+                marks=acpnl.executed_marks(
+                    eb.account_report_paths(_pnl_rep_base) + [_EB_DIR / "executed_book.json"]))
             _exec_eq = _exec["equity"] if _exec is not None else None
             _exec_on = _exec_eq is not None and len(_exec_eq) >= 2
             if _exec_on:
