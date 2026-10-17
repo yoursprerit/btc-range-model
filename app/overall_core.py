@@ -3137,10 +3137,15 @@ def replay_gated_allocation(results: list[dict],
     continues V2's logic from the book V1 last held (``splice_replays``).
 
     Construction, mirroring the live gate:
-      * the funded set on day *t* is the sleeves the engines hold IN THE
-        MARKET on day *t* (``pos_series`` — position on *t* was decided by
-        signals at the close of *t−1*, so the set is causal and already
-        encodes next-bar execution, committed exits and fresh entries).
+      * the funded set on day *t* is the sleeves the engines held going INTO
+        day *t* — ``pos_series`` lagged one bar.  ``pos_series[t]`` is the
+        state AFTER bar *t*'s close (decided by signals at the close of
+        *t−1* and filled at the close of *t*), so the book that earns bar
+        *t* is ``pos_series[t−1]``: the decide-at-close-*t−1* /
+        fill-at-close-*t* convention of ``simulate_regime``.  Funding day
+        *t* from the unlagged state skipped every exit day's return (the
+        sleeve was dropped on the bar whose close produced the signal —
+        look-ahead no account can trade) and overstated the record.
         Position state is CARRIED across a sleeve's non-trading days
         (``position_matrix(carry=True)``): on the union calendar the crypto
         sleeves put weekends into the index, and without the carry every
@@ -3195,7 +3200,9 @@ def replay_gated_allocation(results: list[dict],
         day_anchor = [anchors[i][1] for i in a_pick]
     else:
         day_anchor = None
-    pos = position_matrix(results, idx, carry=True)
+    # the book that earns bar t is the position held going INTO it: the
+    # engines' state after the previous bar's close (see the docstring)
+    pos = position_matrix(results, idx, carry=True).shift(1).fillna(0.0)
     comp = priority_component_history(results, idx, wr_window=wr_window,
                                       sharpe_window=sharpe_window)
     # decision at close t−1 drives the book that earns day t's return

@@ -294,11 +294,15 @@ def test_combined_replay_applies_the_mix_only_from_the_cutover():
     pd.testing.assert_series_equal(mixed["ret"].loc[pre], plain["ret"].loc[pre])
     assert mixed["weights"].loc[pre].equals(plain["weights"].loc[pre])
     cols = ["AAA", "BBB", "CCC", "DDD"]
-    w = mixed["weights"][cols].loc[entry]
+    # the entry fills at ``entry``'s close and earns from the NEXT bar — the
+    # book that earns a bar is the position held going into it
+    assert mixed["weights"][cols].loc[entry].sum() == 0
+    funded = idx[idx.get_loc(entry) + 1]
+    w = mixed["weights"][cols].loc[funded]
     assert w.sum() > 0
     for k, sh in _RMIX["AAA"].items():                # the fresh entry is sized at the split
         assert w[k] / w.sum() == pytest.approx(sh)
-    p = plain["weights"][cols].loc[entry]
+    p = plain["weights"][cols].loc[funded]
     assert p.sum() == pytest.approx(w.sum())          # same cluster size, different split
     assert not (p / p.sum()).round(6).equals((w / w.sum()).round(6))
 

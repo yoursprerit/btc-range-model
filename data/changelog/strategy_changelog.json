@@ -1057,6 +1057,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/241"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "analytics",
+  "title": "Walk-forward replay: fund each bar from the position held going into it",
+  "description": "replay_gated_allocation funded day t from the engines' position AFTER day t's close, so a sleeve exited on the bar whose close produced the signal was dropped before earning that bar: every exit day's return was skipped (look-ahead no account can trade). It now funds day t from the state after bar t-1 (pos_series lagged one bar), the decide-at-close-t-1 / fill-at-close-t convention of the per-sleeve engines and of the live accounts. Entries are unchanged (a sleeve's own stream earns nothing on its fill day).",
+  "impact": "Full history 2021-01-05 to 2026-10-16, old -> new. V2 Balanced: CAGR +60.2% -> +53.7%, MDD -11.5% -> -14.1%, Sharpe 2.22 -> 1.88. V2 Growth: +68.1% -> +59.4%, -17.1% -> -19.2%, 2.07 -> 1.76. Combined Balanced: +59.6% -> +56.8%, -24.0% -> -27.0%, 1.66 -> 1.52. Combined Growth: +68.2% -> +62.0%, -29.4% -> -35.2%, 1.58 -> 1.42. V1 Balanced: +59.8% -> +57.0%; V1 Growth: +68.4% -> +62.4%. Oct 6-16, 2026 (V2 Balanced): +1.36% -> -1.18%, now in line with the C2 and IBKR as-published records.",
+  "links": [
+   {
+    "label": "PR #242",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/242"
+   }
+  ]
  }
  ]
 }
