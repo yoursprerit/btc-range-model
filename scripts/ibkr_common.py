@@ -82,6 +82,10 @@ QUOTE_CACHE_TTL_S = 60.0
 # ``slippage_cap`` — it fills like a market order under normal conditions but
 # caps what a stale quote, a flash dislocation or a bad print can cost.  A naked
 # MARKET order has no such ceiling, which is the only reason to prefer the limit.
+# Under this type NO order ever leaves without a price: a leg that cannot be
+# quoted is skipped (not sent as MARKET), and an unfilled limit is re-sent once
+# at the wider ``ESCALATION_SLIPPAGE_CAP``, never as MARKET.  Plain MARKET
+# orders exist only when ``--order-type market`` is asked for explicitly.
 # MOC: market-on-close, filled in the official closing auction — the venue's
 # deepest liquidity, and the price the engine/backtest actually books against
 # (both assume a close fill), so it removes the structural drift between live
@@ -97,6 +101,14 @@ ORDER_TYPES = (ORDER_MARKETABLE_LIMIT, ORDER_MOC, ORDER_MARKET)
 # MSTU, NUGT, SOXL, ERX, WGMI, REMX, ARTY, SATA) while still refusing to chase a
 # quote that has blown out far past it.
 DEFAULT_SLIPPAGE_CAP = 0.005
+# A marketable limit that has not filled within the wait is re-sent ONCE as a
+# second limit priced this far through the THEN-CURRENT touch (re-quoted, so a
+# market that drifted away is caught up with).  Wide enough to cross any book
+# the quote-sanity gate lets through (2 % spread on buys, 4 % on sells), and
+# still a hard ceiling: nothing in a live run is ever sent without a price.
+# A remainder that fails even this is left unfilled and alerted; tomorrow's
+# run re-plans from the positions the account really holds.
+ESCALATION_SLIPPAGE_CAP = 0.015
 
 # How long each order leg is given to fill before the run moves on.
 DEFAULT_FILL_TIMEOUT_S = 60.0
@@ -2222,19 +2234,19 @@ class Broker:
                      slippage_cap: float, contract, outside_rth: bool = False):
         """(ib_async order, type actually used, limit price or 0.0).
 
-        Falls back to a plain MARKET order when a marketable limit cannot be
-        priced (no market-data subscription, or a dead quote).  That preference
-        is deliberate: an unpriceable limit that never fills leaves the account
-        holding the WRONG exposure until the next run — an unbounded tracking
-        error — whereas market slippage in this universe is bounded and small.
+        A marketable limit that cannot be priced (no market-data subscription,
+        a dead quote) is SKIPPED and reported, never degraded to a MARKET
+        order: an unbounded order on a name whose price the run cannot even
+        see is exactly the fill this order type exists to rule out.  The
+        account then holds the wrong exposure for one session and tomorrow's
+        run re-plans from real positions — a bounded, visible cost.  Outside
+        regular hours the limit is first priced off the book's own
+        publish-time ``exec_price`` (a real, recent print), since no quote is
+        the norm there; inside them a missing quote is a feed problem worth an
+        alert, not a price to trade on.
 
-        ``outside_rth`` flips both halves of that reasoning, because IBKR does
-        not accept a MARKET order outside regular hours at all — it is rejected,
-        not merely risky.  So an extended-hours run stamps ``outsideRth`` on a
-        LIMIT and, when no quote can be had, prices off the book's own
-        publish-time ``exec_price`` rather than degrading to an order the venue
-        will refuse.  A leg that cannot be priced even then is SKIPPED and
-        reported, never sent blind.
+        Plain MARKET orders are built only when ``order_type`` asks for them
+        explicitly (and never outside RTH, where the venue rejects them).
         """
         from ib_async import LimitOrder, MarketOrder, Order as IBOrder
         if order_type == ORDER_MOC:
@@ -2266,12 +2278,15 @@ class Broker:
                       f"({basis} {slippage_cap*100:.2f}% through)"
                       + (f" [outside RTH{tif_note}]" if outside_rth else ""))
                 return order, ORDER_MARKETABLE_LIMIT, float(lmt)
-            if outside_rth:
-                print(f"    SKIP {o.symbol}: {basis}, and a MARKET order is "
-                      f"rejected outside RTH — nothing sent for this leg")
-                return None, ORDER_MARKETABLE_LIMIT, 0.0
-            print(f"    WARN {o.symbol}: {basis} — falling back to MARKET "
-                  f"(no price ceiling on this leg)")
+            why = (f"{basis}, and a MARKET order is rejected outside RTH"
+                   if outside_rth else
+                   f"{basis} — not sending an unpriced MARKET order")
+            print(f"    SKIP {o.symbol}: {why} — nothing sent for this leg")
+            if not outside_rth:
+                self._alert(f"⚠️ {o.action} {o.symbol} ({self.account}) skipped: "
+                            f"{basis}. No market order was sent in its place — "
+                            "check the market-data feed.")
+            return None, ORDER_MARKETABLE_LIMIT, 0.0
         if outside_rth:
             print(f"    SKIP {o.symbol}: MARKET orders are rejected outside RTH")
             return None, ORDER_MARKET, 0.0
@@ -2325,25 +2340,32 @@ class Broker:
         return ORDER_MOC, fractional
 
     def _escalate_unfilled(self, trades: list, fractional: bool,
-                           wait: float, outside_rth: bool = False) -> list:
+                           wait: float, outside_rth: bool = False,
+                           cap: float = ESCALATION_SLIPPAGE_CAP) -> list:
         """Cancel any limit that did not fill in time and re-send the remainder
-        as a MARKET order; returns the new trade tuples to report alongside.
+        ONCE as a wider marketable limit — ``cap`` through the touch as it
+        stands NOW (re-quoted, so a market that drifted away from the first
+        limit is caught up with); returns the new trade tuples to report
+        alongside.
 
-        This is what makes the marketable limit strictly better than a bare
-        market order rather than a trade-off: the limit caps the first attempt,
-        and anything it fails to fill still gets done in the same run instead
-        of leaving the book mismatched until tomorrow.
+        This is what keeps the marketable limit from being a trade-off: the
+        first attempt caps the ordinary case, and a leg that fails it still
+        gets a second, bounded chance in the same run.  It is deliberately NOT
+        a market order: every order a live run sends carries a price ceiling.
+        A remainder that fails the second attempt too — or whose quote is now
+        halted, crossed, blown out, or missing — is left unfilled and alerted;
+        tomorrow's run re-plans from the positions the account really holds.
         """
-        from ib_async import MarketOrder
+        from ib_async import LimitOrder
         if outside_rth:
-            # The market-order safety net does not exist outside RTH; an
-            # unfilled extended-hours limit simply stays unfilled.
+            # Extended-hours limits simply stay working; there is nothing to
+            # re-price them against.
             stuck = [o.symbol for o, _q, used, _l, t in trades
                      if not t.isDone() and used == ORDER_MARKETABLE_LIMIT]
             if stuck:
                 print(f"    outside RTH: leaving {len(stuck)} unfilled "
-                      f"limit(s) working ({', '.join(stuck)}) — no MARKET "
-                      f"escalation is possible; they expire at the "
+                      f"limit(s) working ({', '.join(stuck)}) — no re-pricing "
+                      f"is possible; they expire at the "
                       f"{EXT_CLOSE_ET[0]:02d}:{EXT_CLOSE_ET[1]:02d} ET end of "
                       f"the extended session")
             return []
@@ -2360,42 +2382,63 @@ class Broker:
             self.ib.sleep(1.0)
             if rem <= 0:
                 continue
-            print(f"    ESCALATE {o.symbol}: limit unfilled after {wait:g}s — "
-                  f"re-sending {rem:g} as MARKET")
             contract = sym.ibkr_contract(o.symbol)
             try:
                 self._qualify(contract)
             except Exception as e:
                 print(f"    WARN {o.symbol}: cannot escalate ({e})")
                 continue
-            # A MARKET order has no price ceiling, so it is the one order that
-            # must not chase a halted, crossed or blown-out book — leave the
-            # remainder unfilled; the next run re-plans from real positions.
+            # The second attempt must not chase a halted, crossed or blown-out
+            # book either — leave the remainder unfilled; the next run re-plans
+            # from real positions.
             halt = self._halt_reason()
+            q = self.quote(contract)
             bad = None
             if not halt and getattr(self, "safety", None) is not None:
-                bad = self._unsafe_quote(o.symbol, o.action, self.quote(contract))
-            if halt or bad:
-                why = f"kill switch ({halt})" if halt else bad
+                bad = self._unsafe_quote(o.symbol, o.action, q)
+            lmt, basis = (None, "no quote") if (halt or bad) else \
+                marketable_limit_price(o.action, q, cap)
+            if lmt is None or basis == "close":
+                # ``close`` is the PRIOR session's close — not a live reference
+                # to widen a limit from, and a limit off it is what just failed.
+                why = (f"kill switch ({halt})" if halt else bad if bad else
+                       f"no live quote to re-price from ({basis})")
                 print(f"    NOT escalating {o.symbol}: {why} — {rem:g} left unfilled")
-                if bad:
-                    self._alert(f"⚠️ {o.action} {o.symbol} ({self.account}): "
-                                f"{rem:g} shares left unfilled, not escalated to a "
-                                f"market order — {bad}.")
+                self._alert(f"⚠️ {o.action} {o.symbol} ({self.account}): "
+                            f"{rem:g} shares left unfilled — {why}. No market "
+                            "order was sent in its place.")
                 continue
+            print(f"    ESCALATE {o.symbol}: limit unfilled after {wait:g}s — "
+                  f"re-sending {rem:g} as a wider limit "
+                  f"{'≤' if o.action == 'BUY' else '≥'} ${lmt:,.4f} "
+                  f"({basis} {cap*100:.2f}% through)")
             esc = Order(o.key, o.symbol, o.action, rem, o.price,
                         f"{o.reason} (escalated from unfilled limit)")
-            mkt = MarketOrder(o.action, rem)
-            mkt.account = self.account
+            order = LimitOrder(o.action, rem, lmt)
+            order.account = self.account
             if getattr(self, "order_ref", ""):
-                mkt.orderRef = self.order_ref
-            extra.append((esc, rem, ORDER_MARKET, 0.0,
-                          self.ib.placeOrder(contract, mkt)))
+                order.orderRef = self.order_ref
+            extra.append((esc, rem, ORDER_MARKETABLE_LIMIT, float(lmt),
+                          self.ib.placeOrder(contract, order)))
         if extra:
             deadline = wait
             while deadline > 0 and any(not t.isDone() for *_, t in extra):
                 self.ib.sleep(1.0)
                 deadline -= 1.0
+            left = [(o, rem, t) for o, rem, _u, _l, t in extra if not t.isDone()]
+            for o, rem, t in left:
+                try:
+                    self.ib.cancelOrder(t.order)
+                except Exception:
+                    pass
+                got = float(t.orderStatus.filled or 0.0)
+                print(f"    {o.symbol}: wider limit also unfilled ({got:g}/{rem:g}) "
+                      "— cancelled, remainder left for tomorrow's run")
+                self._alert(f"⚠️ {o.action} {o.symbol} ({self.account}): "
+                            f"{rem - got:g} shares unfilled after the wider limit "
+                            f"({cap*100:.1f}% through) — cancelled, not sent as a "
+                            "market order. The next run re-plans from real "
+                            "positions.")
         return extra
 
     def place(self, orders: list[Order], fractional: bool, wait: float,
@@ -2609,7 +2652,8 @@ class Broker:
                                     status="SKIPPED-UNPRICEABLE", filled=0.0,
                                     avg_fill_price=0.0, order_type="",
                                     limit_price=0.0,
-                                    reason=f"{o.reason} [no price outside RTH]"))
+                                    reason=f"{o.reason} [no usable quote"
+                                           f"{' outside RTH' if outside_rth else ''}]"))
                 continue
             # Explicit, on every order: a login with several accounts routes an
             # unstamped order to its DEFAULT account, which is not necessarily

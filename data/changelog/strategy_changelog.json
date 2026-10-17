@@ -1015,6 +1015,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/238"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "execution",
+  "title": "Executor: every marketable-limit order carries a price ceiling (no market-order fallback)",
+  "description": "Two paths that could send an unbounded market order are closed. A leg whose quote cannot price a limit inside regular hours is now skipped (SKIPPED-UNPRICEABLE, alerted) instead of falling back to MARKET. A limit unfilled after the fill wait is re-sent once as a wider limit — 1.5 % through the then-current touch, re-quoted, and only if that quote passes the halt / crossed / spread gate — and a remainder that fails that too is cancelled and alerted, never sent as MARKET. An explicit order_type \"market\" is unchanged.",
+  "impact": "Worst-case fill under the default order type is now bounded at every step (first attempt 0.5 % through the touch, second 1.5 %, nothing beyond), at the cost of an occasional unfilled remainder on a fast or thin name that the next run re-plans. Previously a dead quote or a 60-second unfilled limit could print at whatever the book offered.",
+  "links": [
+   {
+    "label": "PR #239",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/239"
+   }
+  ]
  }
  ]
 }

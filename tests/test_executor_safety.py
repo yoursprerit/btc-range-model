@@ -237,6 +237,15 @@ class _Trade:
         return self._done
 
 
+class _Sent(tuple):
+    """(action, symbol, qty) — tuple-compatible with the existing assertions —
+    plus ``.lmt``, the limit price if the order carried one."""
+    def __new__(cls, action, symbol, qty, lmt=None):
+        self = super().__new__(cls, (action, symbol, qty))
+        self.lmt = lmt
+        return self
+
+
 class _IB:
     """Quotes and fill prices per symbol; records what was sent / cancelled."""
     def __init__(self, quotes=None, fills=None, on_sleep=None, done=True):
@@ -257,7 +266,8 @@ class _IB:
 
     def placeOrder(self, contract, order):
         qty = float(getattr(order, "totalQuantity", 0.0))
-        self.sent.append((order.action, contract.symbol, qty))
+        self.sent.append(_Sent(order.action, contract.symbol, qty,
+                               getattr(order, "lmtPrice", None)))
         return _Trade(qty, self.fills.get(contract.symbol, 100.0), self.done)
 
     def cancelOrder(self, order):
@@ -284,9 +294,14 @@ def _no_ib_async(monkeypatch):
     class _MarketOrder:                      # stands in for ib_async.MarketOrder
         def __init__(self, action, qty):
             self.action, self.totalQuantity = action, qty
+
+    class _LimitOrder:                       # …and ib_async.LimitOrder
+        def __init__(self, action, qty, lmt):
+            self.action, self.totalQuantity, self.lmtPrice = action, qty, lmt
     monkeypatch.setitem(sys.modules, "ib_async",
                         type(sys)("ib_async"))
     sys.modules["ib_async"].MarketOrder = _MarketOrder
+    sys.modules["ib_async"].LimitOrder = _LimitOrder
 
 
 def _tk(bid=99.9, ask=100.1, last=100.0, close=100.0, halted=NAN):
@@ -467,4 +482,6 @@ def test_an_unfilled_limit_still_escalates_in_a_healthy_book():
     ib = _IB({"X": _tk(), "SPY": _tk()}, done=False)
     b = _broker(ib)
     b.place(_orders(("X", "BUY", 1, 100.0)), False, 2.0, order_type=ic.ORDER_MARKETABLE_LIMIT)
-    assert len(ib.sent) == 2, "ordinary behaviour kept: the remainder goes as a market order"
+    assert len(ib.sent) == 2, "ordinary behaviour kept: the remainder is re-sent"
+    # …but as a WIDER LIMIT off the current ask, never as a market order
+    assert ib.sent[-1].lmt == pytest.approx(100.1 * (1 + ic.ESCALATION_SLIPPAGE_CAP), abs=0.01)
