@@ -374,7 +374,7 @@ def test_a_refresh_report_ignores_the_profile_pin(env, monkeypatch, alerts):
 
 
 def test_consistent_cash_overrides_stale_cash_tag():
-    """U23154574 2026-10-13: cash read before the MOC fills posted."""
+    """…4574 2026-10-13: cash read before the MOC fills posted."""
     pos = [dict(market_value=v) for v in (29159.41, 136730.75, 215.13,
                                           137739.84, 85654.74, 27173.31)]
     got = ic.consistent_cash(461264.12, pos, 145083.9)

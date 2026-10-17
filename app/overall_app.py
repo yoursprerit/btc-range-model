@@ -408,7 +408,8 @@ def get_universe_pack(bucket: str, version: str = "v2"):
         return None
     rets = ov.returns_matrix(results)
     pos = ov.position_matrix(results, rets.index)
-    bm = ov.benchmarks(rets, results, pos=pos, sata_daily=ov.SATA_DAILY)
+    bm = ov.benchmarks(rets, results, pos=pos,
+                       sata_daily=get_sata_returns(bucket, _snap_ok()))
     return dict(results=results, computed_at=computed_at, rets=rets, pos=pos,
                 bm=bm, version=version)
 
@@ -425,7 +426,7 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
         return None
     results, rets, pos, bm = up["results"], up["rets"], up["pos"], up["bm"]
     _prev_w = ov.load_published_book_weights() if version == "v2" else None
-    sata = ov.SATA_DAILY
+    sata = get_sata_returns(bucket, use_snap)   # the leg's real returns
     base_curves = {"Equal-weight strategies": bm["strat_equal"]["equity"],
                    BH_CURVE: bm["bh_equal"]["equity"]}
     prof = ov.RISK_PROFILES[name]
@@ -439,7 +440,8 @@ def get_profile_pack(bucket: str, version: str, name: str, use_snap: bool = True
         _sp = None
     opt = _sp["opt"] if _sp is not None else None
     if opt is None:
-        opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=sata,
+        # the optimiser keeps the coupon as its idle-leg expectation
+        opt = ov.optimize_weights(rets, caps=caps, pos=pos, sata_daily=ov.SATA_DAILY,
                                   mdd_floor=prof["mdd_floor"],
                                   objective=prof["objective"], fundamental=False)
     w_opt = np.array([opt["optimal"]["weights"][c] for c in opt["cols"]])
@@ -524,6 +526,21 @@ def get_portfolio(bucket: str, profile: str, version: str = "v2"):
     return dict(results=up["results"], computed_at=up["computed_at"],
                 rets=up["rets"], bm=up["bm"], profile=profile,
                 version=version, **p)
+
+
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
+def get_sata_returns(bucket: str, use_snap: bool = True):
+    """The SATA leg's return source for every P&L path: SATA's realised
+    per-session total return (``ov.load_sata_returns``) — the snapshot's copy
+    when the replays come from it, so attribution and daily P&L reconcile to
+    the snapshotted curves — or the coupon (``SATA_DAILY``) when no history
+    is on disk."""
+    _snap = get_pnl_snapshot() if use_snap else None
+    if _snap is not None and "sata_returns" in _snap:
+        sr = _snap["sata_returns"]
+    else:
+        sr = ov.load_sata_returns()
+    return sr if sr is not None else ov.SATA_DAILY
 
 
 @st.cache_data(ttl=1800, show_spinner=False, max_entries=2)
@@ -2815,7 +2832,7 @@ with tab_live:
         _px_rets = get_price_returns(_bucket(), _use_snap)
         _bookrep = (ov.published_book_replay(
                         _px_rets if _px_rets is not None else _PFV["rets"],
-                        _books, sata_daily=ov.SATA_DAILY, version_map=_vmap,
+                        _books, sata_daily=get_sata_returns(_bucket(), _use_snap), version_map=_vmap,
                         only_version=_sv.versions_for_view(_pnl_ver),
                         min_as_of=ov.C2_RECORD_START,
                         fill_on_sessions=True,   # C2 trades US sessions only
@@ -2888,7 +2905,9 @@ with tab_live:
                      "sent after C2 became the account of record); earlier "
                      "books are not counted, and a day C2 missed keeps the "
                      "previous book, just like the account. The SATA leg the "
-                     "books hold earns its coupon; idle cash earns nothing. "
+                     "books hold earns SATA's real daily return (price and "
+                     "dividends; the coupon before its listing); idle cash "
+                     "earns nothing. "
                      "**IBKR #…** — the same published books, measured from "
                      "the day that IBKR account first executed them, with the "
                      "account's own **monthly deposit** (amount and day of "
@@ -3053,8 +3072,9 @@ with tab_live:
                        f"(`data/overall/c2_book_archive/`) since the record "
                        f"reset on **{_c2_start}**, strategy version "
                        f"{_ver_up}, compounded at official closes. The SATA "
-                       "leg earns its coupon; idle cash earns nothing, as on "
-                       "C2. The optimizer re-sizes the book "
+                       "leg earns SATA's real daily return (price and "
+                       "dividends; the coupon before its listing); idle cash "
+                       "earns nothing, as on C2. The optimizer re-sizes the book "
                        "every morning, so **every daily trim/re-size that "
                        "really happened flows through every figure and "
                        "toggled section below** (the 🔁 toggle lists each "
@@ -3277,7 +3297,7 @@ with tab_live:
                 get_sleeve_prices(_bucket(), _use_snap), _start_sel, end=_end_arg,
                 portfolio_value=float(portfolio_value), costs=_fx_costs,
                 taxes=_fx_taxes, income=float(_fx_income),
-                sata_daily=ov.SATA_DAILY,
+                sata_daily=get_sata_returns(_bucket(), _use_snap),
                 cash_w=_wf.get("cash"))
             if _fx_sim is not None:
                 _a0 = _fx_sim["net"].index[0]
@@ -3747,7 +3767,7 @@ with tab_live:
                 st.caption(f"📌 IBKR #{_ibkr['account']}'s **as-published "
                            "record**: each day compounds the published book "
                            "from the previous bar's close — weights, daily "
-                           "optimizer trims, SATA leg (coupon) and cash "
+                           "optimizer trims, SATA leg (its real return) and cash "
                            "remainder — from the day the account first "
                            "executed it. Marked at official closes, gross of "
                            "commissions/fills (the ✅ Executed Book app's IBKR "
@@ -3757,7 +3777,7 @@ with tab_live:
                 st.caption("📌 The **as-published record**: each day compounds "
                            "the book Collective2 actually received from the "
                            "previous bar's close — weights, daily optimizer "
-                           "trims, SATA leg (coupon) and cash remainder (earning "
+                           "trims, SATA leg (its real return) and cash remainder (earning "
                            "nothing) exactly as sent. Marked at official "
                            "closes, gross of commissions/fills (the ✅ Executed "
                            "Book app's C2 view is the fills-level record). "
@@ -3820,7 +3840,7 @@ with tab_live:
                 if "v" not in _dpl_memo:
                     _dpl_memo["v"] = ov.pnl_daily_replay(
                         _rets_win, _wf["weights"], _wf["sata"], _start_sel,
-                        sata_daily=ov.SATA_DAILY)
+                        sata_daily=get_sata_returns(_bucket(), _use_snap))
                 return _dpl_memo["v"]
 
             # exact per-sleeve attribution of the window's P&L — the
@@ -3832,7 +3852,7 @@ with tab_live:
                 if "v" not in _att_memo:
                     _att_memo["v"] = ov.pnl_attribution_replay(
                         _rets_win, _wf["weights"], _wf["sata"], _start_sel,
-                        sata_daily=ov.SATA_DAILY)
+                        sata_daily=get_sata_returns(_bucket(), _use_snap))
                 return _att_memo["v"]
 
             # exact per-sleeve ledger (realized/unrealized/deployed) —
@@ -4945,7 +4965,9 @@ with tab_live:
                                 f"<td style='text-align:right;font-weight:700'>"
                                 f"{_wts.get(p['key'], 0)*100:.1f}%</td></tr>")
                     # SATA — the idle-cash sleeve every flat day drains into
-                    _sata_m = ov.sata_slice_metrics(_curve_all.index, _start_sel)
+                    _sata_m = ov.sata_slice_metrics(
+                        _curve_all.index, _start_sel,
+                        sata_daily=get_sata_returns(_bucket(), _use_snap))
                     if _sata_m:
                         par.append(
                             f"<tr style='border-top:2px solid #cbd5e1;background:#f8fafc'>"
@@ -5450,7 +5472,7 @@ with tab_live:
                     _rets_win, _wf["weights"], _wf["sata"], _start_sel,
                     cluster_of={k: (_meta_of(k).get("parent") or k)
                                 for k in _wf["weights"].columns},
-                    sata_daily=ov.SATA_DAILY)
+                    sata_daily=get_sata_returns(_bucket(), _use_snap))
                 if _de is None:
                     st.info("No day with risk deployed in this window — the "
                             "book sat fully in cash, so there is no edge to "
@@ -6468,8 +6490,10 @@ rolling sentiment gauge, *expanding* win-rate and Sharpe, the MA20 bull-regime
 rule) lagged one bar, and the fundamental overlay is excluded throughout.
 Position state **carries across non-trading days** (the crypto sleeves put
 weekends into the calendar; a carried equity position keeps its weight and
-contributes 0 return until its next bar), and **SATA accrues on weekday bars
-only** (its coupon is 0.13/250 per *business* day). The 📊 tab's
+contributes 0 return until its next bar), and **the SATA leg earns SATA's
+real daily total return** (price change plus dividends, `data/sata/`) from
+its 2025-11-06 listing — before that, the coupon on weekday bars only
+(0.13/250 per *business* day). The 📊 tab's
 daily-allocation chart shows this replayed book through time.
 
 **Risk profiles.** The ⚙️ switch on the Live tab bundles the per-kind caps, the
@@ -6548,10 +6572,12 @@ reinvested) — **up to 30% of the book under Strategy Logic V2; any excess stay
 in cash earning 0%** (a preferred's price can fall, so SATA exposure is bounded;
 V1 parked all idle capital in SATA). With **no open positions the book sits 30%
 in SATA and 70% in cash** until a signal fires. The back-test applies the same
-split — SATA earns its coupon, cash earns nothing — so the combined curve and
-every P&L figure follow it (Balanced replay: return +1,241% → +1,196%, drawdown
-unchanged; the cost is the lost coupon on the cash leg). The back-test prices SATA
-without price risk, which is exactly what the cap guards against. Evidence:
+split — SATA earns its real total return (price and dividends) since its
+listing, the coupon before it; cash earns nothing — so the combined curve and
+every P&L figure follow it (at the cap's introduction, Balanced replay: return
++1,241% → +1,196%, drawdown unchanged; the cost is the lost coupon on the cash
+leg). Since listing the back-test carries SATA's real price risk — it fell 16%
+in a week in June 2026 — which is exactly what the cap bounds. Evidence:
 `SATA_CAP_EVAL.md`.
 
 **🩺 Strategy Health — the decay watchdog.** Every sleeve's config was

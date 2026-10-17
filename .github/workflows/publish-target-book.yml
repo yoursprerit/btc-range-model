@@ -192,6 +192,9 @@ jobs:
             git checkout -- data/backtest/ || true
           fi
 
+      - name: Refresh SATA price history (best-effort)
+        if: steps.guard.outputs.run == 'true'
+        run: python scripts/fetch_sata_history.py
       - name: Publish target book (audited)
         if: steps.guard.outputs.run == 'true'
         id: publish
@@ -257,7 +260,7 @@ jobs:
                    data/overall/strategy_health_v2.json data/overall/health_history_v2.csv \
                    data/overall/daily_audit.json data/backtest/ \
                    data/arty data/gldm data/grid data/pbw data/remx data/soxx \
-                   data/wgmi data/xle; do
+                   data/wgmi data/xle data/sata; do
             git add "$p" 2>/dev/null || echo "  (skipped absent path: $p)"
           done
           if git diff --cached --quiet; then

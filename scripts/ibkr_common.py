@@ -207,7 +207,7 @@ def consistent_cash(net_liq: float, positions: list[dict], cash: float,
     ``TotalCashValue`` and ``NetLiquidation`` are separate account-summary
     reads, and the cash tag can lag the portfolio: right after a MOC fill the
     positions and net liq include it while cash still shows the pre-fill
-    balance (U23154574, 2026-10-13: cash overstated by ~$100k, 21.8% of net
+    balance (…4574, 2026-10-13: cash overstated by ~$100k, 21.8% of net
     liq). When ``net_liq - sum(market_value)`` disagrees with the reported cash
     by more than ``tol`` of net liq, the implied figure is returned instead.
     Needs a real net liq and priced positions; otherwise the reading is kept.

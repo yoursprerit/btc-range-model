@@ -938,7 +938,7 @@
   "kind": "ui",
   "title": "Executed Book: drift table and donut reconcile cash with net liq",
   "description": "The report's cash (TotalCashValue) and net liq (NetLiquidation) are separate IBKR reads. When cash disagrees with net liq minus holdings by more than 2% of net liq, the drift table and donut now show cash as net liq minus holdings and say so; a caption flags any Actual column that does not total ~100%.",
-  "impact": "U23154574 showed Actual % totalling 121.8% and a +21.5 pp cash drift while holdings were 90.3% of net liq (target 90%).",
+  "impact": "…4574 showed Actual % totalling 121.8% and a +21.5 pp cash drift while holdings were 90.3% of net liq (target 90%).",
   "links": [
    {
     "label": "PR #234",
@@ -952,7 +952,7 @@
   "kind": "execution",
   "title": "Execution report: cash no longer recorded stale after MOC fills",
   "description": "The executor read TotalCashValue separately from NetLiquidation and the portfolio, and the cash tag can lag fills. The report now records net liq minus holdings when the cash tag disagrees by more than 2% of net liq (ibkr_common.consistent_cash).",
-  "impact": "U23154574 on 2026-10-13 recorded cash $145,084 (31.5%) against an implied $44,591 (9.7%): the ~$100k gap was that day's two MOC buys.",
+  "impact": "…4574 on 2026-10-13 recorded cash $145,084 (31.5%) against an implied $44,591 (9.7%): the ~$100k gap was that day's two MOC buys.",
   "links": [
    {
     "label": "PR #235",
@@ -980,7 +980,7 @@
   "kind": "analytics",
   "title": "Strategy P&L (IBKR as-published): follows the executed playbook's holdings",
   "description": "The IBKR as-published record is now rebuilt from the shares each executed run actually held, marked at official closes, instead of compounding the target books. Portfolio value therefore tracks the Executed Book's net liquidation and differs only by the cost of trading, which the IBKR Pro costs toggle takes out.",
-  "impact": "Live accounts 2026-10-12 to 10-16: replay vs reported net liquidation was +0.0% to +1.2% (U23154574 missed two unfilled first-day MOC buys, XLE and ERX); now within 0.07% on all three.",
+  "impact": "Live accounts 2026-10-12 to 10-16: replay vs reported net liquidation was +0.0% to +1.2% (…4574 missed two unfilled first-day MOC buys, XLE and ERX); now within 0.07% on all three.",
   "links": [
    {
     "label": "PR #237",
@@ -1050,7 +1050,7 @@
   "kind": "ui",
   "title": "Strategy P&L badges: down arrow on losses, return to two significant digits",
   "description": "Metric badges on the Strategy P&L page put the sign first (\"-$88 on ...\", \"-15.7% CAGR\") so Streamlit draws the down arrow and red on a loss instead of an up arrow. The headline Strategy P&L return now shows up to two significant digits (-0.19%, +0.51%, +12%) instead of one decimal.",
-  "impact": "Oct 12-16, 2026: IBKR #U22546572 read \"-0.2%\" with a red up arrow on -$88 and a green up arrow on CAGR -15.7%; both now point down, and the return reads -0.19%.",
+  "impact": "Oct 12-16, 2026: IBKR #…6572 read \"-0.2%\" with a red up arrow on -$88 and a green up arrow on CAGR -15.7%; both now point down, and the return reads -0.19%.",
   "links": [
    {
     "label": "PR #241",
@@ -1085,6 +1085,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/243"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "analytics",
+  "title": "SATA leg earns SATA's real total return instead of a flat coupon",
+  "description": "Every P&L path (walk-forward replay, as-published book replays, attribution and daily P&L, the frictions simulation, the health monitor's realised-book leg, the SATA benchmark line) now prices the SATA leg on SATA's realised daily total return (close + dividend, data/sata/sata_daily.csv, refreshed by the publish workflow) from its 2025-11-06 listing; the 13%/250 coupon stays in force before that. The weight optimiser keeps the coupon as its idle-leg expectation. sata_daily is duck-typed: a float is the coupon, a Series the real record (overall_core.sata_leg).",
+  "impact": "Since listing SATA returned +24.3% (price $88 -> $96.89 plus dividends) against the coupon's +13.1%, with 25% annualised volatility and a -16% week in June 2026. V2 Balanced, coupon -> real: full CAGR +53.7% -> +54.8%, Sharpe 1.88 -> 1.90, since-listing MDD -9.7% -> -12.0%; Combined Balanced full CAGR +56.8% -> +56.6% (2% mean SATA weight under V1 logic). Oct 6-16, 2026: Combined replay -0.74% -> -1.34%; Oct 13-16: -0.30% -> -0.88% against C2's -0.95%, closing the gap that was entirely SATA's -2.2% slide.",
+  "links": []
  }
  ]
 }

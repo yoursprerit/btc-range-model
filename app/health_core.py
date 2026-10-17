@@ -160,17 +160,18 @@ def realized_book_returns(books: list[dict], rets: pd.DataFrame,
     if not parsed or rets is None or rets.empty:
         return pd.Series(dtype=float)
     dates = np.array([t[0].to_datetime64() for t in parsed])
+    import overall_core as oc                 # local: no import cycle at load
     idx = rets.index[rets.index > parsed[0][0]]
     out = {}
     R = rets.fillna(0.0)
-    for d in idx:
+    sr = oc.sata_leg(sata_daily, idx)         # coupon, or SATA's real return
+    for n, d in enumerate(idx):
         i = int(np.searchsorted(dates, pd.Timestamp(d).to_datetime64(), side="left")) - 1
         if i < 0:
             continue
         _, w, cash = parsed[i]
         r = sum(wt * float(R.at[d, k]) for k, wt in w.items() if k in R.columns)
-        if d.dayofweek < 5:
-            r += cash * sata_daily
+        r += cash * sr[n]
         out[d] = r
     return pd.Series(out, dtype=float).sort_index()
 

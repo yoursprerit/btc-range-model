@@ -163,7 +163,8 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
     R = np.nan_to_num(rets.to_numpy(float))
     W = np.column_stack([weights.reindex(idx).fillna(0.0).to_numpy(float),
                          sata_w.reindex(idx).fillna(1.0).to_numpy(float)])
-    biz = np.asarray(idx.dayofweek < 5)
+    import overall_core as _oc                # local: no import cycle at load
+    sr = _oc.sata_leg(sata_daily, idx)        # coupon, or SATA's real return
     Px = (prices.reindex(idx).ffill().bfill().to_numpy(float)
           if prices is not None else np.full((len(idx), len(cols) - 1), np.nan))
     Px = np.where(np.isfinite(Px) & (Px > 0), Px, DEFAULT_PX)
@@ -295,14 +296,13 @@ def simulate_frictions(rets: pd.DataFrame, weights: pd.DataFrame, sata_w: pd.Ser
                 for lot in lots[j]:
                     lot[2] *= g
         sj = len(cols) - 1
-        if val[sj] > 0 and biz[t] and sata_daily:
-            g = 1.0 + sata_daily
+        if val[sj] > 0 and sr[t] != 0.0:
+            g = 1.0 + sr[t]
             val[sj] *= g
             for lot in lots[sj]:
                 lot[2] *= g
         equity = float(val.sum()) + cash_val
-        gross_eq *= 1.0 + float(np.dot(W[t, :-1], R[t])
-                                + (W[t, -1] * sata_daily if biz[t] else 0.0))
+        gross_eq *= 1.0 + float(np.dot(W[t, :-1], R[t]) + W[t, -1] * sr[t])
         if t + 1 < len(idx) and t + 1 < b:
             rebalance(t, t + 1, day, first=False)
         accrued = max(liability(), 0.0)

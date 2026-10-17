@@ -378,6 +378,61 @@ def _label(key: str) -> str:
 SATA = dict(ticker="SATA", name="Strive Variable-Rate Preferred (idle cash)",
             annual_rate=0.13, biz_days=250, par=100.0)
 SATA_DAILY = SATA["annual_rate"] / SATA["biz_days"]     # ≈0.00052 / business day
+# SATA's own daily history (close + dividend per session), refreshed by the
+# publish workflow (scripts/fetch_sata_history.py).  Where it exists the P&L
+# paths earn the REAL total return on the SATA leg instead of the coupon.
+SATA_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "sata" / "sata_daily.csv"
+
+
+def load_sata_returns(path=SATA_DATA_PATH) -> pd.Series | None:
+    """SATA's realised total return per session — ``(close + dividend) /
+    previous close − 1`` — from the committed daily history, indexed by
+    session date.  The listing session itself is kept at 0 (no previous close
+    to measure from), so the series' first date marks where the real record
+    begins.  ``None`` when the file is missing or unreadable, so every caller
+    falls back to the coupon (``SATA_DAILY``)."""
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True).sort_index()
+        close = df["close"].astype(float)
+        div = df["dividend"].astype(float).fillna(0.0) if "dividend" in df else 0.0
+        tr = (close + div) / close.shift(1) - 1.0
+        tr.iloc[0] = 0.0
+        tr = tr[np.isfinite(tr)]
+        return tr if len(tr) else None
+    except Exception:
+        return None
+
+
+def sata_leg(sata_daily, index, business_days_only: bool = True) -> np.ndarray:
+    """Per-bar return of the SATA idle-cash leg over *index*.
+
+    ``sata_daily`` is duck-typed, so every P&L path accepts either:
+      * a float — the modelled par-stable preferred: the coupon on business
+        days (``business_days_only``), or on every bar when ``False``;
+      * a Series (``load_sata_returns``) — the realised total return on each
+        session SATA traded.  Bars before its listing accrue the coupon under
+        the same business-day rule (the leg is modelled there, as before);
+        bars after it with no session (weekends on the crypto calendar,
+        market holidays) earn 0 — exactly as the real position.
+    Returns a float array aligned to *index*."""
+    idx = pd.DatetimeIndex(index)
+    biz = (np.asarray(idx.dayofweek < 5) if business_days_only
+           else np.ones(len(idx), dtype=bool))
+    if isinstance(sata_daily, pd.Series):
+        ser = sata_daily.dropna()
+        coupon = SATA_DAILY * biz
+        if not len(ser):
+            return coupon
+        real = ser.reindex(idx).to_numpy(float)
+        listed = np.asarray(idx >= ser.index[0])
+        return np.where(listed, np.nan_to_num(real), coupon)
+    return float(sata_daily) * biz
+
+
+def _sata_scalar(sata_daily) -> float:
+    """The coupon for paths that need a constant expectation (the optimiser,
+    a between-run accrual): a Series collapses to ``SATA_DAILY``."""
+    return SATA_DAILY if isinstance(sata_daily, pd.Series) else float(sata_daily)
 
 
 # ── entry-priority weighting ──────────────────────────────────────────────
@@ -971,11 +1026,12 @@ def _combine(returns: pd.DataFrame, weights: np.ndarray,
     ew = wt / denom                              # deployed weights, sum→1 among available
     filled = np.nan_to_num(returns.to_numpy())
     port = np.nansum(np.nan_to_num(ew) * filled, axis=1)
-    if pos is not None and sata_daily:
+    if pos is not None and (isinstance(sata_daily, pd.Series) or sata_daily):
         P = np.nan_to_num(pos.reindex(returns.index).to_numpy())
         idle = np.nansum(np.nan_to_num(ew) * (1.0 - P) * avail, axis=1)
-        port = port + sata_daily * idle
-        port[zero] = sata_daily                  # fully-cash day → all in SATA
+        sr = sata_leg(sata_daily, returns.index, business_days_only=False)
+        port = port + sr * idle
+        port[zero] = sr[zero]                    # fully-cash day → all in SATA
     else:
         port[zero] = 0.0
     return pd.Series(port, index=returns.index)
@@ -1283,9 +1339,8 @@ def _avg_cost_ledger(w: pd.DataFrame, cash: pd.Series,
     wz = w.where(w >= min_delta, 0.0)            # same flat floor as actions
     kcols = [k for k in w.columns if k in returns.columns]
     R = returns.reindex(w.index).fillna(0.0).astype(float)
-    biz = np.asarray(w.index.dayofweek < 5)
     port = (wz[kcols].to_numpy(float) * R[kcols].to_numpy(float)) \
-        .sum(axis=1) + cash.to_numpy(float) * sata_daily * biz
+        .sum(axis=1) + cash.to_numpy(float) * sata_leg(sata_daily, w.index)
     port[0] = 0.0                                # anchor bar = cost basis
     V = np.cumprod(1.0 + port)                   # blend value at each close
     V = V / V[anchor]                            # $1 at the anchor close
@@ -1689,9 +1744,8 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
     R = np.nan_to_num(sub.to_numpy(float))
     # identical blend-value path to pnl_attribution_replay, or the parts
     # stop reconciling
-    biz = np.asarray(sub.index.dayofweek < 5)
     sata_term = (sata.reindex(sub.index).fillna(1.0).to_numpy(float)
-                 * sata_daily * biz)
+                 * sata_leg(sata_daily, sub.index))
     contrib = W * R
     contrib[0, :] = 0.0
     sata_term[0] = 0.0
@@ -1755,21 +1809,41 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
     return out
 
 
-def sata_slice_metrics(index: pd.Index, start) -> dict | None:
-    """The SATA idle-cash sleeve since ``start`` on the blend's calendar: a
-    constant ``SATA_DAILY`` yield on a flat $100 par — so no drawdown, every
-    day a (tiny) win, and Sharpe/vol meaningless (returned as ``None``/0).
-    The coupon is per BUSINESS day (0.13/250), so weekend bars on the crypto
-    calendar accrue nothing — matching the replay."""
+def sata_slice_metrics(index: pd.Index, start, sata_daily=SATA_DAILY) -> dict | None:
+    """The SATA idle-cash sleeve since ``start`` on the blend's calendar.
+
+    With the coupon (a float): a constant ``SATA_DAILY`` yield on a flat $100
+    par — so no drawdown, every day a (tiny) win, and Sharpe/vol meaningless
+    (returned as ``None``/0).  The coupon is per BUSINESS day (0.13/250), so
+    weekend bars on the crypto calendar accrue nothing — matching the replay.
+    With SATA's own return series (``load_sata_returns``): the realised
+    total-return curve of the position, drawdown and all (``sata_leg``)."""
     sub = index[index >= pd.Timestamp(start)]
     if len(sub) < 2:
         return None
-    n_biz = int((sub[1:].dayofweek < 5).sum())      # anchor bar = cost basis
-    total = float((1 + SATA_DAILY) ** n_biz - 1)
     yrs = max((sub[-1] - sub[0]).days / 365.25, 1e-9)
+    if isinstance(sata_daily, pd.Series):
+        r = sata_leg(sata_daily, sub)
+        r[0] = 0.0                                  # anchor bar = cost basis
+        eq = np.cumprod(1.0 + r)
+        total = float(eq[-1] - 1.0)
+        on = r[1:][np.asarray(sub[1:].dayofweek < 5)]
+        vol = float(on.std(ddof=1) * np.sqrt(TRADING_DAYS)) if len(on) > 1 else 0.0
+        sharpe = (float(on.mean() / on.std(ddof=1) * np.sqrt(TRADING_DAYS))
+                  if len(on) > 1 and on.std(ddof=1) > 0 else None)
+        return dict(start=sub[0], end=sub[-1], days=len(sub), total_ret=total,
+                    cagr=float((1 + total) ** (1 / yrs) - 1),
+                    mdd=float((eq / np.maximum.accumulate(eq) - 1).min()),
+                    sharpe=sharpe, vol=vol,
+                    win_days=float((on > 0).mean()) if len(on) else 1.0,
+                    best_day=float(on.max()) if len(on) else 0.0,
+                    worst_day=float(on.min()) if len(on) else 0.0)
+    n_biz = int((sub[1:].dayofweek < 5).sum())      # anchor bar = cost basis
+    rate = float(sata_daily)
+    total = float((1 + rate) ** n_biz - 1)
     return dict(start=sub[0], end=sub[-1], days=len(sub), total_ret=total,
                 cagr=float((1 + total) ** (1 / yrs) - 1), mdd=0.0, sharpe=None,
-                vol=0.0, win_days=1.0, best_day=SATA_DAILY, worst_day=SATA_DAILY)
+                vol=0.0, win_days=1.0, best_day=rate, worst_day=rate)
 
 
 def pnl_attribution_since(returns: pd.DataFrame, weights, start,
@@ -1802,8 +1876,9 @@ def pnl_attribution_since(returns: pd.DataFrame, weights, start,
     if pos is not None and sata_daily:
         P = np.nan_to_num(pos.reindex(sub.index).to_numpy())
         idle = (ew * (1.0 - P) * avail).sum(axis=1)
-        sata_term = sata_daily * idle
-        sata_term[zero] = sata_daily             # fully-cash day → all in SATA
+        sr = sata_leg(sata_daily, sub.index, business_days_only=False)
+        sata_term = sr * idle
+        sata_term[zero] = sr[zero]               # fully-cash day → all in SATA
     contrib[0, :] = 0.0                          # anchor bar = cost basis
     sata_term[0] = 0.0
     port = contrib.sum(axis=1) + sata_term
@@ -1910,7 +1985,7 @@ def optimize_weights(returns: pd.DataFrame, caps: dict | None = None,
     # minimise losses" mandate rather than a purely defensive max-Sharpe point.
     # np.argmax returns the FIRST maximiser, so ties break in candidate order,
     # exactly as the previous ``max(pool, key=...)`` did.
-    tot, cag, mdd_a, shp, vlt = _metrics_batch(returns, cand, pos, sata_daily)
+    tot, cag, mdd_a, shp, vlt = _metrics_batch(returns, cand, pos, _sata_scalar(sata_daily))
     feas = np.nonzero(mdd_a >= mdd_floor)[0]
     pool = feas if feas.size else np.arange(len(cand))
     if objective == "max_return":
@@ -3191,7 +3266,6 @@ def replay_gated_allocation(results: list[dict],
     rets = returns_matrix(results)
     idx = rets.index
     keys = list(rets.columns)
-    biz = np.asarray(idx.dayofweek < 5)       # SATA pays on business days only
     if (base_weights is None) == (anchors is None):
         raise ValueError("supply exactly one of base_weights / anchors")
     if anchors:
@@ -3253,12 +3327,13 @@ def replay_gated_allocation(results: list[dict],
         if k in keys:
             init_vec[keys.index(k)] = float(w)
     has_init = init_weights is not None
+    sr = sata_leg(sata_daily, idx)              # the SATA leg's return per bar
     for t in range(t0, len(idx)):
         act = [j for j in range(len(keys)) if P[t, j] > 0]
         cap_t = sc_cap if (sc_cap is not None and (sc_from is None or idx_vals[t] >= sc_from)) else None
         if not act:
             sata_w[t], cash_w[t] = split_idle(1.0, cap_t)
-            port[t] = sata_w[t] * sata_daily if biz[t] else 0.0
+            port[t] = sata_w[t] * sr[t]
             continue
         bw = day_anchor[t] if day_anchor is not None else base_weights
         if tilt:
@@ -3311,8 +3386,7 @@ def replay_gated_allocation(results: list[dict],
             W[t, j] = w
             dep += w
         sata_w[t], cash_w[t] = split_idle(1.0 - dep, cap_t)
-        port[t] = float(np.dot(W[t], R[t])) + \
-            (sata_w[t] * sata_daily if biz[t] else 0.0)
+        port[t] = float(np.dot(W[t], R[t])) + sata_w[t] * sr[t]
 
     if t0:                                     # only the replayed bars are returned
         idx, port, W, sata_w, P = idx[t0:], port[t0:], W[t0:], sata_w[t0:], P[t0:]
@@ -3533,9 +3607,8 @@ def pnl_attribution_replay(returns: pd.DataFrame, weights: pd.DataFrame,
     contrib = W * np.nan_to_num(sub.to_numpy(float))
     # same business-day-only SATA accrual as the replay, or the parts stop
     # summing to the curve
-    biz = np.asarray(sub.index.dayofweek < 5)
     sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float)
-                 * sata_daily * biz)
+                 * sata_leg(sata_daily, sub.index))
     contrib[0, :] = 0.0
     sata_term[0] = 0.0
     port = contrib.sum(axis=1) + sata_term
@@ -3571,9 +3644,8 @@ def pnl_daily_replay(returns: pd.DataFrame, weights: pd.DataFrame,
         return None
     W = weights.reindex(sub.index).fillna(0.0).to_numpy(float)
     contrib = W * np.nan_to_num(sub.to_numpy(float))
-    biz = np.asarray(sub.index.dayofweek < 5)
     sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float)
-                 * sata_daily * biz)
+                 * sata_leg(sata_daily, sub.index))
     contrib[0, :] = 0.0
     sata_term[0] = 0.0
     port = contrib.sum(axis=1) + sata_term
@@ -3642,9 +3714,8 @@ def daily_edge_by_sleeve(returns: pd.DataFrame, weights: pd.DataFrame,
         return None
     W = weights.reindex(sub.index).fillna(0.0).to_numpy(float)
     contrib = W * np.nan_to_num(sub.to_numpy(float))
-    biz = np.asarray(sub.index.dayofweek < 5)
     sata_term = (sata_w.reindex(sub.index).fillna(1.0).to_numpy(float)
-                 * sata_daily * biz)
+                 * sata_leg(sata_daily, sub.index))
     # anchor bar = cost basis: drop it, as pct_change() drops the first bar
     W, contrib, sata_term = W[1:], contrib[1:], sata_term[1:]
     on = W.sum(axis=1) > 0                       # the headline's active mask
@@ -4254,7 +4325,7 @@ def ibkr_executed_replay(holdings: list[dict] | None,
             return r["price"][key]            # the run's own mark (SATA, exits)
         if key == "SATA":
             n = int(np.busday_count(h["date"].date(), day.date()))
-            return h["price"][key] * (1.0 + sata_daily) ** max(n, 0)
+            return h["price"][key] * (1.0 + _sata_scalar(sata_daily)) ** max(n, 0)
         return h["price"][key]
 
     def _value(h, day):
@@ -4430,7 +4501,7 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
     keys = list(returns.columns)
     col = {k: j for j, k in enumerate(keys)}
     R = np.nan_to_num(returns.reindex(idx).to_numpy(float))
-    biz = np.asarray(idx.dayofweek < 5)
+    sr = sata_leg(sata_daily, idx)              # the SATA leg's return per bar
     W = np.zeros((len(idx), len(keys)))
     sata_w = np.zeros(len(idx))
     cash_w = np.zeros(len(idx))
@@ -4453,8 +4524,7 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
         else:
             sata_w[t], cash_w[t] = split_idle(b["cash"], b.get("sata_cap"))
         if t > 0:
-            port[t] = float(np.dot(W[t], R[t])) + \
-                (sata_w[t] * sata_daily if biz[t] else 0.0)
+            port[t] = float(np.dot(W[t], R[t])) + sata_w[t] * sr[t]
     # one-way turnover between consecutive publishes — the daily trims, made
     # visible (0.5 × Σ|Δw| over the union of keys, cash leg included)
     parsed[0]["turnover"] = None
