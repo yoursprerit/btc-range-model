@@ -103,3 +103,17 @@ def test_sata_slice_metrics_real_series_has_a_drawdown(tmp_path):
     assert m["total_ret"] == pytest.approx((1 + tr).prod() - 1)
     flat = oc.sata_slice_metrics(idx, idx[0])
     assert flat["mdd"] == 0.0 and flat["total_ret"] == pytest.approx((1 + oc.SATA_DAILY) ** 4 - 1)
+
+
+def test_load_sata_closes_and_with_sata_closes(tmp_path):
+    p, idx = _hist(tmp_path)
+    sc = oc.load_sata_closes(p)
+    assert list(sc.index) == list(idx) and sc.loc[idx[3]] == 101.0
+    assert oc.load_sata_closes(tmp_path / "missing.csv") is None
+    closes = pd.DataFrame({"XLE": 60.0}, index=idx)
+    out = oc.with_sata_closes(closes)                   # reads the repo file
+    assert "SATA" in out.columns and "XLE" in out.columns
+    assert "SATA" not in closes.columns                  # input untouched
+    already = pd.DataFrame({"SATA": 1.0}, index=idx)
+    assert oc.with_sata_closes(already) is already
+    assert oc.with_sata_closes(None) is None

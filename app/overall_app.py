@@ -322,8 +322,10 @@ def get_price_returns(bucket: str, use_snap: bool = True):
     _snap = get_pnl_snapshot() if use_snap else None
     if _snap is not None:
         return _snap["price_returns"]
-    res = get_results(bucket, "v2")
-    if not res["results"]:
+    # the COMBINED universe: a retired sleeve (OIH under V2) an archived book
+    # or a fills record still held must price, not read as cash
+    res = get_results(bucket, "combined")
+    if not res or not res["results"]:
         return None
     return ov.bh_returns_matrix(res["results"])
 
@@ -553,7 +555,7 @@ def get_sleeve_prices(bucket: str, use_snap: bool = True):
     simulator's placeholder."""
     _snap = get_pnl_snapshot() if use_snap else None
     if _snap is not None and _snap.get("sleeve_prices") is not None:
-        return _snap["sleeve_prices"]
+        return ov.with_sata_closes(_snap["sleeve_prices"])
     res = get_results(bucket, "combined")
     results = res["results"] if res else None
     if not results:
@@ -566,7 +568,8 @@ def get_sleeve_prices(bucket: str, use_snap: bool = True):
             ser = None
         if ser is not None:
             cols[r["key"]] = ser[~ser.index.duplicated()]
-    return pd.DataFrame(cols).reindex(ov.returns_matrix(results).index) if cols else None
+    return ov.with_sata_closes(
+        pd.DataFrame(cols).reindex(ov.returns_matrix(results).index) if cols else None)
 
 
 def get_profile_comparison(bucket: str, version: str = "v2"):
@@ -3379,6 +3382,37 @@ with tab_live:
                     f"{_sm['end'].strftime('%b %d, %Y')}</b> · {_sm['days']} trading "
                     f"days · {_src_note}</div>",
                     unsafe_allow_html=True)
+            # The walk-forward replay has been invested for years; the C2
+            # as-published record opened in cash and only became comparable
+            # at its first fill.  A window that starts before that close
+            # compares an invested book with a cash one — say so, and give
+            # both figures from the first fill so the like-for-like read is
+            # one glance, not a second date pick.
+            if not _actual and not _bh_src:
+                try:
+                    _c2s, _c2a, _ = _c2_snapshot_with_prices()
+                    _c2log = ov.c2_trade_log(_c2s, _c2a) if _c2s else []
+                    _c2_first = min((r["entry_date"] for r in _c2log
+                                     if r["entry_date"] is not None), default=None)
+                    if _c2_first is not None and _sm["start"] < _c2_first <= _sm["end"]:
+                        _c2eq = ov.c2_executed_equity(
+                            _c2s, _c2a, get_sleeve_prices(_bucket(), _use_snap))
+                        _c2eq = (_c2eq.loc[_c2_first:_sm["end"]]
+                                 if _c2eq is not None else None)
+                        _rp = _curve_all.loc[_c2_first:_sm["end"]]
+                        if _c2eq is not None and len(_c2eq) > 1 and len(_rp) > 1:
+                            st.caption(
+                                f"ℹ️ The Collective2 as-published record opened in "
+                                f"cash and first filled at the "
+                                f"**{_c2_first:%b %d, %Y}** close, so this window "
+                                "compares an invested replay with a cash account "
+                                "until then. From that close: replay "
+                                f"**{(_rp.iloc[-1] / _rp.iloc[0] - 1) * 100:+.2f}%**, "
+                                f"C2 record **{(_c2eq.iloc[-1] / _c2eq.iloc[0] - 1) * 100:+.2f}%** "
+                                f"(to {_sm['end']:%b %d}). Start both there for a "
+                                "like-for-like comparison.")
+                except Exception:
+                    pass
             if _fx_on and _fx_sim is not None:
                 _fx_gross_end = portfolio_value * float(_fx_sim["gross"].iloc[-1])
                 _fx_bits = [f"gross ${_fx_gross_end:,.0f}"]

@@ -1099,6 +1099,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/244"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "analytics",
+  "title": "As-published records and the replay priced on one table: SATA at its close, retired sleeves priced",
+  "description": "The C2 and IBKR fills replays marked a held SATA position off the executor's ~3:15 PM ET reads; the price table now carries SATA's official close (data/sata), the same source the walk-forward replay's SATA returns come from. The price-returns matrix behind the as-published book replays and the fills replays' weight columns is built on the COMBINED universe, so a retired sleeve a book or an account still held (OIH under V2) earns its own return instead of reading as cash. The replay view also says when the window starts before the C2 record's first fill (it opened in cash) and gives both figures from that close.",
+  "impact": "Oct 7-16, 2026: C2 record +1.03% (SATA at close; +1.08% on the 3:15 PM reads) against the published books' +1.06%; the Combined replay reads +0.40% over the same window, 0.55 pt of the gap being the Oct 9 V1->V2 cutover (the replay switches on the signal date, the live book two sessions later) and the rest the walk-forward anchors' sizing versus the live optimiser's.",
+  "links": [
+   {
+    "label": "PR #245",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/245"
+   }
+  ]
  }
  ]
 }

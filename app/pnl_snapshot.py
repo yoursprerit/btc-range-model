@@ -134,8 +134,9 @@ def _sleeve_prices(results: list[dict]):
             ser = None
         if ser is not None:
             cols[r["key"]] = ser[~ser.index.duplicated()]
-    return (pd.DataFrame(cols).reindex(ov.returns_matrix(results).index)
-            if cols else None)
+    return ov.with_sata_closes(
+        pd.DataFrame(cols).reindex(ov.returns_matrix(results).index)
+        if cols else None)
 
 
 def build(profiles: list[str] | None = None, versions=VERSIONS,
@@ -174,7 +175,9 @@ def build(profiles: list[str] | None = None, versions=VERSIONS,
         # the per-generation universe runs themselves — the heaviest thing the
         # web process used to recompute (tens of seconds of CPU every 30 min)
         results={v: _results(v, cache) for v in ("v1", "v2")},
-        price_returns=ov.bh_returns_matrix(v2),
+        # the COMBINED universe: a retired sleeve (OIH under V2) an archived
+        # book or a fills record still held must price, not read as cash
+        price_returns=ov.bh_returns_matrix(comb),
         bh_replay=ov.equal_weight_bh_replay(v2, index=rets_v2.index),
         sleeve_prices=_sleeve_prices(comb),
         # the SATA leg's realised returns the replays above were priced on, so
