@@ -15,7 +15,7 @@ Steps (each is idempotent -- safe to re-run, it never overwrites without asking)
               config path and Java -- the three things that went wrong by hand
     secret    store OVERALL_BOOK_SECRET (and optional monitors) for your user
     accounts  log in once, discover the accounts, write deploy\\ibkr_accounts.json
-    tasks     register the 2:15 PM run, the 4:15 PM reconcile and the gateway
+    tasks     register the 2:20 PM run, the 4:15 PM reconcile and the gateway
               auto-start + watchdog; retire the paper tasks
     verify    run the live pre-flight
 
@@ -289,7 +289,7 @@ def step_secret(a) -> bool:
             say("WARN", "skipped -- live refuses an unsigned book, so nothing will trade until it is set")
             ok = False
     for var, what in (("IBKR_ALERT_WEBHOOK", "Slack/Discord alert webhook URL"),
-                      ("IBKR_HEARTBEAT_URL", "healthchecks.io URL for the 2:15 PM run"),
+                      ("IBKR_HEARTBEAT_URL", "healthchecks.io URL for the 2:20 PM run"),
                       ("IBKR_RECONCILE_HEARTBEAT_URL", "healthchecks.io URL for the 4:15 PM reconcile")):
         if os.environ.get(var):
             say("OK", f"{var} {mask(os.environ[var])}")

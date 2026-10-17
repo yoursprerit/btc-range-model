@@ -5,7 +5,7 @@
 # Pulls the latest published live book, then runs scripts/ibkr_execute_accounts.py
 # --execute: every account in deploy/ibkr_accounts.json is traded together as
 # MARKET-ON-CLOSE orders only (no fallback; past the 15:50 ET cutoff the session
-# is skipped). Schedule ~2:15 PM US Central (3:15 PM ET).
+# is skipped). Schedule ~2:20 PM US Central (3:20 PM ET).
 #
 #     CRON_TZ=America/Chicago
 #     15 14 * * 1-5  /path/to/repo/scripts/ibkr_execute_live_accounts.sh >> /path/to/repo/logs/ibkr_live_cron.log 2>&1

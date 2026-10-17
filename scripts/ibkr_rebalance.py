@@ -84,7 +84,8 @@ class TargetBook:
 
 def compute_target_book(profile: str = None, results: list | None = None,
                         live_adjust: bool = True,
-                        prev_weights: dict | None = None) -> TargetBook:
+                        prev_weights: dict | None = None,
+                        force_exit: set | None = None) -> TargetBook:
     """Run the full engine and return today's target weights.
 
     With ``live_adjust=True`` (default — the interactive rebalancer) this
@@ -108,8 +109,14 @@ def compute_target_book(profile: str = None, results: list | None = None,
     the published paper Targetbook).  Strategy Logic V2's adds-only rule pins
     every held sleeve to that weight unless its target rises by ≥ 8 pp, so
     the daily tilt never trims a position the signal has not closed.
+
+    ``force_exit`` — sleeve keys dropped from the book as if their signal had
+    closed them (the 2:00-PM-CT intraday stop check, ``scripts/intraday_stop_check.py``,
+    passes the sleeves whose live price has breached their stop).  Applied on
+    both paths; on the live-adjusted path it is added to the live-exit set.
     """
     profile = profile or oc.DEFAULT_PROFILE
+    force_exit = set(force_exit or ())
     prof = oc.RISK_PROFILES.get(profile) or oc.RISK_PROFILES[oc.DEFAULT_PROFILE]
     caps = oc.caps_for(profile)
 
@@ -133,7 +140,7 @@ def compute_target_book(profile: str = None, results: list | None = None,
         # live spot overlay + live-exit override — identical to the app.
         spot = oc.fetch_spot()
         oc.apply_spot(results, spot)
-        live_exits = oc.live_exit_keys(results, spot, include_entries=True)
+        live_exits = oc.live_exit_keys(results, spot, include_entries=True) | force_exit
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
                                           caps=caps, force_exit=live_exits,
                                           prev_weights=prev_weights,
@@ -143,7 +150,8 @@ def compute_target_book(profile: str = None, results: list | None = None,
     else:
         # committed signals only — the frozen published book.
         gate = oc.signal_gated_allocation(results, opt["optimal"]["weights"],
-                                          caps=caps, prev_weights=prev_weights,
+                                          caps=caps, force_exit=force_exit or None,
+                                          prev_weights=prev_weights,
                                           cluster_mix=oc.cluster_mix_for(profile),
                                           adds_only_cluster=oc.cluster_adds_band_for(profile),
                                           sata_cap=oc.sata_cap_for())

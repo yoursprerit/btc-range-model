@@ -6,7 +6,7 @@
     Runs scripts\ibkr_reconcile_accounts.py about 15 minutes after the 4:00 PM ET
     closing auction. For every account that had orders sent today it asks the
     broker what really filled and checks the execution report against it: a
-    report the 2:15 PM run never got to write is rebuilt from the broker's fills,
+    report the 2:20 PM run never got to write is rebuilt from the broker's fills,
     unfilled or partly filled legs and orders still working are reported, and an
     alert is raised for anything that needs a look. It never sends or cancels an
     order.

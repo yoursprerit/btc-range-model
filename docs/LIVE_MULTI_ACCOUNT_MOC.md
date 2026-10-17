@@ -16,7 +16,7 @@ orders only**, each sized to its own net liquidation and its own limits.
  CLOUD publisher ──► data/overall/target_book_live.json  (HMAC-signed; idle capital → SATA)
                               │ git pull
                               ▼
- scripts/ibkr_execute_live_accounts.ps1     (Task Scheduler, ~2:15 PM US Central)
+ scripts/ibkr_execute_live_accounts.ps1     (Task Scheduler, ~2:20 PM US Central)
    └─ scripts/ibkr_execute_accounts.py      (reads deploy/ibkr_accounts.json)
         ├─ checks the gateway login manages every configured account
         └─ starts ONE executor per account, TOGETHER ───────────────┐
@@ -35,6 +35,53 @@ Run together, every order is in within a few minutes and one auction fills them
 all. A failing or hung account cannot affect the others (separate processes).
 
 ---
+
+## Order type: MOC, marketable limit or market
+
+The runner's `order_type` (top level of `deploy/ibkr_accounts.json`) chooses how
+every account trades the book. **`"moc"` is the default** — a config without the
+key behaves exactly as described in the rest of this page.
+
+| `order_type` | Fills | Price you get | Use when |
+|---|---|---|---|
+| `"moc"` | 4:00 PM ET closing auction | the official close — the price the backtest books against | the slot sits before the 15:50 ET cutoff and you want zero tracking error to the backtest |
+| `"marketable-limit"` | immediately, in the regular session (~2:20 PM CT) | at the touch; a limit priced `slippage_cap` (default 0.5 %) **through** it, so it can never chase a blown-out quote. Anything unfilled after the wait is cancelled and re-sent as a market order (unless the market is halted or the quote is unsafe) | **recommended for a mid-afternoon slot** |
+| `"market"` | immediately | whatever the book offers — no price ceiling | only if you accept unbounded slippage on the thin names (ARTY, PBW, REMX, WGMI, NUGT, MSTU, XOP, SATA) |
+
+A marketable limit fills like a market order under normal conditions and is
+strictly safer: it cannot fill far through the touch on a stale or dislocated
+quote, and the built-in escalation means a leg that fails to fill is still
+done in the same run. A plain market order is only "better" if filling at any
+price matters more than the price — not the case for a once-a-day rebalance.
+
+Non-MOC runs differ from MOC in four ways: there is no `--strict-moc`; the
+session test is "regular session open with ≥ 10 minutes left" instead of the
+15:50 ET cutoff; the SELL leg is sent and awaited first, then the BUY leg is
+sized from cash plus the proceeds the sells actually realised (MOC submits
+both at once); and the run finishes in a few minutes instead of holding the
+connection open through the auction. Every other guard (signature, current-bar
+check, duplicate-run lock, working-orders check, price-drift / exposure /
+turnover caps, kill switch) is unchanged.
+
+```json
+{ "order_type": "marketable-limit", "slippage_cap": 0.005, "fill_timeout_s": 60 }
+```
+
+Register the task at **2:20 PM CT** (`-LiveTaskTime 14:20`): the 2:00 PM
+intraday stop check (below) publishes any stop-out before then.
+
+### Intraday stop check (2:00 PM CT)
+
+`scripts/intraday_stop_check.py` (workflow `intraday-stop-check.yml`) prices
+every held sleeve that has a stop at its live quote at ~2:00 PM CT. Only if a
+fixed or trailing stop is breached does it re-publish **both** signed books
+(paper and live) without that sleeve — exactly as tomorrow's book would show
+it — so this runner, Collective2 (2:30 PM) and the as-published record all see
+it. A clear day changes nothing but `data/overall/intraday_stop_check.json`,
+which this runner reads and **alerts on if today's check did not complete**
+(it still trades the morning book as published). Limits: the engine's stop is a
+*close* rule, so a 2:00 PM breach that recovers into the close is sold anyway;
+and a manual 🚀 publish after 2:00 PM drops the amendment (re-run the workflow).
 
 ## What "strict MOC" means
 
@@ -131,17 +178,17 @@ notepad deploy\ibkr_accounts.json
 setx OVERALL_BOOK_SECRET "<the same secret the publisher signs with>"
 
 # register the scheduled task (elevated PowerShell) - NOT part of -All on purpose
-powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LiveTask -LiveTaskTime 14:15
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LiveTask -LiveTaskTime 14:20
 ```
 
 * The live runner **requires** the secret and a valid signature; unlike paper, it
   will not trade an unsigned book.
-* `-LiveTaskTime` is **local machine time**. 14:15 is 2:15 PM **US Central** =
-  3:15 PM ET — 35 min before the cutoff. MOC fills at the close whenever it is
+* `-LiveTaskTime` is **local machine time**. 14:20 is 2:20 PM **US Central** =
+  3:20 PM ET — 30 min before the cutoff. MOC fills at the close whenever it is
   entered, so earlier costs nothing and buys margin for a slow gateway or `git
   pull`. On another time zone use the local equivalent.
 * The wrapper asks Windows not to sleep while it runs (the auction wait is ~30
-  min). Also set Power Options so the PC isn't sleeping at 2:15 PM, and keep the
+  min). Also set Power Options so the PC isn't sleeping at 2:20 PM, and keep the
   user **logged on** (the task runs interactively).
 * The legacy `ibkr_execute_daily.ps1` now **refuses** `IBKR_ACCOUNT_MODE=live`
   (set `IBKR_ALLOW_LEGACY_LIVE=1` to override) so a live run can't bypass strict
@@ -185,7 +232,7 @@ Use `--dry-run` to see what it would do and `--force` to run before 16:05 ET.
 
 1. **Pre-flight** (read-only):
    ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LivePreflight -LiveTaskTime 14:15
+   powershell -ExecutionPolicy Bypass -File scripts\setup_windows_option_c.ps1 -LivePreflight -LiveTaskTime 14:20
    ```
    Every line must be PASS. It validates the accounts file, that the secret
    verifies the live book, the MOC slot, the task, and that the gateway login

@@ -29,7 +29,7 @@ AllowBlindTrading=yes
 # THIS one primary so a stray web login does not silently kill tomorrow's run.
 ExistingSessionDetectedAction=primary
 
-# Daily restart: pick a time far from the 2:15 PM US Central order window and
+# Daily restart: pick a time far from the 2:20 PM US Central order window and
 # the 3:00 PM close. After this restart IBC logs back in on its own.
 AutoRestartTime=03:00 AM
 
@@ -39,5 +39,5 @@ ReloginAfterSecondFactorAuthenticationTimeout=yes
 SecondFactorAuthenticationExitInterval=180
 
 # IBKR forces a full interactive re-login with 2FA about once a week (around the
-# weekend). Approve the push on your phone then; until you do, the 2:15 PM run
+# weekend). Approve the push on your phone then; until you do, the 2:20 PM run
 # exits 2 ("cannot open an API session") and trades NOTHING.

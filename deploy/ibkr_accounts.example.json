@@ -1,11 +1,14 @@
 {
-  "_comment": "Copy to deploy/ibkr_accounts.json (git-ignored) and edit. One IB Gateway LIVE login, several accounts under it. Every account trades the same signed live book (data/overall/target_book_live.json) as MARKET-ON-CLOSE orders only.",
+  "_comment": "Copy to deploy/ibkr_accounts.json (git-ignored) and edit. One IB Gateway LIVE login, several accounts under it. Every account trades the same signed live book (data/overall/target_book_live.json). order_type: \"moc\" (default, strict market-on-close), \"marketable-limit\" (recommended for the 2:20 PM CT slot) or \"market\".",
 
   "host": "127.0.0.1",
   "port": 4001,
   "client_id_base": 40,
   "book": "data/overall/target_book_live.json",
   "kill_switch_file": "STOP_LIVE",
+  "order_type": "marketable-limit",
+  "slippage_cap": 0.005,
+  "fill_timeout_s": 60,
   "child_timeout_s": 3900,
   "stagger_s": 10,
   "market_data_type": 1,

@@ -1185,6 +1185,33 @@ def moc_entry_open(now=None, cutoff: tuple[int, int] | None = None
     return True, f"{stamp}, before the {cutoff[0]:02d}:{cutoff[1]:02d} ET MOC cutoff"
 
 
+# A regular-session (market / marketable-limit) run needs time for the sell leg
+# to fill before the buys are sized, and for an unfilled limit to escalate.
+REGULAR_ENTRY_MARGIN_MIN = 10
+
+
+def regular_entry_open(now=None, margin_min: int = REGULAR_ENTRY_MARGIN_MIN
+                       ) -> tuple[bool, str]:
+    """(trading?, reason) — is the regular session open with at least
+    *margin_min* minutes left?  The non-MOC counterpart of
+    :func:`moc_entry_open`: a market or marketable-limit run is only sensible
+    inside the session, and one started in the last minutes cannot finish its
+    sells-then-buys sequence (or its limit-to-market escalation) before the
+    close.  The close follows the session: 16:00 ET normally, 13:00 ET on an
+    early-close day."""
+    et = _et_now(now)
+    stamp = et.strftime("%H:%M ET")
+    open_t = et.normalize() + pd.Timedelta(hours=9, minutes=30)
+    h, m = session_close_et(et)
+    close_t = et.normalize() + pd.Timedelta(hours=h, minutes=m)
+    if et < open_t:
+        return False, f"{stamp} is before the 09:30 ET open"
+    if et > close_t - pd.Timedelta(minutes=margin_min):
+        return False, (f"{stamp} is within {margin_min} min of the "
+                       f"{h:02d}:{m:02d} ET close (or past it)")
+    return True, f"{stamp}, regular session open until {h:02d}:{m:02d} ET"
+
+
 def moc_wait_seconds(now=None, buffer_s: float = MOC_CLOSE_BUFFER_S,
                      max_wait_s: float = MOC_MAX_WAIT_S) -> float:
     """How long to wait for MOC fills: until the closing auction prints plus

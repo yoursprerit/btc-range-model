@@ -3,7 +3,7 @@
     python scripts/ibkr_reconcile_accounts.py            # what the 4:15 PM ET task runs
     python scripts/ibkr_reconcile_accounts.py --dry-run  # look, change nothing
 
-The 2:15 PM run sends the orders and then waits ~30 minutes through the 4:00 PM
+The 2:20 PM run sends the orders and then waits ~30 minutes through the 4:00 PM
 closing auction in the SAME process to write the execution report.  If that PC
 sleeps, the gateway drops or Windows restarts in those 30 minutes, the orders are
 fine (they live at IBKR) but the report is never written -- and nobody knows
