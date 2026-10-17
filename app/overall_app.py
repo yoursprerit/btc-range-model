@@ -2642,7 +2642,7 @@ with tab_live:
                     help="Balance at the start of the window plus every deposit made in it.")
         c[3].metric("Strategy P&L (deposits excluded)", _sd(sm_["pnl"]),
                     delta=f"{sm_['pnl_pct_contributed']*100:+.1f}% of money put in",
-                    delta_color="normal" if sm_["pnl"] >= 0 else "inverse")
+                    delta_color="normal")
         mwr = sm_.get("mwr")
         c[4].metric("Money-weighted return (ann.)",
                     "—" if mwr is None else f"{mwr*100:+.1f}%",
@@ -3394,13 +3394,15 @@ with tab_live:
                                    "each realized gain.")
             pm = st.columns(6)
             _pl_lbl = "Buy & hold P&L" if _bh_src else "Strategy P&L"
-            pm[0].metric(_pl_lbl, f"{_sm['total_ret']*100:+.1f}%",
-                         delta=(f"${_pnl_d:+,.0f} on ${_ibkr_sum['contributed']:,.0f} "
-                                "contributed" if _ibkr_sum is not None else
-                                f"${_pnl_d:+,.0f} on ${portfolio_value:,.0f}"),
-                         delta_color="normal" if _pnl_d >= 0 else "inverse")
+            # the delta's sign leads, so Streamlit's arrow and colour follow it
+            pm[0].metric(_pl_lbl, ov.pct_sig2(_sm['total_ret']),
+                         delta=ov.signed_delta(
+                             f"${abs(_pnl_d):,.0f} on ${_ibkr_sum['contributed']:,.0f} "
+                             "contributed" if _ibkr_sum is not None else
+                             f"${abs(_pnl_d):,.0f} on ${portfolio_value:,.0f}",
+                             _pnl_d < 0))
             pm[1].metric("Portfolio value now", f"${_end_v:,.0f}",
-                         delta=f"CAGR {_sm['cagr']*100:+.1f}%")
+                         delta=f"{_sm['cagr']*100:+.1f}% CAGR")
             pm[2].metric("Max drawdown since start", f"{_sm['mdd']*100:.1f}%",
                          help="Deepest peak-to-trough fall measured from the chosen "
                               "start date, not from back-test inception.")
@@ -5759,16 +5761,17 @@ with tab_hist:
                 _h_cm = ov.curve_metrics(_h_curve.loc[:_h_bar])
                 _h_m = st.columns(4)
                 _h_m[0].metric("Blend return to date", f"{_h_cm['total_ret']*100:+,.0f}%",
-                               delta=f"CAGR {_h_cm['cagr']*100:+.0f}%")
+                               delta=f"{_h_cm['cagr']*100:+.0f}% CAGR")
                 _h_m[1].metric("Max DD to date", f"{_h_cm['mdd']*100:.1f}%")
                 _h_m[2].metric("Sharpe to date", f"{_h_cm['sharpe']:.2f}")
                 _h_fwd = ov.slice_metrics(_h_curve, _h_bar)
                 _h_m[3].metric("Since then → today",
                                "—" if _h_fwd is None else f"{_h_fwd['total_ret']*100:+.1f}%",
                                delta=(None if _h_fwd is None
-                                      else f"${_h_fwd['total_ret']*_h_pv:+,.0f} on ${_h_pv:,.0f}"),
-                               delta_color=("off" if _h_fwd is None else
-                                            "normal" if _h_fwd["total_ret"] >= 0 else "inverse"),
+                                      else ov.signed_delta(
+                                          f"${abs(_h_fwd['total_ret']*_h_pv):,.0f} on ${_h_pv:,.0f}",
+                                          _h_fwd["total_ret"] < 0)),
+                               delta_color="off" if _h_fwd is None else "normal",
                                help="What the strategy went on to return from "
                                     "this date to the latest close — the one "
                                     "forward-looking figure on this page.")
@@ -6151,7 +6154,7 @@ with tab_bt:
         _bt_net = ov.curve_metrics(ov._equity(_bt_net_ret))
         m = st.columns(5)
         m[0].metric("Overall strategy — total return", f"{_wfm['total_ret']*100:,.0f}%",
-                    delta=f"CAGR {_wfm['cagr']*100:.0f}%")
+                    delta=f"{_wfm['cagr']*100:+.0f}% CAGR")
         m[1].metric(f"Net of {_bt_cost_bps:.0f} bp/trade (est.)", f"{_bt_net['total_ret']*100:,.0f}%",
                     delta=f"Sharpe {_bt_net['sharpe']:.2f}", delta_color="off",
                     help="The same replay with 5 bp of every unit of notional traded "

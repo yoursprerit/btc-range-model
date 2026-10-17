@@ -1043,6 +1043,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/240"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "ui",
+  "title": "Strategy P&L badges: down arrow on losses, return to two significant digits",
+  "description": "Metric badges on the Strategy P&L page put the sign first (\"-$88 on ...\", \"-15.7% CAGR\") so Streamlit draws the down arrow and red on a loss instead of an up arrow. The headline Strategy P&L return now shows up to two significant digits (-0.19%, +0.51%, +12%) instead of one decimal.",
+  "impact": "Oct 12-16, 2026: IBKR #U22546572 read \"-0.2%\" with a red up arrow on -$88 and a green up arrow on CAGR -15.7%; both now point down, and the return reads -0.19%.",
+  "links": []
  }
  ]
 }
