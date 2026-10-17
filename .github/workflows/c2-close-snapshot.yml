@@ -4,7 +4,7 @@ name: Collective2 after-close snapshot
 # AFTER the 4 PM ET close — the closing account value, C2's own reported
 # return, closed trades (fill dates/prices, net P&L) and starting cash — so
 # the Overall app's 📡 Collective2 account panel matches C2's site rather than
-# the intraday read publish-c2.yml takes at ~3:30 PM ET. Sends no orders.
+# the intraday read publish-c2.yml takes at ~3:20 PM ET. Sends no orders.
 #
 # 4:15 PM ET is 20:15 UTC (EDT) / 21:15 UTC (EST); both slots (plus a
 # half-hour backup each, since GitHub delivers fires late) run, and the guard

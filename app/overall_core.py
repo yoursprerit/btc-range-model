@@ -4044,7 +4044,7 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
     c2_mismatch = (ledger_ret is not None
                    and abs(total_ret - ledger_ret) > C2_LEDGER_TOLERANCE)
     # The fills win whenever the ledger is complete: C2's reported figure is a
-    # point-in-time read (often the ~3:30 PM ET intraday snapshot) and lags
+    # point-in-time read (often the ~3:20 PM ET intraday snapshot) and lags
     # the live marks, so it is only the fallback when the ledger can't be
     # built.  ``c2_mismatch`` still flags a gross (> tolerance) disagreement.
     if ledger_ret is not None and log:
@@ -4339,7 +4339,7 @@ def published_book_replay(returns: pd.DataFrame, books: list[dict],
 
     ``fill_on_publish`` — for the C2 record: a book is sent to the broker on
     the morning AFTER its ``as_of`` bar (``generated_at_utc``) and traded
-    that session (~3:30 PM ET), so it takes effect at the close of its
+    that session (~3:20 PM ET), so it takes effect at the close of its
     PUBLICATION session, not at its ``as_of`` close.  Until then the
     previous book is still what the account holds — e.g. a position the new
     book closes keeps earning (or losing) for that one more session, exactly

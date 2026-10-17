@@ -1071,6 +1071,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/242"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "execution",
+  "title": "Collective2 orders sent at 2:20 PM CT (was 2:30 PM)",
+  "description": "The cron-job.org trigger for publish-c2.yml now fires at 2:20 PM America/Chicago, the slot the IBKR executor runs; the workflow's backup-slot guard, the runbooks (COLLECTIVE2.md, COLLECTIVE2_SETUP.md, EXTERNAL_SCHEDULER.md, LIVE_MULTI_ACCOUNT_MOC.md) and the C2 timing notes in the code follow. The IBKR executor is unchanged: it submits MOC orders at 2:20 PM CT that fill in the 4:00 PM ET auction.",
+  "impact": "C2's market orders now fill about 3:20 PM ET instead of 3:30 PM ET, 40 minutes before the close; nothing else about the book or the fills changes. Dispatches through 2026-10-16 still landed at 2:30 PM CT, so the first 2:20 PM run is the next trading day.",
+  "links": [
+   {
+    "label": "PR #243",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/243"
+   }
+  ]
  }
  ]
 }

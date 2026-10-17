@@ -7,7 +7,7 @@ This script closes most of that gap: ~20 minutes before the executor's 2:20 PM
 CT slot it prices every HELD sleeve that carries a stop at its LIVE quote and,
 if any is at/below its stop level, re-publishes BOTH books (paper + live) with
 those sleeves taken out — exactly as tomorrow's book would show them — so the
-executor, the Collective2 publisher (2:30 PM CT) and the as-published record
+executor, the Collective2 publisher (2:20 PM CT) and the as-published record
 all see the stop-out today.
 
     OVERALL_BOOK_SECRET=… python scripts/intraday_stop_check.py            # check + republish

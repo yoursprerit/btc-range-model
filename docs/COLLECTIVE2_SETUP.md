@@ -4,21 +4,21 @@ Step-by-step setup for publishing the daily **paper** target book to a
 Collective2 (C2) strategy, from zero to a verified daily run. How the
 publisher works and its safety guards are in [`COLLECTIVE2.md`](COLLECTIVE2.md).
 
-**End state:** every weekday at 2:30 PM America/Chicago, cron-job.org triggers
+**End state:** every weekday at 2:20 PM America/Chicago, cron-job.org triggers
 `.github/workflows/publish-c2.yml`, which sends the day's signed book to C2
 with `scripts/publish_c2.py`. Nothing runs on your PC.
 
 ```
 7:15 AM CT  publish-target-book.yml  → data/overall/target_book.json (signed)
-2:30 PM CT  cron-job.org → publish-c2.yml → C2 SetDesiredPositions
-2:30 PM CT  your IBKR executor (unchanged) trades the same book
+2:20 PM CT  cron-job.org → publish-c2.yml → C2 SetDesiredPositions
+2:20 PM CT  your IBKR executor (unchanged) trades the same book (MOC fills at 4:00 PM ET)
 ```
 
 | Part | What you get | Time |
 |---|---|---|
 | [1. Collective2](#1-collective2-strategy-and-api-key) | `C2_STRATEGY_ID`, `C2_API_KEY` | ~10 min |
 | [2. GitHub repo](#2-github-repository-secrets) | Secrets the workflow reads | ~3 min |
-| [3. cron-job.org](#3-cron-joborg-230-pm-ct-trigger) | On-time 2:30 PM CT trigger | ~5 min |
+| [3. cron-job.org](#3-cron-joborg-220-pm-ct-trigger) | On-time 2:20 PM CT trigger | ~5 min |
 | [4. Testing](#4-testing) | A verified first publish | ~15 min, partly during market hours |
 
 ---
@@ -96,11 +96,11 @@ default branch, and the cron-job.org request below dispatches `main`.
 
 ---
 
-## 3. cron-job.org: 2:30 PM CT trigger
+## 3. cron-job.org: 2:20 PM CT trigger
 
 GitHub's own cron slots in `publish-c2.yml` (every 15 minutes in the
-afternoon) are best-effort and often fire 1–3 hours late, so with only 30
-minutes between 2:30 PM CT and the close they rarely land in time. The
+afternoon) are best-effort and often fire 1–3 hours late, so with only 40
+minutes between 2:20 PM CT and the close they rarely land in time. The
 cron-job.org job calling GitHub's `workflow_dispatch` API is the real trigger.
 
 ### 3.1 GitHub token (skip if the 7:16 AM book job already works)
@@ -113,7 +113,7 @@ trigger this workflow too. Only if you need a new one:
 2. Repository access: **Only select repositories → `btc-range-model`**.
 3. Repository permissions: **Actions → Read and write** (nothing else).
 4. Generate, copy it (shown once), and note the expiry date in your calendar.
-   An expired token stops the 2:30 PM trigger with no other warning than
+   An expired token stops the 2:20 PM trigger with no other warning than
    cron-job.org's failure email.
 
 ### 3.2 Create the job
@@ -122,7 +122,7 @@ trigger this workflow too. Only if you need a new one:
 1. cron-job.org → **Dashboard → Cronjobs** → on the job calling
    `publish-target-book.yml`, click **⋮ → Copy/Clone**.
 2. Change only:
-   * **Title:** `C2 publish 2:30 PM CT`
+   * **Title:** `C2 publish 2:20 PM CT`
    * **URL:**
      ```
      https://api.github.com/repos/yoursprerit/btc-range-model/actions/workflows/publish-c2.yml/dispatches
@@ -132,10 +132,10 @@ trigger this workflow too. Only if you need a new one:
 
 **Option B: create it from scratch**
 1. **Create cronjob** → *Common* tab:
-   * **Title:** `C2 publish 2:30 PM CT`
+   * **Title:** `C2 publish 2:20 PM CT`
    * **URL:** the `publish-c2.yml/dispatches` URL above.
 2. **Execution schedule → Custom:**
-   * Minutes `30`, Hours `14` (2:30 PM), every day of month, every month.
+   * Minutes `20`, Hours `14` (2:20 PM), every day of month, every month.
    * Days of week: **Mon–Fri** only.
    * **Time zone: America/Chicago** (tracks the CDT/CST switch automatically).
 3. *Advanced* tab:
@@ -154,7 +154,7 @@ trigger this workflow too. Only if you need a new one:
 4. **Notifications:** enable *notify on failure*.
 5. **Create**.
 
-A dispatch skips only the workflow's 2:30 PM guard. `publish_c2.py` still skips a
+A dispatch skips only the workflow's 2:20 PM guard. `publish_c2.py` still skips a
 book already sent, weekends/holidays and anything outside regular hours, so a
 holiday fire or an overlap with a GitHub backup slot is harmless.
 
@@ -230,7 +230,7 @@ the run and is not recorded as sent; exclude or remap it in the publisher and
 re-run.
 
 ### 4.5 First scheduled day
-The next weekday after 2:30 PM CT, confirm a run with event
+The next weekday after 2:20 PM CT, confirm a run with event
 `workflow_dispatch` (cron-job.org) in the Actions tab and a new
 `chore(c2): published book …` commit. After a few clean days, rely on the
 failure emails from cron-job.org and GitHub.
@@ -250,7 +250,7 @@ failure emails from cron-job.org and GitHub.
 | `ABORT: --require-signature but OVERALL_BOOK_SECRET is not set` (Actions) | Add the `OVERALL_BOOK_SECRET` repo secret (same value the book publish uses). |
 | `ABORT: book holds positions but none sized to a whole share` | Model capital too small; raise it on C2. |
 | `FAILED: C2 rejected part of the request` | See the `REJECTED` line in the summary for the ticker and reason. |
-| No run at 2:30 PM | cron-job.org job disabled or token expired. GitHub's 15-minute backup slots only help if one lands before the 3:00 PM CT close; otherwise that day is skipped and C2 keeps the previous positions. |
+| No run at 2:20 PM | cron-job.org job disabled or token expired. GitHub's 15-minute backup slots only help if one lands before the 3:00 PM CT close; otherwise that day is skipped and C2 keeps the previous positions. |
 
 ## Later
 

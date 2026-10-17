@@ -80,7 +80,7 @@ intraday stop check (below) publishes any stop-out before then.
 every held sleeve that has a stop at its live quote at ~2:00 PM CT. Only if a
 fixed or trailing stop is breached does it re-publish **both** signed books
 (paper and live) without that sleeve — exactly as tomorrow's book would show
-it — so this runner, Collective2 (2:30 PM) and the as-published record all see
+it — so this runner, Collective2 (2:20 PM) and the as-published record all see
 it. A clear day changes nothing but `data/overall/intraday_stop_check.json`,
 which this runner reads and **alerts on if today's check did not complete**
 (it still trades the morning book as published). Limits: the engine's stop is a
