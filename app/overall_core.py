@@ -4064,9 +4064,19 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
         start_date=(min(firsts) if firsts else None), log=log)
 
 
+def _asof_mark(marks: dict | None, key: str, day) -> float | None:
+    """The latest dated mark for *key* on or before *day*, else ``None``."""
+    ser = (marks or {}).get(key)
+    if ser is None or not len(ser):
+        return None
+    ser = ser.loc[:pd.Timestamp(day)]
+    return float(ser.iloc[-1]) if len(ser) else None
+
+
 def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
                        closes: pd.DataFrame | None,
-                       columns: list | None = None) -> dict | None:
+                       columns: list | None = None,
+                       marks: dict | None = None) -> dict | None:
     """The C2 model account rebuilt from what it actually EXECUTED — C2's
     fills, not the target books — in the same shape ``published_book_replay``
     returns (``ret``/``equity``/``weights``/``sata``/``cash``), so every figure
@@ -4088,6 +4098,9 @@ def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
     columns (the price-return sleeves); executed keys outside them are listed
     under ``dropped``.  ``closes`` is a daily close frame by sleeve key (a
     missing close carries the last one forward, else the fill price).
+    ``marks`` — ``{key: Series}`` of dated prices for a key the close frame
+    lacks (``SATA``): the latest mark on/before the bar is used instead of
+    the fill price, so the position moves with its real price.
     ``None`` when there are no fills or no closes."""
     if not snap or closes is None or not len(closes):
         return None
@@ -4117,6 +4130,8 @@ def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
                 continue
             if r["open"] or r["exit_date"] is None or r["exit_date"] > d:
                 p = px[r["key"]].get(d) if r["key"] in px.columns else None
+                if p is None or not np.isfinite(p) or p <= 0:
+                    p = _asof_mark(marks, r["key"], d)
                 p = float(p) if p is not None and np.isfinite(p) and p > 0 \
                     else r["entry_px"]
                 sign = -1.0 if r["side"] == "short" else 1.0

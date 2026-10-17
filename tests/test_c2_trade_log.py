@@ -209,3 +209,43 @@ def test_executed_replay_weights_are_start_of_bar_holdings():
     assert w.loc["2026-09-28", "WGMI"] > 0 and rep["ret"].iloc[0] == 0
     assert np.allclose(w.sum(axis=1) + rep["sata"] + rep["cash"], 1.0)
     assert np.allclose(rep["ret"], eq.pct_change().fillna(0))
+
+
+# ── SATA has no close in the price table: mark it off the executed reports ──
+def _sata_snap():
+    pos = _pos("SATA", 100, 100.0, opened="2026-09-23T19:30:00Z")
+    return _snap("2026-09-28T19:45:00+00:00", [pos], value=50_000.0)
+
+
+def test_executed_replay_marks_sata_at_reported_prices_not_the_fill():
+    snap = _sata_snap()
+    marks = {"SATA": pd.Series([100.0, 99.0, 98.0],
+                               index=pd.to_datetime(["2026-09-23", "2026-09-25",
+                                                     "2026-09-28"]))}
+    flat = oc.c2_executed_replay(snap, [snap], _closes())
+    real = oc.c2_executed_replay(snap, [snap], _closes(), marks=marks)
+    assert np.allclose(flat["equity"], 1.0)                 # held at the fill price
+    # 24th carries the 23rd's mark, 25th is 99, 28th is 98: 100 sh × −$2
+    assert np.isclose((real["equity"].loc["2026-09-24"] - 1) * 50_000, 0.0)
+    assert np.isclose((real["equity"].loc["2026-09-25"] - 1) * 50_000, -100.0)
+    assert np.isclose((real["equity"].iloc[-1] - 1) * 50_000, -200.0)
+
+
+def test_executed_marks_reads_sata_from_archived_reports(tmp_path):
+    import json
+    import account_pnl as ap
+    arch = tmp_path / "accounts" / "U1" / "executed_archive"
+    arch.mkdir(parents=True)
+    rep = tmp_path / "accounts" / "U1" / "executed_book_live.json"
+    for d, px in [("2026-10-12", 99.4), ("2026-10-13", 99.2)]:
+        (arch / f"{d}_live.json").write_text(json.dumps({
+            "schema": "executed-book/v1", "as_of": d, "mode": "execute",
+            "account_mode": "live", "account": "U1", "net_liq": 1000.0,
+            "generated_at_utc": f"{d}T19:30:00+00:00",
+            "positions": [{"key": "SATA", "symbol": "SATA", "shares": 1,
+                           "market_price": px},
+                          {"key": "XLE", "symbol": "XLE", "shares": 1,
+                           "market_price": 66.0}], "trades": []}))
+    m = ap.executed_marks([rep])
+    assert list(m) == ["SATA"]
+    assert m["SATA"].loc["2026-10-13"] == 99.2 and len(m["SATA"]) == 2

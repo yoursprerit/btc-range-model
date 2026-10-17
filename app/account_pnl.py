@@ -92,6 +92,34 @@ def holdings_from_records(recs: list[dict]) -> list[dict]:
     return out
 
 
+def executed_marks(report_paths, keys=("SATA",)) -> dict[str, pd.Series]:
+    """Daily price marks for sleeves the close table does not carry (SATA),
+    read off the executed IBKR reports: ``{key: Series}`` indexed by the
+    New-York date of each run, the median across accounts when several ran
+    the same day.  These are the run-time marks of the same security another
+    account held, so a broker whose own prices are unavailable (Collective2)
+    can value that position at something other than its fill price."""
+    rows: dict[str, dict] = {k: {} for k in keys}
+    for rp in report_paths:
+        try:
+            recs = eb.archived_records(rp)
+        except Exception:
+            continue
+        for r in recs:
+            day = pd.Timestamp(r["executed_on"]).normalize()
+            for p in (r["payload"].get("positions") or []):
+                k = str(p.get("key") or p.get("symbol"))
+                try:
+                    px = float(p["market_price"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if k in rows and np.isfinite(px) and px > 0:
+                    rows[k].setdefault(day, []).append(px)
+    return {k: pd.Series({d: float(np.median(v)) for d, v in sorted(m.items())},
+                         dtype=float)
+            for k, m in rows.items() if m}
+
+
 def load_deposit_defaults(path) -> dict[str, dict]:
     """Saved per-account deposit settings: ``{"U123": {"monthly": 500, "day": 1}}``.
     A missing or unreadable file means "no deposits", never an error."""
