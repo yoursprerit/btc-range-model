@@ -67,6 +67,11 @@ def main() -> int:
                     metavar="VIEW",
                     help=f"strategy-logic views to build (default: {' '.join(VIEWS)})")
     args = ap.parse_args()
+    # the SATA leg earns its realised return where SATA's history exists
+    # (data/sata), the coupon before — the same source the P&L snapshot uses,
+    # so M1 compares the published books with the replay on one footing
+    _sr = oc.load_sata_returns()
+    sata_src = _sr if _sr is not None else oc.SATA_DAILY
 
     import strategy_version as sv
     all_books = hc.load_books(ARCHIVE_DIR)
@@ -99,7 +104,7 @@ def main() -> int:
             try:
                 replays[name] = oc.walkforward_gated_replay(
                     results, caps=oc.caps_for(name), mdd_floor=prof["mdd_floor"],
-                    objective=prof["objective"], sata_daily=oc.SATA_DAILY, tilt=True,
+                    objective=prof["objective"], sata_daily=sata_src, tilt=True,
                     version=view, gens=gens,
                     cluster_mix=oc.cluster_mix_for(name, view),
                     adds_only_cluster=oc.cluster_adds_band_for(name, view),
@@ -116,7 +121,7 @@ def main() -> int:
         out_p, hist_p = view_paths(Path(args.out), Path(args.history), view)
         prev = hc.load_prev(out_p)
         snap = hc.build_snapshot(results, replays, books, prev,
-                                 sata_daily=oc.SATA_DAILY,
+                                 sata_daily=sata_src,
                                  rets=oc.returns_matrix(results))
         snap["strategy_view"] = view
         snap["strategy_version"] = oc.STRATEGY_VERSION

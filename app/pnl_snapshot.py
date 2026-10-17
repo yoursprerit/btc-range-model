@@ -90,10 +90,11 @@ def _pack(version: str, name: str, cache: dict, rets_cache: dict) -> dict:
     # and the benchmark curves are identical across profiles and live once per
     # version under ``shared`` (see :func:`get_pack`)
     results = _results(version, cache)
+    sata = _sata_source()
     if version not in rets_cache:
         rets = ov.returns_matrix(results)
         pos = ov.position_matrix(results, rets.index)
-        bm = ov.benchmarks(rets, results, pos=pos, sata_daily=ov.SATA_DAILY)
+        bm = ov.benchmarks(rets, results, pos=pos, sata_daily=sata)
         rets_cache[version] = (rets, bm)
     rets, bm = rets_cache[version]
     prof = ov.RISK_PROFILES[name]
@@ -101,7 +102,7 @@ def _pack(version: str, name: str, cache: dict, rets_cache: dict) -> dict:
             if version == "combined" else None)
     wf = ov.walkforward_gated_replay(
         results, caps=ov.caps_for(name), mdd_floor=prof["mdd_floor"],
-        objective=prof["objective"], sata_daily=ov.SATA_DAILY, tilt=True,
+        objective=prof["objective"], sata_daily=sata, tilt=True,
         version=version, gens=gens, cluster_mix=ov.cluster_mix_for(name, version),
         adds_only_cluster=ov.cluster_adds_band_for(name, version),
         sata_cap=ov.sata_cap_for(version))
@@ -115,6 +116,13 @@ def _pack(version: str, name: str, cache: dict, rets_cache: dict) -> dict:
                               mdd_floor=prof["mdd_floor"],
                               objective=prof["objective"], fundamental=False)
     return dict(wf=wf, opt=opt)
+
+
+def _sata_source():
+    """SATA's realised return series for the P&L paths (``load_sata_returns``),
+    the coupon when no history is on disk."""
+    sr = ov.load_sata_returns()
+    return sr if sr is not None else ov.SATA_DAILY
 
 
 def _sleeve_prices(results: list[dict]):
@@ -169,6 +177,9 @@ def build(profiles: list[str] | None = None, versions=VERSIONS,
         price_returns=ov.bh_returns_matrix(v2),
         bh_replay=ov.equal_weight_bh_replay(v2, index=rets_v2.index),
         sleeve_prices=_sleeve_prices(comb),
+        # the SATA leg's realised returns the replays above were priced on, so
+        # the app's attribution / daily P&L reconcile to the snapshotted curves
+        sata_returns=ov.load_sata_returns(),
     )
 
 
