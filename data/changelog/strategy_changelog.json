@@ -1001,7 +1001,7 @@
   "date": "2026-10-17",
   "kind": "execution",
   "title": "Live executor: configurable order type, 2:20 PM CT slot (marketable limit recommended)",
-  "description": "The multi-account live runner gains an order_type setting — moc (unchanged default, strict market-on-close), marketable-limit (a limit priced 0.5 % through the touch that escalates to market if unfilled) or market — and its shipped schedule moves from 2:15 PM to 2:20 PM CT. Non-MOC runs use a regular-session window instead of the MOC cutoff, send sells first and size the buys from realised proceeds, and alert when the 2 PM stop check did not complete.",
+  "description": "The multi-account live runner gains an order_type setting — marketable-limit (the new default: a limit priced 0.5 % through the touch that escalates to market if unfilled), moc (the previous strict market-on-close flow, now opt-in) or market — and its shipped schedule moves from 2:15 PM to 2:20 PM CT. Non-MOC runs use a regular-session window instead of the MOC cutoff, send sells first and size the buys from realised proceeds, and alert when the 2 PM stop check did not complete.",
   "impact": "Replay on the common hourly window (2024-06-18 → 2026-06-15, Balanced book with the 30 % cluster cap): fills at the 4 PM close +329 %, ~10 AM ET +307 %, the open +286 % — close ahead but not statistically significant (daily t = −0.6 / −1.1), so the move to a mid-afternoon slot trades a small, unproven backtest-fidelity cost for same-day stop handling."
  }
  ]

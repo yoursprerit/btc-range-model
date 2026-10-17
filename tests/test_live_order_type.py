@@ -1,10 +1,10 @@
 """The multi-account live runner's configurable order type (the 2:20 PM CT slot).
 
-MOC stays the default — existing configs and the strict-MOC contract
-(tests/test_multi_account.py) are untouched.  ``marketable-limit`` / ``market``
-trade at the touch in the regular session: no ``--strict-moc``, a regular-session
-window instead of the MOC cutoff, and a visible warning when the 2 PM intraday
-stop check did not run.
+``marketable-limit`` is the default: a config without ``order_type`` trades at
+the touch in the regular session — no ``--strict-moc``, a regular-session window
+instead of the MOC cutoff, and a visible warning when the 2 PM intraday stop
+check did not run.  ``"moc"`` keeps the strict-MOC contract
+(tests/test_multi_account.py) exactly as it was.
 """
 import json
 import re
@@ -33,8 +33,17 @@ def _cfg(**kw):
 
 
 # ── config ───────────────────────────────────────────────────────────────────
-def test_default_is_unchanged_strict_moc():
+def test_default_is_marketable_limit():
     cfg, errs = acc.validate_config(_cfg())
+    assert not errs and cfg.order_type == ic.ORDER_MARKETABLE_LIMIT
+    argv = acc.child_argv(cfg, cfg.accounts[0], 0, execute=True)
+    assert "--strict-moc" not in argv
+    assert argv[argv.index("--order-type") + 1] == "marketable-limit"
+    assert argv[argv.index("--slippage-cap") + 1] == str(ic.DEFAULT_SLIPPAGE_CAP)
+
+
+def test_moc_opt_in_keeps_the_strict_contract():
+    cfg, errs = acc.validate_config(_cfg(order_type="moc"))
     assert not errs and cfg.order_type == ic.ORDER_MOC
     argv = acc.child_argv(cfg, cfg.accounts[0], 0, execute=True)
     assert "--strict-moc" in argv and argv[argv.index("--order-type") + 1] == "moc"

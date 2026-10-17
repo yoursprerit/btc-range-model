@@ -358,7 +358,7 @@ def test_missing_and_malformed_files(tmp_path):
 
 # ── the command line each account's executor gets ───────────────────────────
 def test_child_argv_is_strict_moc_pinned_and_signed():
-    cfg, _ = acc.validate_config(_cfg())
+    cfg, _ = acc.validate_config(_cfg(order_type="moc"))
     argv = acc.child_argv(cfg, cfg.accounts[1], 1, execute=True, python="py")
     s = " ".join(argv)
     for want in ("--account U2222222", "--expected-account U2222222",

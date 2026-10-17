@@ -9,7 +9,8 @@
 > first run.
 
 One PC, **one IB Gateway live login**, as many accounts as that login manages.
-Every account trades the **same signed live book** as **market-on-close (MOC)
+Every account trades the **same signed live book**, by default as marketable
+limits at 2:20 PM CT (§ Order type below) or, opted in, as **market-on-close (MOC)
 orders only**, each sized to its own net liquidation and its own limits.
 
 ```
@@ -39,13 +40,15 @@ all. A failing or hung account cannot affect the others (separate processes).
 ## Order type: MOC, marketable limit or market
 
 The runner's `order_type` (top level of `deploy/ibkr_accounts.json`) chooses how
-every account trades the book. **`"moc"` is the default** — a config without the
-key behaves exactly as described in the rest of this page.
+every account trades the book. **`"marketable-limit"` is the default** (a
+config without the key trades that way at the 2:20 PM CT slot); set
+`"order_type": "moc"` to keep the strict market-on-close flow the rest of this
+page was written for.
 
 | `order_type` | Fills | Price you get | Use when |
 |---|---|---|---|
-| `"moc"` | 4:00 PM ET closing auction | the official close — the price the backtest books against | the slot sits before the 15:50 ET cutoff and you want zero tracking error to the backtest |
-| `"marketable-limit"` | immediately, in the regular session (~2:20 PM CT) | at the touch; a limit priced `slippage_cap` (default 0.5 %) **through** it, so it can never chase a blown-out quote. Anything unfilled after the wait is cancelled and re-sent as a market order (unless the market is halted or the quote is unsafe) | **recommended for a mid-afternoon slot** |
+| `"moc"` | 4:00 PM ET closing auction | the official close — the price the backtest books against | opt in when the slot sits before the 15:50 ET cutoff and you want zero tracking error to the backtest |
+| `"marketable-limit"` (default) | immediately, in the regular session (~2:20 PM CT) | at the touch; a limit priced `slippage_cap` (default 0.5 %) **through** it, so it can never chase a blown-out quote. Anything unfilled after the wait is cancelled and re-sent as a market order (unless the market is halted or the quote is unsafe) | **recommended for a mid-afternoon slot** |
 | `"market"` | immediately | whatever the book offers — no price ceiling | only if you accept unbounded slippage on the thin names (ARTY, PBW, REMX, WGMI, NUGT, MSTU, XOP, SATA) |
 
 A marketable limit fills like a market order under normal conditions and is
@@ -66,6 +69,7 @@ turnover caps, kill switch) is unchanged.
 ```json
 { "order_type": "marketable-limit", "slippage_cap": 0.005, "fill_timeout_s": 60 }
 ```
+(these are the defaults — only `"order_type": "moc"` needs to be written down)
 
 Register the task at **2:20 PM CT** (`-LiveTaskTime 14:20`): the 2:00 PM
 intraday stop check (below) publishes any stop-out before then.

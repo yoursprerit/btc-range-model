@@ -1,11 +1,11 @@
 """Multi-account Option-C runner — trade the published live book in EVERY
 configured IBKR account on this PC.
 
-Order type is the config's ``order_type``: ``"moc"`` (default) = strict
-market-on-close, entered before the 15:50 ET cutoff; ``"marketable-limit"``
-(recommended for a mid-afternoon slot, e.g. 2:20 PM CT) = a limit priced a
-fraction through the touch that escalates to a market order if unfilled;
-``"market"`` = plain market orders.  The notes below describe the MOC flow.
+Order type is the config's ``order_type``: ``"marketable-limit"`` (default,
+for the 2:20 PM CT slot) = a limit priced a fraction through the touch that
+escalates to a market order if unfilled; ``"moc"`` = strict market-on-close,
+entered before the 15:50 ET cutoff (the original flow, which the notes below
+describe); ``"market"`` = plain market orders.
 
     # preview (default — no orders):
     python scripts/ibkr_execute_accounts.py
@@ -108,11 +108,11 @@ class Config:
     child_timeout_s: float = 3900.0   # = ic.MOC_MAX_WAIT_S + 300 (enforced below)
     stagger_s: float = 10.0
     market_data_type: int = 1      # 1 live, 2 frozen, 3 delayed, 4 delayed-frozen
-    # How the book is traded.  "moc" (the default, unchanged) = strict
-    # market-on-close, entered before the 15:50 ET cutoff.  "marketable-limit"
-    # / "market" trade at the touch during the regular session (the 2:20 PM CT
-    # slot) — see docs/LIVE_MULTI_ACCOUNT_MOC.md § Order type.
-    order_type: str = ic.ORDER_MOC
+    # How the book is traded.  "marketable-limit" (the default) / "market"
+    # trade at the touch during the regular session (the 2:20 PM CT slot);
+    # "moc" = strict market-on-close, entered before the 15:50 ET cutoff — see
+    # docs/LIVE_MULTI_ACCOUNT_MOC.md § Order type.
+    order_type: str = ic.ORDER_MARKETABLE_LIMIT
     slippage_cap: float = ic.DEFAULT_SLIPPAGE_CAP   # marketable-limit: how far THROUGH the touch
     fill_timeout_s: float = 0.0    # per-leg wait before a limit escalates (0 = executor default)
     kill_switch_file: str = ""
