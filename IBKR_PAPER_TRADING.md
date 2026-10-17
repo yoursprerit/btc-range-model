@@ -97,11 +97,12 @@ automating anything.
 ### 3. Share market data with the paper account (recommended)
 
 Client Portal → *Settings* → **Market Data Subscriptions**. Without live quotes
-the executor cannot price its marketable limits: each affected leg logs a
-`WARN … falling back to MARKET` (`scripts/ibkr_common.py`) and trades as an
-unprotected market order. It still trades — you just lose the price ceiling. If
-you would rather not share data, widen the cap instead
-(`--slippage-cap 0.015` / `IBKR_SLIPPAGE_CAP=0.015`).
+the executor cannot price its marketable limits: each affected leg is
+**skipped** (`SKIP … not sending an unpriced MARKET order`, status
+`SKIPPED-UNPRICEABLE`, plus an alert) rather than sent without a price ceiling,
+and the next run re-plans from the positions the account really holds. Share
+the data; widening the cap (`--slippage-cap 0.015` / `IBKR_SLIPPAGE_CAP=0.015`)
+only helps a quote that is present but stale.
 
 ### 4. The shared signing secret
 
@@ -445,7 +446,7 @@ via the wrapper scripts):
 
 | `--order-type` | What is sent | When to use it |
 |---|---|---|
-| `marketable-limit` **(default)** | A LIMIT priced `--slippage-cap` **through** the touch — a BUY at 0.5% above the ask, a SELL at 0.5% below the bid | Everyday default. Fills like a market order in a normal book, but a stale quote, a flash dislocation or a bad print can't cost more than the cap |
+| `marketable-limit` **(default)** | A LIMIT priced `--slippage-cap` **through** the touch — a BUY at 0.5% above the ask, a SELL at 0.5% below the bid. Unfilled after the wait → re-sent **once** as a wider limit (1.5% through the then-current touch); still unfilled → cancelled and alerted. A leg with no usable quote is skipped. **No order under this type is ever sent without a price.** | Everyday default. Fills like a market order in a normal book, but a stale quote, a flash dislocation or a bad print can't cost more than the cap |
 | `moc` | Market-on-close — filled in the official 4:00 PM ET closing auction | Tightest tracking to the backtest, which books fills at the close (see below) |
 | `market` | An unprotected market order (the pre-2026-08 behaviour) | Escape hatch; no price ceiling |
 
@@ -453,11 +454,13 @@ via the wrapper scripts):
 doesn't fill leaves the account holding the *wrong* exposure until tomorrow's
 run — an open-ended tracking error, far worse than paying a spread. So the
 limit is priced to cross immediately, and anything it still fails to fill
-inside `--fill-timeout` is **cancelled and re-sent as a market order in the
-same run** (partial fills escalate only the remainder). The ceiling therefore
-costs nothing in fill certainty — it only ever caps the first attempt. If a
-leg can't be priced at all (no market-data subscription, dead quote) it falls
-back to a market order and says so in the log.
+inside `--fill-timeout` is **cancelled and re-sent once as a wider limit in the
+same run** — 1.5% through the touch as it stands at that moment, re-quoted
+(partial fills escalate only the remainder). A remainder that fails the
+second attempt too is cancelled and alerted, never sent as a market order; the
+next run re-plans from the positions the account really holds. If a leg can't
+be priced at all (no market-data subscription, dead quote) it is skipped and
+alerted. Every order this type sends carries a price ceiling.
 
 **Why MOC is worth considering.** Every backtest in this repo books fills at
 the **close**; the executor trades at 2:30 PM CT, 30 minutes earlier, so live

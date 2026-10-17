@@ -181,15 +181,18 @@ CRON_TZ=America/Chicago
 ### Order routing on this host
 
 Orders default to **marketable limits**: a limit priced `IBKR_SLIPPAGE_CAP`
-(0.5%) through the touch, with automatic market-order escalation for anything
-unfilled inside the fill timeout. Full rationale in
+(0.5%) through the touch; anything unfilled inside the fill timeout is re-sent
+once as a wider limit (1.5% through the then-current touch), never as a market
+order. Full rationale in
 [`IBKR_PAPER_TRADING.md` § Order routing](../IBKR_PAPER_TRADING.md#order-routing).
 Two VM-specific consequences:
 
 - **Delayed-only market data** (no subscription shared to the paper account)
-  means legs that can't be priced log `WARN … falling back to MARKET` and go out
-  unprotected. Either share the data (§1b) or widen the cap:
-  `IBKR_SLIPPAGE_CAP=0.015`.
+  means legs that can't be priced are **skipped** (`SKIP … not sending an
+  unpriced MARKET order`, status `SKIPPED-UNPRICEABLE`, with an alert) and the
+  next run re-plans from real positions. Share the data (§1b) so every leg has
+  a live quote; widening the cap (`IBKR_SLIPPAGE_CAP=0.015`) only helps a
+  stale-but-present quote cross.
 - **`IBKR_ORDER_TYPE=moc`** fills in the 4:00 PM ET closing auction — the price
   the backtest books against — but the executor then **holds the connection
   ~32 minutes** waiting for the print (the wait ceiling is 60 minutes). Keep
