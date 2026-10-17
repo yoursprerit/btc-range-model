@@ -900,13 +900,14 @@ def _run_of(res: dict) -> dict:
 def combine_results(res_v1: list[dict], res_v2: list[dict],
                     cutover=None) -> list[dict]:
     """Splice two universes into the COMBINED view: for every sleeve, bars
-    before ``cutover`` (default the V1 → V2 cut-over) carry the V1 engine's
+    before ``cutover`` (default ``STRATEGY_VERSION_LIVE_START`` — the first
+    bar earned under a published V2 book) carry the V1 engine's
     return/position and bars from it carry V2's — each day under the logic
-    that was actually in effect that day.  Live fields (decision, position,
+    that was actually in force in the live book that day.  Live fields (decision, position,
     prices) are the current generation's; curve metrics, trade counts and
     the win rate are recomputed on the spliced stream; ``version_series``
     (per-bar generation tag) is attached for the UI."""
-    cut = pd.Timestamp(cutover or STRATEGY_VERSION_START)
+    cut = pd.Timestamp(cutover or STRATEGY_VERSION_LIVE_START)
     v1 = {r["key"]: r for r in res_v1}
     v2 = {r["key"]: r for r in res_v2}
     # universe order: the V2 order, with a sleeve only V1 traded (retired at
@@ -3510,7 +3511,7 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
                                        objective=objective, sata_daily=sata_daily,
                                        min_hist=min_hist, n_samples=n_samples,
                                        seed=seed, refit=refit, fit_window=fit_window)
-        cut = pd.Timestamp(STRATEGY_VERSION_START)
+        cut = pd.Timestamp(STRATEGY_VERSION_LIVE_START)
         w1 = rep1["weights"].loc[:cut - pd.Timedelta(days=1)]
         init = ({k: float(v) for k, v in w1.iloc[-1].items() if v > 0}
                 if len(w1) else {})
@@ -3528,12 +3529,12 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
     if adds_only is None:
         adds_only = ADDS_ONLY_BAND if ver in ("v2", "combined") else 0.0
         if ver == "combined" and adds_only_from is None:
-            adds_only_from = STRATEGY_VERSION_START
+            adds_only_from = STRATEGY_VERSION_LIVE_START
     if cluster_cap is None:
         cluster_cap = CLUSTER_CAP if ver in ("v2", "combined") else 0.0
         if ver == "combined" and cluster_cap_from is None:
-            cluster_cap_from = STRATEGY_VERSION_START
-    mix_from = STRATEGY_VERSION_START if ver == "combined" else None
+            cluster_cap_from = STRATEGY_VERSION_LIVE_START
+    mix_from = STRATEGY_VERSION_LIVE_START if ver == "combined" else None
     if ver == "v1":
         cluster_mix = None                      # V1 never had the split
         adds_only_cluster = None                # ... nor a per-cluster band
@@ -3563,15 +3564,16 @@ def walkforward_gated_replay(results: list[dict], caps: dict | None = None,
 
 def splice_replays(rep1: dict, rep2: dict, cutover=None) -> dict:
     """The Combined replay from the two generations' replays: ``rep1``'s
-    bars before ``cutover`` (default the V1 → V2 cut-over), ``rep2``'s from
-    it — each day's book under the logic actually in effect that day.  The
+    bars before ``cutover`` (default ``STRATEGY_VERSION_LIVE_START``),
+    ``rep2``'s from it — each day's book under the logic actually in force
+    in the live book that day.  The
     equity curve is re-compounded from the spliced returns; weights / SATA /
     active matrices are concatenated over the union of sleeves (a sleeve one
     generation never traded is 0 on the other's bars); turnover is measured
     across the join, so the hand-over from V1's last book to V2's first is
     counted; the anchor schedule carries V1's entries before the cut-over
     and V2's from it (with V2's anchor in force at the cut-over)."""
-    cut = pd.Timestamp(cutover or STRATEGY_VERSION_START)
+    cut = pd.Timestamp(cutover or STRATEGY_VERSION_LIVE_START)
     before = lambda s: s.loc[s.index < cut]
     after = lambda s: s.loc[s.index >= cut]
     ret = pd.concat([before(rep1["ret"]), after(rep2["ret"])])
@@ -3803,7 +3805,8 @@ C2_PNL_DEFAULT_START = "2026-10-07"
 # labelled from the committed side-car ``data/overall/book_versions.json``
 # (see ``scripts/backfill_book_versions.py``) as ``pre-v1``.
 from strategy_version import (STRATEGY_VERSION,        # noqa: E402,F401
-                              STRATEGY_VERSION_START)  # noqa: E402,F401
+                              STRATEGY_VERSION_START,  # noqa: E402,F401
+                              STRATEGY_VERSION_LIVE_START)  # noqa: E402,F401
 BOOK_VERSIONS_JSON = _REPO_ROOT / "data" / "overall" / "book_versions.json"
 PUBLISHED_BOOK_JSON = _REPO_ROOT / "data" / "overall" / "target_book.json"
 

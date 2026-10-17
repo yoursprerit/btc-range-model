@@ -1113,6 +1113,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/245"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-17",
+  "kind": "analytics",
+  "title": "Combined view switches to V2 when the first published V2 book filled",
+  "description": "The Combined replay (and the combined per-sleeve streams behind it) switched from V1 to V2 logic on the first V2 signal day (STRATEGY_VERSION_START, 2026-10-09). The live accounts can only trade a published book, and the first V2 book (as_of 2026-10-11) filled at the 2026-10-12 close, so the live book ran V1 for two more sessions. A new STRATEGY_VERSION_LIVE_START (2026-10-13, the first bar earned under a published V2 book) now drives the engine splice, the replay splice and the start of the V2 rules in the Combined view; STRATEGY_VERSION_START still labels books and admits them to the as-published record.",
+  "impact": "Oct 7-16, 2026: the Combined replay read +0.40% against the C2 as-published record's +1.03% with 0.65 pt of the gap on Oct 9-12, when the replay was V2-sized (sold GLDM/UGL/OIH, bought XOP and SATA) while the live book still held the last V1 book through gold's and energy's Oct 9 rally. After: Combined Balanced +1.13% over Oct 7-16 (Growth +2.14%), day by day within a few bp of the C2 record except the sizing residual; full-history Combined figures unchanged (Balanced CAGR +56.8%, Sharpe 1.52).",
+  "links": []
  }
  ]
 }

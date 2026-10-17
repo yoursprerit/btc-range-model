@@ -52,6 +52,15 @@ STRATEGY_VERSION = "v2"
 # older bar under new code can never pull old-strategy days into the record.
 STRATEGY_VERSION_START = "2026-10-09"
 
+# First bar the COMBINED replay earns under the current version: the day after
+# the first PUBLISHED book of this version filled (V2: book as_of 2026-10-11,
+# published the morning of 2026-10-12, filled at that close).  The live
+# accounts can only trade a published book, so "Combined" — the logic actually
+# in force in the live book each day — switches here, not on the first signal
+# day above (which labels books and admits them to the as-published record).
+# BUMP TOGETHER with the constants above on a new generation.
+STRATEGY_VERSION_LIVE_START = "2026-10-13"
+
 # Every deliberate logic generation and the first signal day it governs,
 # oldest first.  ``version_for_date`` reads this; the apps' V1 / V2 /
 # Combined selectors and every "version in effect on that day" label derive
