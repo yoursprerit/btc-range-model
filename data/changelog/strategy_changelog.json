@@ -1037,7 +1037,12 @@
   "title": "Strategy P&L (C2 as-published): SATA marked at its real price",
   "description": "The Collective2 executed-fills replay held SATA flat at its fill price because the close table has no SATA column. It now marks SATA at the price the executed IBKR reports carry (latest mark on/before each bar), falling back to the fill price only when no report has one.",
   "impact": "Oct 12-16, 2026: the C2 view read +0.5% (+$512 on $100k) against about -0.2% from C2's own fills and -0.27% in C2's reported account value; SATA fell $99.39 to $97.04 on 302 shares, about -$640 the replay ignored.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #240",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/240"
+   }
+  ]
  }
  ]
 }
