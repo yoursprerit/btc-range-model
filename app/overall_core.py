@@ -403,6 +403,34 @@ def load_sata_returns(path=SATA_DATA_PATH) -> pd.Series | None:
         return None
 
 
+def load_sata_closes(path=SATA_DATA_PATH) -> pd.Series | None:
+    """SATA's official daily close per session from the committed history
+    (``None`` when missing), so the executed-fills replays mark a held SATA
+    position at the same close the walk-forward replay's returns come from."""
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True).sort_index()
+        close = df["close"].astype(float)
+        close = close[np.isfinite(close) & (close > 0)]
+        return close if len(close) else None
+    except Exception:
+        return None
+
+
+def with_sata_closes(closes: pd.DataFrame | None) -> pd.DataFrame | None:
+    """*closes* (a daily close frame by sleeve key) with a ``SATA`` column
+    added from ``load_sata_closes`` when it has none — the price table the
+    C2 / IBKR fills replays mark positions on.  Unchanged when SATA is already
+    there or no history is on disk."""
+    if closes is None or "SATA" in closes.columns:
+        return closes
+    sc = load_sata_closes()
+    if sc is None:
+        return closes
+    out = closes.copy()
+    out["SATA"] = sc.reindex(out.index)
+    return out
+
+
 def sata_leg(sata_daily, index, business_days_only: bool = True) -> np.ndarray:
     """Per-bar return of the SATA idle-cash leg over *index*.
 
