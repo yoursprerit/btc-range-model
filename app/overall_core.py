@@ -4064,6 +4064,32 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
         start_date=(min(firsts) if firsts else None), log=log)
 
 
+def pct_sig2(ret: float) -> str:
+    """A return as a signed percent with up to two significant digits and no
+    trailing zeros: -0.0019 → "-0.19%", 0.0051 → "+0.51%", 0.123 → "+12%",
+    1.5 → "+150%".  Zero reads "0%"."""
+    v = float(ret) * 100.0
+    if not np.isfinite(v):
+        return "—"
+    if v == 0:
+        return "0%"
+    digits = min(3, max(0, 1 - int(np.floor(np.log10(abs(v))))))
+    txt = f"{abs(round(v, digits)):,.{digits}f}"
+    if "." in txt:
+        txt = txt.rstrip("0").rstrip(".")
+    if txt in ("", "0"):                       # rounds to nothing at this precision
+        return "0%"
+    return f"{'-' if v < 0 else '+'}{txt}%"
+
+
+def signed_delta(text: str, negative: bool) -> str:
+    """A metric ``delta`` string whose sign comes FIRST.  Streamlit picks the
+    arrow (and the green/red) from the delta's leading character, so
+    "$-88 on …" or "CAGR -15.7%" render an up arrow on a loss; "-$88 on …"
+    renders the down arrow.  *text* is the unsigned body."""
+    return f"{'-' if negative else '+'}{text}"
+
+
 def _asof_mark(marks: dict | None, key: str, day) -> float | None:
     """The latest dated mark for *key* on or before *day*, else ``None``."""
     ser = (marks or {}).get(key)
