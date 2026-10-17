@@ -1093,7 +1093,12 @@
   "title": "SATA leg earns SATA's real total return instead of a flat coupon",
   "description": "Every P&L path (walk-forward replay, as-published book replays, attribution and daily P&L, the frictions simulation, the health monitor's realised-book leg, the SATA benchmark line) now prices the SATA leg on SATA's realised daily total return (close + dividend, data/sata/sata_daily.csv, refreshed by the publish workflow) from its 2025-11-06 listing; the 13%/250 coupon stays in force before that. The weight optimiser keeps the coupon as its idle-leg expectation. sata_daily is duck-typed: a float is the coupon, a Series the real record (overall_core.sata_leg).",
   "impact": "Since listing SATA returned +24.3% (price $88 -> $96.89 plus dividends) against the coupon's +13.1%, with 25% annualised volatility and a -16% week in June 2026. V2 Balanced, coupon -> real: full CAGR +53.7% -> +54.8%, Sharpe 1.88 -> 1.90, since-listing MDD -9.7% -> -12.0%; Combined Balanced full CAGR +56.8% -> +56.6% (2% mean SATA weight under V1 logic). Oct 6-16, 2026: Combined replay -0.74% -> -1.34%; Oct 13-16: -0.30% -> -0.88% against C2's -0.95%, closing the gap that was entirely SATA's -2.2% slide.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #244",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/244"
+   }
+  ]
  }
  ]
 }
