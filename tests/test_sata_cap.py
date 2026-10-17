@@ -181,7 +181,7 @@ def test_walkforward_replay_applies_the_cap_for_v2_ignores_it_for_v1():
 def test_combined_replay_splices_cash_applying_the_cap_from_the_cutover():
     import strategy_version as sv
     from test_strategy_logic_v2 import _sleeve
-    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_LIVE_START)   # the Combined splice
     idx = pd.bdate_range(cut - pd.Timedelta(days=200), periods=300)
 
     def gen(version, seed):

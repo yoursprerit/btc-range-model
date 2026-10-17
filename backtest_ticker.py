@@ -49,8 +49,12 @@ def active_version(version: str | None = None) -> str:
 
 
 def version_cutover() -> str:
-    """First signal day of the current version (the V1 → V2 cut-over)."""
-    return _sv.STRATEGY_VERSION_START if _sv is not None else "2099-01-01"
+    """The Combined view's cut-over: the first bar earned under a PUBLISHED
+    book of the current version (``STRATEGY_VERSION_LIVE_START``) — the logic
+    actually in force in the live book each day, not the first signal day."""
+    if _sv is None:
+        return "2099-01-01"
+    return getattr(_sv, "STRATEGY_VERSION_LIVE_START", _sv.STRATEGY_VERSION_START)
 
 
 def combine_runs(r1: dict, r2: dict, cutover) -> dict:

@@ -619,7 +619,7 @@ def _sleeve(key, parent, idx, rng, in_pos=True):
 
 def test_combine_results_splices_a_universe_change_at_the_cutover():
     rng = np.random.default_rng(5)
-    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_LIVE_START)   # the Combined splice
     idx = pd.bdate_range(cut - pd.Timedelta(days=120), periods=120)
     assert idx[0] < cut < idx[-1]
     xle1, xle2 = _sleeve("XLE", "XLE", idx, rng), _sleeve("XLE", "XLE", idx, rng)
@@ -707,7 +707,7 @@ def test_as_published_pricing_basis_is_version_independent():
     or being retired in one generation (whose strategy stream would drop the
     move of a position the book still held)."""
     rng = np.random.default_rng(11)
-    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_LIVE_START)   # the Combined splice
     idx = pd.bdate_range(cut - pd.Timedelta(days=60), periods=60)
     xle1, xle2 = _sleeve("XLE", "XLE", idx, rng), _sleeve("XLE", "XLE", idx, rng)
     oih = _sleeve("OIH", "XLE", idx, rng)
@@ -744,7 +744,7 @@ def test_replay_start_and_init_weights_continue_a_held_book():
 
 
 def test_combined_walkforward_is_a_splice_of_the_two_generations():
-    cut = pd.Timestamp(sv.STRATEGY_VERSION_START)
+    cut = pd.Timestamp(sv.STRATEGY_VERSION_LIVE_START)   # the Combined splice
     rng = np.random.default_rng(4)
     idx = pd.bdate_range(cut - pd.Timedelta(days=400), periods=330)
     assert idx[0] < cut < idx[-1]
@@ -773,3 +773,22 @@ def test_combined_walkforward_is_a_splice_of_the_two_generations():
     assert ac == a2
     assert (wc["version_series"].loc[:cut - pd.Timedelta(days=1)] == "v1").all()
     assert (wc["version_series"].loc[cut:] == "v2").all()
+
+
+def test_combined_cutover_is_the_bar_after_the_first_published_v2_book_filled():
+    """``STRATEGY_VERSION_LIVE_START`` pins the Combined splice to the live
+    book: the first V2 book C2 received (as_of 2026-10-11) was published the
+    next morning and filled at that session's close, so V2 logic earns from
+    the session after.  It must follow the first signal day, never precede it."""
+    import json
+    live = pd.Timestamp(sv.STRATEGY_VERSION_LIVE_START)
+    assert live > pd.Timestamp(sv.STRATEGY_VERSION_START)
+    repo = Path(__file__).resolve().parent.parent
+    books = sorted((repo / "data" / "overall" / "c2_book_archive").glob("*.json"))
+    first_v2 = next(json.loads(p.read_text()) for p in books
+                    if sv.version_for_date(json.loads(p.read_text())["as_of"]) == "v2")
+    fill = oc._publish_fill_day(pd.Timestamp(first_v2["as_of"]), first_v2.get("generated_at_utc"))
+    fill = pd.bdate_range(fill, periods=1)[0]                 # first US session on/after
+    assert live == pd.bdate_range(fill, periods=2)[1]           # the session after the fill
+    assert oc.STRATEGY_VERSION_LIVE_START == sv.STRATEGY_VERSION_LIVE_START
+    assert bt.version_cutover() == sv.STRATEGY_VERSION_LIVE_START
