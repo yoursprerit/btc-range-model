@@ -643,12 +643,16 @@ def test_combine_results_splices_a_universe_change_at_the_cutover():
     assert (by["XOP"]["ret"].loc[:cut - pd.Timedelta(days=1)] == 0).all()
     assert by["XOP"]["ret"].loc[cut:].abs().sum() > 0
     assert by["XOP"]["pos"]["in_pos"] is True
-    # the replay sees both: OIH funded only before the cut-over, XOP only from it
+    # the replay sees both: OIH funded only through the cut-over bar (held
+    # going into it, sold at its close), XOP only from the bar after it (its
+    # entry fills at the cut-over close) — the book that earns a bar is the
+    # position held going into it
     bw = {"XLE": 0.3, "OIH": 0.3, "XOP": 0.3, "GRID": 0.3}
     rep = oc.replay_gated_allocation(out, base_weights=bw, adds_only=0, cluster_cap=0)
     W = rep["weights"]
-    assert (W["OIH"].loc[cut:] == 0).all() and W["OIH"].loc[:cut - pd.Timedelta(days=1)].max() > 0
-    assert (W["XOP"].loc[:cut - pd.Timedelta(days=1)] == 0).all() and W["XOP"].loc[cut:].max() > 0
+    after = cut + pd.Timedelta(days=1)
+    assert (W["OIH"].loc[after:] == 0).all() and W["OIH"].loc[:cut].max() > 0
+    assert (W["XOP"].loc[:cut] == 0).all() and W["XOP"].loc[after:].max() > 0
 
 
 def test_priority_history_tolerates_a_sleeve_with_no_closed_trades():
