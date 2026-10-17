@@ -212,7 +212,7 @@ restarted, nothing runs and nothing complains. A heartbeat fixes that: each run
 pings an outside monitor, and the **monitor** alerts when a ping is missing.
 
 1. Create two free checks at healthchecks.io (or Uptime Kuma push monitors):
-   * **Run** - schedule `15 14 * * *`, timezone `America/Chicago`, grace 30-45 min.
+   * **Run** - schedule `20 14 * * *`, timezone `America/Chicago`, grace 30-45 min.
    * **Reconcile** - schedule `15 16 * * *`, timezone `America/New_York`, grace 30-45 min.
    Both are *daily*: a weekend or holiday is a normal, successful "nothing to do" run that still pings.
 2. `setx IBKR_HEARTBEAT_URL "https://hc-ping.com/<run-uuid>"` and
