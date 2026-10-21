@@ -1154,6 +1154,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/248"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-21",
+  "kind": "analytics",
+  "title": "SATA buy/sell P&L and dividends in every P&L view",
+  "description": "The executed-fills replays (Collective2 and IBKR) now add the dividends a held SATA collects on top of its price move, so portfolio value and every metric carry SATA's full total return. The Realized P&L by asset bars gain a SATA line: the gain on each slice SATA hands to a new entry (price vs dividends split on hover) plus its unrealized part, reconciling to the SATA bar of the P&L attribution.",
+  "impact": "Before, the executed views marked SATA at its close only (dividends missing) and the realized bars omitted SATA entirely.",
+  "links": [
+   {
+    "label": "PR #249",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/249"
+   }
+  ]
  }
  ]
 }
