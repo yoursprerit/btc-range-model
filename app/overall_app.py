@@ -3041,7 +3041,8 @@ with tab_live:
             # cost of trading, which the IBKR Pro costs toggle takes out.
             _ix = ov.ibkr_executed_replay(
                 _ibkr.get("holdings"), get_sleeve_prices(_bucket(), _use_snap),
-                columns=(list(_px_rets.columns) if _px_rets is not None else None))
+                columns=(list(_px_rets.columns) if _px_rets is not None else None),
+                sata_div=ov.load_sata_dividends())
             _ix_on = _ix is not None and len(_ix["equity"]) >= 2
             if _ix_on:
                 _curve_all = _ix["equity"]
@@ -3106,7 +3107,8 @@ with tab_live:
                 columns=(list(_px_rets.columns) if _px_rets is not None
                          else None),
                 marks=acpnl.executed_marks(
-                    eb.account_report_paths(_pnl_rep_base) + [_EB_DIR / "executed_book.json"]))
+                    eb.account_report_paths(_pnl_rep_base) + [_EB_DIR / "executed_book.json"]),
+                sata_div=ov.load_sata_dividends())
             _exec_eq = _exec["equity"] if _exec is not None else None
             _exec_on = _exec_eq is not None and len(_exec_eq) >= 2
             if _exec_on:
@@ -3897,7 +3899,9 @@ with tab_live:
                 if "v" not in _rlz_memo:
                     _rlz_memo["v"] = ov.realized_pnl_by_asset(
                         _wf["weights"], _wf["sata"], _start_sel, _rets_win,
-                        active=_wf.get("active"))
+                        active=_wf.get("active"),
+                        sata_daily=get_sata_returns(_bucket(), _use_snap),
+                        include_sata=True)
                 return _rlz_memo["v"]
 
             # ── daily trade log — every buy/sell the daily book ordered ──────
@@ -4491,7 +4495,10 @@ with tab_live:
                                "(Σproceeds/Σcost − 1); hover for the "
                                "tilt-vs-signal split (tilt includes "
                                "re-balance flows), ticket counts and "
-                               "dollars sold. Sleeves that never sold "
+                               "dollars sold. **SATA** is a line of its own: "
+                               "the gain on every slice it hands over to a "
+                               "new entry (price move + dividends, split on "
+                               "hover) is realized there. Sleeves that never sold "
                                "show no solid bar — only their lighter "
                                "open-position extension. (The 🧾 trade-log chips "
                                "measure each ticket from the position's "
@@ -4514,7 +4521,24 @@ with tab_live:
                             f"{_n_s} signal sell{'s' if _n_s != 1 else ''} "
                             f"(${r['pnl_signal']*portfolio_value:+,.0f}) · "
                             f"${r['proceeds']*portfolio_value:,.0f} sold")
-                        if abs(_unrl) >= 0.5:
+                        if k == "SATA":
+                            _hov = (
+                                f"{_n_t} funding trim{'s' if _n_t != 1 else ''} "
+                                f"· ${r['proceeds']*portfolio_value:,.0f} sold"
+                                f"<br>realized: price "
+                                f"${r['pnl_price']*portfolio_value:+,.0f} "
+                                f"(buy/sell) + dividends "
+                                f"${r['pnl_div']*portfolio_value:+,.0f}")
+                            if abs(_unrl) >= 0.5:
+                                _hov += (
+                                    f"<br>still held: price "
+                                    f"${r['unrealized_price']*portfolio_value:+,.0f}"
+                                    f" + dividends "
+                                    f"${r['unrealized_div']*portfolio_value:+,.0f}"
+                                    f" unrealized · total "
+                                    f"${r['total']*portfolio_value:+,.0f} = "
+                                    f"its 📊 P&L-by-asset bar")
+                        elif abs(_unrl) >= 0.5:
                             _hov += (f"<br>still open: ${_unrl:+,.0f} "
                                      f"unrealized · total "
                                      f"${r['total']*portfolio_value:+,.0f} "
@@ -5152,7 +5176,7 @@ with tab_live:
                            "portfolio value entered — only the dollar "
                            "figures scale with it.")
                 _capled = {k: r for k, r in _get_rlz().items()
-                           if r["deployed"] > 1e-9}
+                           if r["deployed"] > 1e-9 and k != "SATA"}
                 if not _capled:
                     st.info("No sleeve the blend holds traded in this window — "
                             "nothing was deployed.")
@@ -5313,7 +5337,7 @@ with tab_live:
                            "capital.")
                 _eff_att = _get_att()
                 _effled = {k: r for k, r in _get_rlz().items()
-                           if r["deployed"] > 1e-9}
+                           if r["deployed"] > 1e-9 and k != "SATA"}
                 if not _effled or _eff_att is None:
                     st.info("No sleeve the blend holds traded in this window — "
                             "nothing was deployed.")

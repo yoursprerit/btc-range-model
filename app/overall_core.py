@@ -416,6 +416,31 @@ def load_sata_closes(path=SATA_DATA_PATH) -> pd.Series | None:
         return None
 
 
+def load_sata_dividends(path=SATA_DATA_PATH) -> pd.Series | None:
+    """SATA's cash dividend per share by ex-date from the committed daily
+    history (``None`` when missing or empty).  The executed-fills replays mark
+    a held position at its close, which leaves the dividend out — they add it
+    back from this series, so a held SATA earns its full total return there
+    exactly as it does in the weight-based replays."""
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True).sort_index()
+        div = df["dividend"].astype(float).fillna(0.0)
+        div = div[np.isfinite(div) & (div > 0)]
+        return div if len(div) else None
+    except Exception:
+        return None
+
+
+def _div_between(divs: pd.Series | None, after, upto) -> float:
+    """Σ per-share dividends with ex-date in ``(after, upto]`` — what a share
+    held at the close of *after* and still held at the close of *upto*
+    collected (the total-return convention of ``load_sata_returns``)."""
+    if divs is None or after is None or upto is None:
+        return 0.0
+    m = (divs.index > pd.Timestamp(after)) & (divs.index <= pd.Timestamp(upto))
+    return float(divs[m].sum())
+
+
 def with_sata_closes(closes: pd.DataFrame | None) -> pd.DataFrame | None:
     """*closes* (a daily close frame by sleeve key) with a ``SATA`` column
     added from ``load_sata_closes`` when it has none — the price table the
@@ -455,6 +480,25 @@ def sata_leg(sata_daily, index, business_days_only: bool = True) -> np.ndarray:
         listed = np.asarray(idx >= ser.index[0])
         return np.where(listed, np.nan_to_num(real), coupon)
     return float(sata_daily) * biz
+
+
+def _sata_price_leg(sata_daily, index) -> np.ndarray:
+    """The price-only part of ``sata_leg`` over *index* — SATA's close-to-close
+    move with the dividend left out — so ``sata_leg − _sata_price_leg`` is what
+    the dividends earned.  Zero where SATA has no price history (the modelled
+    par-stable coupon is all dividend), so the split degrades to "all
+    dividend" rather than failing."""
+    idx = pd.DatetimeIndex(index)
+    out = np.zeros(len(idx))
+    if not isinstance(sata_daily, pd.Series):
+        return out
+    closes = load_sata_closes()
+    ser = sata_daily.dropna()
+    if closes is None or not len(ser):
+        return out
+    px = (closes / closes.shift(1) - 1.0).reindex(idx).to_numpy(float)
+    listed = np.asarray(idx >= ser.index[0])
+    return np.where(listed, np.nan_to_num(px), 0.0)
 
 
 def _sata_scalar(sata_daily) -> float:
@@ -1726,7 +1770,8 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
                           returns: pd.DataFrame,
                           min_delta: float = 0.0005,
                           active: pd.DataFrame | None = None,
-                          sata_daily: float = SATA_DAILY) -> dict:
+                          sata_daily: float = SATA_DAILY,
+                          include_sata: bool = False) -> dict:
     """Per-asset realized + unrealized P&L of the daily-weight book since
     ``start`` under WINDOW-ANCHORED exact accounting — built to reconcile
     with ``pnl_attribution_replay`` to float precision.
@@ -1764,18 +1809,37 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
     some point in the window is reported (a bought-and-held sleeve has
     zero ticket counts but real ``deployed``/``unrealized``) — callers
     wanting only sleeves that sold filter on the ticket counts; ``{}``
-    with <2 bars on/after ``start``."""
+    with <2 bars on/after ``start``.
+
+    ``include_sata`` adds the SATA leg as one more ledger line under the key
+    ``"SATA"``: its weight is ``sata``, its return ``sata_leg(sata_daily)``
+    (price AND dividends), so the gain on every slice SATA sells — the idle
+    capital handed to a new entry — is realized there, and what is still
+    held is its unrealized P&L; ``total`` equals ``pnl_attribution_replay``'s
+    ``sata`` dollars.  The line also carries ``pnl_price`` / ``pnl_div`` and
+    ``unrealized_price`` / ``unrealized_div`` — the same ledger run on SATA's
+    price-only return, the dividends being the remainder.  Off by default so
+    callers that only want the traded sleeves are unchanged."""
     sub = returns.loc[pd.Timestamp(start):]
     if len(sub) < 2:
         return {}
     W = weights.reindex(index=sub.index, columns=sub.columns) \
         .fillna(0.0).to_numpy(float)
     R = np.nan_to_num(sub.to_numpy(float))
+    cols = list(sub.columns)
+    sata_w = sata.reindex(sub.index).fillna(0.0).to_numpy(float)
+    sata_r = sata_leg(sata_daily, sub.index)
+    sata_px = _sata_price_leg(sata_daily, sub.index)
+    if include_sata:
+        W = np.column_stack([W, sata_w])
+        R = np.column_stack([R, sata_r])
+        cols.append("SATA")
     # identical blend-value path to pnl_attribution_replay, or the parts
     # stop reconciling
     sata_term = (sata.reindex(sub.index).fillna(1.0).to_numpy(float)
                  * sata_leg(sata_daily, sub.index))
-    contrib = W * R
+    nc = len(sub.columns)                       # the SATA line (if any) is
+    contrib = W[:, :nc] * R[:, :nc]             # already in sata_term
     contrib[0, :] = 0.0
     sata_term[0] = 0.0
     port = contrib.sum(axis=1) + sata_term
@@ -1792,13 +1856,8 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
                 if a["signal_change"]:
                     sig_sale.add((day["date"], a["key"]))
 
-    out: dict[str, dict] = {}
-    n = len(sub)
-    for ci, k in enumerate(sub.columns):
-        wk = W[:, ci]
-        if not (wk > 0).any():
-            continue
-        rk = R[:, ci]
+    def _ledger(wk, rk, k):
+        """The average-cost pass over one line (see the docstring)."""
         cost = a_val = wk[0]                    # basis = the anchor close
         deployed = wk[0]                        # anchor holding = cost in
         realized = rl_sig = proceeds = cost_sold = 0.0
@@ -1825,16 +1884,43 @@ def realized_pnl_by_asset(weights: pd.DataFrame, sata: pd.Series, start,
                 rl_sig += gain
             cost *= h_val / a_val               # pro-rata cost removal
         unreal = (a_val - cost) if a_val > 0 else 0.0
-        tickets = listed.get(k, [])
-        n_sig = sum(a["signal_change"] for a in tickets)
+        return dict(realized=realized, unreal=unreal, proceeds=proceeds,
+                    cost_sold=cost_sold, deployed=deployed, cost_open=cost,
+                    rl_sig=rl_sig)
+
+    out: dict[str, dict] = {}
+    n = len(sub)
+    for ci, k in enumerate(cols):
+        wk = W[:, ci]
+        if not (wk > 0).any():
+            continue
+        L = _ledger(wk, R[:, ci], k)
+        realized, unreal = L["realized"], L["unreal"]
+        proceeds, cost_sold = L["proceeds"], L["cost_sold"]
+        rl_sig = L["rl_sig"]
+        if k == "SATA" and include_sata:
+            # SATA is never ticketed: its sales are the idle capital handed
+            # to the sleeves, so every reduction is a funding trim
+            n_trims = int((np.diff(sata_w) < -min_delta).sum())
+            n_sig = 0
+            Lp = _ledger(wk, sata_px, k)
+            extra = dict(pnl_price=Lp["realized"],
+                         pnl_div=realized - Lp["realized"],
+                         unrealized_price=Lp["unreal"],
+                         unrealized_div=unreal - Lp["unreal"])
+        else:
+            tickets = listed.get(k, [])
+            n_sig = sum(a["signal_change"] for a in tickets)
+            n_trims = len(tickets) - n_sig
+            extra = {}
         out[k] = dict(pnl=realized, unrealized=unreal,
                       total=realized + unreal,
                       ret=(proceeds / cost_sold - 1.0) if cost_sold > 0
                       else 0.0,
                       proceeds=proceeds, cost=cost_sold,
-                      deployed=deployed, cost_open=cost,
+                      deployed=L["deployed"], cost_open=L["cost_open"],
                       pnl_signal=rl_sig, pnl_tilt=realized - rl_sig,
-                      n_trims=len(tickets) - n_sig, n_sells=n_sig)
+                      n_trims=n_trims, n_sells=n_sig, **extra)
     return out
 
 
@@ -4211,7 +4297,8 @@ def _asof_mark(marks: dict | None, key: str, day) -> float | None:
 def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
                        closes: pd.DataFrame | None,
                        columns: list | None = None,
-                       marks: dict | None = None) -> dict | None:
+                       marks: dict | None = None,
+                       sata_div: pd.Series | None = None) -> dict | None:
     """The C2 model account rebuilt from what it actually EXECUTED — C2's
     fills, not the target books — in the same shape ``published_book_replay``
     returns (``ret``/``equity``/``weights``/``sata``/``cash``), so every figure
@@ -4236,6 +4323,11 @@ def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
     ``marks`` — ``{key: Series}`` of dated prices for a key the close frame
     lacks (``SATA``): the latest mark on/before the bar is used instead of
     the fill price, so the position moves with its real price.
+    ``sata_div`` — ``load_sata_dividends()``: SATA's per-share dividends.  A
+    SATA lot collects every dividend with an ex-date after its entry date and
+    on/before the bar (or its exit), on top of the price P&L, so the
+    equity — and every metric off it — carries SATA's price move AND its
+    daily yield.  ``None`` leaves the dividends out.
     ``None`` when there are no fills or no closes."""
     if not snap or closes is None or not len(closes):
         return None
@@ -4272,8 +4364,13 @@ def c2_executed_replay(snap: dict | None, archive: list[dict] | None,
                 sign = -1.0 if r["side"] == "short" else 1.0
                 eq += sign * r["shares"] * (p - r["entry_px"]) / cash0
                 hv[r["key"]] += sign * r["shares"] * p / cash0
+                if r["key"] == "SATA" and sign > 0:
+                    eq += r["shares"] * _div_between(sata_div, r["entry_date"], d) / cash0
             elif not r["pending"]:
                 eq += r["pnl_usd"]
+                if r["key"] == "SATA" and r["side"] != "short":
+                    eq += r["shares"] * _div_between(
+                        sata_div, r["entry_date"], r["exit_date"]) / cash0
         vals.append(eq)
         held.append(hv)
     equity = pd.Series(vals, index=idx, name="C2 executed")
@@ -4301,7 +4398,8 @@ def c2_executed_equity(snap: dict | None, archive: list[dict] | None,
 def ibkr_executed_replay(holdings: list[dict] | None,
                          closes: pd.DataFrame | None,
                          columns: list | None = None,
-                         sata_daily: float = SATA_DAILY) -> dict | None:
+                         sata_daily: float = SATA_DAILY,
+                         sata_div: pd.Series | None = None) -> dict | None:
     """An IBKR account's as-published record rebuilt from what its executed
     playbook HELD — the shares in each run's report — not from the target
     books, in the same shape ``c2_executed_replay`` returns.
@@ -4322,6 +4420,13 @@ def ibkr_executed_replay(holdings: list[dict] | None,
     the figure differs from reported net liquidation by exactly that, which the
     IBKR Pro costs toggle then takes out.  Deposits and withdrawals never move
     it (they change cash, not the market move on the holdings).
+
+    ``sata_div`` — ``load_sata_dividends()``: the dividends a held SATA
+    collects.  A run's report only books them in its own cash from that run
+    on, so between runs the shares held collect every dividend with an
+    ex-date after the run and on/before the bar, added to the account's value
+    (and carried in it until the next run restates cash) — the curve then
+    moves with SATA's price AND its yield.  ``None`` leaves them out.
 
     A key absent from ``closes`` (``SATA``, a retired sleeve) is marked at the
     price an executed run reported on that day; between runs ``SATA`` accrues
@@ -4361,7 +4466,9 @@ def ibkr_executed_replay(holdings: list[dict] | None,
 
     def _value(h, day):
         hv = {k: q * _price(k, day, h) for k, q in h["shares"].items()}
-        return h["cash"] + sum(hv.values()), hv
+        paid = h["shares"].get("SATA", 0.0) * _div_between(
+            sata_div, h["date"], day)           # dividends since the run
+        return h["cash"] + paid + sum(hv.values()), hv
 
     equity, w_rows, v_post = [1.0], [], []
     v0, hv0 = _value(_held(bars[0], strict=False), bars[0])
