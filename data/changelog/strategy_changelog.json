@@ -1168,6 +1168,13 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/249"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-21",
+  "kind": "ui",
+  "title": "SOXX live panel shows the 25-day MA",
+  "description": "The SOXX top panel on the Live tab now shows the 25-day MA (title and value) instead of the 20-day MA, matching the 25/100 dual-MA signal."
  }
  ]
 }

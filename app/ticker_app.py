@@ -2133,7 +2133,11 @@ def render_live_dashboard(as_of_date=None, is_live=True):
     else:
         d1c.metric(f"{cfg.key} next-hour (pred)", "— (replay)"); d2c.metric("95% CI band", "—")
     _ma20 = sigs.get("ma20_value") if sigs else None
-    d3c.metric(f"{cfg.key} 20-day MA", f"${_ma20:,.2f}" if _ma20 else "—",
+    _ma_days = 20
+    if cfg.key == "SOXX" and mst and mst.get("ma_fast_val") is not None:
+        # SOXX trades the 25/100 cross, so the panel shows its 25-day SMA
+        _ma20, _ma_days = mst["ma_fast_val"], cfg.ma_fast
+    d3c.metric(f"{cfg.key} {_ma_days}-day MA", f"${_ma20:,.2f}" if _ma20 else "—",
                (f"${last_px-_ma20:+,.2f} vs close" if _ma20 else None),
                delta_color="normal" if (_ma20 and last_px >= _ma20) else "inverse")
     if hl:
