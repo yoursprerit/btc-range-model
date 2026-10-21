@@ -43,13 +43,15 @@ def test_a_matching_or_unstamped_book_raises_no_warning():
     assert dt.book_mode_warning(None, None) is None
 
 
-def test_the_two_published_books_really_differ_in_sata_and_cash():
-    """Why this mattered: the paper book has no SATA and the live one does."""
+def test_both_published_books_park_idle_capital_in_capped_sata():
+    """Since the SATA cap both modes publish a SATA leg (capped) plus the
+    excess in cash — the paper book no longer differs from the live one."""
     paper = json.loads((DATA / "target_book.json").read_text())
     live = json.loads((DATA / "target_book_live.json").read_text())
     assert paper.get("book_mode") == "paper" and live.get("book_mode") == "live"
-    assert "SATA" not in paper["weights"] and live["weights"].get("SATA", 0) > 0
-    assert live["cash_weight"] < paper["cash_weight"]
+    for book in (paper, live):
+        assert 0 < book["weights"].get("SATA", 0) <= book["sata_cap"] + 1e-9
+        assert book["cash_weight"] >= 0
 
 
 def test_the_page_picks_its_target_through_the_helper():
