@@ -1,3 +1,13 @@
 {
-  "_comment": "Saved monthly-deposit schedule per IBKR account, used for the dollar P&L of 'As-published record (IBKR #...)'. Example entry: \"U1234567\": {\"monthly\": 500, \"day\": 15}. 'day' is 1-28; a weekend/holiday rolls to the next trading day. The fields on the P&L page override these for one session."
+  "_comment": "Saved monthly-deposit schedule per IBKR account, used for the dollar P&L of 'As-published record (IBKR #...)'. Example entry: \"U1234567\": {\"monthly\": 500, \"day\": 15}. 'day' is 1-28; optional 'from' (YYYY-MM) is the first month the deposit applies; a weekend/holiday rolls to the next trading day. The fields on the P&L page override these for one session.",
+  "U22546572": {
+    "monthly": 200,
+    "day": 22,
+    "from": "2026-10"
+  },
+  "U22636213": {
+    "monthly": 500,
+    "day": 22,
+    "from": "2026-10"
+  }
 }

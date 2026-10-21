@@ -112,7 +112,8 @@ def test_saved_deposit_defaults(tmp_path):
     p.write_text(json.dumps({"_comment": "x", "U1": {"monthly": 500, "day": 15},
                              "U2": {"monthly": -5, "day": 40}, "U3": "junk"}))
     got = ap.load_deposit_defaults(p)
-    assert got == {"U1": {"monthly": 500.0, "day": 15}, "U2": {"monthly": 0.0, "day": 28}}
+    assert got == {"U1": {"monthly": 500.0, "day": 15, "since": None},
+                   "U2": {"monthly": 0.0, "day": 28, "since": None}}
     assert ap.load_deposit_defaults(tmp_path / "missing.json") == {}
 
 
@@ -141,3 +142,20 @@ def test_a_preview_only_account_has_no_record(tmp_path):
                   mode="dry-run")
     assert ap.record_info(rep) is None            # nothing executed -> no radio option
     assert ap.record_info(tmp_path / "accounts" / "U9" / "executed_book_live.json") is None
+
+
+def test_since_holds_deposits_back_until_the_effective_month():
+    idx = pd.bdate_range("2026-08-03", "2027-01-29")
+    bars = ap.deposit_bars(idx, idx[0], day=22, since="2026-10")
+    assert [b.strftime("%Y-%m-%d") for b in bars] == [
+        "2026-10-22", "2026-11-23", "2026-12-22", "2027-01-22"]   # Nov 22 = Sunday
+    assert ap.deposit_bars(idx, idx[0], day=22)[0].month == 9     # default unchanged
+
+
+def test_since_before_first_month_changes_nothing_and_saved_defaults_parse(tmp_path):
+    idx = pd.bdate_range("2026-10-05", "2026-12-31")
+    assert ap.deposit_bars(idx, idx[0], 22, since="2026-10")[0].month == 11
+    p = tmp_path / "d.json"
+    p.write_text('{"U1": {"monthly": 200, "day": 22, "from": "2026-10"}, "U2": {"monthly": 5}}')
+    got = ap.load_deposit_defaults(p)
+    assert got["U1"]["since"] == pd.Timestamp("2026-10-01") and got["U2"]["since"] is None

@@ -2610,6 +2610,8 @@ with tab_live:
 
     _DEPOSITS_PATH = _EB_DIR / "account_deposits.json"
 
+    _dep_since: dict = {}
+
     def _render_ibkr_deposits(info, pv):
         """Per-account monthly deposit inputs for an IBKR as-published record.
 
@@ -2621,7 +2623,7 @@ with tab_live:
         saved = acpnl.load_deposit_defaults(_DEPOSITS_PATH).get(acct, {})
         st.markdown(f"<div style='font-size:13.5px;font-weight:700;margin:8px 0 2px'>"
                     f"🏦 IBKR account #{acct} — deposits</div>", unsafe_allow_html=True)
-        dc = st.columns(3)
+        dc = st.columns(4)
         monthly = dc[0].number_input(
             "💵 Monthly deposit ($)", min_value=0.0, step=100.0, format="%.0f",
             value=float(saved.get("monthly", 0.0)), key=f"overall_dep_amt_{acct}",
@@ -2643,9 +2645,16 @@ with tab_live:
             help="Defaults to the net liquidation IBKR reported after the "
                  f"account's first executed run ({info['start']:%b %d, %Y}).")
         st.caption("To make a deposit schedule permanent, add "
-                   f"`\"{acct}\": {{\"monthly\": {monthly:.0f}, \"day\": {int(day)}}}` "
+                   f"`\"{acct}\": {{\"monthly\": {monthly:.0f}, \"day\": {int(day)}, \"from\": \"YYYY-MM\"}}` "
                    "to `data/overall/account_deposits.json` and commit it; the "
                    "fields above only change this session.")
+        since = dc[3].text_input(
+            "🗓️ Effective from (YYYY-MM)",
+            value=(saved["since"].strftime("%Y-%m") if saved.get("since") is not None else ""),
+            key=f"overall_dep_since_{acct}",
+            help="First month the deposit applies. Blank = the month after the "
+                 "account's first executed day.")
+        _dep_since[acct] = acpnl.parse_since(since)
         return float(monthly), int(day), float(initial)
 
     def _render_ibkr_summary(info, sm_, sm, monthly, day, sim):
@@ -3289,7 +3298,8 @@ with tab_live:
         _ibkr_sim, _ibkr_sum = None, None
         if _ibkr is not None:
             _g_sim = acpnl.simulate_account(_curve_all, _ibkr["start"],
-                                            _dep_initial, _dep_monthly, _dep_day)
+                                            _dep_initial, _dep_monthly, _dep_day,
+                                            _dep_since.get(_ibkr['account']))
             _g_sum = acpnl.window_summary(_g_sim, _start_sel, _end_ts)
             if _g_sum is not None:
                 portfolio_value = float(_g_sum["start_value"])
@@ -3322,7 +3332,8 @@ with tab_live:
         _sm = None if _c2_pending else ov.slice_metrics(_curve_all, _start_sel)
         if _ibkr is not None and _sm is not None:
             _ibkr_sim = acpnl.simulate_account(_curve_all, _ibkr["start"],
-                                               _dep_initial, _dep_monthly, _dep_day)
+                                               _dep_initial, _dep_monthly, _dep_day,
+                                            _dep_since.get(_ibkr['account']))
             _ibkr_sum = acpnl.window_summary(_ibkr_sim, _start_sel, _end_ts)
         if _c2_pending and _rec_ibkr is not None:
             st.info(f"🎯 IBKR #{_rec_ibkr['account']}'s as-published record "
