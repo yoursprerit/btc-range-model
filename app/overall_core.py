@@ -4259,6 +4259,73 @@ def c2_account_summary(snap: dict | None, archive: list[dict] | None = None,
         start_date=(min(firsts) if firsts else None), log=log)
 
 
+def c2_reconciliation(acct: dict | None, exec_eq: pd.Series | None,
+                      pnl_start, pnl_end, pv: float, strategy_value: float,
+                      book_eq: pd.Series | None = None) -> dict | None:
+    """Bridge the Strategy P&L's ``Portfolio value now`` to the C2 account's
+    ``Total portfolio value``, one labelled step at a time.
+
+    Both are dollar values at ``pv``.  The Strategy P&L (``strategy_value``) is
+    the executed-fills curve ``exec_eq`` (``c2_executed_replay``) re-based at
+    ``pnl_start`` and cut at ``pnl_end`` (and net of the taxes toggle); the C2
+    figure is C2's reported ``ModelAccountValue`` ÷ starting cash
+    (``acct["value_ret"]``) at the latest sync.  Steps, in order:
+
+    * **frictions** — what the taxes/costs toggle took off the window;
+    * **before the start date** — P&L earned before ``pnl_start`` that the
+      re-based window leaves out;
+    * **after the end date** — bars past ``pnl_end``;
+    * **marks** — the account rebuilt from C2's fills at live/last prices
+      (``acct["ledger_ret"]``) vs the curve at official closes (also carries
+      the SATA dividends the curve adds); skipped without a ledger;
+    * **C2's report** — C2's own value vs the fills (snapshot timing, a
+      position C2 failed to mark).
+
+    ``steps`` is ``[{label, delta, value}]`` — ``strategy_value`` plus every
+    ``delta`` equals ``c2_value`` exactly.  ``execution`` is the memo that
+    answers "what did trading it for real cost?": ``book_eq`` (the published
+    books compounded) vs the executed curve over the same bars, as returns and
+    dollars at ``pv``.  ``None`` without an account or a curve."""
+    if not acct or exec_eq is None or len(exec_eq) < 2:
+        return None
+    eq = exec_eq.dropna()
+
+    def _at(day):
+        return float(eq.loc[:pd.Timestamp(day)].iloc[-1])
+
+    e_last = float(eq.iloc[-1])
+    e_start = float(eq.loc[pd.Timestamp(pnl_start):].iloc[0])
+    e_end = _at(pnl_end)
+    window = pv * e_end / e_start
+    exec_incep = pv * e_last
+    c2_value = pv * (1.0 + acct["value_ret"])
+    raw = [("Taxes / costs toggle (added back)", window - strategy_value),
+           ("P&L before the start date (outside the window)", pv * e_end - window),
+           ("Bars after the selected end date", exec_incep - pv * e_end)]
+    prev = pv * e_last
+    if acct.get("ledger_ret") is not None:
+        led = pv * (1.0 + acct["ledger_ret"])
+        raw.append(("Live/last-price marks vs official closes (+ SATA dividends)",
+                    led - prev))
+        prev = led
+    raw.append(("C2's reported value vs its own fills", c2_value - prev))
+    steps, run = [], strategy_value
+    for label, d in raw:
+        run += d
+        steps.append(dict(label=label, delta=d, value=run))
+    out = dict(strategy_value=strategy_value, c2_value=c2_value, steps=steps,
+               executed_value=exec_incep, execution=None)
+    if book_eq is not None and len(book_eq):
+        bk = book_eq.reindex(eq.index).ffill().dropna()
+        if len(bk) >= 2:
+            book_ret = float(bk.iloc[-1] / bk.iloc[0]) - 1.0
+            exec_ret = e_last / float(eq.iloc[0]) - 1.0
+            out["execution"] = dict(book_ret=book_ret, exec_ret=exec_ret,
+                                    shortfall=exec_ret - book_ret,
+                                    shortfall_usd=pv * (exec_ret - book_ret))
+    return out
+
+
 def pct_sig2(ret: float) -> str:
     """A return as a signed percent with up to two significant digits and no
     trailing zeros: -0.0019 → "-0.19%", 0.0051 → "+0.51%", 0.123 → "+12%",

@@ -2685,6 +2685,9 @@ with tab_live:
                     "slippage — pick **With IBKR Pro costs**) or deposits and "
                     "withdrawals that differ from the schedule above.")
 
+    def _sd_usd(x):                      # signed dollars: +$1,234 / −$1,234
+        return f"{'-' if x < 0 else '+'}${abs(x):,.0f}"
+
     def _render_c2_account(pv, exec_ret=None):
         """📡 The Collective2 model account — C2's own account value, fills
         and P&L — re-scaled from its starting cash to the 💼 portfolio value
@@ -3478,6 +3481,55 @@ with tab_live:
                               "returns| since the chosen start date. Above 1 "
                               "means gains outweigh losses. Shows — when the "
                               "window had no losing day.")
+            if _exec_on and _actual and _ibkr is None:
+                try:
+                    _rc_s, _rc_a, _rc_p = _c2_snapshot_with_prices()
+                    _rc = ov.c2_reconciliation(
+                        ov.c2_account_summary(_rc_s, _rc_a, _rc_p), _exec_eq,
+                        _sm["start"], _sm["end"], float(portfolio_value),
+                        float(_end_v), book_eq=_bookrep["equity"])
+                except Exception:
+                    _rc = None
+                if _rc is not None:
+                    with st.expander("🔎 Reconcile with the C2 account's "
+                                     "Total portfolio value"):
+                        st.caption(
+                            "Why *Portfolio value now* and the 📡 account's "
+                            "*Total portfolio value* differ — each step moves "
+                            "one thing, and the steps add up exactly.")
+                        _rc_rows = [{"Step": "Portfolio value now (this window)",
+                                     "Change": None,
+                                     "Running value": _rc["strategy_value"]}]
+                        _rc_rows += [{"Step": s["label"], "Change": s["delta"],
+                                      "Running value": s["value"]}
+                                     for s in _rc["steps"]]
+                        _rc_rows.append({"Step": "= C2 Total portfolio value",
+                                         "Change": None,
+                                         "Running value": _rc["c2_value"]})
+                        st.dataframe(
+                            pd.DataFrame(_rc_rows).style.format(
+                                {"Change": lambda v: "" if pd.isna(v) else _sd_usd(v),
+                                 "Running value": "${:,.0f}"}),
+                            hide_index=True, use_container_width=True)
+                        _ex = _rc["execution"]
+                        if _ex is not None:
+                            st.caption(
+                                "**Execution shortfall** (same bars, since C2's "
+                                f"first fill): target books compounded "
+                                f"**{_ex['book_ret']*100:+.2f}%** → C2 executed "
+                                f"**{_ex['exec_ret']*100:+.2f}%** = "
+                                f"**{_ex['shortfall']*100:+.2f} pp** "
+                                f"({_sd_usd(_ex['shortfall_usd'])} at "
+                                f"${portfolio_value:,.0f}) from fill prices, "
+                                "timing, share rounding and commissions. Watch "
+                                "this one over time — a growing gap is an "
+                                "execution problem, not a strategy one.")
+                        st.caption(
+                            "Set the 📅 Start date to C2's first-fill day and "
+                            "the 'before the start date' step goes to zero. "
+                            "The last step is C2's own report and is usually a "
+                            "snapshot-timing or missing-mark effect — treat "
+                            "the fills-based figure as the reliable one.")
             if _ibkr_sum is not None:
                 _render_ibkr_summary(_ibkr, _ibkr_sum, _sm, _dep_monthly, _dep_day, _ibkr_sim)
             # per-asset since-start reads (also feed the blend-level trade stats)
