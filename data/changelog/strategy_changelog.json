@@ -1182,7 +1182,13 @@
   "kind": "analytics",
   "title": "Reconcile Strategy P&L with the C2 account value",
   "description": "A new expander under the Strategy P&L metrics bridges Portfolio value now to the Collective2 account's Total portfolio value in labelled steps that add up exactly (taxes toggle, P&L before the start date, bars after the end date, live vs official-close marks, C2's reported value vs its fills), plus an execution-shortfall line comparing the compounded target books with C2's executed fills.",
-  "impact": "The two headline numbers differ by design; the bridge shows which step explains each dollar and isolates execution cost from everything else."
+  "impact": "The two headline numbers differ by design; the bridge shows which step explains each dollar and isolates execution cost from everything else.",
+  "links": [
+   {
+    "label": "PR #252",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/252"
+   }
+  ]
  }
  ]
 }
