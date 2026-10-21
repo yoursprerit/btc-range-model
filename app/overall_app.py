@@ -3177,10 +3177,9 @@ with tab_live:
                                       else "2026-03-01").date()
         if _exec_on:
             # the executed curve opens at the account's starting capital (the
-            # bar before C2's first fill) — default to it so the P&L counts the
-            # fills' own move to the first close and the opening commissions,
-            # exactly like the Collective2 account card above
-            _default_start = _d0
+            # bar before C2's first fill), but the P&L defaults to the
+            # as-published start (Oct 7, 2026); earlier dates stay selectable
+            _default_start = pd.Timestamp(ov.C2_PNL_DEFAULT_START).date()
         if _ibkr is not None:
             # an IBKR account's record starts the day IT first traded the
             # book — Collective2's start date plays no part
