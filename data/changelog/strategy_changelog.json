@@ -1211,7 +1211,12 @@
   "title": "Today's plan Chg % stays fixed after hours",
   "description": "Once an equity/ETF session has closed, Chg % shows today's close vs the previous trading day's close instead of collapsing to 0.00%. Bitcoin and other crypto keep tracking the live price.",
   "impact": "After-hours rows no longer read 0.00% once the sleeve ingests today's bar.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #254",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/254"
+   }
+  ]
  }
 ]
 }
