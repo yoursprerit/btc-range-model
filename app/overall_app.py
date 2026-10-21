@@ -4457,13 +4457,15 @@ with tab_live:
                     f"💰 Realized P&L by asset {_win_lbl} — % and $ locked "
                     "in by daily tilt trims & sell signals (toggle to show)",
                     key="overall_realized_pnl_by_asset"):
-                # the ledger reports every held sleeve — this chart shows
-                # only the ones that actually listed a sale ticket
+                # the ledger reports every held sleeve — this chart shows the
+                # ones that sold a ticket plus bought-&-held sleeves with open
+                # P&L (a zero realized bar with its unrealized extension)
                 _rlz = {k: r for k, r in _get_rlz().items()
-                        if r["n_trims"] + r["n_sells"] > 0}
+                        if r["n_trims"] + r["n_sells"] > 0
+                        or abs(r["unrealized"] * portfolio_value) >= 0.5}
                 if not _rlz:
-                    st.info("No position was trimmed or sold in this window — "
-                            "nothing realized yet.")
+                    st.info("No position was held with open P&L or "
+                            "trimmed/sold in this window — nothing to show.")
                 else:
                     st.caption("**The P&L locked in by sales — "
                                "window-anchored so it reconciles.** An "
@@ -4490,8 +4492,9 @@ with tab_live:
                                "(Σproceeds/Σcost − 1); hover for the "
                                "tilt-vs-signal split (tilt includes "
                                "re-balance flows), ticket counts and "
-                               "dollars sold. Sleeves that never listed a "
-                               "sale are omitted. (The 🧾 trade-log chips "
+                               "dollars sold. Sleeves that never sold "
+                               "show no solid bar — only their lighter "
+                               "open-position extension. (The 🧾 trade-log chips "
                                "measure each ticket from the position's "
                                "own entry — trade-lifetime accounting — so "
                                "individual chips won't sum to these bars.) "
@@ -4504,6 +4507,8 @@ with tab_live:
                         _n_t, _n_s = r["n_trims"], r["n_sells"]
                         _unrl = r["unrealized"] * portfolio_value
                         _hov = (
+                            "no sales yet — held since entry" if
+                            _n_t + _n_s == 0 else
                             f"{_n_t} tilt trim{'s' if _n_t != 1 else ''} "
                             f"(${r['pnl_tilt']*portfolio_value:+,.0f} incl. "
                             f"re-balance flows) · "
@@ -4524,7 +4529,7 @@ with tab_live:
                             r["ret"],
                             C_BUY if r["pnl"] >= 0 else C_EXIT,
                             _hov, _unrl))
-                    _rb.sort(key=lambda b: b[1])
+                    _rb.sort(key=lambda b: b[1] + b[5])
                     _rlz_tot = sum(b[1] for b in _rb)
                     _unrl_tot = sum(b[5] for b in _rb)
                     _rlz_cost = sum(r["cost"] for r in _rlz.values())
@@ -4535,7 +4540,8 @@ with tab_live:
                         x=[b[1] for b in _rb],
                         orientation="h", name="realized",
                         marker_color=[b[3] for b in _rb],
-                        text=[f"${v:+,.0f} · {rr*100:+.1f}%"
+                        text=[f"${v:+,.0f} · {rr*100:+.1f}%" if rr or v
+                              else ""
                               for _, v, rr, _c, _h, _u in _rb],
                         textposition="outside", cliponaxis=False,
                         customdata=[[b[4]] for b in _rb],
@@ -4549,7 +4555,15 @@ with tab_live:
                             y=[b[0] for b in _rb],
                             x=[b[5] for b in _rb],
                             orientation="h", name="unrealized (open)",
-                            marker=dict(color="#94a3b8", opacity=0.45),
+                            marker=dict(
+                                color=[C_BUY if b[5] >= 0 else C_EXIT
+                                       for b in _rb],
+                                opacity=0.4,
+                                line=dict(color="#94a3b8", width=1)),
+                            text=[f"${b[5]:+,.0f} open" if b[1] == 0
+                                  and abs(b[5]) >= 0.5 else ""
+                                  for b in _rb],
+                            textposition="outside", cliponaxis=False,
                             hovertemplate="%{y}: <b>$%{x:+,.0f}</b> "
                                           "unrealized on the open position"
                                           "<extra></extra>"))
