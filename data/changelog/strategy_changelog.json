@@ -1127,6 +1127,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/246"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-21",
+  "kind": "ui",
+  "title": "Realized P&L by asset also shows bought-and-held sleeves",
+  "description": "The Realized P&L by asset chart used to drop every sleeve that never listed a sale ticket, so held positions (e.g. XLE, ERX, XOP from September) vanished. They now appear as a 'no sales yet' row with their open P&L as the lighter unrealized extension.",
+  "impact": "Realized + unrealized on every row still equals that sleeve's P&L-by-asset bar; the 'locked in' title total is unchanged."
  }
  ]
 }
