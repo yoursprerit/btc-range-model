@@ -2048,6 +2048,15 @@ with tab_live:
             # ambiguity rather than removing it, so the column now shows the
             # bar-relative move alone.
             _chg = ov.live_change_pct(_bar_px, _live_px if _has_live else None)
+            # after the regular session ends, once the sleeve has ingested
+            # today's bar both price cells hold today's close and the move
+            # above collapses to 0.00%. The fixed after-hours number is today's
+            # close vs the previous trading day's close. Crypto never closes,
+            # so it keeps tracking the live price against its bar.
+            _is_crypto = str(ov.SPOT_SYMBOLS.get(a["key"], "")).endswith("-USD")
+            if (_has_live and not _is_crypto and _q.get("session_closed")
+                    and _q.get("prev")):
+                _chg = ov.live_change_pct(_q["prev"], _live_px)
             if _chg is None:
                 chg_s, chg_col = "—", "#94a3b8"
             elif abs(_chg) < 0.005:      # rounds to nothing — don't tint "-0.00%" red
