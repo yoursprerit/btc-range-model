@@ -1189,6 +1189,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/252"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-21",
+  "kind": "analytics",
+  "title": "Recurring monthly deposits for IBKR U22546572 ($200) and U22636213 ($500)",
+  "description": "Strategy P&L now credits $200 / $500 on the 22nd of each month (next trading day on a weekend or holiday) from October 2026 onward, via a new 'from' month in account_deposits.json. Deposits are excluded from P&L and counted in money put in, portfolio value and the money-weighted return.",
+  "impact": "Dollar P&L, portfolio value and money-weighted return no longer treat deposited cash as profit.",
+  "links": [
+   {
+    "label": "PR #253",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/253"
+   }
+  ]
  }
- ]
+]
 }

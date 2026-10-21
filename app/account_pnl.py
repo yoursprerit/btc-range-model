@@ -122,6 +122,8 @@ def executed_marks(report_paths, keys=("SATA",)) -> dict[str, pd.Series]:
 
 def load_deposit_defaults(path) -> dict[str, dict]:
     """Saved per-account deposit settings: ``{"U123": {"monthly": 500, "day": 1}}``.
+    An optional ``"from": "2026-10"`` makes the schedule effective from that
+    month on (``since`` in the result is its first day, or None).
     A missing or unreadable file means "no deposits", never an error."""
     try:
         raw = json.loads(Path(path).read_text())
@@ -133,10 +135,22 @@ def load_deposit_defaults(path) -> dict[str, dict]:
             continue
         try:
             out[str(acct)] = dict(monthly=max(0.0, float(v.get("monthly", 0.0))),
-                                  day=clamp_day(v.get("day", 1)))
+                                  day=clamp_day(v.get("day", 1)),
+                                  since=parse_since(v.get("from")))
         except (TypeError, ValueError):
             continue
     return out
+
+
+def parse_since(val) -> pd.Timestamp | None:
+    """First day of the month a deposit schedule takes effect, or None."""
+    if val in (None, ""):
+        return None
+    try:
+        t = pd.Timestamp(str(val))
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(t) else t.to_period("M").to_timestamp()
 
 
 def clamp_day(day) -> int:
@@ -148,15 +162,17 @@ def clamp_day(day) -> int:
 
 
 # ── the deposit schedule ────────────────────────────────────────────────────
-def deposit_bars(index: pd.DatetimeIndex, first_bar: pd.Timestamp, day: int
-                 ) -> list[pd.Timestamp]:
+def deposit_bars(index: pd.DatetimeIndex, first_bar: pd.Timestamp, day: int,
+                 since=None) -> list[pd.Timestamp]:
     """The bar each monthly deposit lands on.
 
     One deposit per calendar month, on *day* — rolled FORWARD to the first bar
     on or after that date (a weekend or holiday deposit is credited the next
     session).  The month of *first_bar* has none: the account was funded at its
     start, and the record opens with that balance.  A month whose deposit date
-    falls after the last bar is not yet due."""
+    falls after the last bar is not yet due.  *since* (any date in the first
+    month to deposit) holds the schedule back until that month: earlier months
+    get none, because the schedule was not in force."""
     idx = pd.DatetimeIndex(index)
     if len(idx) == 0:
         return []
@@ -164,6 +180,8 @@ def deposit_bars(index: pd.DatetimeIndex, first_bar: pd.Timestamp, day: int
     first_bar = pd.Timestamp(first_bar)
     out: list[pd.Timestamp] = []
     month = (first_bar + pd.offsets.MonthBegin(1)).normalize()   # next month's 1st
+    if since is not None:
+        month = max(month, parse_since(since))
     last = idx[-1]
     while month <= last:
         due = month + pd.Timedelta(days=day - 1)
@@ -175,7 +193,7 @@ def deposit_bars(index: pd.DatetimeIndex, first_bar: pd.Timestamp, day: int
 
 
 def simulate_account(curve: pd.Series, start, initial: float, monthly: float,
-                     day: int = 1) -> pd.DataFrame:
+                     day: int = 1, since=None) -> pd.DataFrame:
     """The account in dollars from its first bar on/after *start*.
 
     *curve* is any positive equity series (the as-published record); only its
@@ -189,7 +207,7 @@ def simulate_account(curve: pd.Series, start, initial: float, monthly: float,
         return pd.DataFrame(columns=["value", "deposit", "contributed"], dtype=float)
     dep = pd.Series(0.0, index=c.index)
     if monthly > 0:
-        for bar in deposit_bars(c.index, c.index[0], day):
+        for bar in deposit_bars(c.index, c.index[0], day, since):
             dep.loc[bar] += float(monthly)
     ratio = (c / c.shift(1)).fillna(1.0).to_numpy()
     vals = np.empty(len(c))
