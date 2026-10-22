@@ -1,18 +1,18 @@
 {
  "schema": "overall-daily-audit/v1",
- "generated_at_utc": "2026-10-22T13:56:35+00:00",
- "generated_at_ct": "Oct 22, 2026 at 8:56:35 AM CDT",
+ "generated_at_utc": "2026-10-22T14:00:23+00:00",
+ "generated_at_ct": "Oct 22, 2026 at 9:00:23 AM CDT",
  "scheduled_publish": "once daily at \u22487:15 AM US Central (\u224815 min after the 7:00-AM-CT Bitcoin daily-bar close), with catch-up retries until published; frozen until the next morning unless manually re-published from the UI",
  "overall": {
   "as_of": "2026-10-21",
   "profile": "Balanced",
   "n_instruments": 18,
   "n_apps": 10,
-  "computed_at_utc": "2026-10-22T13:56:35+00:00"
+  "computed_at_utc": "2026-10-22T14:00:23+00:00"
  },
  "audit": {
-  "checked_at_utc": "2026-10-22T13:56:33+00:00",
-  "checked_at_ct": "Oct 22, 2026 at 8:56:33 AM CDT",
+  "checked_at_utc": "2026-10-22T14:00:21+00:00",
+  "checked_at_ct": "Oct 22, 2026 at 9:00:21 AM CDT",
   "passed": true,
   "stale_apps": [],
   "stale_assets": [],
@@ -234,7 +234,7 @@
   "skip_reason": null,
   "withheld_since_ct": null,
   "consecutive_withheld_days": 0,
-  "generated_at_utc": "2026-10-22T13:56:35+00:00",
+  "generated_at_utc": "2026-10-22T14:00:23+00:00",
   "as_of": "2026-10-21",
   "profile": "Balanced",
   "signed": true
