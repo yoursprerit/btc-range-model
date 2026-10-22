@@ -1251,7 +1251,12 @@
   "kind": "ui",
   "title": "Paper Target Book treats SATA as the idle bucket, like Live",
   "description": "The Paper view listed SATA as an ordinary, untickable position in the Target allocation table and counted it in Positions; it now handles SATA as the idle bucket exactly as the Live view does. Legacy cash-only paper books render as before.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #257",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/257"
+   }
+  ]
  }
 ]
 }
