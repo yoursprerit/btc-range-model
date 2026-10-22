@@ -279,8 +279,8 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-21,sleeve,GDX,green,-0.0069,39.49,41.0,99.0
 2026-10-21,sleeve,GLDM,warming,-0.0953,12.81,,10.0
 2026-10-21,sleeve,GRID,yellow,-0.1427,0.43,43.7,60.0
-2026-10-21,sleeve,MSTR,yellow,-0.0378,-31.71,,8.0
-2026-10-21,sleeve,MSTU,yellow,-0.0713,-24.67,,8.0
+2026-10-21,sleeve,MSTR,yellow,-0.0378,-32.33,,8.0
+2026-10-21,sleeve,MSTU,yellow,-0.0713,-24.18,,8.0
 2026-10-21,sleeve,NUGT,green,-0.0163,94.66,37.8,99.0
 2026-10-21,sleeve,PBW,green,-0.0555,35.79,89.4,80.0
 2026-10-21,sleeve,REMX,warming,-0.21,31.95,,4.0
@@ -288,6 +288,6 @@ date,scope,key,status,dd,edge_pp,exp_pctl,n_trades
 2026-10-21,sleeve,SOXX,warming,-0.2235,-0.4,,9.0
 2026-10-21,sleeve,UGL,warming,-0.1959,28.09,,16.0
 2026-10-21,sleeve,WGMI,warming,-0.1072,57.05,,15.0
-2026-10-21,sleeve,XLE,warming,-0.0012,-0.0,,3.0
+2026-10-21,sleeve,XLE,warming,-0.0012,0.0,,3.0
 2026-10-21,sleeve,XOP,warming,-0.0068,-0.0,,3.0
 2026-10-21,tracking,book_vs_replay,warming,,1.51,,12.0
