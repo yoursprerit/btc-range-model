@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-20T12:17:51+00:00",
- "as_of": "2026-10-19",
+ "generated_at_utc": "2026-10-21T12:17:56+00:00",
+ "as_of": "2026-10-20",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -12,10 +12,10 @@
  },
  "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "ERX": 121.2,
-  "XLE": 67.8,
-  "XOP": 199.47,
-  "SATA": 97.81
+  "ERX": 121.92,
+  "XOP": 200.05,
+  "XLE": 67.97,
+  "SATA": 98.75
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.7228571428571429,
+   "priority": 0.7561904761904762,
    "exits_next_bar": false
   },
   {
@@ -33,7 +33,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.7172134732072876,
+   "priority": 0.7508483819891766,
    "exits_next_bar": false
   },
   {
@@ -42,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.5428571428571429,
+   "priority": 0.5761904761904761,
    "exits_next_bar": false
   },
   {
@@ -102,7 +102,7 @@
   {
    "key": "GDX",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -111,7 +111,7 @@
   {
    "key": "NUGT",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -165,7 +165,7 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 DOWNTREND (D1)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -174,7 +174,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "STAND ASIDE \u2014 DOWNTREND (D1)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -184,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-20T12:17:50+00:00",
+  "checked_at_utc": "2026-10-21T12:17:54+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Oct 20, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-10-19",
-  "btc_bar_close_utc": "2026-10-20T12:00:00+00:00"
+  "anchor_ct": "Oct 21, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-10-20",
+  "btc_bar_close_utc": "2026-10-21T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "5391c330e920",
+ "code_sha": "81a29952d6e9",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "35ffb5fb220c3fc61264d71e6db5d879c43181cdc08171b903f05428872b8c01"
+  "value": "0fbf473f0e7179dd8d027a474e25760001d28d134838b883584b1dde852536f7"
  }
 }
