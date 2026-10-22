@@ -340,7 +340,6 @@ def _render_book(payload: dict, *, source: str) -> None:
                  or "SATA" in (payload.get("weights") or {}))
     idle_label = (("SATA + cash" if sata_cap is not None else "SATA")
                   if sata_idle else "Cash")
-    prices = payload.get("exec_price", {}) or {}
     cash = float(payload.get("cash_weight", 0.0) or 0.0)
     # split the idle bucket out of the weights: for live it's the SATA position
     # (+ the over-cap excess in cash_weight), for paper it's cash_weight (SATA is
@@ -348,6 +347,16 @@ def _render_book(payload: dict, *, source: str) -> None:
     all_w = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
     idle_base = (all_w.pop("SATA", 0.0) + cash) if sata_idle else cash
     risk_w = all_w                                    # risk positions only
+    # Names the publisher already dropped (today's exclusions) are not in the book
+    # any more; list them unticked so they can be put back.  ``detail`` carries
+    # their original weight/price (absent on books published before it was stamped).
+    detail = payload.get("excluded_detail") or {}
+    pre_ex = [k for k in (payload.get("excluded") or []) if k not in risk_w]
+    if detail:
+        payload = dict(payload, exec_price={
+            **{k: d.get("price") for k, d in detail.items() if d.get("price")},
+            **(payload.get("exec_price") or {})})
+    prices = payload.get("exec_price", {}) or {}
 
     # ── header + status badges ────────────────────────────────────────────────
     st.caption(f"Source: {source}")
@@ -436,9 +445,10 @@ def _render_book(payload: dict, *, source: str) -> None:
                "unamended.")
 
     saved_ex = _saved_exclusions(is_live)
-    if payload.get("excluded"):
-        st.caption(f"Already dropped when published: **{', '.join(payload['excluded'])}** "
-                   f"(`data/overall/book_exclusions.json`) — their weight is in {idle_label}.")
+    if pre_ex:
+        st.caption(f"Already dropped when this book was published: "
+                   f"**{', '.join(pre_ex)}** — listed below unticked; tick one and press "
+                   f"**Publish with these exclusions** to put it back.")
     base_rows = []
     for k in sorted(risk_w, key=lambda k: -risk_w[k]):
         meta = ov.ASSET_META.get(k, {})
@@ -447,6 +457,15 @@ def _render_book(payload: dict, *, source: str) -> None:
             Instrument=f"{ov.KIND_EMOJI.get(meta.get('kind', 'core'), '')} "
                        f"{meta.get('name', k)}".strip(),
             Weight=risk_w[k] * 100, Price=(prices.get(k) or float('nan'))))
+    for k in pre_ex:
+        meta = ov.ASSET_META.get(k, {})
+        d = detail.get(k) or {}
+        base_rows.append(dict(
+            Include=False, Signal=k, IBKR=(sym.trade_symbol(k) or k),
+            Instrument=f"{ov.KIND_EMOJI.get(meta.get('kind', 'core'), '')} "
+                       f"{meta.get('name', k)}".strip(),
+            Weight=(d["weight"] * 100 if d.get("weight") is not None else None),
+            Price=(prices.get(k) or float('nan'))))
     base_df = pd.DataFrame(base_rows)
 
     # Per-row Include checkbox = the select/unselect control. Keyed by book_mode so
@@ -461,10 +480,15 @@ def _render_book(payload: dict, *, source: str) -> None:
             "Price": st.column_config.NumberColumn("Price", format="$%.2f")})
 
     included = set(edited.loc[edited["Include"], "Signal"]) if len(base_df) else set()
-    excluded = [k for k in risk_w if k not in included]
-    moved = sum(risk_w[k] for k in excluded)
+    all_keys = list(risk_w) + pre_ex
+    excluded = [k for k in all_keys if k not in included]
+    newly = [k for k in risk_w if k not in included]   # still in the book → idle
+    moved = sum(risk_w[k] for k in newly)
     adj_risk = {k: v for k, v in risk_w.items() if k in included}
-    idle_after = idle_base + moved                    # excluded weight → idle bucket
+    back = {k: float(detail[k]["weight"]) for k in pre_ex
+            if k in included and (detail.get(k) or {}).get("weight") is not None}
+    adj_risk.update(back)                              # put back ← idle bucket
+    idle_after = max(0.0, idle_base + moved - sum(back.values()))
     risk_total = sum(adj_risk.values())
 
     m = st.columns(3)
@@ -480,10 +504,17 @@ def _render_book(payload: dict, *, source: str) -> None:
         st.caption(f"Idle {idle_after * 100:.1f}% → **SATA {sata_after * 100:.1f}%** "
                    f"(capped at {sata_cap * 100:.0f}% of the book) · "
                    f"**cash {cash_after * 100:.1f}%** (0% yield).")
-    m[2].metric("Positions", f"{len(included)}/{len(risk_w)}")
+    m[2].metric("Positions", f"{len(included)}/{len(all_keys)}")
     if excluded:
-        st.info(f"Excluded **{', '.join(excluded)}** → moved "
-                f"**{moved * 100:.1f}%** (${moved * nav:,.0f}) to {idle_label}.")
+        st.info(f"Excluded **{', '.join(excluded)}**"
+                + (f" → moved **{moved * 100:.1f}%** (${moved * nav:,.0f}) to "
+                   f"{idle_label}." if newly else f" — their weight is in {idle_label}."))
+    if back:
+        st.info(f"Putting back **{', '.join(back)}** "
+                f"({sum(back.values()) * 100:.1f}% taken from {idle_label}).")
+    if [k for k in pre_ex if k in included and k not in back]:
+        st.caption("_A name ticked back in without a stored weight is restored by the "
+                   "next publish (the strategy sizes it)._")
 
     # deployable positions = risk + (SATA as a real position on live)
     deploy_w = dict(adj_risk)
@@ -525,6 +556,7 @@ def _render_book(payload: dict, *, source: str) -> None:
         adf = pd.DataFrame([
             dict(Signal=a.get("key"),
                  Action=(f"EXCLUDED → {idle_label}" if a.get("key") in excluded
+                         else "RE-INCLUDE (next publish)" if a.get("action") == "EXCLUDED"
                          else a.get("action")),
                  Decision=a.get("decision"),
                  Target=(f"{(a.get('target') or 0) * 100:.1f}%"),

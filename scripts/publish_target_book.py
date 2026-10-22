@@ -280,8 +280,15 @@ def assemble_payloads(book, profile: str, *, audit_stamp: dict, basis: dict,
         actions=_mark_excluded(book.actions, excl["live"]), book_mode="live",
         generated_at_utc=paper["generated_at_utc"], sata_cap=book.sata_cap)
     for _m, _bk in (("paper", paper), ("live", live)):
-        if excl[_m]:
-            _bk["excluded"] = sorted(excl[_m])
+        dropped = sorted(k for k in book.weights if k in excl[_m])
+        if dropped:
+            _bk["excluded"] = dropped
+            # what was dropped, so the Target Book page can list it unticked and
+            # let the user put it back (the weights/prices are no longer in the book)
+            _bk["excluded_detail"] = {
+                k: dict(weight=float(book.weights[k]),
+                        price=float(book.exec_price.get(k) or 0.0))
+                for k in dropped}
     for _bk in (paper, live):
         _bk["signal_audit"] = dict(audit_stamp)
         _bk["signal_basis"] = dict(basis)
