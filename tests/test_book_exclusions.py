@@ -56,3 +56,12 @@ def test_exclusion_is_today_only(tmp_path):
     assert ptb.load_exclusions(f, today="2026-10-23") == {"paper": set(), "live": set()}
     f.write_text(json.dumps({"live": ["soxx"]}))          # undated → ignored
     assert ptb.load_exclusions(f, today="2026-10-22") == {"paper": set(), "live": set()}
+
+
+def test_merge_exclusions_button():
+    m = ptb.merge_exclusions
+    assert m(None, "live", ["soxx"], "D1") == {"paper": [], "live": ["SOXX"], "date": "D1"}
+    old = {"paper": ["GRID"], "live": ["X"], "date": "D1"}
+    assert m(old, "live", [], "D1") == {"paper": ["GRID"], "live": [], "date": "D1"}
+    # an older day's list is stale: dropped, not carried forward
+    assert m(old, "live", ["SOXL"], "D2") == {"paper": [], "live": ["SOXL"], "date": "D2"}

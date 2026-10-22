@@ -155,6 +155,79 @@ def trigger_publish_workflow(repo: str, ref: str, token: str) -> tuple[bool, str
     return False, f"GitHub API returned {r.status_code}{hint}{detail}"
 
 
+EXCLUSIONS_REPO_PATH = "data/overall/book_exclusions.json"
+
+
+def _today_ct() -> str:
+    return str(pd.Timestamp.now(tz="America/Chicago").date())
+
+
+def publish_with_exclusions(repo: str, ref: str, token: str, mode: str,
+                            excluded) -> tuple[bool, str]:
+    """Commit today's exclusions for ``mode`` to ``ref`` (the dated
+    ``book_exclusions.json`` the publisher reads), then dispatch the publish
+    Action so it emits the book without them."""
+    import base64
+    import requests
+    hdr = {"Authorization": f"Bearer {token}",
+           "Accept": "application/vnd.github+json",
+           "X-GitHub-Api-Version": "2022-11-28"}
+    url = f"https://api.github.com/repos/{repo}/contents/{EXCLUSIONS_REPO_PATH}"
+    try:
+        g = requests.get(url, params={"ref": ref}, headers=hdr, timeout=15)
+        existing, sha = None, None
+        if g.status_code == 200:
+            sha = g.json().get("sha")
+            try:
+                existing = json.loads(base64.b64decode(g.json()["content"]))
+            except Exception:
+                existing = None
+        elif g.status_code != 404:
+            return False, f"Could not read the exclusions file ({g.status_code})."
+        from publish_target_book import merge_exclusions
+        new = merge_exclusions(existing, mode, excluded, _today_ct())
+        body = {"message": f"chore(books): {mode} exclusions for {new['date']} "
+                           f"({', '.join(new[mode]) or 'none'}) via Target Book UI",
+                "content": base64.b64encode(
+                    (json.dumps(new, indent=1) + "\n").encode()).decode(),
+                "branch": ref}
+        if sha:
+            body["sha"] = sha
+        r = requests.put(url, json=body, headers=hdr, timeout=15)
+    except Exception as e:
+        return False, f"Could not reach the GitHub API: {e}"
+    if r.status_code not in (200, 201):
+        return False, (f"Could not commit the exclusions ({r.status_code}) — the "
+                       "token needs **Contents: write** on this repo.")
+    ok, msg = trigger_publish_workflow(repo, ref, token)
+    if not ok:
+        return False, f"Exclusions committed, but {msg}"
+    return True, (f"Committed today's {mode} exclusions "
+                  f"({', '.join(new[mode]) or 'none'}) and dispatched the publish. "
+                  "The new book appears after the run (~5–15 min).")
+
+
+def _render_publish_with_exclusions(is_live: bool, excluded: list) -> None:
+    mode = "live" if is_live else "paper"
+    repo = _github_repo()
+    ref = _conf("GITHUB_PUBLISH_REF") or "main"
+    token = _conf("GITHUB_TOKEN", "GH_TOKEN")
+    clicked = st.button(
+        f"🚀 Publish with these exclusions ({mode})", key=f"tb_pub_excl_{mode}",
+        disabled=not token,
+        help=f"Commits today's {mode} exclusion list ("
+             f"{', '.join(excluded) or 'none'}) to `{repo}@{ref}`, then runs the "
+             "publish Action: the new book omits those names (weight → SATA/cash). "
+             "Valid for today only — tomorrow's book is the strategy's, unamended. "
+             "Needs a token with Contents + Actions write.")
+    if not token:
+        st.caption("_Add a `GITHUB_TOKEN` with Contents + Actions write to enable._")
+    elif clicked:
+        with st.spinner("Committing exclusions and dispatching the publish…"):
+            ok, msg = publish_with_exclusions(repo, ref, token, mode, excluded)
+        (st.success if ok else st.error)(msg)
+
+
 def _render_publish_button() -> None:
     repo = _github_repo()
     ref = _conf("GITHUB_PUBLISH_REF") or "main"
@@ -335,10 +408,10 @@ def _render_book(payload: dict, *, source: str) -> None:
     st.markdown("#### Target allocation")
     st.caption(f"Untick **Include** to drop a position — its weight moves to "
                f"**{idle_label}** (it is *not* redistributed to the other assets). "
-               "Ticks here are a view only; to drop a name from the *published* books "
-               "run `python scripts/set_book_exclusions.py --paper KEY… --live KEY…` "
-               "and commit `data/overall/book_exclusions.json`. It applies to **today's** "
-               "publishes only — tomorrow's book is the strategy's, unamended.")
+               "Ticks only change this view until you press **Publish with these "
+               "exclusions** below, which drops them from today's published book. "
+               "That applies to **today** only — tomorrow's book is the strategy's, "
+               "unamended.")
 
     saved_ex = _saved_exclusions(is_live)
     if payload.get("excluded"):
@@ -448,6 +521,7 @@ def _render_book(payload: dict, *, source: str) -> None:
     else:
         dl_weights, dl_cash = adj_risk, idle_after
     _downloads(payload, dl_weights, dl_cash, excluded, secret)
+    _render_publish_with_exclusions(is_live, excluded)
 
 
 def _downloads(payload: dict, adj_weights: dict, adj_cash: float,

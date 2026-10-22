@@ -185,7 +185,7 @@ def load_exclusions(path: Path | None = None, today=None) -> dict[str, set]:
     """Positions the user has dropped from each published book — TODAY only.
 
     ``data/overall/book_exclusions.json`` is ``{"paper": [...], "live": [...],
-    "date": "YYYY-MM-DD"}`` (written by ``scripts/set_book_exclusions.py``).  The
+    "date": "YYYY-MM-DD"}`` (written only by the Target Book page's "Publish with these exclusions" button).  The
     list applies only while the current CT date equals ``date``; from the next
     day the strategy's own book is published unamended, so an exclusion must be
     re-made every day it is intended.  A missing, undated, stale or unreadable
@@ -201,6 +201,18 @@ def load_exclusions(path: Path | None = None, today=None) -> dict[str, set]:
         return none
     return {m: {str(k).upper() for k in (raw.get(m) or [])}
             for m in ("paper", "live")}
+
+
+def merge_exclusions(existing: dict | None, mode: str, excluded, today: str) -> dict:
+    """The exclusions file after the user presses the button on the ``mode``
+    ("paper"/"live") book: that mode's list is replaced by ``excluded``; the other
+    mode's list is kept only when it was also set today (older lists are stale)."""
+    cur = {"paper": [], "live": []}
+    if existing and existing.get("date") == today:
+        cur.update({m: list(existing.get(m) or []) for m in cur})
+    cur[mode] = sorted({str(k).upper() for k in excluded})
+    cur["date"] = today
+    return cur
 
 
 def _mode_book(book, excluded: set) -> tuple[dict, float, dict]:
