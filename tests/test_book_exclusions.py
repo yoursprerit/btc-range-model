@@ -40,6 +40,7 @@ def test_excluded_names_dropped_and_weight_goes_idle():
     assert set(w) == {"BTC", "SATA"} and w["BTC"] == 0.30
     assert abs(sum(w.values()) + cash - 1.0) < 1e-9
     assert live["excluded"] == ["SOXL", "SOXX"] and "SOXX" not in live["exec_price"]
+    assert live["excluded_detail"]["SOXX"] == {"weight": 0.10, "price": 2.0}
     assert next(a for a in live["actions"] if a["key"] == "SOXX")["action"] == "EXCLUDED"
 
 

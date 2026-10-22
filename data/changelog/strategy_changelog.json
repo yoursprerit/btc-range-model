@@ -1257,6 +1257,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/257"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-22",
+  "kind": "ui",
+  "title": "Excluded positions stay listed (unticked) so they can be put back",
+  "description": "Positions dropped by an exclusion vanished from the Target allocation table, so they could not be re-ticked. They now show as unticked rows (weight and price are stamped into the book as excluded_detail); ticking one and pressing 'Publish with these exclusions' restores it.",
+  "links": []
  }
 ]
 }
