@@ -1222,8 +1222,8 @@
   "version": "v2",
   "date": "2026-10-22",
   "kind": "execution",
-  "title": "Persistent include/exclude for the published target books",
-  "description": "New data/overall/book_exclusions.json (per paper/live book, set with scripts/set_book_exclusions.py) is applied by the publisher and the intraday stop check: listed positions are left out of the signed book and their weight goes to SATA/cash. The Target Book viewer pre-unticks them. SOXX and SOXL are excluded from both books.",
+  "title": "Daily include/exclude for the published target books",
+  "description": "New data/overall/book_exclusions.json (per paper/live book, set with scripts/set_book_exclusions.py) is applied by the publisher and the intraday stop check: listed positions are left out of the signed book and their weight goes to SATA/cash. Each list is stamped with its CT date and applies to that day only; the next day's book is the strategy's, unamended, so exclusions must be repeated daily. The Target Book viewer pre-unticks them. SOXX and SOXL are excluded from both books today.",
   "impact": "Unticks in the UI were session-only, so the viewer re-included SOXX/SOXL on reload and the executor still traded them; the published books now omit them.",
   "links": []
  }

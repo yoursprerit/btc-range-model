@@ -214,13 +214,15 @@ def build_adjusted_payload(payload: dict, adj_weights: dict, adj_cash: float) ->
 
 
 def _saved_exclusions(is_live: bool) -> set:
-    """Names listed in ``data/overall/book_exclusions.json`` for this book mode —
-    the publisher drops them from the next published book, so the viewer shows
-    them unticked (a book published before the file was edited may still hold
-    them)."""
+    """Names listed in ``data/overall/book_exclusions.json`` for this book mode,
+    when the list is dated today (CT) — the publisher drops them from today's
+    next publish, so the viewer shows them unticked (a book published before the
+    file was edited may still hold them).  A list from an earlier day is ignored."""
     try:
         raw = json.loads((Path(__file__).resolve().parent.parent / "data" / "overall"
                           / "book_exclusions.json").read_text()) or {}
+        if raw.get("date") != str(pd.Timestamp.now(tz="America/Chicago").date()):
+            return set()
         return {str(k).upper() for k in raw.get("live" if is_live else "paper") or []}
     except Exception:
         return set()
@@ -335,7 +337,8 @@ def _render_book(payload: dict, *, source: str) -> None:
                f"**{idle_label}** (it is *not* redistributed to the other assets). "
                "Ticks here are a view only; to drop a name from the *published* books "
                "run `python scripts/set_book_exclusions.py --paper KEY… --live KEY…` "
-               "and commit `data/overall/book_exclusions.json`.")
+               "and commit `data/overall/book_exclusions.json`. It applies to **today's** "
+               "publishes only — tomorrow's book is the strategy's, unamended.")
 
     saved_ex = _saved_exclusions(is_live)
     if payload.get("excluded"):

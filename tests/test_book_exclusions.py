@@ -48,7 +48,11 @@ def test_modes_are_independent():
     assert "SOXX" in paper["weights"] and "SOXX" not in live["weights"]
 
 
-def test_missing_file_means_none(tmp_path):
+def test_exclusion_is_today_only(tmp_path):
     assert ptb.load_exclusions(tmp_path / "nope.json") == {"paper": set(), "live": set()}
-    f = tmp_path / "e.json"; f.write_text(json.dumps({"live": ["soxx"]}))
-    assert ptb.load_exclusions(f) == {"paper": set(), "live": {"SOXX"}}
+    f = tmp_path / "e.json"
+    f.write_text(json.dumps({"live": ["soxx"], "date": "2026-10-22"}))
+    assert ptb.load_exclusions(f, today="2026-10-22") == {"paper": set(), "live": {"SOXX"}}
+    assert ptb.load_exclusions(f, today="2026-10-23") == {"paper": set(), "live": set()}
+    f.write_text(json.dumps({"live": ["soxx"]}))          # undated → ignored
+    assert ptb.load_exclusions(f, today="2026-10-22") == {"paper": set(), "live": set()}

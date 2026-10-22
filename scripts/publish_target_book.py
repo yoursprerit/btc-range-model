@@ -181,16 +181,24 @@ def _publish_sha() -> str:
     return (sha or "unknown")[:12]
 
 
-def load_exclusions(path: Path | None = None) -> dict[str, set]:
-    """Positions the user has dropped from each published book.
+def load_exclusions(path: Path | None = None, today=None) -> dict[str, set]:
+    """Positions the user has dropped from each published book — TODAY only.
 
-    ``data/overall/book_exclusions.json`` is ``{"paper": [...], "live": [...]}``
-    (edit it with ``scripts/set_book_exclusions.py``).  A missing or unreadable
+    ``data/overall/book_exclusions.json`` is ``{"paper": [...], "live": [...],
+    "date": "YYYY-MM-DD"}`` (written by ``scripts/set_book_exclusions.py``).  The
+    list applies only while the current CT date equals ``date``; from the next
+    day the strategy's own book is published unamended, so an exclusion must be
+    re-made every day it is intended.  A missing, undated, stale or unreadable
     file means nothing is excluded."""
+    none = {"paper": set(), "live": set()}
     try:
         raw = json.loads(Path(path or EXCLUSIONS_PATH).read_text()) or {}
+        day = str(pd.Timestamp(raw.get("date")).date())
     except Exception:
-        raw = {}
+        return none
+    today = str(today or fr.now_utc().tz_convert(fr.CT).date())
+    if day != today:
+        return none
     return {m: {str(k).upper() for k in (raw.get(m) or [])}
             for m in ("paper", "live")}
 
