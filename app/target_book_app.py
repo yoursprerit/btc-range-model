@@ -213,6 +213,19 @@ def build_adjusted_payload(payload: dict, adj_weights: dict, adj_cash: float) ->
     return adj
 
 
+def _saved_exclusions(is_live: bool) -> set:
+    """Names listed in ``data/overall/book_exclusions.json`` for this book mode —
+    the publisher drops them from the next published book, so the viewer shows
+    them unticked (a book published before the file was edited may still hold
+    them)."""
+    try:
+        raw = json.loads((Path(__file__).resolve().parent.parent / "data" / "overall"
+                          / "book_exclusions.json").read_text()) or {}
+        return {str(k).upper() for k in raw.get("live" if is_live else "paper") or []}
+    except Exception:
+        return set()
+
+
 def _badge(text: str, color: str) -> str:
     return (f"<span style='background:{color}22;color:{color};font-weight:700;"
             f"padding:3px 11px;border-radius:999px;font-size:13px'>{text}</span>")
@@ -319,13 +332,20 @@ def _render_book(payload: dict, *, source: str) -> None:
 
     st.markdown("#### Target allocation")
     st.caption(f"Untick **Include** to drop a position — its weight moves to "
-               f"**{idle_label}** (it is *not* redistributed to the other assets).")
+               f"**{idle_label}** (it is *not* redistributed to the other assets). "
+               "Ticks here are a view only; to drop a name from the *published* books "
+               "run `python scripts/set_book_exclusions.py --paper KEY… --live KEY…` "
+               "and commit `data/overall/book_exclusions.json`.")
 
+    saved_ex = _saved_exclusions(is_live)
+    if payload.get("excluded"):
+        st.caption(f"Already dropped when published: **{', '.join(payload['excluded'])}** "
+                   f"(`data/overall/book_exclusions.json`) — their weight is in {idle_label}.")
     base_rows = []
     for k in sorted(risk_w, key=lambda k: -risk_w[k]):
         meta = ov.ASSET_META.get(k, {})
         base_rows.append(dict(
-            Include=True, Signal=k, IBKR=(sym.trade_symbol(k) or k),
+            Include=(k not in saved_ex), Signal=k, IBKR=(sym.trade_symbol(k) or k),
             Instrument=f"{ov.KIND_EMOJI.get(meta.get('kind', 'core'), '')} "
                        f"{meta.get('name', k)}".strip(),
             Weight=risk_w[k] * 100, Price=(prices.get(k) or float('nan'))))

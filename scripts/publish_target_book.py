@@ -41,6 +41,7 @@ from ibkr_rebalance import compute_target_book     # noqa: E402  (reuse the exac
 DEFAULT_OUT = _REPO / "data" / "overall" / "target_book.json"
 DEFAULT_OUT_LIVE = _REPO / "data" / "overall" / "target_book_live.json"
 DEFAULT_AUDIT_OUT = _REPO / "data" / "overall" / "daily_audit.json"
+EXCLUSIONS_PATH = _REPO / "data" / "overall" / "book_exclusions.json"
 SATA_KEY = "SATA"
 AUDIT_SCHEMA = "overall-daily-audit/v1"
 AUDIT_RETRY_WAIT_S = 90          # let a detached BTC feature re-pull land, then retry
@@ -180,8 +181,46 @@ def _publish_sha() -> str:
     return (sha or "unknown")[:12]
 
 
+def load_exclusions(path: Path | None = None) -> dict[str, set]:
+    """Positions the user has dropped from each published book.
+
+    ``data/overall/book_exclusions.json`` is ``{"paper": [...], "live": [...]}``
+    (edit it with ``scripts/set_book_exclusions.py``).  A missing or unreadable
+    file means nothing is excluded."""
+    try:
+        raw = json.loads(Path(path or EXCLUSIONS_PATH).read_text()) or {}
+    except Exception:
+        raw = {}
+    return {m: {str(k).upper() for k in (raw.get(m) or [])}
+            for m in ("paper", "live")}
+
+
+def _mode_book(book, excluded: set) -> tuple[dict, float, dict]:
+    """Weights / cash / exec prices for one book mode: excluded names are dropped
+    and their weight joins the idle bucket (→ SATA up to the V2 cap, the rest
+    cash) — it is NOT redistributed to the other names."""
+    drop = {k for k in book.weights if k in excluded}
+    w = {k: v for k, v in book.weights.items() if k not in drop}
+    px = {k: v for k, v in book.exec_price.items() if k not in drop}
+    idle = book.cash_weight + sum(book.weights[k] for k in drop)
+    sata, cash = oc.split_idle(idle, book.sata_cap)
+    if sata > 1e-6:
+        w[SATA_KEY] = w.get(SATA_KEY, 0.0) + sata
+    return w, cash, px
+
+
+def _mark_excluded(actions, excluded: set) -> list:
+    out = []
+    for a in actions or []:
+        if a.get("key") in excluded:
+            a = dict(a, action="EXCLUDED", target=0.0, exits_next_bar=False)
+        out.append(a)
+    return out
+
+
 def assemble_payloads(book, profile: str, *, audit_stamp: dict, basis: dict,
-                      generated_at_utc: str | None = None
+                      generated_at_utc: str | None = None,
+                      exclusions: dict | None = None
                       ) -> tuple[dict, dict, dict, float]:
     """Build the PAPER and LIVE book payloads (unsigned) from a computed
     ``TargetBook``; returns ``(paper, live, live_weights, live_cash)``.
@@ -193,27 +232,36 @@ def assemble_payloads(book, profile: str, *, audit_stamp: dict, basis: dict,
     SAME weights and differ only in ``book_mode``.  ``audit_stamp`` (the
     signal-freshness verdict) and ``basis`` (the exact closes the book was
     built from) are stamped INTO both payloads — they are covered by the HMAC
-    signature — together with the strategy-logic provenance."""
-    live_weights = dict(book.weights)
-    live_exec = dict(book.exec_price)
-    live_sata, live_cash = oc.split_idle(book.cash_weight, book.sata_cap)
-    if live_sata > 1e-6:
-        live_weights[SATA_KEY] = live_weights.get(SATA_KEY, 0.0) + live_sata
+    signature — together with the strategy-logic provenance.  ``exclusions``
+    (``{"paper": [...], "live": [...]}``, default: the committed
+    ``book_exclusions.json``) drops those positions from the matching book."""
+    excl = load_exclusions() if exclusions is None else {
+        m: set(exclusions.get(m) or ()) for m in ("paper", "live")}
+    paper_w, paper_cash, paper_exec = _mode_book(book, excl["paper"])
+    live_weights, live_cash, live_exec = _mode_book(book, excl["live"])
+    if SATA_KEY in live_weights or SATA_KEY in paper_w:
         try:
             sata_px = oc.fetch_sata().get("price")
         except Exception:
             sata_px = None
-        live_exec[SATA_KEY] = float(sata_px) if sata_px else float(oc.SATA["par"])
+        _px = float(sata_px) if sata_px else float(oc.SATA["par"])
+        for _w, _e in ((paper_w, paper_exec), (live_weights, live_exec)):
+            if SATA_KEY in _w:
+                _e[SATA_KEY] = _px
     paper = tb.build_payload(
-        as_of=book.as_of, profile=profile, weights=live_weights,
-        cash_weight=live_cash, exec_price=live_exec,
-        actions=book.actions, book_mode="paper", sata_cap=book.sata_cap,
+        as_of=book.as_of, profile=profile, weights=paper_w,
+        cash_weight=paper_cash, exec_price=paper_exec,
+        actions=_mark_excluded(book.actions, excl["paper"]),
+        book_mode="paper", sata_cap=book.sata_cap,
         generated_at_utc=generated_at_utc)
     live = tb.build_payload(
         as_of=book.as_of, profile=profile, weights=live_weights,
-        cash_weight=live_cash, exec_price=live_exec, actions=book.actions,
-        book_mode="live", generated_at_utc=paper["generated_at_utc"],
-        sata_cap=book.sata_cap)
+        cash_weight=live_cash, exec_price=live_exec,
+        actions=_mark_excluded(book.actions, excl["live"]), book_mode="live",
+        generated_at_utc=paper["generated_at_utc"], sata_cap=book.sata_cap)
+    for _m, _bk in (("paper", paper), ("live", live)):
+        if excl[_m]:
+            _bk["excluded"] = sorted(excl[_m])
     for _bk in (paper, live):
         _bk["signal_audit"] = dict(audit_stamp)
         _bk["signal_basis"] = dict(basis)
