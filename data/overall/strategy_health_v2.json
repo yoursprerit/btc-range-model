@@ -1,6 +1,6 @@
 {
  "schema": "strategy-health/v1",
- "generated_at_utc": "2026-10-22T14:53:04+00:00",
+ "generated_at_utc": "2026-10-22T15:11:36+00:00",
  "as_of": "2026-10-21",
  "live_anchor": "2026-10-09",
  "thresholds": {
@@ -3253,7 +3253,7 @@
    },
    "edge": {
     "status": "yellow",
-    "value_pp": -32.33,
+    "value_pp": -30.82,
     "first_breach_date": "2026-10-09",
     "need": null
    },
@@ -4785,7 +4785,7 @@
      -3.72,
      -16.21,
      -31.67,
-     -32.33
+     -30.82
     ]
    }
   },

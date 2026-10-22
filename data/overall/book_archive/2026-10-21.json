@@ -1,6 +1,6 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-22T14:50:40+00:00",
+ "generated_at_utc": "2026-10-22T15:09:16+00:00",
  "as_of": "2026-10-21",
  "profile": "Balanced",
  "book_mode": "live",
@@ -8,34 +8,30 @@
   "XLE": 0.1825174825174825,
   "XOP": 0.056643356643356645,
   "ERX": 0.06083916083916084,
-  "SOXX": 0.22499999999999998,
-  "SOXL": 0.075,
   "SATA": 0.3
  },
- "cash_weight": 0.10000000000000003,
+ "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "XLE": 66.97,
-  "SOXL": 85.7,
-  "SOXX": 481.19,
-  "ERX": 117.88,
-  "XOP": 195.48,
-  "SATA": 97.58
+  "XOP": 195.56,
+  "XLE": 66.915,
+  "ERX": 118.16,
+  "SATA": 97.6325
  },
  "actions": [
   {
    "key": "SOXL",
-   "action": "OPEN",
+   "action": "EXCLUDED",
    "decision": "ENTER \u2014 ABOVE TREND",
-   "target": 0.075,
+   "target": 0.0,
    "in_pos": false,
    "priority": 0.3704083395376196,
    "exits_next_bar": false
   },
   {
    "key": "SOXX",
-   "action": "OPEN",
+   "action": "EXCLUDED",
    "decision": "ENTER \u2014 ABOVE TREND",
-   "target": 0.22499999999999998,
+   "target": 0.0,
    "in_pos": false,
    "priority": 0.35968253968253966,
    "exits_next_bar": false
@@ -186,9 +182,13 @@
   }
  ],
  "sata_cap": 0.3,
+ "excluded": [
+  "SOXL",
+  "SOXX"
+ ],
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-22T14:50:38+00:00",
+  "checked_at_utc": "2026-10-22T15:09:15+00:00",
   "stale_apps": []
  },
  "signal_basis": {
@@ -197,9 +197,9 @@
   "btc_bar_close_utc": "2026-10-22T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "0735bdcce183",
+ "code_sha": "256dd363f216",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "d61de5cb553ee92e8c7c9d3659aa586f573df3673256feb61e88e2ef38f7b92f"
+  "value": "244c92f30762671351b497e7960eb0ed40e9a4a46fd1a722fba0a3975886643e"
  }
 }
