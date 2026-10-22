@@ -1225,7 +1225,12 @@
   "title": "Daily include/exclude for the published target books",
   "description": "New data/overall/book_exclusions.json (per paper/live book, written only by the Target Book page's 'Publish with these exclusions' button, which commits it and dispatches the publish) is applied by the publisher and the intraday stop check: listed positions are left out of the signed book and their weight goes to SATA/cash. Each list is stamped with its CT date and applies to that day only; the next day's book is the strategy's, unamended, so exclusions must be repeated daily. The Target Book viewer pre-unticks them. Nothing is excluded by default.",
   "impact": "Unticks in the UI were session-only, so the viewer re-included SOXX/SOXL on reload and the executor still traded them; the published books now omit them.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #255",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/255"
+   }
+  ]
  }
 ]
 }
