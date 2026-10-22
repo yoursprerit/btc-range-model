@@ -1231,6 +1231,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/255"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-22",
+  "kind": "ui",
+  "title": "'Publish with these exclusions' button moved next to 'Publish new target book'",
+  "description": "The exclusions publish button now sits at the top of the Target Book page beside the plain publish button; it acts on the Paper/Live view currently selected and the names unticked in its table.",
+  "links": []
  }
 ]
 }

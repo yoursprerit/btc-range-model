@@ -207,7 +207,21 @@ def publish_with_exclusions(repo: str, ref: str, token: str, mode: str,
                   "The new book appears after the run (~5–15 min).")
 
 
+_EXCL_SLOT = None   # container beside the top 🚀 button, filled by _render_book
+
+
 def _render_publish_with_exclusions(is_live: bool, excluded: list) -> None:
+    """The button needs the unticked names, which only exist once the book's
+    table has rendered — so the top row reserves a slot (``_EXCL_SLOT``) and the
+    book fills it; with no slot (no token / no book) it renders inline."""
+    if _EXCL_SLOT is not None:
+        with _EXCL_SLOT:
+            _publish_with_exclusions_ui(is_live, excluded)
+    else:
+        _publish_with_exclusions_ui(is_live, excluded)
+
+
+def _publish_with_exclusions_ui(is_live: bool, excluded: list) -> None:
     mode = "live" if is_live else "paper"
     repo = _github_repo()
     ref = _conf("GITHUB_PUBLISH_REF") or "main"
@@ -233,7 +247,11 @@ def _render_publish_button() -> None:
     ref = _conf("GITHUB_PUBLISH_REF") or "main"
     token = _conf("GITHUB_TOKEN", "GH_TOKEN")
     actions_url = f"https://github.com/{repo}/actions/workflows/{PUBLISH_WORKFLOW}"
-    cols = st.columns([1, 2])
+    global _EXCL_SLOT
+    _EXCL_SLOT = None
+    cols = st.columns([1, 1, 1] if token else [1, 2])
+    if token:
+        _EXCL_SLOT = cols[1].container()
     clicked = cols[0].button(
         "🚀 Publish new target book", type="primary", use_container_width=True,
         disabled=not token,
