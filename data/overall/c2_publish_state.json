@@ -1,9 +1,9 @@
 {
- "fingerprint": "2026-10-21|a98a500f1dbef02ec7e31b5505a64ee2f5a5c0b00ee1a1425aede6675eb582cc",
- "as_of": "2026-10-21",
- "sent_at_utc": "2026-10-22T19:20:41+00:00",
+ "fingerprint": "2026-10-22|f081058311ef53b31f104b38ddc7dc15c4fc5ac2facd4316cedfb297b6029de1",
+ "as_of": "2026-10-22",
+ "sent_at_utc": "2026-10-23T19:20:24+00:00",
  "strategy_id": 157874453,
- "capital": 100329.0,
+ "capital": 101778.0,
  "positions": {
   "ERX": 54.0,
   "SATA": 302.0,
