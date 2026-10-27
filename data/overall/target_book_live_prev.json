@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-23T12:18:15+00:00",
- "as_of": "2026-10-22",
+ "generated_at_utc": "2026-10-26T12:17:49+00:00",
+ "as_of": "2026-10-25",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
@@ -12,37 +12,19 @@
  },
  "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "ERX": 120.11,
-  "XLE": 67.57,
-  "XOP": 196.87,
-  "SATA": 97.96
+  "XLE": 69.33,
+  "XOP": 201.69,
+  "ERX": 126.61,
+  "SATA": 98.02
  },
  "actions": [
-  {
-   "key": "SOXX",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 BELOW TREND",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
-  },
-  {
-   "key": "SOXL",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 BELOW TREND",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
-  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.7342857142857143,
+   "priority": 0.7552380952380953,
    "exits_next_bar": false
   },
   {
@@ -51,7 +33,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.7280873037712193,
+   "priority": 0.7497385677099853,
    "exits_next_bar": false
   },
   {
@@ -60,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.5542857142857143,
+   "priority": 0.5752380952380953,
    "exits_next_bar": false
   },
   {
@@ -136,6 +118,24 @@
    "exits_next_bar": false
   },
   {
+   "key": "SOXX",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "SOXL",
+   "action": "STAND ASIDE",
+   "decision": "FLAT \u2014 BELOW TREND",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
    "key": "GRID",
    "action": "STAND ASIDE",
    "decision": "FLAT \u2014 BELOW TREND",
@@ -165,7 +165,7 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D3 exhaustion)",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -174,7 +174,7 @@
   {
    "key": "ARTY",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D3 exhaustion)",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -184,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-23T12:18:13+00:00",
+  "checked_at_utc": "2026-10-26T12:17:48+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Oct 23, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-10-22",
-  "btc_bar_close_utc": "2026-10-23T12:00:00+00:00"
+  "anchor_ct": "Oct 26, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-10-23",
+  "btc_bar_close_utc": "2026-10-26T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "9dfb7a83fd54",
+ "code_sha": "58b9aa89cf9b",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "a0d93df876b0333f045100546a300ddee77c2e7d0a748a33c36a0fa315ae4155"
+  "value": "58d059c594c9c1c00f88eaf0446e48728022689a506e26b601e2e688ab73e01e"
  }
 }
