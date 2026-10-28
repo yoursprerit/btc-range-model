@@ -1,5 +1,10 @@
 name: Publish book to Collective2
 
+# SEND DISABLED — the IBKR account is linked to the C2 strategy through C2
+# Broker Transmit, which publishes the account's fills as the strategy's
+# trades. This workflow now only takes the read-only positions snapshot
+# (publish_c2.py --snapshot); the description below is the former behaviour.
+#
 # Mirrors the day's signed PAPER target book (data/overall/target_book.json)
 # onto the Collective2 strategy at 2:20 PM America/Chicago — 40 minutes before
 # the close — via scripts/publish_c2.py (SetDesiredPositions, API v4).
@@ -86,28 +91,16 @@ jobs:
         # the model stack is not needed to forward a published book.
         run: pip install "numpy>=1.26,<2.3" "pandas>=2.1,<2.3"
 
-      - name: Publish to Collective2
-        if: steps.guard.outputs.run == 'true'
-        env:
-          C2_API_KEY: ${{ secrets.C2_API_KEY }}
-          C2_STRATEGY_ID: ${{ secrets.C2_STRATEGY_ID }}
-          OVERALL_BOOK_SECRET: ${{ secrets.OVERALL_BOOK_SECRET }}
-        run: |
-          # Actions runs bash with -e; turn it off so the summary is written
-          # even when the publish fails, then fail the step with its status.
-          set +e -o pipefail
-          python scripts/publish_c2.py --file data/overall/target_book.json \
-            --state data/overall/c2_publish_state.json --execute --require-signature \
-            | tee c2_publish.out
-          STATUS=$?
-          { echo '### Collective2 publish'; echo '```'; cat c2_publish.out; echo '```'; } \
-            >> "$GITHUB_STEP_SUMMARY"
-          exit $STATUS
+      # The "Publish to Collective2" step (publish_c2.py --execute) was removed
+      # when the IBKR account was linked to the strategy through C2 Broker
+      # Transmit: C2 now reads the account's fills and publishes them itself,
+      # so sending SetDesiredPositions as well would double-report. Restore it
+      # from git history if Broker Transmit is switched off.
 
       # What the C2 model account actually holds (shares + average fill),
       # for the Overall app's 💼 Current Positions. Read-only; runs on every
-      # slot so the fills of a book sent in an earlier slot land here, and
-      # the file is only rewritten when the holdings change (or once a day).
+      # slot so fills land here, and the file is only rewritten when the
+      # holdings change (or once a day).
       - name: Snapshot C2 positions
         if: always() && steps.guard.outputs.run == 'true'
         continue-on-error: true
@@ -116,10 +109,6 @@ jobs:
           C2_STRATEGY_ID: ${{ secrets.C2_STRATEGY_ID }}
         run: |
           set -euo pipefail
-          # a book was just sent: give C2's market orders a moment to fill
-          if ! git diff --quiet -- data/overall/c2_publish_state.json; then
-            sleep 60
-          fi
           python scripts/publish_c2.py --snapshot \
             --state data/overall/c2_publish_state.json \
             --snapshot-file data/overall/c2_positions.json
