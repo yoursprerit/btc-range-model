@@ -1,10 +1,10 @@
 {
  "schema": "overall-intraday-stop-check/v1",
  "status": "clear",
- "checked_at_utc": "2026-10-27T19:01:45+00:00",
- "checked_at_ct": "Oct 27, 2026 at 2:01:45 PM CDT",
+ "checked_at_utc": "2026-10-28T19:01:46+00:00",
+ "checked_at_ct": "Oct 28, 2026 at 2:01:46 PM CDT",
  "books_rewritten": false,
- "as_of": "2026-10-26",
+ "as_of": "2026-10-27",
  "profile": "Balanced",
  "triggered": [],
  "watching": [],
