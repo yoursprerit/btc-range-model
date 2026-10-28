@@ -1276,7 +1276,13 @@
   "date": "2026-10-28",
   "kind": "execution",
   "title": "Stop sending the book to Collective2 via API — IBKR fills feed C2 through Broker Transmit",
-  "description": "The IBKR account is now linked to the C2 strategy through C2 Broker Transmit, which publishes the account's fills as the strategy's trades. publish-c2.yml no longer runs publish_c2.py --execute (SetDesiredPositions); the read-only C2 positions snapshot and the after-close snapshot continue. The as-published C2 P&L and Executed Book already follow the snapshots' fills, so they keep updating; the c2_book_archive of target books stops growing. The snapshot's book_as_of now follows the current target book instead of the (no longer advancing) sent-book marker."
+  "description": "The IBKR account is now linked to the C2 strategy through C2 Broker Transmit, which publishes the account's fills as the strategy's trades. publish-c2.yml no longer runs publish_c2.py --execute (SetDesiredPositions); the read-only C2 positions snapshot and the after-close snapshot continue. The as-published C2 P&L and Executed Book already follow the snapshots' fills, so they keep updating; the c2_book_archive of target books stops growing. The snapshot's book_as_of now follows the current target book instead of the (no longer advancing) sent-book marker.",
+  "links": [
+   {
+    "label": "PR #259",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/259"
+   }
+  ]
  }
 ]
 }
