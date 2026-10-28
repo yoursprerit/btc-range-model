@@ -1,39 +1,39 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-10-27T21:40:05+00:00",
+ "fetched_at_utc": "2026-10-28T19:20:23+00:00",
  "strategy_id": 157874453,
- "book_as_of": "2026-10-25",
- "model_account_value": 101422.0,
+ "book_as_of": "2026-10-27",
+ "model_account_value": 101563.0,
  "starting_cash": 100000.0,
- "cash": 68315.4,
- "c2_return": 1.21,
+ "cash": 75820.8,
+ "c2_return": 1.35,
  "c2_return_label": "Cumul. Return",
  "positions": [
   {
    "key": "SATA",
    "symbol": "SATA",
-   "shares": 302.0,
+   "shares": 236.0,
    "avg_cost": 99.17,
    "opened": "2026-10-13T19:30:31Z"
   },
   {
    "key": "XLE",
    "symbol": "XLE",
-   "shares": 280.0,
+   "shares": 206.0,
    "avg_cost": 64.92662,
    "opened": "2026-10-07T19:30:39Z"
   },
   {
    "key": "ERX",
    "symbol": "ERX",
-   "shares": 54.0,
+   "shares": 42.0,
    "avg_cost": 106.56,
    "opened": "2026-10-07T19:30:30Z"
   },
   {
    "key": "XOP",
    "symbol": "XOP",
-   "shares": 29.0,
+   "shares": 23.0,
    "avg_cost": 194.17,
    "opened": "2026-10-12T19:30:30Z"
   }
