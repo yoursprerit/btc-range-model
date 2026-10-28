@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-26T12:17:49+00:00",
- "as_of": "2026-10-25",
+ "generated_at_utc": "2026-10-27T12:17:52+00:00",
+ "as_of": "2026-10-26",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -12,10 +12,10 @@
  },
  "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "XLE": 69.33,
-  "XOP": 201.69,
-  "ERX": 126.61,
-  "SATA": 98.02
+  "XLE": 69.64,
+  "ERX": 127.8,
+  "XOP": 204.86,
+  "SATA": 98.36
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.7552380952380953,
+   "priority": 0.7638095238095238,
    "exits_next_bar": false
   },
   {
@@ -33,7 +33,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.7497385677099853,
+   "priority": 0.7583069464781385,
    "exits_next_bar": false
   },
   {
@@ -42,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.5752380952380953,
+   "priority": 0.5838095238095238,
    "exits_next_bar": false
   },
   {
@@ -184,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-26T12:17:48+00:00",
+  "checked_at_utc": "2026-10-27T12:17:50+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Oct 26, 2026 at 7:15 AM CDT",
-  "equity_close": "2026-10-23",
-  "btc_bar_close_utc": "2026-10-26T12:00:00+00:00"
+  "anchor_ct": "Oct 27, 2026 at 7:15 AM CDT",
+  "equity_close": "2026-10-26",
+  "btc_bar_close_utc": "2026-10-27T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "58b9aa89cf9b",
+ "code_sha": "365875f4a0d4",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "bf57eedb74adefcda9718e2e4d19b26050df3dcf42495c41d1f040bc2e3c2b84"
+  "value": "09f9253a1362e9759a899e1328ef0c8ea83c32281aaee1fa38afcae91f3fdf3f"
  }
 }
