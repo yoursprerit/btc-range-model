@@ -4,6 +4,7 @@ SetDesiredPositions closes every C2 position missing from the request, so the
 tests that matter most pin the cases where a bad book or tiny capital would
 turn into an accidental liquidation of the public strategy.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -430,3 +431,17 @@ def test_sata_leg_must_size_to_a_share():
     assert pc.check_sata_sized({"BTC": 1.0}, [], px, 50)[0]     # no SATA leg → fine
     ok, why = pc.check_sata_sized(w, [], {}, 100_000)
     assert not ok and "no SATA price" in why
+
+
+def test_snapshot_book_as_of_follows_the_target_book_when_nothing_is_sent(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"as_of": "2026-10-20"}))
+    book = tmp_path / "book.json"
+    book.write_text(json.dumps({"as_of": "2026-10-27"}))
+    assert pc._snapshot_book_as_of(state, book) == "2026-10-27"
+    # a book older than the marker never moves it backwards
+    book.write_text(json.dumps({"as_of": "2026-10-01"}))
+    assert pc._snapshot_book_as_of(state, book) == "2026-10-20"
+    # unreadable book / missing state fall back to whichever exists
+    assert pc._snapshot_book_as_of(state, tmp_path / "nope.json") == "2026-10-20"
+    assert pc._snapshot_book_as_of(tmp_path / "none.json", None) is None
