@@ -517,13 +517,33 @@ def archive_sent_book(archive_dir: Path, book_text: str, as_of) -> Path:
     return out
 
 
+def _snapshot_book_as_of(state_path: Path, book_path: Path | None) -> str | None:
+    """The signal bar the snapshot is stamped with: the later of the last book
+    this script sent and the current target book. With Broker Transmit nothing
+    is sent any more, so the sent-book marker alone would stay frozen while
+    the IBKR account (and so C2) keeps trading each day's book."""
+    cands = [_load_state(state_path).get("as_of")]
+    if book_path is not None:
+        try:
+            cands.append(tb.loads(book_path.read_text()).get("as_of"))
+        except (OSError, ValueError):
+            pass
+    dated = []
+    for c in cands:
+        t = pd.Timestamp(c) if c else pd.NaT
+        if not pd.isna(t):
+            dated.append((t, str(c)))
+    return max(dated)[1] if dated else None
+
+
 def run_snapshot(api_key: str, strategy_id: int | None, path: Path,
-                 state_path: Path, archive_dir: Path | None = None) -> int:
+                 state_path: Path, archive_dir: Path | None = None,
+                 book_path: Path | None = None) -> int:
     """``--snapshot``: read-only — record what the C2 model account holds."""
     if not (api_key and strategy_id):
         print("ABORT: --snapshot needs C2_API_KEY and C2_STRATEGY_ID")
         return 2
-    book_as_of = _load_state(state_path).get("as_of")
+    book_as_of = _snapshot_book_as_of(state_path, book_path)
     try:
         snap = fetch_snapshot(api_key, strategy_id, book_as_of)
     except C2Error as e:
@@ -613,7 +633,8 @@ def main(argv: list[str] | None = None) -> int:
         print("── Collective2 positions snapshot ──")
         return run_snapshot(api_key, args.strategy_id, Path(args.snapshot_file),
                             Path(args.state),
-                            Path(args.snapshot_archive) if args.snapshot_archive else None)
+                            Path(args.snapshot_archive) if args.snapshot_archive else None,
+                            Path(args.file))
     secret = os.environ.get("OVERALL_BOOK_SECRET")
     mode = "EXECUTE" if args.execute else "DRY-RUN"
     print(f"── Collective2 publish ({mode}) ──")
