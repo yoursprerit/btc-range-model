@@ -799,7 +799,8 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
     if navs:
         labels = list(navs) + ["C2 model account"]
         pick = st.selectbox(
-            "Size the drift against", labels, index=0, key=f"{scope}_drift_basis",
+            "Size the drift against", labels,
+            index=min(1, len(navs) - 1),   # the second IBKR account; the only one if single key=f"{scope}_drift_basis",
             format_func=lambda k: (f"{k} — net liq ${navs[k][0]:,.0f} ({navs[k][1]})"
                                    if k in navs else k))
         if pick in navs:

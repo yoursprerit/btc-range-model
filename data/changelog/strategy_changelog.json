@@ -1289,7 +1289,7 @@
   "date": "2026-10-29",
   "kind": "ui",
   "title": "C2 Executed Book drift sized against the IBKR account",
-  "description": "With C2 mirroring an IBKR account through Broker Transmit, the C2 view's allocation-drift panel divided holdings by C2's $100k model-account value, so an IBKR account of a different size read as a uniform underweight. The panel now offers each live IBKR account's net liquidation (the run standing on the snapshot's day) as the denominator, defaulting to the first IBKR account, with the C2 model account still selectable."
+  "description": "With C2 mirroring an IBKR account through Broker Transmit, the C2 view's allocation-drift panel divided holdings by C2's $100k model-account value, so an IBKR account of a different size read as a uniform underweight. The panel now offers each live IBKR account's net liquidation (the run standing on the snapshot's day) as the denominator, defaulting to the second IBKR account (the only one when there is a single account), with the C2 model account still selectable."
  }
 ]
 }
