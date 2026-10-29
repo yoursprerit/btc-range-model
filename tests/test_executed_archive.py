@@ -286,3 +286,17 @@ def test_broker_msg_round_trips_and_defaults_empty():
                  "price": 10, "status": "Filled"}])
     assert p["trades"][0]["broker_msg"].startswith("Order rejected")
     assert p["trades"][1]["broker_msg"] == ""
+
+
+def test_account_nav_picks_the_run_standing_on_the_day():
+    import executed_book as eb
+    recs = [dict(executed_on="2026-10-27", as_of="2026-10-26", payload={"net_liq": 80_000}),
+            dict(executed_on="2026-10-28", as_of="2026-10-27", payload={"net_liq": 79_000.5}),
+            dict(executed_on="2026-10-29", as_of="2026-10-28", payload={"net_liq": 0})]
+    assert eb.account_nav(recs) is None                       # latest run has no usable NAV
+    assert eb.account_nav(recs, "2026-10-28") == (79_000.5, "2026-10-28")
+    assert eb.account_nav(recs, "2026-10-28 12:00") == (79_000.5, "2026-10-28")
+    assert eb.account_nav(recs, "2026-10-31") is None         # latest-before-day is the 0-NAV run
+    assert eb.account_nav(recs[:2]) == (79_000.5, "2026-10-28")
+    assert eb.account_nav(recs, "2026-10-01") is None         # before the archive
+    assert eb.account_nav([]) is None
