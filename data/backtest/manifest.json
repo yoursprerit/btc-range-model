@@ -1,7 +1,7 @@
 {
   "version": "v3",
   "pull_date": "2026-10-29",
-  "pull_ts_utc": "2026-10-29T12:16:38Z",
+  "pull_ts_utc": "2026-10-29T18:23:26Z",
   "generated_by": "scripts/pull_backtest_data.py",
   "qc_all_passed": true,
   "btc_bar_anchor": "12:00 UTC (7am CT) \u2014 BTC OHLCV rebucketed from Binance hourly to match the daily model and live view. Macro/on-chain remain calendar-date joined. Equities (MSTR/MSTU) remain exchange-session daily.",
@@ -39,7 +39,7 @@
       "rows": 1093,
       "date_from": "2023-11-01",
       "date_to": "2026-10-28",
-      "checksum_sha256": "40c7185fafd23c70",
+      "checksum_sha256": "9040ba26b78702b9",
       "qc_passed": true
     },
     "btc_usd_daily": {
@@ -55,28 +55,28 @@
     "mstr_daily": {
       "file": "mstr_daily.csv",
       "ticker": "MSTR",
-      "rows": 750,
+      "rows": 751,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-28",
-      "checksum_sha256": "392ad2c944bc4202",
+      "date_to": "2026-10-29",
+      "checksum_sha256": "64539e56b2030d4c",
       "qc_passed": true
     },
     "mstu_daily": {
       "file": "mstu_daily.csv",
       "ticker": "MSTU",
-      "rows": 530,
+      "rows": 531,
       "date_from": "2024-09-18",
-      "date_to": "2026-10-28",
-      "checksum_sha256": "5cda3d36fa6258db",
+      "date_to": "2026-10-29",
+      "checksum_sha256": "5f61757d6d9ea768",
       "qc_passed": true
     },
     "mstu_synthetic_daily": {
       "file": "mstu_synthetic_daily.csv",
       "ticker": "MSTU (OLS-synthetic)",
-      "rows": 750,
+      "rows": 751,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-28",
-      "checksum_sha256": "06cd988f58b007b7",
+      "date_to": "2026-10-29",
+      "checksum_sha256": "4057c0cb6d283590",
       "qc_passed": true
     },
     "eth_usd_daily": {
