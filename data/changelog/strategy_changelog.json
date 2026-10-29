@@ -1296,6 +1296,13 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/260"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-29",
+  "kind": "ui",
+  "title": "C2 Executed Book: weights, cash and pie sized against the IBKR account; fix duplicate-widget crash",
+  "description": "The C2 positions table's Weight %, the cash figure and the donut still used the C2 model-account value, so the pie showed ~54% cash against a 40% target even after the drift table was re-based. The sizing selector now sits above the holdings and drives all of them. Also fixes a StreamlitDuplicateElementId crash on the C2 page (the selector's key had been commented out) and a dollar-sign rendering glitch in its caption."
  }
 ]
 }
