@@ -562,6 +562,22 @@ def write_reset(report_path, cutoff_as_of, reason: str = "account reset") -> Pat
     return p
 
 
+def account_nav(records: list[dict], day=None) -> tuple[float, str] | None:
+    """(net liquidation, executed-on date) of an IBKR account's run standing on
+    *day* (the latest run when None), from :func:`archived_records` output.
+    None when no run qualifies or its net liquidation is not positive.  Used to
+    size a Collective2 snapshot against the account whose fills C2 mirrors."""
+    rec = record_for(records, day) if day is not None else (
+        max(records, key=lambda r: (r["executed_on"], r["as_of"])) if records else None)
+    if rec is None:
+        return None
+    try:
+        nav = float((rec.get("payload") or {}).get("net_liq") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return (nav, rec["executed_on"]) if nav > 0 else None
+
+
 def record_for(records: list[dict], day) -> dict | None:
     """The run executed ON *day*, else the most recent one BEFORE it.
 

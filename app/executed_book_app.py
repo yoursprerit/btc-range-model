@@ -653,9 +653,24 @@ def _c2_sent_book_path(as_of) -> Path | None:
     return p if p.exists() else None
 
 
+def _ibkr_navs(snap: dict, historical: bool) -> dict[str, tuple[float, str]]:
+    """``{"IBKR Account #X": (net_liq, executed_on)}`` for every live IBKR
+    account — the latest run, or for a past snapshot the run standing that day."""
+    day = None
+    if historical and snap.get("fetched_at_utc"):
+        day = ov._ny_date(snap["fetched_at_utc"])
+    out = {}
+    for path in _acct_paths.values():
+        got = eb.account_nav(eb.archived_records(path), day)
+        if got:
+            out[f"IBKR Account #{eb.account_id_of(path)}"] = got
+    return out
+
+
 def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> None:
     """One C2 positions snapshot: holdings × live quote, the book behind them,
-    and the drift against that book."""
+    and the drift against that book (sized against the IBKR account whose
+    fills C2 mirrors through Broker Transmit)."""
     scope = "c2hist" if historical else "c2now"
     positions = snap.get("positions") or []
     acct_val = float(snap.get("model_account_value") or 0.0)
@@ -776,8 +791,25 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
 
     # ── drift vs the book C2 was sent ────────────────────────────────────────
     mv_sum = sum(p["market_value"] for p in pos_for_drift)
-    drift_payload = dict(as_of=book_as_of, net_liq=acct_val,
-                         cash=max(acct_val - mv_sum, 0.0) if acct_val else 0.0,
+    # C2 mirrors an IBKR account's fills (Broker Transmit), so its share counts
+    # are sized to THAT account, not to C2's $100k model account: weights over
+    # the model-account value read as a drift that is really a size mismatch.
+    navs = _ibkr_navs(snap, historical)
+    basis_nav = acct_val
+    if navs:
+        labels = list(navs) + ["C2 model account"]
+        pick = st.selectbox(
+            "Size the drift against", labels,
+            index=min(1, len(navs) - 1),   # the second IBKR account; the only one if single key=f"{scope}_drift_basis",
+            format_func=lambda k: (f"{k} — net liq ${navs[k][0]:,.0f} ({navs[k][1]})"
+                                   if k in navs else k))
+        if pick in navs:
+            basis_nav = navs[pick][0]
+            st.caption(f"Holdings × quote ÷ **{pick}** net liquidation "
+                       f"(${basis_nav:,.0f}, run of {navs[pick][1]}), not the C2 "
+                       f"model account (${acct_val:,.0f}).")
+    drift_payload = dict(as_of=book_as_of, net_liq=basis_nav,
+                         cash=max(basis_nav - mv_sum, 0.0) if basis_nav else 0.0,
                          positions=pos_for_drift)
     _drift_section(drift_payload, historical=historical,
                    target_path=_c2_sent_book_path(book_as_of) or
