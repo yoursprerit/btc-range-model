@@ -275,7 +275,11 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
                          "cost (sold shares × average cost). “—” when the "
                          "report records no realised figure or no fill to "
                          "measure it against."),
-                "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%")})
+                "Weight": st.column_config.NumberColumn(
+                        "Weight %", format="%.1f%%",
+                        help="Share of the sizing account's net liquidation "
+                             "(selector above), so it compares with the target "
+                             "allocation.")})
         tot_upnl = sum(float(p.get("unrealized_pnl") or 0.0) for p in positions)
         _rl = [eb.opt_float(p.get("realized_pnl")) for p in positions]
         _rl_known = [v for v in _rl if v is not None]
@@ -720,6 +724,26 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
                         "Target shares", format="%.0f")})
             st.markdown("---")
 
+    # ── sizing basis ────────────────────────────────────────────────────────
+    # C2 mirrors an IBKR account's fills (Broker Transmit), so its share counts
+    # are sized to THAT account, not to C2's $100k model account: weights, cash
+    # and the drift over the model-account value read as a mismatch that is
+    # really a size difference.
+    navs = _ibkr_navs(snap, historical)
+    basis_nav = acct_val
+    if navs:
+        pick = st.selectbox(
+            "Size weights, cash and drift against", list(navs) + ["C2 model account"],
+            index=min(1, len(navs) - 1),      # the second IBKR account; the only one if single
+            key=f"{scope}_drift_basis",
+            format_func=lambda k: (f"{k} — net liq ${navs[k][0]:,.0f} ({navs[k][1]})"
+                                   if k in navs else k))
+        if pick in navs:
+            basis_nav = navs[pick][0]
+            st.caption((f"Holdings × quote ÷ **{pick}** net liquidation "
+                        f"(${basis_nav:,.0f}, run of {navs[pick][1]}), not the C2 "
+                        f"model account (${acct_val:,.0f}).").replace("$", "\\$"))
+
     # ── holdings ──────────────────────────────────────────────────────────────
     st.markdown("### 📊 Current C2 positions" if not historical
                 else "### 📊 C2 positions held that day")
@@ -748,7 +772,8 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
     else:
         mv_total = sum(r["_mv"] for r in rows)
         for r in rows:
-            r["Weight"] = r["_mv"] / mv_total * 100 if mv_total else 0.0
+            r["Weight"] = (r["_mv"] / basis_nav * 100 if basis_nav
+                           else r["_mv"] / mv_total * 100 if mv_total else 0.0)
         rows.sort(key=lambda r: -r["_mv"])
         left, right = st.columns([3, 2])
         with left:
@@ -761,7 +786,11 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
                         "Avg cost", help="C2's average fill price (AvgPx)."),
                     "Unreal_PnL": st.column_config.TextColumn("Unreal. P&L"),
                     "Unreal_Pct": st.column_config.TextColumn("Unreal. P&L %"),
-                    "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%")})
+                    "Weight": st.column_config.NumberColumn(
+                        "Weight %", format="%.1f%%",
+                        help="Share of the sizing account's net liquidation "
+                             "(selector above), so it compares with the target "
+                             "allocation.")})
             _known = [r["_pnl"] for r in rows if r["_pnl"] is not None]
             cost = sum(float(p.get("shares") or 0) * float(p.get("avg_cost") or 0)
                        for p in positions)
@@ -770,8 +799,8 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
                  + (f" (**{sum(_known) / cost * 100:+.2f}%**)" if cost else "")
                  + " · " if _known else "")
                 + f"invested **${mv_total:,.0f}** · cost basis **${cost:,.0f}**"
-                + (f" · cash ≈ **${max(acct_val - mv_total, 0):,.0f}**"
-                   if acct_val else "")).replace("$", "\\$"))
+                + (f" · cash ≈ **${max(basis_nav - mv_total, 0):,.0f}**"
+                   if basis_nav else "")).replace("$", "\\$"))
             if historical:
                 st.caption("Valued at C2's average cost — a past day's holdings "
                            "are not re-marked at today's prices.")
@@ -781,8 +810,8 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
         with right:
             labels = [r["C2"] for r in rows]
             vals = [r["_mv"] for r in rows]
-            if acct_val and acct_val > mv_total:
-                labels += ["CASH"]; vals += [acct_val - mv_total]
+            if basis_nav and basis_nav > mv_total:
+                labels += ["CASH"]; vals += [basis_nav - mv_total]
             fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.55,
                                    sort=False, textinfo="label+percent"))
             fig.update_layout(height=340, margin=dict(t=10, b=10, l=10, r=10),
@@ -791,23 +820,6 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
 
     # ── drift vs the book C2 was sent ────────────────────────────────────────
     mv_sum = sum(p["market_value"] for p in pos_for_drift)
-    # C2 mirrors an IBKR account's fills (Broker Transmit), so its share counts
-    # are sized to THAT account, not to C2's $100k model account: weights over
-    # the model-account value read as a drift that is really a size mismatch.
-    navs = _ibkr_navs(snap, historical)
-    basis_nav = acct_val
-    if navs:
-        labels = list(navs) + ["C2 model account"]
-        pick = st.selectbox(
-            "Size the drift against", labels,
-            index=min(1, len(navs) - 1),   # the second IBKR account; the only one if single key=f"{scope}_drift_basis",
-            format_func=lambda k: (f"{k} — net liq ${navs[k][0]:,.0f} ({navs[k][1]})"
-                                   if k in navs else k))
-        if pick in navs:
-            basis_nav = navs[pick][0]
-            st.caption(f"Holdings × quote ÷ **{pick}** net liquidation "
-                       f"(${basis_nav:,.0f}, run of {navs[pick][1]}), not the C2 "
-                       f"model account (${acct_val:,.0f}).")
     drift_payload = dict(as_of=book_as_of, net_liq=basis_nav,
                          cash=max(basis_nav - mv_sum, 0.0) if basis_nav else 0.0,
                          positions=pos_for_drift)
