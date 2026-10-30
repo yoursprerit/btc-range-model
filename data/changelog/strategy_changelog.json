@@ -1323,6 +1323,13 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/262"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-30",
+  "kind": "ui",
+  "title": "Targetbook page: Live account default, timestamps in US Central",
+  "description": "The Targetbook page now opens on the Live account (when a live book is published) instead of Paper, and the 'generated' badge shows US Central time instead of UTC."
  }
 ]
 }

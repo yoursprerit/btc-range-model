@@ -414,7 +414,7 @@ def _render_book(payload: dict, *, source: str) -> None:
         _badge(aud_txt, aud_color) + "  " +
         _badge(_ver_txt, "#7c3aed") + "  " +
         _badge(("🟢 " if ok_val else "🟡 ") + val_why, val_color) + "  " +
-        _badge(f"generated {gen} UTC", "#0ea5e9"),
+        _badge(f"generated {fr.fmt_ct(gen) if gen != '—' else gen}", "#0ea5e9"),
         unsafe_allow_html=True)
     if secret and not ok_sig:
         st.error(f"Signature check failed — {sig_why}. This book would be REFUSED "
@@ -683,7 +683,7 @@ if _src.startswith("📦"):
         [("Live", BOOK_PATH_LIVE)] if BOOK_PATH_LIVE.exists() else [])
     if len(_avail) > 1:
         _pick = st.radio("Account", [n for n, _ in _avail], horizontal=True,
-                         key="tb_account",
+                         key="tb_account", index=len(_avail) - 1,  # default: Live
                          help="Paper and Live carry the same weights (idle → SATA) and are "
                               "published as separate, differently-labelled books; the executor picks the "
                               "one matching its --account-mode.")
