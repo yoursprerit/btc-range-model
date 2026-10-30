@@ -1,11 +1,7 @@
 {
  "paper": [
-  "SOXL",
-  "SOXX"
+  "GRID"
  ],
- "live": [
-  "SOXL",
-  "SOXX"
- ],
- "date": "2026-10-22"
+ "live": [],
+ "date": "2026-10-30"
 }
