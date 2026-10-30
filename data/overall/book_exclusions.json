@@ -2,6 +2,8 @@
  "paper": [
   "GRID"
  ],
- "live": [],
+ "live": [
+  "GRID"
+ ],
  "date": "2026-10-30"
 }
