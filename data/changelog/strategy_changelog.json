@@ -1309,6 +1309,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/261"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-30",
+  "kind": "execution",
+  "title": "Live book: MACD sleeves (GRID) now exit/enter on the live price",
+  "description": "live_exit_keys / live_entry_keys skipped MACD-mode sleeves, so when GRID's live MACD 10/20/9 histogram turned negative the Recommended Live Possible Targetbook still held it. They now re-evaluate the MACD histogram with the live price as the provisional close, like the MA / dual-MA sleeves.",
+  "impact": "The live recommendation now matches what the MACD filter will do at the close; the published Current Targetbook is unchanged (it still commits only at the close).",
+  "links": [
+   {
+    "label": "PR #262",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/262"
+   }
+  ]
  }
 ]
 }

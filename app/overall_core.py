@@ -5491,19 +5491,20 @@ def live_exit_keys(results: list[dict], spot: dict,
     """Keys of trend instruments the *live* price says will drop out on the next
     bar.  The mode's REAL long condition is re-evaluated with the live price as
     the newest close (via ``trend_long_now_live``): for ``ma``/``ma_vol`` that's
-    close-vs-SMA, and for ``dual_ma`` it's the fast/slow SMA cross — NOT a naive
-    price-vs-line read (so a golden-cross name whose price merely dips below its
-    slow SMA is not mis-flagged).  These filters decide at the close and act on
+    close-vs-SMA, for ``dual_ma`` the fast/slow SMA cross, and for ``macd`` the
+    MACD histogram sign (e.g. GRID's 10/20/9) — NOT a naive price-vs-line read
+    (so a golden-cross name whose price merely dips below its slow SMA is not
+    mis-flagged).  These filters decide at the close and act on
     the next bar.  By default this covers positions currently **held** (long
     today, but exit next bar).  With ``include_entries=True`` it also covers fresh
     **entries** signalled off the last close whose live price has since broken the
     trend — they'd open into a broken trend and reverse right back out next bar.
-    MACD (oscillator) and divergence exits are signal-triggered, not simple
-    price-crossings, so they're not included."""
+    Divergence exits are signal-triggered, not simple price-crossings, so
+    they're not included."""
     out = set()
     for r in results:
         mode = r.get("mode")
-        if mode not in ("ma", "dual_ma", "ma_vol"):
+        if mode not in ("ma", "dual_ma", "macd", "ma_vol"):
             continue
         p = r.get("pos") or {}
         in_pos = bool(p.get("in_pos"))
@@ -5599,12 +5600,12 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
     U1 + the regime gate at today's close is flagged too.  Instruments already
     signalling buy off the last close (committed entries, action OPEN) are
     excluded — they are flagged separately as certain, not "likely", entries.
-    MACD (oscillator) entries are signal-triggered with no live equivalent, so
-    they're not included."""
+    MACD sleeves (GRID) are re-evaluated like the other trend modes: the live
+    price is appended as the provisional close and the histogram sign re-read."""
     out = set()
     for r in results:
         mode = r.get("mode")
-        if mode not in ("ma", "dual_ma", "ma_vol", "divergence"):
+        if mode not in ("ma", "dual_ma", "macd", "ma_vol", "divergence"):
             continue
         p = r.get("pos") or {}
         if p.get("in_pos"):
