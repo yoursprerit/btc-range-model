@@ -1,7 +1,7 @@
 {
   "version": "v3",
-  "pull_date": "2026-10-29",
-  "pull_ts_utc": "2026-10-29T23:54:04Z",
+  "pull_date": "2026-10-30",
+  "pull_ts_utc": "2026-10-30T12:16:44Z",
   "generated_by": "scripts/pull_backtest_data.py",
   "qc_all_passed": true,
   "btc_bar_anchor": "12:00 UTC (7am CT) \u2014 BTC OHLCV rebucketed from Binance hourly to match the daily model and live view. Macro/on-chain remain calendar-date joined. Equities (MSTR/MSTU) remain exchange-session daily.",
@@ -36,20 +36,20 @@
         "cb_premium_ma3",
         "cb_premium_z7"
       ],
-      "rows": 1093,
+      "rows": 1094,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-28",
-      "checksum_sha256": "2d6de18c4715dbae",
+      "date_to": "2026-10-29",
+      "checksum_sha256": "b4bab4b066722c68",
       "qc_passed": true
     },
     "btc_usd_daily": {
       "file": "btc_usd_daily.csv",
       "ticker": "BTC-USD (Binance BTCUSDT, 12:00-UTC bars)",
       "note": "volume is in BTC (base asset); all volume features are scale-invariant",
-      "rows": 1093,
+      "rows": 1094,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-28",
-      "checksum_sha256": "225ae8afda08691e",
+      "date_to": "2026-10-29",
+      "checksum_sha256": "e323ab37903e28d8",
       "qc_passed": true
     },
     "mstr_daily": {
@@ -58,7 +58,7 @@
       "rows": 751,
       "date_from": "2023-11-01",
       "date_to": "2026-10-29",
-      "checksum_sha256": "8e814e884203a7df",
+      "checksum_sha256": "c7533138594bd350",
       "qc_passed": true
     },
     "mstu_daily": {
@@ -67,7 +67,7 @@
       "rows": 531,
       "date_from": "2024-09-18",
       "date_to": "2026-10-29",
-      "checksum_sha256": "f85c6e33f6cc9807",
+      "checksum_sha256": "aca929c7ecceef37",
       "qc_passed": true
     },
     "mstu_synthetic_daily": {
@@ -83,10 +83,10 @@
       "file": "eth_usd_daily.csv",
       "ticker": "ETH-USD (Binance ETHUSDT, 12:00-UTC bars)",
       "note": "spot-ETH sleeve traded off the BTC CT signal; same bar anchor as BTC so the fill lands on the signal bar's close. Live execution is via the ETHA ETF (cf. BTC\u2192IBIT). Volume is in ETH (base asset); volume features are scale-invariant.",
-      "rows": 1093,
+      "rows": 1094,
       "date_from": "2023-11-01",
-      "date_to": "2026-10-28",
-      "checksum_sha256": "0ceef8dc5b6a83f6",
+      "date_to": "2026-10-29",
+      "checksum_sha256": "8ed018fac75f9e3e",
       "qc_passed": true
     }
   }
