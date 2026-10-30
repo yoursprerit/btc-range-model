@@ -176,3 +176,30 @@ def test_weekend_requote_skips_the_divergence_entry_too():
     r2 = _div_res(completed, pending)
     r2["close_hist"] = [c0 * 0.99, c0]
     assert oc.live_entry_keys([r2], {"ARTY": {"price": strong}}) == {"ARTY"}
+
+
+# ── MACD sleeves (GRID 10/20/9) ─────────────────────────────────────────────
+def _macd_cfg():
+    return SimpleNamespace(strategy_mode="macd", macd_fast=10, macd_slow=20,
+                           macd_signal=9)
+
+
+def _macd_hist(closes):
+    import backtest_ticker as bt
+    return bt.macd_hist_array(_macd_cfg(), closes)[-1]
+
+
+def test_macd_hold_exits_when_live_price_flips_histogram_negative():
+    hist = [100.0 + i for i in range(40)]            # steady uptrend → hist > 0
+    assert _macd_hist(hist) > 0
+    r = _res(key="GRID", mode="macd", in_pos=True, tone="hold",
+             cfg=_macd_cfg(), close_hist=hist)
+    assert oc.live_exit_keys([r], {"GRID": {"price": 60.0}}) == {"GRID"}
+    assert oc.live_exit_keys([r], {"GRID": {"price": 150.0}}) == set()
+
+
+def test_macd_flat_enters_when_live_price_flips_histogram_positive():
+    hist = [140.0 - i for i in range(40)]            # steady downtrend → hist < 0
+    r = _res(key="GRID", mode="macd", cfg=_macd_cfg(), close_hist=hist)
+    assert oc.live_entry_keys([r], {"GRID": {"price": 300.0}}) == {"GRID"}
+    assert oc.live_entry_keys([r], {"GRID": {"price": 90.0}}) == set()
