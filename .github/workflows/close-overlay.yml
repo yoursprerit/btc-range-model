@@ -1,0 +1,71 @@
+name: After-close price overlay
+
+# Writes the newest completed US session's official closes to
+# data/overall/close_overlay.json the evening they print, so the P&L of what the
+# IBKR accounts and the Collective2 model account actually HELD (the "executed"
+# replays on the Overall page) reaches today's close the same day. The pinned
+# datasets and the P&L snapshot are NOT touched: they stay on the previous
+# session until the next morning's publish by design (app/freshness.py), so no
+# post-close row can leak into a published book or its signals. The next day's
+# pinned bar supersedes the overlay (overall_core.apply_close_overlay).
+#
+# 4:25 PM ET is 20:25 UTC (EDT) / 21:25 UTC (EST); both are tried, plus later
+# backups since GitHub delivers cron fires late or drops them. The script itself
+# does nothing before 4:10 PM ET or on a non-trading day, and rewrites the file
+# only when a close changed, so extra slots commit nothing.
+# NOTE: `on: schedule` fires only from the repo's DEFAULT branch.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "25,55 20,21,22 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: close-overlay
+  cancel-in-progress: false
+
+jobs:
+  overlay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install "numpy>=1.26,<2.3" "pandas>=2.1,<2.3" "requests>=2.31" "yfinance>=0.2.40"
+
+      - name: Pull today's official closes
+        run: python scripts/pull_close_overlay.py
+
+      - name: Commit the overlay
+        run: |
+          set -euo pipefail
+          git add data/overall/close_overlay.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Overlay unchanged — nothing to commit."; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(data): after-close price overlay" \
+            -m "Automated via .github/workflows/close-overlay.yml"
+          # only the overlay is in this commit, so this run's copy wins
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase --autostash -X theirs "origin/${GITHUB_REF_NAME}" \
+               && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "Overlay pushed on attempt ${attempt}."; exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 5))
+          done
+          echo "::error title=Overlay not landed::could not push the close overlay."
+          exit 1

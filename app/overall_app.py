@@ -572,6 +572,25 @@ def get_sleeve_prices(bucket: str, use_snap: bool = True):
         pd.DataFrame(cols).reindex(ov.returns_matrix(results).index) if cols else None)
 
 
+
+def get_replay_closes(bucket: str, use_snap: bool = True):
+    """``get_sleeve_prices`` plus the after-close overlay — for the executed-fills
+    replays only (what IBKR / C2 actually held), so they reach today's close the
+    evening it prints while the pinned book data stays on the previous session."""
+    return ov.apply_close_overlay(get_sleeve_prices(bucket, use_snap),
+                                  ov.load_close_overlay())
+
+
+
+def _overlay_note(last_bar) -> str:
+    """Caption suffix when the replay's last bar is the after-close overlay's
+    session, i.e. ahead of the pinned datasets."""
+    ov_doc = ov.load_close_overlay()
+    if ov_doc and pd.Timestamp(ov_doc["session"]).normalize() == pd.Timestamp(last_bar).normalize():
+        return " (after-close prices, provisional until tomorrow's pinned data)"
+    return ""
+
+
 def get_profile_comparison(bucket: str, version: str = "v2"):
     """Headline metrics for every UI risk profile (reads the shared computation)."""
     allp = get_all_profiles(bucket, version)
@@ -3061,7 +3080,7 @@ with tab_live:
             # differs from the Executed Book's net liquidation only by the
             # cost of trading, which the IBKR Pro costs toggle takes out.
             _ix = ov.ibkr_executed_replay(
-                _ibkr.get("holdings"), get_sleeve_prices(_bucket(), _use_snap),
+                _ibkr.get("holdings"), get_replay_closes(_bucket(), _use_snap),
                 columns=(list(_px_rets.columns) if _px_rets is not None else None),
                 sata_div=ov.load_sata_dividends())
             _ix_on = _ix is not None and len(_ix["equity"]) >= 2
@@ -3074,6 +3093,7 @@ with tab_live:
                     f"🧾 **Figures below follow what IBKR #{_ibkr['account']} "
                     "actually held** — the shares in each executed run, marked "
                     f"at official closes through **{_ix['equity'].index[-1]:%b %d, %Y}**"
+                    f"{_overlay_note(_ix['equity'].index[-1])}"
                     " — not the target books. Portfolio value therefore matches "
                     "the Executed Book's net liquidation apart from brokerage "
                     "costs: pick **With IBKR Pro costs** to take them out.")
@@ -3124,7 +3144,7 @@ with tab_live:
             # line below shows the gap between the two.
             _exec = ov.c2_executed_replay(
                 get_c2_snapshot(_bucket()), get_c2_archive(_bucket()),
-                get_sleeve_prices(_bucket(), _use_snap),
+                get_replay_closes(_bucket(), _use_snap),
                 columns=(list(_px_rets.columns) if _px_rets is not None
                          else None),
                 marks=acpnl.executed_marks(
@@ -3146,7 +3166,8 @@ with tab_live:
                 st.caption(
                     "🧾 **Figures below follow C2's executed fills** (entry and "
                     "exit prices, share counts, commissions), marked at official "
-                    f"closes through **{_exec_eq.index[-1]:%b %d, %Y}** — not the "
+                    f"closes through **{_exec_eq.index[-1]:%b %d, %Y}**"
+                    f"{_overlay_note(_exec_eq.index[-1])} — not the "
                     "target books. For reference, compounding the books alone over "
                     f"the same bars gives {(_book_end - 1) * 100:+.2f}% vs "
                     f"{(float(_exec_eq.iloc[-1]) - 1) * 100:+.2f}% executed; the "
@@ -3420,7 +3441,7 @@ with tab_live:
                                      if r["entry_date"] is not None), default=None)
                     if _c2_first is not None and _sm["start"] < _c2_first <= _sm["end"]:
                         _c2eq = ov.c2_executed_equity(
-                            _c2s, _c2a, get_sleeve_prices(_bucket(), _use_snap))
+                            _c2s, _c2a, get_replay_closes(_bucket(), _use_snap))
                         _c2eq = (_c2eq.loc[_c2_first:_sm["end"]]
                                  if _c2eq is not None else None)
                         _rp = _curve_all.loc[_c2_first:_sm["end"]]

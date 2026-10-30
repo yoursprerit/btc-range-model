@@ -1349,6 +1349,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/264"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-30",
+  "kind": "data",
+  "title": "Same-day close for the executed P&L (after-close price overlay)",
+  "description": "A new 'After-close price overlay' workflow writes the newest completed session's official closes to data/overall/close_overlay.json the evening they print. The IBKR and Collective2 executed-fills replays on the Overall P&L page add it as one extra bar, so what each account actually held is marked at today's close the same day.",
+  "impact": "The pinned datasets, the P&L snapshot and the published book stay on the previous session until the next morning by design, so no post-close row can reach a signal or a published book; the next day's pinned bar supersedes the overlay.",
+  "links": [
+   {
+    "label": "PR #265",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/265"
+   }
+  ]
  }
 ]
 }
