@@ -1,6 +1,6 @@
 {
  "schema": "strategy-health/v1",
- "generated_at_utc": "2026-10-30T12:20:05+00:00",
+ "generated_at_utc": "2026-10-30T16:17:07+00:00",
  "as_of": "2026-10-29",
  "live_anchor": "2026-10-09",
  "thresholds": {
@@ -3277,7 +3277,7 @@
    },
    "edge": {
     "status": "yellow",
-    "value_pp": -72.06,
+    "value_pp": -61.37,
     "first_breach_date": "2026-10-09",
     "need": null
    },
@@ -4809,7 +4809,7 @@
      -36.17,
      -54.21,
      -65.97,
-     -72.06
+     -61.37
     ]
    }
   },
@@ -4832,7 +4832,7 @@
    },
    "edge": {
     "status": "yellow",
-    "value_pp": -120.22,
+    "value_pp": -92.71,
     "first_breach_date": "2026-10-21",
     "need": null
    },
@@ -6364,7 +6364,7 @@
      -31.23,
      -59.72,
      -102.33,
-     -120.22
+     -92.71
     ]
    }
   },

@@ -1,6 +1,6 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-10-30T12:17:59+00:00",
+ "generated_at_utc": "2026-10-30T16:14:55+00:00",
  "as_of": "2026-10-29",
  "profile": "Balanced",
  "book_mode": "live",
@@ -13,11 +13,11 @@
  },
  "cash_weight": 0.10000000000000003,
  "exec_price": {
-  "XOP": 199.52,
-  "XLE": 68.71,
-  "GRID": 170.34,
-  "ERX": 124.29,
-  "SATA": 97.98
+  "GRID": 165.12,
+  "XOP": 202.98,
+  "ERX": 127.28,
+  "XLE": 69.67,
+  "SATA": 96.06
  },
  "actions": [
   {
@@ -186,7 +186,7 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-10-30T12:17:57+00:00",
+  "checked_at_utc": "2026-10-30T16:14:53+00:00",
   "stale_apps": []
  },
  "signal_basis": {
@@ -195,9 +195,9 @@
   "btc_bar_close_utc": "2026-10-30T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "51fcd8684a72",
+ "code_sha": "27fa9f72b68a",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "3ce864fb8d9e1eaaa3c5e9cc0bd6b70274d4568f2f408cf79a33653d9bde24f5"
+  "value": "2a441cb553b8d1357a1868e8e6c94125fb0d18363273c5cd57ffd3fd5f708be4"
  }
 }
