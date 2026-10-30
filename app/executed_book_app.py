@@ -118,6 +118,42 @@ def _name(key: str, symbol: str) -> str:
     return f"{ov.KIND_EMOJI.get(kind, '')} {meta.get('name', symbol)}".strip()
 
 
+def _trades_table(trades: list[dict], scope: str) -> None:
+    """The executed-orders table of one IBKR execution report: sells first,
+    then buys, with type, fill, status and the broker's message."""
+    trows = []
+    for t in sorted(trades, key=lambda x: (x.get("action") != "SELL",
+                                           -abs(float(x.get("qty") or 0) *
+                                                float(x.get("price") or 0)))):
+        filled = float(t.get("filled") or 0.0)
+        avg = float(t.get("avg_fill_price") or 0.0)
+        qty = float(t.get("qty") or 0.0)
+        px = avg or float(t.get("price") or 0.0)
+        lmt = float(t.get("limit_price") or 0.0)
+        otype = {"marketable-limit": "LMT", "moc": "MOC",
+                 "market": "MKT"}.get(t.get("order_type") or "", "—")
+        trows.append(dict(
+            Action=t.get("action"), Instrument=_name(t.get("key"), t.get("symbol")),
+            IBKR=t.get("symbol"), Qty=qty,
+            Type=(f"{otype} ${lmt:,.2f}" if lmt else otype),
+            Fill=(f"${avg:,.2f}" if avg else (f"~${float(t.get('price') or 0):,.2f}")),
+            Value=f"${qty * px:,.0f}",
+            Status=t.get("status") or "—",
+            Filled=(f"{filled:g}" if filled else ("—" if t.get('status') == 'PLANNED' else "0")),
+            Reason=t.get("reason") or "—",
+            **{"Broker message": t.get("broker_msg") or "—"},
+        ))
+    tdf = pd.DataFrame(trows)
+    n_buy = sum(1 for t in trades if t.get("action") == "BUY")
+    n_sell = sum(1 for t in trades if t.get("action") == "SELL")
+    st.caption(f"**{n_sell}** sell(s) then **{n_buy}** buy(s).")
+    st.dataframe(
+        tdf, hide_index=True, use_container_width=True, key=f"{scope}_trades",
+        column_config={
+            "Qty": st.column_config.NumberColumn("Qty", format="%.0f"),
+            "Action": st.column_config.TextColumn("Action")})
+
+
 def _render(payload: dict, *, source: str, historical: bool = False) -> None:
     """Render one execution report.
 
@@ -181,37 +217,7 @@ def _render(payload: dict, *, source: str, historical: bool = False) -> None:
     if not trades:
         st.info("No trades this run — the book was already within the no-trade band.")
     else:
-        trows = []
-        for t in sorted(trades, key=lambda x: (x.get("action") != "SELL",
-                                               -abs(float(x.get("qty") or 0) *
-                                                    float(x.get("price") or 0)))):
-            filled = float(t.get("filled") or 0.0)
-            avg = float(t.get("avg_fill_price") or 0.0)
-            qty = float(t.get("qty") or 0.0)
-            px = avg or float(t.get("price") or 0.0)
-            lmt = float(t.get("limit_price") or 0.0)
-            otype = {"marketable-limit": "LMT", "moc": "MOC",
-                     "market": "MKT"}.get(t.get("order_type") or "", "—")
-            trows.append(dict(
-                Action=t.get("action"), Instrument=_name(t.get("key"), t.get("symbol")),
-                IBKR=t.get("symbol"), Qty=qty,
-                Type=(f"{otype} ${lmt:,.2f}" if lmt else otype),
-                Fill=(f"${avg:,.2f}" if avg else (f"~${float(t.get('price') or 0):,.2f}")),
-                Value=f"${qty * px:,.0f}",
-                Status=t.get("status") or "—",
-                Filled=(f"{filled:g}" if filled else ("—" if t.get('status') == 'PLANNED' else "0")),
-                Reason=t.get("reason") or "—",
-                **{"Broker message": t.get("broker_msg") or "—"},
-            ))
-        tdf = pd.DataFrame(trows)
-        n_buy = sum(1 for t in trades if t.get("action") == "BUY")
-        n_sell = sum(1 for t in trades if t.get("action") == "SELL")
-        st.caption(f"**{n_sell}** sell(s) then **{n_buy}** buy(s).")
-        st.dataframe(
-            tdf, hide_index=True, use_container_width=True, key=f"{scope}_trades",
-            column_config={
-                "Qty": st.column_config.NumberColumn("Qty", format="%.0f"),
-                "Action": st.column_config.TextColumn("Action")})
+        _trades_table(trades, scope)
 
     st.markdown("---")
 
@@ -723,21 +729,53 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
                         f"(${acct_val:,.0f}).").replace("$", "\\$"))
 
     # ── trades executed ──────────────────────────────────────────────────────
+    # Nothing is sent to C2 directly: the IBKR account does the trading and C2
+    # copies its fills through Broker Transmit. So the trades executed are the
+    # SELECTED IBKR account's run; C2's own fills are the reconciliation below.
     st.markdown("### 🔁 Trades executed")
-    fills = eb.c2_fills(snap, upto=(ov._ny_date(fetched) if historical and fetched
-                                    else None))
-    if not fills:
-        st.info("C2 reports no fills yet.")
+    read_day = ov._ny_date(fetched) if fetched else None
+    acct_path = next((p_ for p_ in _acct_paths.values()
+                      if f"IBKR Account #{eb.account_id_of(p_)}" == basis_name), None)
+    run = None
+    if acct_path is not None:
+        recs = eb.archived_records(acct_path)
+        run = (eb.record_for(recs, read_day) if historical and read_day is not None
+               else max(recs, key=lambda r: (r["executed_on"], r["as_of"]), default=None))
+    if run is not None:
+        pl = run["payload"]
+        trades = pl.get("trades") or []
+        dry = (pl.get("mode") or "").lower() != "execute"
+        today_ny = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
+        ref_day = read_day if historical and read_day is not None else today_ny
+        st.markdown(
+            _badge(f"🏦 {basis_name}", "#0ea5e9") + "  "
+            + _badge(f"run of {run['executed_on']}", "#6366f1") + "  "
+            + _badge(f"for signal bar {run['as_of']}", "#0ea5e9")
+            + ("  " + _badge("🟡 DRY-RUN (no orders)", "#d97706") if dry else ""),
+            unsafe_allow_html=True)
+        st.caption(
+            f"Collective2 receives no orders from this app: **{basis_name}** trades "
+            "the book and C2 copies its fills through Broker Transmit, so these are "
+            "the trades behind the C2 positions below."
+            + ("" if pd.Timestamp(run["executed_on"]) == ref_day else
+               f" ⚠️ No run on {ref_day:%Y-%m-%d}; showing the latest, "
+               f"**{run['executed_on']}**."))
+        if not trades:
+            st.info("No trades this run — the book was already within the no-trade band.")
+        else:
+            _trades_table(trades, scope)
+    elif acct_path is not None:
+        st.info(f"{basis_name} has no executed run yet.")
     else:
+        st.caption("Pick an IBKR account above to see the trades it executed; "
+                   "showing C2's own fills below.")
+
+    fills = eb.c2_fills(snap, upto=read_day if historical else None)
+    if fills:
         last_day = fills[0]["date"]
         day_fills = [f for f in fills if f["date"] == last_day]
-        read_day = str(ov._ny_date(fetched).date()) if fetched else None
         n_sell = sum(f["action"] == "SELL" for f in day_fills)
         n_buy = sum(f["action"] == "BUY" for f in day_fills)
-        st.caption(f"Latest C2 fills: **{last_day}** — **{n_sell}** sell(s) then "
-                   f"**{n_buy}** buy(s)."
-                   + (f" No fills on {read_day} (holdings read that day)."
-                      if read_day and read_day != last_day else ""))
 
         def _fill_rows(rs):
             return pd.DataFrame([dict(
@@ -752,17 +790,22 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
         _fcfg = {"Qty": st.column_config.NumberColumn("Qty", format="%.0f"),
                  "Realised": st.column_config.TextColumn(
                      "Realised P&L", help="Net P&L of the closed trade (sells only).")}
-        st.dataframe(_fill_rows(day_fills), hide_index=True,
-                     use_container_width=True, key=f"{scope}_fills",
-                     column_config=_fcfg)
-        if len(fills) > len(day_fills):
-            with st.expander(f"All C2 fills ({len(fills)})"):
+        with st.expander(f"C2's own fills — latest {last_day}: {n_sell} sell(s), "
+                         f"{n_buy} buy(s) (all {len(fills)})",
+                         expanded=run is None):
+            st.caption("What C2 recorded for the copied orders (its fill prices and "
+                       "dates), read from holdings opened and trades closed; adds to "
+                       "an open position fold into its average cost. Use it to "
+                       "reconcile against the IBKR trades above.")
+            st.dataframe(_fill_rows(day_fills), hide_index=True,
+                         use_container_width=True, key=f"{scope}_fills",
+                         column_config=_fcfg)
+            if len(fills) > len(day_fills):
                 st.dataframe(_fill_rows(fills), hide_index=True,
                              use_container_width=True, key=f"{scope}_fills_all",
                              column_config=_fcfg)
-        st.caption("Read from C2's fill prices and dates (holdings opened, trades "
-                   "closed). Later adds to an open position fold into its average "
-                   "cost and are not listed separately.")
+    elif run is None:
+        st.info("C2 reports no fills yet.")
     st.markdown("---")
 
     # ── current target book, sized to the selected account ──────────────────
