@@ -1336,6 +1336,13 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/263"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-30",
+  "kind": "ui",
+  "title": "Collective2 Executed Book: trades executed + Current Target Book sized to the IBKR account",
+  "description": "The C2 page now has a Trades executed section (C2 fills read from the holdings snapshot: opens, closes, fill prices, realised P&L). The stale 'Last book sent to C2' panel (a pre-Broker-Transmit marker) is replaced by the Current Target Book, with target shares, cash and drift sized to the selected IBKR account's net liquidation, plus the shares still to trade."
  }
 ]
 }

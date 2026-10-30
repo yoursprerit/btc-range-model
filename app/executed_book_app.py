@@ -701,48 +701,127 @@ def _render_c2(snap: dict, *, historical: bool = False, source: str = "") -> Non
         unsafe_allow_html=True)
     st.markdown("")
 
-    # ── the book C2 was sent ─────────────────────────────────────────────────
-    if not historical:
-        state = _read_json(C2_STATE_PATH) or {}
-        if state:
-            st.markdown("### 🔁 Last book sent to C2")
-            st.caption(
-                f"Book for signal bar **{state.get('as_of')}**, sent "
-                f"**{fr.fmt_ct(state.get('sent_at_utc'))}** against "
-                f"\\${float(state.get('capital') or 0):,.0f} of model capital. C2 "
-                "places whatever orders move the model account onto these "
-                "share counts (SetDesiredPositions).")
-            want = state.get("positions") or {}
-            if want:
-                st.dataframe(
-                    pd.DataFrame([{"Instrument": _name(sym.key_for_symbol(k) or k, k),
-                                   "C2": k, "Target shares": float(q)}
-                                  for k, q in sorted(want.items(),
-                                                     key=lambda kv: -kv[1])]),
-                    hide_index=True, use_container_width=True, key=f"{scope}_sent",
-                    column_config={"Target shares": st.column_config.NumberColumn(
-                        "Target shares", format="%.0f")})
-            st.markdown("---")
-
     # ── sizing basis ────────────────────────────────────────────────────────
     # C2 mirrors an IBKR account's fills (Broker Transmit), so its share counts
-    # are sized to THAT account, not to C2's $100k model account: weights, cash
-    # and the drift over the model-account value read as a mismatch that is
-    # really a size difference.
+    # are sized to THAT account, not to C2's $100k model account: target shares,
+    # weights, cash and drift over the model-account value read as a mismatch
+    # that is really a size difference.
     navs = _ibkr_navs(snap, historical)
-    basis_nav = acct_val
+    basis_nav, basis_name = acct_val, "C2 model account"
     if navs:
         pick = st.selectbox(
-            "Size weights, cash and drift against", list(navs) + ["C2 model account"],
+            "Size target shares, weights, cash and drift against",
+            list(navs) + ["C2 model account"],
             index=min(1, len(navs) - 1),      # the second IBKR account; the only one if single
             key=f"{scope}_drift_basis",
             format_func=lambda k: (f"{k} — net liq ${navs[k][0]:,.0f} ({navs[k][1]})"
                                    if k in navs else k))
         if pick in navs:
-            basis_nav = navs[pick][0]
-            st.caption((f"Holdings × quote ÷ **{pick}** net liquidation "
-                        f"(${basis_nav:,.0f}, run of {navs[pick][1]}), not the C2 "
-                        f"model account (${acct_val:,.0f}).").replace("$", "\\$"))
+            basis_nav, basis_name = navs[pick][0], pick
+            st.caption((f"Net liquidation **${basis_nav:,.0f}** (run of "
+                        f"{navs[pick][1]}), not the C2 model account "
+                        f"(${acct_val:,.0f}).").replace("$", "\\$"))
+
+    # ── trades executed ──────────────────────────────────────────────────────
+    st.markdown("### 🔁 Trades executed")
+    fills = eb.c2_fills(snap, upto=(ov._ny_date(fetched) if historical and fetched
+                                    else None))
+    if not fills:
+        st.info("C2 reports no fills yet.")
+    else:
+        last_day = fills[0]["date"]
+        day_fills = [f for f in fills if f["date"] == last_day]
+        read_day = str(ov._ny_date(fetched).date()) if fetched else None
+        n_sell = sum(f["action"] == "SELL" for f in day_fills)
+        n_buy = sum(f["action"] == "BUY" for f in day_fills)
+        st.caption(f"Latest C2 fills: **{last_day}** — **{n_sell}** sell(s) then "
+                   f"**{n_buy}** buy(s)."
+                   + (f" No fills on {read_day} (holdings read that day)."
+                      if read_day and read_day != last_day else ""))
+
+        def _fill_rows(rs):
+            return pd.DataFrame([dict(
+                Date=r["date"], Action=r["action"],
+                Instrument=_name(r["key"], r["symbol"]), C2=r["symbol"],
+                Qty=r["qty"], Fill=f"${r['price']:,.2f}",
+                Value=f"${r['qty'] * r['price']:,.0f}",
+                Realised=("—" if r["pnl"] is None else f"${float(r['pnl']):,.0f}"),
+                Commission=("—" if r["commission"] is None
+                            else f"${float(r['commission']):,.2f}"))
+                for r in rs])
+        _fcfg = {"Qty": st.column_config.NumberColumn("Qty", format="%.0f"),
+                 "Realised": st.column_config.TextColumn(
+                     "Realised P&L", help="Net P&L of the closed trade (sells only).")}
+        st.dataframe(_fill_rows(day_fills), hide_index=True,
+                     use_container_width=True, key=f"{scope}_fills",
+                     column_config=_fcfg)
+        if len(fills) > len(day_fills):
+            with st.expander(f"All C2 fills ({len(fills)})"):
+                st.dataframe(_fill_rows(fills), hide_index=True,
+                             use_container_width=True, key=f"{scope}_fills_all",
+                             column_config=_fcfg)
+        st.caption("Read from C2's fill prices and dates (holdings opened, trades "
+                   "closed). Later adds to an open position fold into its average "
+                   "cost and are not listed separately.")
+    st.markdown("---")
+
+    # ── current target book, sized to the selected account ──────────────────
+    tgt_path = (_c2_sent_book_path(book_as_of) or
+                (TARGET_ARCHIVE_DIR / f"{pd.Timestamp(book_as_of).date()}.json"
+                 if (historical and book_as_of) else TARGET_PATH))
+    st.markdown("### 🎯 Current Target Book" if not historical
+                else "### 🎯 Target Book of that day")
+    tgt = None
+    try:
+        tgt = tb.loads(tgt_path.read_text())
+    except Exception:
+        pass
+    if not tgt or not basis_nav:
+        st.caption("No target book (or no net liquidation) to size shares from.")
+    else:
+        import publish_c2 as pc2
+        want, dropped = pc2.build_positions(
+            tgt.get("weights") or {}, tgt.get("exec_price") or {}, basis_nav,
+            pc2.DEFAULT_CASH_BUFFER)
+        held = {p.get("symbol"): float(p.get("shares") or 0.0) for p in positions}
+        wsym = {w["symbol"]: w for w in want}
+        trows, tot = [], 0.0
+        for s_ in sorted(set(wsym) | set(held),
+                         key=lambda x: -(wsym.get(x, {}).get("weight", 0.0))):
+            w = wsym.get(s_)
+            q = w["quantity"] if w else 0
+            val = q * w["price"] if w else 0.0
+            tot += val
+            trows.append({"Instrument": _name((w or {}).get("key") or
+                                               sym.key_for_symbol(s_) or s_, s_),
+                          "C2": s_,
+                          "Weight": (w["weight"] * 100 if w else 0.0),
+                          "Price": (f"${w['price']:,.2f}" if w else "—"),
+                          "Target shares": float(q),
+                          "Target value": f"${val:,.0f}",
+                          "Held": held.get(s_, 0.0),
+                          "To trade": float(q) - held.get(s_, 0.0)})
+        st.caption((
+            f"Book for signal bar **{tgt.get('as_of')}** "
+            f"(`{tgt_path.relative_to(_REPO_ROOT)}`), shares sized to "
+            f"**{basis_name}** net liquidation ${basis_nav:,.0f} (whole shares, "
+            f"{pc2.DEFAULT_CASH_BUFFER:.0%} cash buffer): invested **${tot:,.0f}**, "
+            f"cash **${max(basis_nav - tot, 0):,.0f}** "
+            f"({max(basis_nav - tot, 0) / basis_nav:.1%}).").replace("$", "\\$"))
+        st.dataframe(
+            pd.DataFrame(trows), hide_index=True, use_container_width=True,
+            key=f"{scope}_target",
+            column_config={
+                "Weight": st.column_config.NumberColumn("Weight %", format="%.1f%%"),
+                "Target shares": st.column_config.NumberColumn(format="%.0f"),
+                "Held": st.column_config.NumberColumn("Held (C2)", format="%.0f"),
+                "To trade": st.column_config.NumberColumn(
+                    "To trade", format="%+.0f",
+                    help="Target shares minus what C2 holds; the next fills "
+                         "Broker Transmit should copy.")})
+        if dropped:
+            st.caption("Not sized: " + "; ".join(dropped))
+    st.markdown("---")
 
     # ── holdings ──────────────────────────────────────────────────────────────
     st.markdown("### 📊 Current C2 positions" if not historical
