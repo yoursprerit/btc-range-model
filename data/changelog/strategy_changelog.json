@@ -1363,6 +1363,19 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/265"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-10-30",
+  "kind": "ui",
+  "title": "Collective2 Executed Book: Trades executed shows the selected IBKR account's trades",
+  "description": "No orders go to Collective2 directly: the IBKR account trades and C2 copies its fills through Broker Transmit. The C2 page's Trades executed section now shows the run of the IBKR account picked in the sizing selector (latest run, or the run standing on the snapshot day), with C2's own recorded fills in an expander for reconciliation.",
+  "links": [
+   {
+    "label": "PR #266",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/266"
+   }
+  ]
  }
 ]
 }
