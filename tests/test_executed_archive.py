@@ -300,3 +300,21 @@ def test_account_nav_picks_the_run_standing_on_the_day():
     assert eb.account_nav(recs[:2]) == (79_000.5, "2026-10-28")
     assert eb.account_nav(recs, "2026-10-01") is None         # before the archive
     assert eb.account_nav([]) is None
+
+
+def test_c2_fills_reads_holdings_and_closed_trades_as_fills():
+    snap = {"schema": eb.C2_SNAPSHOT_SCHEMA,
+            "positions": [{"key": "XLE", "symbol": "XLE", "shares": 10,
+                           "avg_cost": 60.0, "opened": "2026-10-29T19:30:00Z"}],
+            "closed_trades": [{"key": "ARTY", "symbol": "ARTY", "side": "long",
+                               "quantity": 5, "entry_px": 80.0, "exit_px": 78.0,
+                               "opened": "2026-10-07T19:30:28Z",
+                               "closed": "2026-10-29T19:30:32Z", "pnl": -10.0,
+                               "commission": 1.0}]}
+    fills = eb.c2_fills(snap)
+    assert [(f["date"], f["action"], f["symbol"]) for f in fills] == [
+        ("2026-10-29", "SELL", "ARTY"), ("2026-10-29", "BUY", "XLE"),
+        ("2026-10-07", "BUY", "ARTY")]
+    assert fills[0]["price"] == 78.0 and fills[0]["pnl"] == -10.0
+    assert [f["date"] for f in eb.c2_fills(snap, upto="2026-10-10")] == ["2026-10-07"]
+    assert eb.c2_fills({"schema": "other"}) == []

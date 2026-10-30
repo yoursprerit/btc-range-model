@@ -844,3 +844,53 @@ def from_c2_snapshot(snap: dict | None) -> dict | None:
         "positions": [dict(p, market_price=0.0)
                       for p in snap.get("positions") or []],
     }
+
+
+def _ny_day(ts) -> str | None:
+    """A C2 timestamp (UTC, ``…Z``) → its New-York calendar date ``YYYY-MM-DD``."""
+    if not ts:
+        return None
+    t = pd.Timestamp(ts)
+    t = t.tz_localize("UTC") if t.tzinfo is None else t
+    return str(t.tz_convert("America/New_York").date())
+
+
+def c2_fills(snap: dict | None, upto=None) -> list[dict]:
+    """The C2 fills a ``c2-positions/v1`` snapshot implies, newest first.
+
+    C2 reports no order list, only what the model account holds and the trades
+    it has closed, so each is read back as fills: an open position is a BUY at
+    its average cost on the day it opened; a closed trade is a BUY at its entry
+    price and a SELL at its exit price (carrying the trade's net P&L). Shorts
+    flip the two sides. Later adds to an open position fold into its average
+    cost and do not appear separately. *upto* (a date) drops later fills.
+
+    Rows: ``{date, ts, action, key, symbol, qty, price, pnl, commission}``."""
+    if not snap or snap.get("schema") != C2_SNAPSHOT_SCHEMA:
+        return []
+    rows = []
+
+    def _row(ts, action, p, qty, px, pnl=None, comm=None):
+        day = _ny_day(ts)
+        if day and qty and px:
+            rows.append(dict(date=day, ts=str(ts), action=action,
+                             key=p.get("key"), symbol=p.get("symbol"),
+                             qty=float(qty), price=float(px), pnl=pnl,
+                             commission=comm))
+
+    for p in snap.get("positions") or []:
+        short = float(p.get("shares") or 0.0) < 0
+        _row(p.get("opened"), "SELL" if short else "BUY", p,
+             abs(float(p.get("shares") or 0.0)), p.get("avg_cost"))
+    for t in snap.get("closed_trades") or []:
+        short = str(t.get("side") or "long").lower() == "short"
+        q = abs(float(t.get("quantity") or 0.0))
+        _row(t.get("opened"), "SELL" if short else "BUY", t, q, t.get("entry_px"))
+        _row(t.get("closed"), "BUY" if short else "SELL", t, q, t.get("exit_px"),
+             pnl=t.get("pnl"), comm=t.get("commission"))
+    if upto is not None:
+        cut = str(pd.Timestamp(upto).date())
+        rows = [r for r in rows if r["date"] <= cut]
+    rows.sort(key=lambda r: (r["date"], r["action"] == "SELL", r["qty"] * r["price"]),
+              reverse=True)
+    return rows
