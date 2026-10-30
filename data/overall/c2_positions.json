@@ -1,19 +1,19 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-10-29T22:16:10+00:00",
+ "fetched_at_utc": "2026-10-30T19:20:24+00:00",
  "strategy_id": 157874453,
- "book_as_of": "2026-10-28",
- "model_account_value": 101524.0,
+ "book_as_of": "2026-10-29",
+ "model_account_value": 101407.0,
  "starting_cash": 100000.0,
- "cash": 75836.3,
- "c2_return": 1.31,
+ "cash": 75848.5,
+ "c2_return": 1.19,
  "c2_return_label": "Cumul. Return",
  "positions": [
   {
    "key": "SATA",
    "symbol": "SATA",
-   "shares": 236.0,
-   "avg_cost": 99.17,
+   "shares": 245.0,
+   "avg_cost": 99.05251,
    "opened": "2026-10-13T19:30:31Z"
   },
   {
