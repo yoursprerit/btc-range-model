@@ -34,6 +34,7 @@ imported or modified.
 """
 from __future__ import annotations
 
+import json
 import sys
 import warnings
 from dataclasses import replace
@@ -414,6 +415,70 @@ def load_sata_closes(path=SATA_DATA_PATH) -> pd.Series | None:
         return close if len(close) else None
     except Exception:
         return None
+
+
+CLOSE_OVERLAY_SCHEMA = "close-overlay/v1"
+CLOSE_OVERLAY_PATH = Path(__file__).resolve().parent.parent / "data" / "overall" / "close_overlay.json"
+CLOSE_OVERLAY_MAX_JUMP = 0.5      # a close this far from the last one is a bad print
+
+
+def load_close_overlay(path=CLOSE_OVERLAY_PATH) -> dict | None:
+    """The after-close price overlay (``scripts/pull_close_overlay.py``): the
+    official closes of the newest completed US session, committed the same
+    evening — hours before the pinned datasets take that bar the next morning.
+    ``None`` when missing, foreign or empty."""
+    try:
+        d = json.loads(Path(path).read_text())
+        if d.get("schema") != CLOSE_OVERLAY_SCHEMA or not d.get("closes"):
+            return None
+        pd.Timestamp(d["session"])
+        return d
+    except Exception:
+        return None
+
+
+def apply_close_overlay(closes: pd.DataFrame | None,
+                        overlay: dict | None) -> pd.DataFrame | None:
+    """*closes* with the overlay's session appended as one extra bar.
+
+    Used only by the executed-fills replays (IBKR, C2), which mark what an
+    account actually HELD: they can show today's trades the evening they
+    happen, while the pinned book/signal data stays on the previous session.
+    Unchanged when the pinned data already has that session (it has caught up
+    and wins), when the overlay is older than the last bar, or without one.
+    Keys the overlay lacks stay NaN on the new bar (the replays carry the last
+    close forward); a close more than ``CLOSE_OVERLAY_MAX_JUMP`` from the
+    previous one is dropped as a bad print."""
+    if closes is None or not len(closes) or not overlay:
+        return closes
+    try:
+        day = pd.Timestamp(overlay["session"]).normalize()
+    except Exception:
+        return closes
+    if day <= closes.index[-1]:
+        return closes
+    row = {}
+    for k, v in (overlay.get("closes") or {}).items():
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(v) or v <= 0:
+            continue
+        if k in closes.columns:
+            prev = closes[k].dropna()
+            if len(prev) and abs(v / float(prev.iloc[-1]) - 1.0) > CLOSE_OVERLAY_MAX_JUMP:
+                continue
+        row[k] = v
+    if not row:
+        return closes
+    out = closes.copy()
+    out.loc[day] = np.nan
+    for k, v in row.items():
+        if k not in out.columns:
+            out[k] = np.nan
+        out.loc[day, k] = v
+    return out
 
 
 def load_sata_dividends(path=SATA_DATA_PATH) -> pd.Series | None:
