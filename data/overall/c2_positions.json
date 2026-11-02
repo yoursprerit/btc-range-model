@@ -1,12 +1,12 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-10-30T21:51:13+00:00",
+ "fetched_at_utc": "2026-11-02T20:20:24+00:00",
  "strategy_id": 157874453,
- "book_as_of": "2026-10-29",
- "model_account_value": 101238.0,
+ "book_as_of": "2026-11-01",
+ "model_account_value": 100402.0,
  "starting_cash": 100000.0,
- "cash": 75420.5,
- "c2_return": 1.02,
+ "cash": 75434.0,
+ "c2_return": 0.19,
  "c2_return_label": "Cumul. Return",
  "positions": [
   {
