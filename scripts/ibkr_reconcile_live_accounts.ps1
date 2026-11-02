@@ -19,6 +19,9 @@
 .PARAMETER DryRun
     Look and report only: rewrite nothing, push nothing, no heartbeat.
 
+    -SlotCT HH:MM (env IBKR_SLOT_CT): US Central slot; the run proceeds only when
+    Chicago is within -5/+30 min of it (DST-proof, see scripts\slot_guard.py).
+
     Env: IBKR_PYTHON, OVERALL_BOOK_SECRET (to re-sign a rebuilt report),
     IBKR_NO_PUSH_REPORT=1, IBKR_ALERT_WEBHOOK, IBKR_RECONCILE_HEARTBEAT_URL.
 
@@ -29,6 +32,7 @@
 #>
 param(
     [string]$Config = $env:IBKR_ACCOUNTS_CONFIG,
+    [string]$SlotCT = $env:IBKR_SLOT_CT,
     [switch]$DryRun
 )
 
@@ -68,6 +72,27 @@ function Log($msg) {
 Set-Location $RepoRoot
 Log "----------------------------------------------"
 Log "starting IBKR LIVE reconcile (after the close)"
+
+# DST-proof slot guard. The task fires at every local time the configured US Central
+# slot can map to over the year; only the fire where America/Chicago really is
+# at the slot proceeds. -Preview and direct runs (no -SlotCT) always proceed.
+# Fails OPEN: if the check itself cannot run, trade rather than skip the day.
+if ($SlotCT -and -not $DryRun) {
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $GuardOut = & $Python (Join-Path $ScriptDir 'slot_guard.py') --slot $SlotCT 2>&1
+    $GuardExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($GuardExit -eq 10) {
+        Log "slot guard: $GuardOut"
+        Log "not the $SlotCT US Central slot (wrong side of a DST change) - exiting, nothing done"
+        exit 0
+    } elseif ($GuardExit -ne 0) {
+        Log "WARN: slot guard could not run (exit $GuardExit: $GuardOut) - proceeding anyway"
+    } else {
+        Log "slot guard: $GuardOut"
+    }
+}
+
 
 $RunArgs = @('scripts\ibkr_reconcile_accounts.py')
 if ($Config) { $RunArgs += @('--config', $Config) }

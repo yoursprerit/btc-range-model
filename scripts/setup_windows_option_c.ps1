@@ -52,6 +52,11 @@
                            2:30 PM US Central slot on a Central-time machine;
                            on another zone pass the local equivalent, e.g.
                            15:30 on an Eastern box).
+.PARAMETER LiveTaskTime    US CENTRAL wall-clock slot of the LIVE executor (default 14:20),
+                           NOT the PC's local time: the task is registered at every
+                           local time that slot maps to and guarded (-SlotCT) so it
+                           runs once at 2:20 PM CT on both sides of a DST change.
+                           Same for -ReconcileTaskTime (default 15:15 CT).
 .PARAMETER Branch          Branch carrying the published target book (default
                            main - where the publisher commits the daily book).
 
@@ -302,6 +307,28 @@ if ($IBC) {
     Info "start the gateway under IBC with: $IbcDir\StartGateway.bat"
 }
 
+# DST-proof triggers. A Task Scheduler trigger is a wall-clock hint in the PC's
+# zone; one pinned to UTC ("Synchronize across time zones") slid from 2:20 PM to
+# 1:20 PM CT when US daylight time ended (2026-11-02). So register a trigger at
+# EVERY local time the US Central slot can map to over the year (one on a Central
+# PC, two or more elsewhere) and pass -SlotCT: the wrapper then runs only on the
+# fire where America/Chicago is really at the slot (scripts\slot_guard.py).
+# StartBoundary is set WITHOUT an offset so the trigger is never UTC-pinned.
+function New-CentralSlotTriggers([string]$Slot) {
+    $times = @($Slot)                                   # fallback: treat as local
+    if (Test-Path $Venvpy) {
+        $out = & $Venvpy (Join-Path $ScriptDir 'slot_guard.py') --slot $Slot --local-times 2>$null
+        if ($LASTEXITCODE -eq 0 -and $out) { $times = @($out | Where-Object { $_ -match '^\d\d:\d\d$' }) }
+        else { Warn "slot_guard.py failed - registering a single local trigger at $Slot" }
+    }
+    foreach ($t in $times) {
+        $trg = New-ScheduledTaskTrigger -Daily -At ([datetime]$t)
+        $trg.StartBoundary = ([datetime]$t).ToString("yyyy-MM-dd'T'HH:mm:ss")
+        $trg
+    }
+    Info "triggers (local time): $($times -join ', ') -> guarded to $Slot US Central"
+}
+
 # -- 7. Task Scheduler ---------------------------------------------------------
 if ($Task) {
     Section "Task Scheduler - daily executor"
@@ -491,9 +518,9 @@ if ($LiveTask) {
         Warn "no $cfgPath yet - copy deploy\ibkr_accounts.example.json to it and edit"
         Warn "  (the task is registered anyway; it will exit 2 until the file exists)"
     }
-    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Branch `"$Branch`""
+    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Branch `"$Branch`" -SlotCT `"$LiveTaskTime`""
     $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $RepoRoot
-    $trg = New-ScheduledTaskTrigger -Daily -At ([datetime]$LiveTaskTime)
+    $trg = @(New-CentralSlotTriggers $LiveTaskTime)
     # No -StartWhenAvailable on purpose: a LIVE MOC run that fires late is
     # skipped by the runner anyway (past the 15:50 ET cutoff), so a catch-up
     # fire would only produce a confusing "skipped" alert after the close.
@@ -502,7 +529,7 @@ if ($LiveTask) {
     Register-ScheduledTask -TaskName 'IBKR Option C LIVE executor' -Action $act -Trigger $trg `
         -Settings $set -RunLevel Limited -Force `
         -Description 'Trade the published live book in every configured IBKR account as market-on-close orders.' | Out-Null
-    Ok "registered task 'IBKR Option C LIVE executor' at $LiveTaskTime daily (-WakeToRun), branch $Branch"
+    Ok "registered task 'IBKR Option C LIVE executor' at $LiveTaskTime US Central daily (DST-proof, -WakeToRun), branch $Branch"
     Info "the MOC cutoff is 15:50 ET: $LiveTaskTime must be well before it in YOUR time zone"
     Info "preview now (no orders): .\scripts\setup_windows_option_c.ps1 -LiveRehearse"
 }
@@ -516,15 +543,15 @@ if ($ReconcileTask) {
     Section "Task Scheduler - LIVE after-the-close reconcile"
     $wrapper = Join-Path $ScriptDir 'ibkr_reconcile_live_accounts.ps1'
     if (-not (Test-Path $wrapper)) { throw "missing $wrapper" }
-    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`""
+    $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -SlotCT `"$ReconcileTaskTime`""
     $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $RepoRoot
-    $trg = New-ScheduledTaskTrigger -Daily -At ([datetime]$ReconcileTaskTime)
+    $trg = @(New-CentralSlotTriggers $ReconcileTaskTime)
     $set = New-ScheduledTaskSettingsSet -WakeToRun `
             -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
     Register-ScheduledTask -TaskName 'IBKR Option C LIVE reconcile' -Action $act -Trigger $trg `
         -Settings $set -RunLevel Limited -Force `
         -Description 'After the close: verify what filled in each live IBKR account and rebuild any missing execution report.' | Out-Null
-    Ok "registered task 'IBKR Option C LIVE reconcile' at $ReconcileTaskTime daily (4:15 PM ET = 3:15 PM US Central)"
+    Ok "registered task 'IBKR Option C LIVE reconcile' at $ReconcileTaskTime US Central daily (DST-proof; 4:15 PM ET = 3:15 PM US Central)"
     Info "dry run now: .\scripts\ibkr_reconcile_live_accounts.ps1 -DryRun"
 }
 
