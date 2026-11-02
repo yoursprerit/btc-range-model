@@ -26,7 +26,9 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -349,26 +351,27 @@ def check_live_secret_required(payload: dict | None) -> None:
 
 
 def check_moc_slot() -> None:
-    """Where the scheduled live trigger lands relative to the MOC cutoff."""
+    """Where the scheduled live slot (US Central wall clock) lands relative to
+    the MOC cutoff. IBKR_SLOT_CT / IBKR_TASK_TIME is the Central slot, not the
+    PC's local time -- the task is registered at the matching local times."""
     try:
         from zoneinfo import ZoneInfo
     except ImportError:                                    # pragma: no cover
         _add("WARN", "task-slot", "zoneinfo unavailable -- cannot check the timezone")
         return
-    task_time = os.environ.get("IBKR_TASK_TIME", "14:20")
+    task_time = os.environ.get("IBKR_SLOT_CT") or os.environ.get("IBKR_TASK_TIME", "14:20")
     try:
         hh, mm = (int(x) for x in task_time.split(":"))
     except ValueError:
         _add("WARN", "task-slot", f"unparseable task time {task_time!r}")
         return
-    local = datetime.now().astimezone().replace(hour=hh, minute=mm, second=0,
-                                                microsecond=0)
-    et = local.astimezone(ZoneInfo("America/New_York"))
-    ct = local.astimezone(ZoneInfo("America/Chicago"))
+    ct = datetime.now(ZoneInfo("America/Chicago")).replace(hour=hh, minute=mm, second=0,
+                                                            microsecond=0)
+    et = ct.astimezone(ZoneInfo("America/New_York"))
     mins_to_cutoff = (MOC_CUTOFF_ET[0] * 60 + MOC_CUTOFF_ET[1]) - (et.hour * 60 + et.minute)
-    detail = (f"{task_time} local = {ct:%H:%M} US Central = {et:%H:%M} ET; "
+    detail = (f"{task_time} US Central ({ct:%Z}) = {et:%H:%M} ET; "
               f"{mins_to_cutoff} min before the {MOC_CUTOFF_ET[0]}:{MOC_CUTOFF_ET[1]} "
-              f"ET MOC cutoff (machine zone {local.tzname()})")
+              f"ET MOC cutoff")
     if mins_to_cutoff < 0 or et.hour < 10:
         _add("FAIL", "task-slot", detail + " -- the run would start AFTER the cutoff "
                                            "(or before the open); strict MOC would skip every session")
@@ -377,6 +380,90 @@ def check_moc_slot() -> None:
                                            "git pull; 2:20 PM US Central is recommended")
     else:
         _add("PASS", "task-slot", detail)
+
+
+_TASK_NS = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+LIVE_TASK_NAME = "IBKR Option C LIVE executor"
+
+
+def analyze_task_triggers(xml_text: str, slot: str, local_tz=None) -> tuple[str, str]:
+    """DST audit of a registered task (the `schtasks /Query /XML` document).
+
+    For a mid-summer and a mid-winter day, work out which US Central wall-clock
+    times the task's triggers fire at -- a trigger with a UTC offset/Z in its
+    StartBoundary ("Synchronize across time zones") is pinned to UTC, any other
+    is machine-local time. The slot must be hit in BOTH seasons; a fire at any
+    other time is only acceptable when the action carries the -SlotCT guard.
+    `local_tz` (tzinfo) overrides the machine zone, for tests. -> (status, detail)."""
+    import re
+    from zoneinfo import ZoneInfo
+    chicago = ZoneInfo("America/Chicago")
+    root = ET.fromstring(re.sub(r"^\s*<\?xml[^>]*\?>", "", xml_text))  # schtasks says UTF-16
+    triggers = [t.findtext(f"{_TASK_NS}StartBoundary") or ""
+                for t in root.iter() if t.tag in (f"{_TASK_NS}CalendarTrigger",
+                                                  f"{_TASK_NS}TimeTrigger")]
+    if not triggers:
+        return "FAIL", "task has no time trigger"
+    args = " ".join(a.findtext(f"{_TASK_NS}Arguments") or ""
+                    for a in root.iter(f"{_TASK_NS}Exec"))
+    guarded = bool(re.search(r"-SlotCT\b", args))
+    pinned = [b for b in triggers if re.search(r"(Z|[+-]\d\d:\d\d)$", b)]
+    hh, mm = (int(x) for x in slot.split(":"))
+    seasons, missed, stray = {}, [], False
+    for label, day in (("summer", (2026, 7, 15)), ("winter", (2026, 1, 15))):
+        fires = set()
+        for b in triggers:
+            when = datetime.fromisoformat(b.replace("Z", "+00:00"))
+            if when.tzinfo is not None:                      # pinned: fixed UTC clock
+                utc = datetime(*day, when.astimezone(timezone.utc).hour,
+                               when.astimezone(timezone.utc).minute, tzinfo=timezone.utc)
+                ct = utc.astimezone(chicago)
+            else:                                            # machine-local wall clock
+                naive = datetime(*day, when.hour, when.minute)
+                local = naive.replace(tzinfo=local_tz) if local_tz else naive.astimezone()
+                ct = local.astimezone(chicago)
+            fires.add(f"{ct:%H:%M}")
+        seasons[label] = sorted(fires)
+        if f"{hh:02d}:{mm:02d}" not in fires:
+            missed.append(label)
+        if fires - {f"{hh:02d}:{mm:02d}"}:
+            stray = True
+    detail = (f"{slot} CT slot; triggers fire at CT " +
+              "; ".join(f"{k}: {', '.join(v)}" for k, v in seasons.items()) +
+              f"; guard {'ON' if guarded else 'OFF'}"
+              f"{'; UTC-PINNED trigger' if pinned else ''}")
+    if missed:
+        return "FAIL", (detail + f" -- misses the slot in {' and '.join(missed)}: the "
+                        "executor drifts an hour at the DST change. Re-register with "
+                        "setup_windows_option_c.ps1 -LiveTask")
+    if stray and not guarded:
+        return "FAIL", (detail + " -- fires at other times with no -SlotCT guard: it "
+                        "would trade at the wrong hour on one side of DST. Re-register "
+                        "with setup_windows_option_c.ps1 -LiveTask")
+    return "PASS", detail
+
+
+def check_task_dst(task_name: str = LIVE_TASK_NAME) -> None:
+    """Windows only: read the registered task back and audit it for DST drift."""
+    if os.name != "nt":
+        return
+    slot = os.environ.get("IBKR_SLOT_CT") or os.environ.get("IBKR_TASK_TIME", "14:20")
+    try:
+        r = subprocess.run(["schtasks", "/Query", "/TN", task_name, "/XML"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception as e:                                 # noqa: BLE001
+        _add("WARN", "task-dst", f"cannot query Task Scheduler: {e}")
+        return
+    if r.returncode != 0:
+        _add("WARN", "task-dst", f"task {task_name!r} not registered "
+                                 f"(setup_windows_option_c.ps1 -LiveTask)")
+        return
+    try:
+        status, detail = analyze_task_triggers(r.stdout, slot)
+    except Exception as e:                                 # noqa: BLE001
+        _add("WARN", "task-dst", f"could not audit the task XML: {type(e).__name__}: {e}")
+        return
+    _add(status, "task-dst", detail)
 
 
 def check_kill_switch() -> None:
@@ -403,6 +490,7 @@ def main() -> int:
     if LIVE:
         check_live_secret_required(payload)
         check_moc_slot()
+        check_task_dst()
         check_live_accounts(payload)
     else:
         check_slot()

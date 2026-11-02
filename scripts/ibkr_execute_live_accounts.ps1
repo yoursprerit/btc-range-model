@@ -23,6 +23,12 @@
     Git branch carrying the published book (env: IBKR_BRANCH, default main).
 .PARAMETER Config
     Accounts config (env: IBKR_ACCOUNTS_CONFIG, default deploy\ibkr_accounts.json).
+.PARAMETER SlotCT
+    HH:MM on the US Central (America/Chicago) wall clock. When set, the run
+    proceeds only if Chicago is within -5/+30 min of it (scripts\slot_guard.py),
+    so a task registered at several local times trades once, at 2:20 PM CT,
+    on both sides of a daylight-saving change. Registered by setup_windows_option_c.ps1
+    -LiveTask. Ignored with -Preview. Env: IBKR_SLOT_CT.
 .PARAMETER Preview
     Run the runner WITHOUT --execute: connects, reads every account, prints the
     order plan, places no orders.
@@ -42,6 +48,7 @@
 param(
     [string]$Branch = $env:IBKR_BRANCH,
     [string]$Config = $env:IBKR_ACCOUNTS_CONFIG,
+    [string]$SlotCT = $env:IBKR_SLOT_CT,
     [switch]$Preview,
     [switch]$NoPull
 )
@@ -82,6 +89,26 @@ function Log($msg) {
     $line = "[{0}] {1}" -f (Get-Date).ToUniversalTime().ToString('u'), $msg
     Write-Output $line
     Add-Content -Path $Log -Value $line -Encoding UTF8
+}
+
+# DST-proof slot guard. The task fires at every local time the configured US Central
+# slot can map to over the year; only the fire where America/Chicago really is
+# at the slot proceeds. -Preview and direct runs (no -SlotCT) always proceed.
+# Fails OPEN: if the check itself cannot run, trade rather than skip the day.
+if ($SlotCT -and -not $Preview) {
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $GuardOut = & $Python (Join-Path $ScriptDir 'slot_guard.py') --slot $SlotCT 2>&1
+    $GuardExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($GuardExit -eq 10) {
+        Log "slot guard: $GuardOut"
+        Log "not the $SlotCT US Central slot (wrong side of a DST change) - exiting, nothing done"
+        exit 0
+    } elseif ($GuardExit -ne 0) {
+        Log "WARN: slot guard could not run (exit $GuardExit: $GuardOut) - proceeding anyway"
+    } else {
+        Log "slot guard: $GuardOut"
+    }
 }
 
 # The run holds the gateway connection through the 4:00 PM ET closing auction

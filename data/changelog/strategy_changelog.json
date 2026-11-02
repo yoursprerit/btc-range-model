@@ -1376,6 +1376,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/266"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-02",
+  "kind": "execution",
+  "title": "Live executor slot is DST-proof (2:20 PM US Central year-round)",
+  "description": "The Windows live executor and reconcile tasks are now registered at every local time the US Central slot maps to and guarded by scripts/slot_guard.py (-SlotCT), so exactly one fire runs at 2:20 PM CT on both sides of a daylight-saving change. Preflight now reads the registered task back and fails a UTC-pinned or drifting trigger.",
+  "impact": "The 2026-11-02 live run fired at 1:20 PM CT (a UTC-pinned trigger did not follow the clock change), before the 2:00 PM CT intraday stop check. The guard admits only a fire within -5/+30 min of the slot on the America/Chicago clock.",
+  "links": [
+   {
+    "label": "PR #267",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/267"
+   }
+  ]
  }
 ]
 }

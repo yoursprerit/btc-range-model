@@ -792,6 +792,8 @@ Short version:
 5. `... -LivePreflight`, then `... -LiveRehearse` (reads every account, sends
    nothing), then enable **one** account with a small deploy cap first.
 
+`-LiveTaskTime` / `-ReconcileTaskTime` are **US Central** slots, not PC-local: the task is registered at each local time that slot maps to over the year and `-SlotCT` (`scripts\slot_guard.py`, window -5/+30 min on the America/Chicago clock) lets exactly one fire run, so DST changes never move the trade time. `-LivePreflight` reads the task back (`task-dst`) and fails a trigger pinned to UTC ("Synchronize across time zones").
+
 What it does at 2:20 PM US Central: pulls `target_book_live.json`, checks the
 gateway login manages every configured account, then starts one executor per
 account **together**, each sending whole-share **MOC** orders stamped with its
