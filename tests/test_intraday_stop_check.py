@@ -253,3 +253,112 @@ def test_a_failed_freshness_audit_acts_on_nothing(env):
     assert isc.main(env["argv"]) == 1
     assert _marker(env)["status"] == "audit_failed"
     assert (env["tmp"] / "target_book.json").read_text() == before
+
+
+# ── entry reversals: a fresh entry the live price has already turned back ────
+def _entry(key, *, ma=100.0, bar=102.0, parent=None):
+    """A committed buy (opens today) on a plain-MA sleeve: long while price > ma."""
+    r = _res(key, tone="buy", state="ENTRY", label="ENTER", parent=parent)
+    r.update(mode="ma", ma_val=ma, bar_close=bar)
+    return r
+
+
+def test_entry_reversal_flags_only_entries_whose_live_price_breaks_the_trend():
+    res = [_entry("EEE", ma=100.0), _entry("FFF", ma=100.0),
+           _held("AAA", stop=95.0)]                          # held: not an entry
+    spot = {"EEE": _q(99.0), "FFF": _q(101.0), "AAA": _q(10.0)}
+    er = isc.evaluate_entry_reversals(res, spot, held_keys={"EEE", "FFF", "AAA"}, now=NOW)
+    assert [t["key"] for t in er["reversed"]] == ["EEE"]
+    assert [t["key"] for t in er["holding"]] == ["FFF"]
+    assert er["reversed"][0]["chg_pct"] == pytest.approx(-2.94, abs=0.01)
+
+
+def test_entry_reversal_only_looks_at_sleeves_in_the_book_and_uses_the_parent_quote():
+    res = [_entry("EEE"), _entry("LEV", parent="UND")]
+    spot = {"EEE": _q(90.0), "UND": _q(90.0), "LEV": _q(500.0)}   # LEV's own quote is irrelevant
+    er = isc.evaluate_entry_reversals(res, spot, held_keys={"LEV"}, now=NOW)
+    assert [t["key"] for t in er["reversed"]] == ["LEV"]          # EEE not in the book → ignored
+
+
+@pytest.mark.parametrize("quote,why", [
+    (dict(price=None), "no live quote"),
+    (dict(price=90.0, session_closed=True), "session closed"),
+    (dict(price=40.0, session_closed=False), "implausible"),
+])
+def test_entry_reversal_never_cancels_on_an_untrustworthy_quote(quote, why):
+    q = dict(quote_time=NOW - pd.Timedelta(minutes=2), src="yahoo", **quote)
+    er = isc.evaluate_entry_reversals([_entry("EEE")], {"EEE": q}, held_keys={"EEE"}, now=NOW)
+    assert not er["reversed"] and why in er["skipped"][0]["reason"]
+
+
+def test_stale_requoted_last_close_is_not_a_reversal():
+    r = _entry("EEE", ma=100.0, bar=99.0)
+    r["close_hist"] = [98.0, 99.0]                       # live == last close → no new information
+    er = isc.evaluate_entry_reversals([r], {"EEE": _q(99.0)}, held_keys={"EEE"}, now=NOW)
+    assert not er["reversed"]
+
+
+def test_cancel_marks_the_entry_stand_aside_with_zero_target():
+    acts = [dict(key="EEE", action="OPEN", decision="ENTER", target=0.0, in_pos=False),
+            dict(key="FFF", action="OPEN", decision="ENTER", target=0.1, in_pos=False)]
+    out = isc.cancel_entry_actions(acts, [dict(key="EEE", live=99.0)])
+    assert out[0]["action"] == "STAND ASIDE" and out[0]["target"] == 0.0
+    assert "ENTRY CANCELLED" in out[0]["decision"]
+    assert out[1]["action"] == "OPEN" and acts[0]["action"] == "OPEN"
+
+
+def test_a_cancelled_entry_is_not_funded_by_the_allocator():
+    w = {"HHH": 0.3, "EEE": 0.3}
+    res = [_res("HHH", in_pos=True, tone="hold"), _res("EEE", tone="buy", state="ENTRY")]
+    base = oc.signal_gated_allocation(res, w, prev_weights={"HHH": 0.28})
+    out = oc.signal_gated_allocation(res, w, prev_weights={"HHH": 0.28}, force_exit={"EEE"})
+    assert base["target"]["EEE"] > 0 and out["target"].get("EEE", 0.0) == 0.0
+    assert out["target"]["HHH"] == pytest.approx(base["target"]["HHH"])
+
+
+def _entry_env(env, live):
+    """Swap the fixture's universe for one with a pending entry (DDD) in the book."""
+    res = [_held("AAA", stop=95.0), _held("BBB", stop=90.0), _held("CCC"), _entry("DDD")]
+    env["monkeypatch"].setattr(oc, "run_universe", lambda *a, **k: res)
+    spot = {"AAA": _q(99.0), "BBB": _q(99.0), "CCC": _q(10.0), "DDD": _q(live)}
+    env["monkeypatch"].setattr(oc, "fetch_spot", lambda *a, **k: spot)
+    env["write_books"]()
+    for name, mode in (("target_book.json", "paper"), ("target_book_live.json", "live")):
+        p = tb.build_payload(as_of="2026-10-16", profile="Balanced",
+                             weights={"AAA": 0.2, "BBB": 0.2, "CCC": 0.2, "DDD": 0.1, "SATA": 0.1},
+                             cash_weight=0.2, exec_price={"AAA": 92.0}, book_mode=mode,
+                             sata_cap=0.30, generated_at_utc="2026-10-19T12:20:00+00:00")
+        (env["tmp"] / name).write_text(tb.dumps(p, SECRET))
+
+
+def test_a_reversed_entry_republishes_both_books_without_it(env):
+    _entry_env(env, live=99.0)                          # DDD long only while > 100
+    assert isc.main(env["argv"]) == 0
+    assert env["calls"]["force"] == {"DDD"}
+    for name in ("target_book.json", "target_book_live.json"):
+        b = tb.loads((env["tmp"] / name).read_text())
+        assert tb.verify_signature(b, SECRET)[0]
+        assert "DDD" not in b["weights"] and b["weights"]["AAA"] == pytest.approx(0.2)
+        assert b["intraday_stop"]["cancelled_keys"] == ["DDD"]
+        assert b["intraday_stop"]["stopped_keys"] == []
+    m = _marker(env)
+    assert m["status"] == "entry_cancelled" and m["books_rewritten"] is True
+    assert m["entry_reversed"][0]["key"] == "DDD"
+
+
+def test_entry_reversal_rerun_is_idempotent(env):
+    _entry_env(env, live=99.0)
+    isc.main(env["argv"])
+    first = (env["tmp"] / "target_book.json").read_text()
+    assert isc.main(env["argv"]) == 0
+    assert _marker(env)["status"] == "already_applied"
+    assert (env["tmp"] / "target_book.json").read_text() == first
+
+
+def test_an_entry_that_still_holds_leaves_the_books_untouched(env):
+    _entry_env(env, live=104.0)
+    before = (env["tmp"] / "target_book.json").read_text()
+    assert isc.main(env["argv"]) == 0
+    m = _marker(env)
+    assert m["status"] == "clear" and m["entry_holding"][0]["key"] == "DDD"
+    assert (env["tmp"] / "target_book.json").read_text() == before

@@ -1,5 +1,11 @@
 """Intraday stop check — the 2:00-PM-CT amendment to the day's published books.
 
+(Two checks share this job: STOPS on held sleeves, and ENTRY REVERSALS — a
+sleeve the morning book OPENS off the last close whose live price would, if it
+were today's close, flip its trend flat again, so it would open today and exit
+tomorrow.  Such a sleeve is cancelled from the book exactly like a stop-out.
+See ``evaluate_entry_reversals``.)
+
 The daily books are built at 7:15 AM CT from the previous close, so a stop
 (a fixed −5 %/−10 % stop or a 10 %/12 % trailing stop on the sleeves that have
 one) can only be seen by the book the morning AFTER the close that breached it.
@@ -35,6 +41,17 @@ What it does, in order
    else is trimmed), both books are re-signed and rewritten in place with an
    ``intraday_stop`` stamp, and the dated as-of archive is replaced.  The
    outgoing book is NOT rotated into ``*_prev.json`` (same-day re-publish).
+
+Entry reversals
+---------------
+A sleeve opening today (committed ENTER off the last close, not yet held) is
+re-tested with the live price standing in for today's close, using the engine's
+own mode-aware read (``overall_core.live_exit_keys(include_entries=True)``:
+close-vs-SMA, the dual-MA cross, the MACD histogram).  If the trend would be
+flat at that close, the sleeve is removed from both books (action STAND ASIDE,
+target 0) — it would otherwise be bought into MOC and sold the next morning.
+Same quote-trust rules as the stops.  Divergence sleeves (ARTY) have no live
+exit read and are not covered.
 
 Honest limits (by design of the request)
 ----------------------------------------
@@ -162,6 +179,69 @@ def evaluate_stops(results: list[dict], spot: dict, *, held_keys=None,
     return out
 
 
+def entry_candidates(results: list[dict], held_keys) -> list[dict]:
+    """Sleeves the published book OPENS today: in the book, flat in the engine
+    (not yet held) and signalling a committed buy off the last close."""
+    return [r for r in results
+            if r["key"] in held_keys
+            and not (r.get("pos") or {}).get("in_pos")
+            and (r.get("decision") or {}).get("tone") == "buy"]
+
+
+def evaluate_entry_reversals(results: list[dict], spot: dict, *, held_keys,
+                             now=None) -> dict:
+    """Which of today's fresh entries has the live price already turned back?
+
+    Each candidate (see :func:`entry_candidates`) is re-tested with its PARENT's
+    live quote as the newest close — if the mode's real long condition is then
+    false, the position would open today and be sold at tomorrow's open, so it
+    is ``reversed``.  Untrustworthy quotes (stale, closed session, implausible)
+    are ``skipped`` and never cancel an entry.  Rows carry ``key, parent,
+    live, bar_close, chg_pct`` (``skipped`` rows carry ``reason``)."""
+    now = now if now is not None else fr.now_utc()
+    out = {"reversed": [], "holding": [], "skipped": []}
+    cands = entry_candidates(results, held_keys)
+    usable, rows = [], {}
+    for r in cands:
+        q = (spot or {}).get(r.get("parent") or r["key"]) or {}
+        ch = r.get("close_hist")
+        try:
+            bar = float(ch[-1]) if ch is not None and len(ch) else r.get("bar_close")
+        except (TypeError, ValueError):
+            bar = r.get("bar_close")
+        row = dict(key=r["key"], parent=r.get("parent"), bar_close=bar)
+        why = _quote_problem(q, bar, now)
+        if why:
+            out["skipped"].append(dict(row, reason=why))
+            continue
+        px = float(q["price"])
+        row.update(live=round(px, 4), src=q.get("src"),
+                   chg_pct=(None if not bar else round((px / float(bar) - 1) * 100, 2)))
+        rows[r["key"]] = row
+        usable.append(r)
+    flipped = oc.live_exit_keys(usable, spot, include_entries=True) if usable else set()
+    for k, row in rows.items():
+        (out["reversed"] if k in flipped else out["holding"]).append(row)
+    return out
+
+
+def cancel_entry_actions(actions: list[dict], reversed_rows: list[dict]) -> list[dict]:
+    """Turn each cancelled entry's action row into STAND ASIDE with a zero
+    target (the allocator leaves a force-exited buy as an OPEN row)."""
+    by = {t["key"]: t for t in reversed_rows}
+    out = []
+    for a in actions:
+        a = dict(a)
+        t = by.get(a.get("key"))
+        if t:
+            a.update(action="STAND ASIDE", target=0.0, exits_next_bar=False,
+                     live_entry=False,
+                     decision=(f"ENTRY CANCELLED — live {t['live']:,.2f} would "
+                               "flip the trend flat at the close"))
+        out.append(a)
+    return out
+
+
 def in_window(ct_now, earliest: str, latest: str) -> tuple[bool, str]:
     """(inside?, reason) for the CT wall-clock window ``earliest``–``latest``."""
     def _hm(s):
@@ -283,6 +363,10 @@ def main(argv=None) -> int:
     ev = evaluate_stops(results, spot, now=now,
                         held_keys=set(held_w) | set(prior.get("stopped_keys") or []))
     trig = ev["triggered"]
+    prior_cancelled = set(prior.get("cancelled_keys") or [])
+    er = evaluate_entry_reversals(results, spot, now=now,
+                                  held_keys=set(held_w) | prior_cancelled)
+    rev = er["reversed"]
     as_of = cur.get("as_of")
     for t in trig:
         print(f"  🛑 {t['key']:5s} live {t['live']:>10,.2f} ≤ {t['kind']} stop "
@@ -290,27 +374,43 @@ def main(argv=None) -> int:
     for w in ev["watching"][:WATCH_ROWS]:
         print(f"  ·  {w['key']:5s} live {w['live']:>10,.2f}  {w['kind']} stop "
               f"{w['level']:>10,.2f}  ({w['dist_pct']:+.2f} % above)")
-    for s in ev["skipped"]:
-        print(f"  ?  {s['key']:5s} not evaluated — {s['reason']}")
+    for s_ in ev["skipped"]:
+        print(f"  ?  {s_['key']:5s} not evaluated — {s_['reason']}")
+    for t in rev:
+        print(f"  ↩️  {t['key']:5s} entry cancelled — live {t['live']:>10,.2f} "
+              f"({t['chg_pct']:+.2f} % vs last close) would flip the trend flat")
+    for w in er["holding"]:
+        print(f"  ✓  {w['key']:5s} entry holds — live {w['live']:>10,.2f}")
+    for s_ in er["skipped"]:
+        print(f"  ?  {s_['key']:5s} entry not re-tested — {s_['reason']}")
     summary = dict(as_of=as_of, profile=profile, triggered=trig,
-                   watching=ev["watching"][:WATCH_ROWS], skipped=ev["skipped"])
+                   watching=ev["watching"][:WATCH_ROWS], skipped=ev["skipped"],
+                   entry_reversed=rev, entry_holding=er["holding"],
+                   entry_skipped=er["skipped"])
 
-    if not trig:
+    if not trig and not rev:
         return done("clear", books_rewritten=False, **summary)
     keys = sorted(t["key"] for t in trig)
-    if not args.force and set(keys) <= set(prior.get("stopped_keys") or []) \
-            and all(held_w.get(k, 0) == 0 for k in keys):
+    rkeys = sorted(t["key"] for t in rev)
+    if not args.force \
+            and set(keys) <= set(prior.get("stopped_keys") or []) \
+            and set(rkeys) <= prior_cancelled \
+            and all(held_w.get(k, 0) == 0 for k in keys + rkeys):
         return done("already_applied", books_rewritten=False, **summary)
     if args.dry_run:
-        print(f"[dry-run] would re-publish both books without: {', '.join(keys)}")
+        print("[dry-run] would re-publish both books without: "
+              f"{', '.join(keys + rkeys)}")
         return 0
 
     # ── rebuild: morning book pinned (adds-only), stopped sleeves forced out ──
     from ibkr_rebalance import compute_target_book
     import publish_target_book as ptb
+    all_stopped = set(keys) | set(prior.get("stopped_keys") or [])
+    all_cancelled = set(rkeys) | prior_cancelled
     book = compute_target_book(profile, results=results, live_adjust=False,
-                               prev_weights=held_w, force_exit=set(keys))
-    book.actions = amend_actions(book.actions, trig)
+                               prev_weights=held_w,
+                               force_exit=all_stopped | all_cancelled)
+    book.actions = cancel_entry_actions(amend_actions(book.actions, trig), rev)
     audit_stamp = dict(passed=True, checked_at_utc=audit["checked_at_utc"],
                        stale_apps=list(audit["stale_apps"]))
     basis = dict(anchor_ct=fr.fmt_ct(anchor),
@@ -322,7 +422,11 @@ def main(argv=None) -> int:
         generated_at_utc=base["checked_at_utc"])
     stamp = dict(checked_at_utc=base["checked_at_utc"],
                  checked_at_ct=base["checked_at_ct"],
-                 stopped_keys=sorted(set(keys) | set(prior.get("stopped_keys") or [])),
+                 stopped_keys=sorted(all_stopped),
+                 cancelled_keys=sorted(all_cancelled),
+                 cancelled=[{k: t.get(k) for k in ("key", "parent", "bar_close",
+                                                   "live", "chg_pct", "src")}
+                            for t in rev],
                  stopped=[{k: t.get(k) for k in ("key", "kind", "level", "live",
                                                  "entry", "src")} for t in trig],
                  morning_generated_at_utc=(prior.get("morning_generated_at_utc")
@@ -334,12 +438,13 @@ def main(argv=None) -> int:
     arch = tb.archive_book(live, live_path, secret)
     if arch:
         print(f"Replaced the dated as-of record → {arch}")
-    print(f"\nRe-published both books without {', '.join(keys)} "
+    print(f"\nRe-published both books without {', '.join(keys + rkeys)} "
           f"(as-of {book.as_of}, profile {profile}):")
     for k in sorted(live_w, key=lambda k: -live_w[k]):
         print(f"    {k:5s} {live_w[k]*100:5.1f}%")
     print(f"    CASH  {live_cash*100:5.1f}%")
-    return done("stopped", books_rewritten=True, **summary)
+    return done("stopped" if keys else "entry_cancelled",
+                books_rewritten=True, **summary)
 
 
 if __name__ == "__main__":

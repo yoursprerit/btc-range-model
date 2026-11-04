@@ -3,6 +3,8 @@ name: Intraday stop check (2:00 PM CT)
 # Prices every HELD sleeve that carries a stop at its live quote about 20 minutes
 # before the executor's 2:20 PM CT slot, and — only if a stop is breached —
 # re-publishes both signed books (paper + live) without the stopped sleeves.
+# It also re-tests today's FRESH ENTRIES at the live price and cancels (removes
+# from both books) any whose trend would flip flat if that price were the close.
 # Logic, guards and honest limits: scripts/intraday_stop_check.py.
 #
 # TIMING. The precise trigger is an external scheduler calling workflow_dispatch
