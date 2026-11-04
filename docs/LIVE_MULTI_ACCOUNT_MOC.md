@@ -81,7 +81,12 @@ every held sleeve that has a stop at its live quote at ~2:00 PM CT. Only if a
 fixed or trailing stop is breached does it re-publish **both** signed books
 (paper and live) without that sleeve — exactly as tomorrow's book would show
 it — so this runner, Collective2 (2:20 PM) and the as-published record all see
-it. A clear day changes nothing but `data/overall/intraday_stop_check.json`,
+it. The same job also **cancels fresh entries that have already turned back**:
+a sleeve the morning book opens off the last close whose live price would flip
+its trend flat if it were today's close (it would be bought MOC and sold the
+next morning) is removed from both books too (action *STAND ASIDE*; marker
+status `entry_cancelled`). Divergence sleeves (ARTY) have no live read and are
+not covered. A clear day changes nothing but `data/overall/intraday_stop_check.json`,
 which this runner reads and **alerts on if today's check did not complete**
 (it still trades the morning book as published). Limits: the engine's stop is a
 *close* rule, so a 2:00 PM breach that recovers into the close is sold anyway;

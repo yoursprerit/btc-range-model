@@ -1390,6 +1390,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/267"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-04",
+  "kind": "execution",
+  "title": "2 PM check cancels fresh entries the live price has already reversed",
+  "description": "Besides stops, the 2:00 PM CT intraday check now re-tests every sleeve the morning book opens off the last close, using the live price as today's close (the engine's own close-vs-SMA / dual-MA / MACD read). If the trend would be flat at that price, the sleeve is removed from both signed books, which are re-published (status entry_cancelled). Divergence sleeves are not covered.",
+  "impact": "Avoids buying MOC into a trend that has already broken and selling it the next morning.",
+  "links": []
  }
 ]
 }
