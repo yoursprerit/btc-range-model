@@ -1,10 +1,10 @@
 {
  "key": "WGMI",
  "source": "yahoo-live",
- "saved_at_utc": "2026-11-04T13:17:36+00:00",
- "rows": 1189,
+ "saved_at_utc": "2026-11-05T13:17:54+00:00",
+ "rows": 1190,
  "date_from": "2022-02-08",
- "date_to": "2026-11-03",
+ "date_to": "2026-11-04",
  "columns": [
   "px_open",
   "px_high",
@@ -47,18 +47,18 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "604675e96fd19cf1",
+ "checksum_sha256": "7c3309631f2404da",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "1189 rows"
+   "detail": "1190 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "1189 rows (need \u2265 260)"
+   "detail": "1190 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -68,7 +68,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "px_close: 1189 non-null values"
+   "detail": "px_close: 1190 non-null values"
   },
   {
    "name": "required_columns",
@@ -83,12 +83,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "1189 rows vs snapshot 1188"
+   "detail": "1190 rows vs snapshot 1189"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-11-03 vs snapshot 2026-11-02"
+   "detail": "last 2026-11-04 vs snapshot 2026-11-03"
   },
   {
    "name": "no_missing_recent_sessions",
