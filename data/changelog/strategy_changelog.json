@@ -1426,7 +1426,12 @@
   "title": "Data gate rejects an unadjusted stock-split step (SOXX 3-for-1)",
   "description": "New quality check no_unadjusted_split_step: a one-day close ratio near an integer split ratio (2, 3, 4, 5, 6, 8, 10, 15, 20 or its inverse, within 8%) on a session the pinned snapshot does not already carry rejects the fetch, so the sleeve keeps its last good snapshot until the provider restates the whole history on one basis. A fully restated history still passes and re-baselines. DATA_GATE_ALLOW_SPLIT_STEP=1 accepts a step knowingly.",
   "impact": "Simulated on the real SOXX snapshot: a mixed basis (old prices plus a post-split bar, -67.0%) passed every earlier check, including the 75% move bound and the returns-agreement check, and would have pinned a fake crash (err_hi -0.45 to -68). A restated history leaves every prediction (to about 4e-15) and all 29,986 signal cells unchanged, so SOXX/SOXL need no retraining or re-evaluation.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #270",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/270"
+   }
+  ]
  }
 ]
 }
