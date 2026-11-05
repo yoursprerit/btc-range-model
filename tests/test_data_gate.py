@@ -429,3 +429,87 @@ def test_tampered_snapshot_not_pinned(tmp_path):
     dg._atomic_write(spec.snapshot_csv, dg._norm_index(snap).to_csv())
     out = dg.gated_daily(spec, fetch_full=lambda: _frame(), consumer="UNIT")
     assert out.attrs["data_gate"]["decision"] == "refreshed"   # not "pinned"
+
+
+# ── unadjusted-split guard (SOXX 3-for-1, 2026-11-05) ────────────────────────
+def _post_split_bar(df, factor=3.0, day_move=0.99):
+    """Append one session priced on the post-split basis."""
+    nxt = df.index[-1] + pd.offsets.BDay(1)
+    row = df.iloc[-1].copy()
+    for c in ("px_open", "px_high", "px_low", "px_close", "soxl_close"):
+        row[c] = df.iloc[-1][c] * day_move / (factor if c != "soxl_close" else 1)
+    out = df.copy()
+    out.loc[nxt] = row
+    return out
+
+
+def _restate(df, factor=3.0):
+    out = df.copy()
+    for c in ("px_open", "px_high", "px_low", "px_close"):
+        out[c] = out[c] / factor
+    out["px_volume"] = out["px_volume"] * factor
+    return out
+
+
+def test_split_helper_flags_forward_and_reverse_ratios():
+    s = pd.Series([100.0, 99.0, 33.0, 33.5, 100.5],
+                  index=pd.bdate_range("2026-01-05", periods=5))
+    got = [(str(d.date()), k) for d, _, k in dg.split_like_steps(s)]
+    assert got == [("2026-01-07", 3), ("2026-01-09", -3)]
+    assert dg.split_like_steps(pd.Series([100.0, 40.0])) == []   # ERX-style -60% day
+
+
+def test_mixed_basis_split_bar_is_rejected(tmp_path):
+    """Old price level + a new post-split bar must NOT pass: the -67% print sits
+    inside the extreme-move bound and the returns check cannot see it."""
+    snap = _frame(n=320)
+    rep = dg.run_quality_checks(_spec(tmp_path), _post_split_bar(snap),
+                                snapshot=snap)
+    assert not rep["passed"]
+    assert "no_unadjusted_split_step" in rep["failed"]
+    assert "no_extreme_traded_moves" not in rep["failed"]   # the gap this closes
+
+
+def test_fully_restated_history_with_new_bar_is_accepted(tmp_path):
+    snap = _frame(n=320)
+    fresh = _post_split_bar(_restate(snap), factor=1.0)      # all one basis
+    rep = dg.run_quality_checks(_spec(tmp_path), fresh, snapshot=snap)
+    assert rep["passed"], rep["failed"]
+
+
+def test_already_pinned_split_step_is_history_not_news(tmp_path):
+    snap = _post_split_bar(_frame(n=320))     # carries the step, pinned earlier
+    fresh = snap.copy()
+    nxt = fresh.index[-1] + pd.offsets.BDay(1)
+    fresh.loc[nxt] = fresh.iloc[-1] * 1.002
+    rep = dg.run_quality_checks(_spec(tmp_path), fresh, snapshot=snap)
+    assert "no_unadjusted_split_step" not in rep["failed"]
+
+
+def test_no_snapshot_only_checks_the_newest_bars(tmp_path):
+    mixed = _post_split_bar(_frame(n=320))
+    assert "no_unadjusted_split_step" in dg.run_quality_checks(
+        _spec(tmp_path), mixed)["failed"]
+    deep = _frame(n=320).copy()
+    deep.iloc[100:, deep.columns.get_indexer(["px_close"])] *= 1 / 3
+    assert "no_unadjusted_split_step" not in dg.run_quality_checks(
+        _spec(tmp_path), deep)["failed"]
+
+
+def test_split_step_override_is_explicit(tmp_path, monkeypatch):
+    snap = _frame(n=320)
+    monkeypatch.setenv(dg.SPLIT_STEP_OVERRIDE_ENV, "1")
+    rep = dg.run_quality_checks(_spec(tmp_path), _post_split_bar(snap),
+                                snapshot=snap)
+    assert "no_unadjusted_split_step" not in rep["failed"]
+
+
+def test_gate_holds_the_snapshot_on_a_mixed_basis_fetch(tmp_path):
+    spec = _spec(tmp_path)
+    snap = _frame(n=320, end=CUT - pd.offsets.BDay(1))
+    snap_sha = dg.frame_sha(snap)
+    dg.save_snapshot(spec, snap, dg.run_quality_checks(spec, snap))
+    mixed = _post_split_bar(snap)
+    out = dg.gated_daily(spec, lambda: mixed, consumer="t")
+    assert out.attrs["data_gate"]["decision"] == "fallback_snapshot"
+    assert dg.frame_sha(out) == snap_sha
