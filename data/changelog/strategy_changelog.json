@@ -1460,6 +1460,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/272"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-05",
+  "kind": "analytics",
+  "title": "Intraday rate-of-drop exit evaluation (SOXL, NUGT, WGMI)",
+  "description": "New scripts/eval_intraday_drop.py lays an intraday drop trigger (vol-normalised or fixed %, 27 configs, two fill models, flat vs re-buy) over the shipped daily engines using hourly bars cached in data/intraday_eval/, with a train/test split and a random-placement placebo. Analysis only: no strategy or live-book behaviour changes. Write-up: INTRADAY_DROP_EVAL.md.",
+  "impact": "Tight triggers (<=8% or <=5 sigma) cut return and Sharpe on every sleeve (SOXL +688% -> +8..+416%, NUGT +238% -> +60..+100%). Only a crash-only trigger (>=12% in <=3h) with re-buy looks useful: SOXL +688% -> +1086%, MDD -69% -> -59%, but 22 noisy triggers on 3 baseline trades, erased at ~100 bp fills; Overall equal-weight MDD -12.2% -> -10.6%, Sharpe 2.96 -> 3.07. MSTU not covered (calendar mismatch); not recommended to ship."
  }
 ]
 }
