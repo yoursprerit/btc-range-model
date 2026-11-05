@@ -513,3 +513,118 @@ def test_gate_holds_the_snapshot_on_a_mixed_basis_fetch(tmp_path):
     out = dg.gated_daily(spec, lambda: mixed, consumer="t")
     assert out.attrs["data_gate"]["decision"] == "fallback_snapshot"
     assert dg.frame_sha(out) == snap_sha
+
+
+# ── half-restated split history (SOXX 3-for-1, 2026-11-05) ───────────────────
+def _half_restated(snap, k=3.0, raw_tail=3, new_bar=True):
+    """Yahoo's real shape that day: older history restated (÷k), the last
+    ``raw_tail`` pinned sessions still raw, plus one post-split bar."""
+    out = snap.copy()
+    old = out.index[:-raw_tail]
+    for c in ("px_open", "px_high", "px_low", "px_close"):
+        out.loc[old, c] = out.loc[old, c] / k
+    out.loc[old, "px_volume"] = out.loc[old, "px_volume"] * k
+    if new_bar:
+        nxt = out.index[-1] + pd.offsets.BDay(1)
+        row = snap.iloc[-1].copy()
+        for c in ("px_open", "px_high", "px_low", "px_close"):
+            row[c] = snap.iloc[-1][c] * 0.99 / k
+        out.loc[nxt] = row
+    return out
+
+
+def test_half_restated_fetch_is_reconciled_onto_one_basis(tmp_path):
+    spec = _spec(tmp_path)
+    snap = _frame(n=320, end=CUT - pd.offsets.BDay(1))
+    mixed = _half_restated(snap)
+    assert not dg.run_quality_checks(spec, mixed, snapshot=snap)["passed"]
+    fixed, rebased = dg.reconcile_split_basis(mixed, snap)
+    assert rebased == {"px_close": 3}
+    # every session is now ONE basis: the restated one
+    want = _restate(snap).px_close
+    assert np.allclose(fixed.px_close.loc[snap.index], want, rtol=1e-12)
+    assert np.allclose(fixed.px_volume.loc[snap.index], snap.px_volume * 3)
+    assert not dg.split_like_steps(fixed.px_close)
+    assert dg.run_quality_checks(spec, fixed, snapshot=snap)["passed"]
+    assert mixed.px_close.iloc[-4] != fixed.px_close.iloc[-4]   # input untouched
+
+
+def test_gate_repins_a_half_restated_split_instead_of_freezing(tmp_path):
+    spec = _spec(tmp_path)
+    snap = _frame(n=320, end=CUT - pd.offsets.BDay(1))
+    dg.save_snapshot(spec, snap, dg.run_quality_checks(spec, snap))
+    mixed = _half_restated(snap)
+    out = dg.gated_daily(spec, lambda: mixed, consumer="t")
+    meta = out.attrs["data_gate"]
+    assert meta["decision"] == "refreshed", meta
+    assert out.index.max() == mixed.index.max()          # the new session landed
+    man = json.loads(Path(spec.manifest_json).read_text())
+    assert any(c["name"] == "split_basis_reconciled" for c in man["qc_checks"])
+    pinned, _ = dg.load_snapshot(spec)
+    assert not dg.split_like_steps(pinned.px_close)      # re-pinned on one basis
+    # next load is a plain pinned/refreshed read -- no further rebase
+    again = dg.gated_daily(spec, lambda: mixed, consumer="t")
+    assert again.attrs["data_gate"]["decision"] in ("pinned", "refreshed")
+
+
+def test_reconcile_is_a_noop_without_the_mixed_pattern(tmp_path):
+    snap = _frame(n=320)
+    for df in (snap,                                          # identical
+               _restate(snap),                                # fully restated
+               _post_split_bar(snap)):                        # raw + new bar
+        out, rebased = dg.reconcile_split_basis(df, snap)
+        assert rebased == {} and out is df
+
+
+def test_reconcile_refuses_other_disagreements(tmp_path):
+    snap = _frame(n=320)
+    # restated sessions AFTER raw ones is not a split restatement
+    rev = snap.copy()
+    rev.loc[rev.index[-3:], ["px_close"]] = rev.px_close.iloc[-3:] / 3
+    assert dg.reconcile_split_basis(rev, snap)[1] == {}
+    # a stray session that is neither raw nor 1/k
+    odd = _half_restated(snap, new_bar=False)
+    odd.iloc[150, odd.columns.get_loc("px_close")] *= 1.37
+    assert dg.reconcile_split_basis(odd, snap)[1] == {}
+    # restated by a non-split factor
+    assert dg.reconcile_split_basis(_half_restated(snap, k=2.5, new_bar=False),
+                                    snap)[1] == {}
+
+
+def test_new_bar_on_the_wrong_basis_is_still_rejected(tmp_path):
+    """Reconcile fixes the stragglers only; a new bar left on the OLD basis
+    leaves a split-sized step the checks still catch."""
+    spec = _spec(tmp_path)
+    snap = _frame(n=320, end=CUT - pd.offsets.BDay(1))
+    dg.save_snapshot(spec, snap, dg.run_quality_checks(spec, snap))
+    bad = _half_restated(snap)
+    for c in ("px_open", "px_high", "px_low", "px_close"):
+        bad.iloc[-1, bad.columns.get_loc(c)] = snap.iloc[-1][c] * 0.99   # raw
+    out = dg.gated_daily(spec, lambda: bad, consumer="t")
+    assert out.attrs["data_gate"]["decision"] == "fallback_snapshot"
+
+
+def test_crosscheck_accepts_the_split_bar_after_a_rebase(tmp_path, monkeypatch):
+    """Nasdaq's tape is raw across the split (old basis before, new basis on
+    the split day): the rebased history must not make the new bar look wrong."""
+    import market_fallback as mf
+    spec = _spec(tmp_path)
+    spec.symbol_by_col = {"px_close": "TST"}
+    snap = _frame(n=320, end=CUT - pd.offsets.BDay(1))
+    dg.save_snapshot(spec, snap, dg.run_quality_checks(spec, snap))
+    mixed = _half_restated(snap)
+    raw_tape = mixed.px_close.copy()
+    raw_tape.loc[snap.index] = snap.px_close                  # raw pre-split
+    monkeypatch.setattr(mf, "daily_ohlcv", _fake_nasdaq(raw_tape))
+    out = dg.gated_daily(spec, lambda: mixed, consumer="t")
+    assert out.attrs["data_gate"]["decision"] == "refreshed"
+    man = json.loads(Path(spec.manifest_json).read_text())
+    xc = [c for c in man["qc_checks"] if c["name"] == "nasdaq_crosscheck"]
+    assert xc and xc[0]["passed"]
+    # ...and a genuinely wrong new print is still caught
+    spec2 = _spec(tmp_path / "b"); spec2.symbol_by_col = {"px_close": "TST"}
+    dg.save_snapshot(spec2, snap, dg.run_quality_checks(spec2, snap))
+    wrong = raw_tape.copy(); wrong.iloc[-1] *= 1.05
+    monkeypatch.setattr(mf, "daily_ohlcv", _fake_nasdaq(wrong))
+    out2 = dg.gated_daily(spec2, lambda: mixed, consumer="t")
+    assert out2.attrs["data_gate"]["decision"] == "fallback_snapshot"
