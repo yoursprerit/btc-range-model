@@ -116,6 +116,42 @@ _XCHECK_MAX_SESSIONS = 5         # newest new sessions verified per refresh
 _XCHECK_REF_DAYS = 10            # prior overlap sessions used to align bases
 
 
+# Unadjusted-split guard.  A stock split is invisible to every other check
+# here: the per-day RETURNS agree with the snapshot (an adjusted history keeps
+# them), and a 3-for-1 lands at -66.7%, inside MAX_ABS_TRADED_MOVE.  The
+# dangerous case is a MIXED basis -- the pinned history on the old price level
+# plus a new bar on the post-split one -- which would be pinned as a fake -67%
+# crash (SOXX 3-for-1, 2026-11-05).  Nasdaq's tape is raw too, so its
+# cross-check agrees with the mixed frame.  A one-day step whose ratio sits
+# near an integer split ratio (or its inverse) on a date the snapshot has not
+# already pinned is therefore rejected until the provider restates the history
+# on one basis.  The band absorbs the day's ordinary move on top of the split;
+# it is narrow enough that the worst real 3x-ETF crash on record (ERX -60% on
+# 2020-03-09, ratio 0.40) sits outside every band.
+SPLIT_RATIOS = (2, 3, 4, 5, 6, 8, 10, 15, 20)
+SPLIT_RATIO_TOL = 0.08            # relative band around k or 1/k
+SPLIT_STEP_OVERRIDE_ENV = "DATA_GATE_ALLOW_SPLIT_STEP"   # =1: accept knowingly
+_SPLIT_NO_SNAPSHOT_TAIL = 5       # with no snapshot, only the newest bars
+
+
+def split_like_steps(s: pd.Series) -> list[tuple]:
+    """[(date, ratio, k)] for one-day close ratios near an integer split ratio
+    (``k`` > 0 a forward split's 1/k drop, < 0 a reverse split's k-fold jump)."""
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    s = s[s > 0]
+    if len(s) < 2:
+        return []
+    r = s / s.shift(1)
+    out = []
+    for d, v in r.dropna().items():
+        for k in SPLIT_RATIOS:
+            if abs(v * k - 1.0) <= SPLIT_RATIO_TOL:
+                out.append((d, float(v), k)); break
+            if abs(v / k - 1.0) <= SPLIT_RATIO_TOL:
+                out.append((d, float(v), -k)); break
+    return out
+
+
 @dataclass
 class GateSpec:
     """Everything the gate needs to know about one daily dataset."""
@@ -231,6 +267,40 @@ def run_quality_checks(spec: GateSpec, df: pd.DataFrame | None,
     add("no_extreme_traded_moves", not offenders,
         "all daily moves plausible" if not offenders
         else f"implausible one-day moves: {offenders}")
+
+    # a split-sized step on a date the snapshot has not already pinned
+    stepped = []
+    for c in spec.traded_close_cols:
+        if not c.endswith("_close") and c != spec.price_col:
+            continue
+        if c not in df.columns:
+            continue
+        have = (pd.to_numeric(snapshot[c], errors="coerce")
+                if snapshot is not None and c in snapshot.columns else None)
+        steps = split_like_steps(df[c])
+        if have is None:
+            steps = [x for x in steps
+                     if x[0] in df.index[-_SPLIT_NO_SNAPSHOT_TAIL:]]
+        for d, ratio, k in steps:
+            # already pinned with the same step -> history, not news
+            if have is not None and d in have.index:
+                prev = have.index[have.index.get_loc(d) - 1] \
+                    if have.index.get_loc(d) > 0 else None
+                if prev is not None and have.loc[prev] > 0 and have.loc[d] > 0:
+                    if abs((have.loc[d] / have.loc[prev]) / ratio - 1) < 1e-3:
+                        continue
+            stepped.append(f"{c}@{pd.Timestamp(d).date()} ({ratio:.3f}x ≈ "
+                           f"{'1/' if k > 0 else ''}{abs(k)})")
+    if stepped and os.environ.get(SPLIT_STEP_OVERRIDE_ENV) == "1":
+        add("no_unadjusted_split_step", True,
+            f"split-sized step(s) ACCEPTED by {SPLIT_STEP_OVERRIDE_ENV}=1: "
+            f"{stepped}")
+    else:
+        add("no_unadjusted_split_step", not stepped,
+            "no split-sized price steps" if not stepped else
+            f"split-sized one-day step on a new session: {stepped} — a split "
+            "the provider has not restated across the whole history? hold the "
+            f"snapshot until it does (or {SPLIT_STEP_OVERRIDE_ENV}=1)")
 
     # versus the last known-good snapshot: never accept a shrunken or
     # backdated history, nor one whose overlapping returns disagree
