@@ -1,33 +1,25 @@
 {
  "schema": "overall-intraday-stop-check/v1",
- "status": "entry_cancelled",
- "checked_at_utc": "2026-11-04T20:01:51+00:00",
- "checked_at_ct": "Nov 4, 2026 at 2:01:51 PM CST",
- "books_rewritten": true,
- "as_of": "2026-11-03",
+ "status": "clear",
+ "checked_at_utc": "2026-11-05T20:01:46+00:00",
+ "checked_at_ct": "Nov 5, 2026 at 2:01:46 PM CST",
+ "books_rewritten": false,
+ "as_of": "2026-11-04",
  "profile": "Balanced",
  "triggered": [],
- "watching": [],
- "skipped": [],
- "entry_reversed": [
-  {
-   "key": "GRID",
-   "parent": "GRID",
-   "bar_close": 167.39999389648438,
-   "live": 162.26,
-   "src": "yahoo",
-   "chg_pct": -3.07
-  }
- ],
- "entry_holding": [
+ "watching": [
   {
    "key": "PBW",
-   "parent": "PBW",
-   "bar_close": 26.309999465942383,
-   "live": 26.54,
-   "src": "yahoo",
-   "chg_pct": 0.87
+   "kind": "fixed",
+   "level": 23.85,
+   "entry": 26.5,
+   "live": 24.91,
+   "dist_pct": 4.44,
+   "src": "yahoo"
   }
  ],
+ "skipped": [],
+ "entry_reversed": [],
+ "entry_holding": [],
  "entry_skipped": []
 }
