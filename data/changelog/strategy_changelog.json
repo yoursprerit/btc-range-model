@@ -1404,6 +1404,20 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/268"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-05",
+  "kind": "execution",
+  "title": "Manual-trade refresh helper for live IBKR accounts",
+  "description": "scripts/ibkr_manual_refresh.py re-states every enabled live account after trades placed by hand in TWS: it runs the executor's no-order --refresh-report per account, prints each account's holdings against the book's targets and any orders still working, and with --publish commits all the signed reports in one push.",
+  "impact": "Closes the gap where the reconcile job ignores manual trades (no send-lock) and the Executed Book would otherwise keep showing the last scheduled run.",
+  "links": [
+   {
+    "label": "PR #269",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/269"
+   }
+  ]
  }
 ]
 }
