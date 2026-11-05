@@ -378,6 +378,27 @@ STRAT_CURVE_ACTUAL = "Overall strategy (as published)"
 # both a benchmark line on every Growth chart AND a selectable performance
 # source in the P&L section, so the name has to be one constant.
 BH_CURVE = pnl_snap.BH_CURVE
+SPY_CURVE = "SPY Buy & Hold"
+SPY_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "spy" / "spy_daily.csv"
+
+
+def load_spy_equity(path=SPY_DATA_PATH) -> pd.Series | None:
+    """SPY buy-&-hold total-return equity curve (starts at 1.0) from the
+    committed daily history (``scripts/fetch_spy_history.py``): each session
+    compounds ``(close + dividend) / previous close - 1``.  ``None`` when the
+    file is missing, so the benchmark row/line simply drops out.  Lives in the
+    page module on purpose: the P&L snapshot fingerprint hashes the engine
+    modules, and this benchmark is not part of any snapshotted replay."""
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True).sort_index()
+        df = df[~df.index.duplicated()]
+        close = df["close"].astype(float)
+        div = df["dividend"].astype(float).fillna(0.0) if "dividend" in df else 0.0
+        tr = ((close + div) / close.shift(1) - 1.0).iloc[1:]
+        tr = tr[np.isfinite(tr)]
+        return (1.0 + tr).cumprod() if len(tr) >= 2 else None
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=900, show_spinner=False, max_entries=2)
@@ -3295,6 +3316,12 @@ with tab_live:
         _end_arg = None if _end_sel >= _d1 else _end_sel
         _curve_all = _curve_all.loc[:_end_ts]
         _curves_view = {k: v.loc[:_end_ts] for k, v in _curves_view.items()}
+        # passive SPY buy & hold (total return) as an extra benchmark row/line
+        _spy_eq = load_spy_equity()
+        if _spy_eq is not None and SPY_CURVE not in _curves_view:
+            _spy_eq = _spy_eq.loc[:_end_ts]
+            if len(_spy_eq) >= 2:
+                _curves_view[SPY_CURVE] = _spy_eq
         _wf = {"weights": _wf["weights"].loc[:_end_ts],
                "sata": _wf["sata"].loc[:_end_ts],
                # V2 SATA cap: idle capital above the cap, in cash at 0 %
@@ -3824,6 +3851,7 @@ with tab_live:
             # even when it shares a name with a benchmark (buy & hold does)
             _pnl_styles = {"Equal-weight strategies": ("#0ea5e9", 1.5),
                            BH_CURVE: ("#94a3b8", 1.5),
+                           SPY_CURVE: ("#f97316", 1.5),
                            STRAT_CURVE: ("#7c3aed", 1.5),
                            STRAT_CURVE_ACTUAL: ("#16a34a", 1.5)}
             _pnl_styles[_strat_label] = ("#111827", 3)

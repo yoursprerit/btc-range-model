@@ -1432,6 +1432,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/270"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-05",
+  "kind": "analytics",
+  "title": "SPY Buy & Hold benchmark in Strategy P&L",
+  "description": "The Strategy P&L performance table gains a 'SPY Buy & Hold' row (total return incl. dividends) and the growth chart a matching line, over the same selected window. SPY history lives in data/spy/spy_daily.csv, refreshed daily by scripts/fetch_spy_history.py in the publish workflow.",
+  "impact": "Puts the strategy next to the plain S&P 500 alternative on the same dates."
  }
 ]
 }
