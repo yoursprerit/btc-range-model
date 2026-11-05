@@ -38,6 +38,10 @@ WHAT IT DOES
    dropped-session check can never pass again), re-pin from scratch by
    deleting that sleeve's snapshot CSV + manifest; with no snapshot there is
    nothing to regress against and the next clean fetch becomes the baseline.
+   A provider that restates a split's history only in PART is the one
+   exception: ``reconcile_split_basis`` puts the unrestated sessions on the
+   restated basis (judged against the pinned snapshot) and the repaired frame
+   must then pass every check, so the sleeve advances instead of freezing.
 4. **Audit** — every load appends a record (decision, source, span, rows,
    SHA-256 content hash, failed checks, consumer app) to
    ``runtime/dataset_audit.json``; the 🕵️ Daily Audit app renders the trail.
@@ -203,6 +207,76 @@ def _norm_index(df: pd.DataFrame) -> pd.DataFrame:
         idx = idx.tz_convert("UTC").tz_localize(None)
     out.index = idx.normalize()
     return out[~out.index.duplicated(keep="last")].sort_index()
+
+
+# Half-restated split history.  When a provider applies a split it can restate
+# the OLD history in stages (SOXX 3-for-1, 2026-11-05: Yahoo served <= Oct 30 and
+# the post-split bar on the new basis but Nov 2-4 still on the old one), so the
+# fetch carries two phantom steps (+189% / -71%) and every check correctly
+# rejects it -- freezing the sleeve on its pre-split snapshot, one session
+# behind, until the provider finishes (or forever).  The snapshot is the
+# reference that makes this recoverable: against it each overlapping session is
+# unambiguously either UNRESTATED (close ratio ~ 1) or RESTATED (ratio ~ 1/k),
+# so the unrestated stragglers can be put on the restated basis.  Deliberately
+# narrow -- only this exact pattern is repaired, anything else is left for the
+# checks to reject:
+#   * every overlapping session is one of those two classes (no other ratio),
+#   * one integer k (SPLIT_RATIOS) explains all restated sessions,
+#   * the restated sessions all PRECEDE the unrestated ones (a restatement in
+#     progress; the reverse order is not a split),
+#   * and the repaired frame must still pass every check -- a new bar that is
+#     itself on the wrong basis leaves a split-sized step and is rejected.
+SPLIT_BASIS_TOL = 0.01            # relative band on the fetch/snapshot ratio
+
+
+def reconcile_split_basis(df: pd.DataFrame, snapshot: pd.DataFrame | None
+                          ) -> tuple[pd.DataFrame, dict]:
+    """Put a half-restated split history on one (the restated) basis.
+
+    Returns ``(frame, {close_col: k})``; the dict is empty (and ``df`` is
+    returned untouched) unless the pattern described above is found.  Prices
+    are divided by ``k`` and volume multiplied by it, for every OHLCV column of
+    the affected symbol."""
+    if df is None or snapshot is None or not len(df) or not len(snapshot):
+        return df, {}
+    out, rebased = df, {}
+    for close in [c for c in df.columns if str(c).endswith("_close")]:
+        if close not in snapshot.columns:
+            continue
+        a = pd.to_numeric(df[close], errors="coerce")
+        b = pd.to_numeric(snapshot[close], errors="coerce")
+        shared = a.index.intersection(b.index)
+        r = (a.loc[shared] / b.loc[shared]).replace(
+            [np.inf, -np.inf], np.nan).dropna()
+        r = r[(r > 0)]
+        if len(r) < 10:
+            continue
+        raw = (r - 1.0).abs() <= SPLIT_BASIS_TOL
+        if not raw.any() or raw.all():
+            continue                          # nothing to repair / not mixed
+        k = next((k for k in SPLIT_RATIOS
+                  if ((r[~raw] * k - 1.0).abs() <= SPLIT_BASIS_TOL).all()), None)
+        if k is None:
+            continue                          # some other disagreement
+        last_restated = r.index[~raw.to_numpy()].max()
+        first_raw = r.index[raw.to_numpy()].min()
+        if last_restated >= first_raw:
+            continue                          # restated must precede unrestated
+        fix = r.index[raw.to_numpy()]
+        stem = str(close)[:-len("_close")]
+        if out is df:
+            out = df.copy()
+        for suffix in ("open", "high", "low", "close"):
+            col = f"{stem}_{suffix}"
+            if col in out.columns:
+                out[col] = out[col].astype(float)
+                out.loc[fix, col] = out.loc[fix, col] / k
+        vol = f"{stem}_volume"
+        if vol in out.columns:
+            out[vol] = out[vol].astype(float)
+            out.loc[fix, vol] = out.loc[fix, vol] * k
+        rebased[close] = k
+    return out, rebased
 
 
 def run_quality_checks(spec: GateSpec, df: pd.DataFrame | None,
@@ -463,7 +537,8 @@ def read_audit() -> dict:
 # Independent cross-check of newly-added sessions (Nasdaq's free tape)
 # ════════════════════════════════════════════════════════════════════════
 def _nasdaq_crosscheck(spec: GateSpec, hist: pd.DataFrame,
-                       prev: pd.DataFrame | None) -> dict | None:
+                       prev: pd.DataFrame | None,
+                       rebased: dict | None = None) -> dict | None:
     """Verify the traded closes of sessions being ADDED to the snapshot
     against Nasdaq's independent quote API — the one moment a print has no
     prior reference to agree with (`history_agreement` covers everything
@@ -521,6 +596,13 @@ def _nasdaq_crosscheck(spec: GateSpec, hist: pd.DataFrame,
                 skipped += 1
                 continue
             rel = abs(float(yd) - float(nq.loc[d, "close"]) * scale) / float(yd)
+            if rebased and col in rebased:
+                # history was put on the post-split basis by
+                # reconcile_split_basis, but Nasdaq's raw tape steps AT the
+                # split: the reference sessions sit on the old basis (scale
+                # ~ 1/k) while the new session is already on the new one.
+                rel = min(rel, abs(float(yd) - float(nq.loc[d, "close"])
+                                   * scale * rebased[col]) / float(yd))
             checked += 1
             if rel > NASDAQ_XCHECK_TOL:
                 bad.append(f"{col}@{pd.Timestamp(d).date()} "
@@ -732,13 +814,23 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
         # upstream from hourly/second-provider data (the pinned OFFICIAL close
         # wins, so a repair never restates already-pinned history).
         hist, spliced = _restore_from_snapshot(hist, snap, cut, spec.price_col)
+        # a provider that restated a split's history only in part is put on one
+        # basis against the pinned snapshot BEFORE QC judges it (the repaired
+        # frame must still pass every check, so this cannot launder bad data)
+        hist, rebased = reconcile_split_basis(hist, snap)
         report = run_quality_checks(spec, hist, snapshot=snap)
+        if rebased:
+            ks = ", ".join(f"{c}: 1/{k}" for c, k in sorted(rebased.items()))
+            report["checks"].append(dict(
+                name="split_basis_reconciled", passed=True,
+                detail=f"half-restated split history put on one basis "
+                       f"against the pinned snapshot ({ks})"))
         if report["passed"]:
             # sessions entering the snapshot for the first time get a second
             # opinion from Nasdaq's independent tape (best-effort; a failed
             # verification rejects the fetch like any other check)
             try:
-                xc = _nasdaq_crosscheck(spec, hist, snap)
+                xc = _nasdaq_crosscheck(spec, hist, snap, rebased)
             except Exception:
                 xc = None
             if xc is not None:
@@ -759,8 +851,14 @@ def gated_daily(spec: GateSpec, fetch_full, fetch_recent=None,
                     n_part = int(len(partial))
             _record_audit(spec, "refreshed", "yahoo-live", consumer, hist,
                           report, partial_rows=n_part,
-                          note=("restored from the pinned snapshot: "
-                                + ", ".join(spliced)) if spliced else "")
+                          note="; ".join(filter(None, [
+                              ("restored from the pinned snapshot: "
+                               + ", ".join(spliced)) if spliced else "",
+                              ("split basis reconciled and snapshot re-pinned "
+                               "on the post-split basis: "
+                               + ", ".join(f"{c} 1/{k}" for c, k
+                                           in sorted(rebased.items())))
+                              if rebased else ""])))
             return _finish(spec, out, "refreshed", "yahoo-live", report, cut,
                            spliced)
 

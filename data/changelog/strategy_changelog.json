@@ -1446,6 +1446,15 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/271"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-05",
+  "kind": "data",
+  "title": "Data gate reconciles a half-restated split history (SOXX 3-for-1)",
+  "description": "When a provider restates a split's old history only in part (Yahoo, SOXX 2026-11-05: through Oct 30 and the post-split bar on the new basis, Nov 2-4 still raw), the gate now compares each overlapping session with the pinned snapshot, divides the still-unrestated sessions by the split ratio (volume multiplied), and runs every quality check on the repaired frame before re-pinning it on the post-split basis. Deliberately narrow: only a mixed history whose restated sessions all precede the raw ones, explained by one integer ratio, is repaired; a new bar on the wrong basis still leaves a split-sized step and is rejected. The Nasdaq cross-check accepts the split-day bar for rebased columns (Nasdaq's raw tape steps at the split).",
+  "impact": "Before: the fetch failed no_extreme_traded_moves and no_unadjusted_split_step (+189% / -71% phantom steps), so SOXX/SOXL stayed on the Nov 4 snapshot and the cockpit flagged STALE SIGNALS. Replaying today's live Yahoo SOXX through the real snapshot now refreshes through Nov 5 (Nov 4 150.14 -> Nov 5 131.90, -12.2%, in line with SMH -11%), 0/119 returns disagree. Rescaling leaves signals unchanged (see PR #270).",
+  "links": []
  }
 ]
 }
