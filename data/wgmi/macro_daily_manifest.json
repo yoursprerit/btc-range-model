@@ -1,10 +1,10 @@
 {
  "key": "WGMI",
  "source": "yahoo-live",
- "saved_at_utc": "2026-11-05T13:17:54+00:00",
- "rows": 1190,
+ "saved_at_utc": "2026-11-06T13:17:52+00:00",
+ "rows": 1191,
  "date_from": "2022-02-08",
- "date_to": "2026-11-04",
+ "date_to": "2026-11-05",
  "columns": [
   "px_open",
   "px_high",
@@ -47,18 +47,18 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "7c3309631f2404da",
+ "checksum_sha256": "7a7d2ff903489c1d",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "1190 rows"
+   "detail": "1191 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "1190 rows (need \u2265 260)"
+   "detail": "1191 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -68,7 +68,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "px_close: 1190 non-null values"
+   "detail": "px_close: 1191 non-null values"
   },
   {
    "name": "required_columns",
@@ -81,14 +81,19 @@
    "detail": "all daily moves plausible"
   },
   {
+   "name": "no_unadjusted_split_step",
+   "passed": true,
+   "detail": "no split-sized price steps"
+  },
+  {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "1190 rows vs snapshot 1189"
+   "detail": "1191 rows vs snapshot 1190"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-11-04 vs snapshot 2026-11-03"
+   "detail": "last 2026-11-05 vs snapshot 2026-11-04"
   },
   {
    "name": "no_missing_recent_sessions",

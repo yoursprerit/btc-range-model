@@ -1,10 +1,10 @@
 {
  "key": "GLDM",
  "source": "yahoo-live",
- "saved_at_utc": "2026-11-05T13:17:52+00:00",
- "rows": 2102,
+ "saved_at_utc": "2026-11-06T13:17:49+00:00",
+ "rows": 2103,
  "date_from": "2018-06-26",
- "date_to": "2026-11-04",
+ "date_to": "2026-11-05",
  "columns": [
   "gldm_open",
   "gldm_high",
@@ -57,18 +57,18 @@
   "spx_close",
   "spx_volume"
  ],
- "checksum_sha256": "657400dbe5d05b36",
+ "checksum_sha256": "cc3b03a508c29e6a",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "2102 rows"
+   "detail": "2103 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "2102 rows (need \u2265 260)"
+   "detail": "2103 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -78,7 +78,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "gldm_close: 2102 non-null values"
+   "detail": "gldm_close: 2103 non-null values"
   },
   {
    "name": "required_columns",
@@ -91,14 +91,19 @@
    "detail": "all daily moves plausible"
   },
   {
+   "name": "no_unadjusted_split_step",
+   "passed": true,
+   "detail": "no split-sized price steps"
+  },
+  {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "2102 rows vs snapshot 2101"
+   "detail": "2103 rows vs snapshot 2102"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-11-04 vs snapshot 2026-11-03"
+   "detail": "last 2026-11-05 vs snapshot 2026-11-04"
   },
   {
    "name": "no_missing_recent_sessions",
