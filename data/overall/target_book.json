@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-11-06T13:17:56+00:00",
- "as_of": "2026-11-05",
+ "generated_at_utc": "2026-11-07T13:17:53+00:00",
+ "as_of": "2026-11-06",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -12,28 +12,19 @@
  },
  "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "XLE": 61.63,
-  "XOP": 174.1,
-  "ERX": 99.53,
-  "SATA": 95.93
+  "XOP": 173.77,
+  "XLE": 61.62,
+  "ERX": 99.21,
+  "SATA": 96.54
  },
  "actions": [
-  {
-   "key": "PBW",
-   "action": "CLOSE",
-   "decision": "EXIT NEXT BAR \u2014 D3 exhaustion",
-   "target": 0.0,
-   "in_pos": true,
-   "priority": null,
-   "exits_next_bar": true
-  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.5323809523809524,
+   "priority": 0.5352380952380953,
    "exits_next_bar": false
   },
   {
@@ -42,7 +33,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.527129694323383,
+   "priority": 0.5290969755415341,
    "exits_next_bar": false
   },
   {
@@ -51,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.3523809523809524,
+   "priority": 0.35523809523809524,
    "exits_next_bar": false
   },
   {
@@ -67,6 +58,15 @@
    "key": "NUGT",
    "action": "WATCH",
    "decision": "WATCH \u2014 U1 (GATE PENDING)",
+   "target": 0.0,
+   "in_pos": false,
+   "priority": null,
+   "exits_next_bar": false
+  },
+  {
+   "key": "PBW",
+   "action": "WATCH",
+   "decision": "WATCH \u2014 UPTREND (GATE PENDING)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -147,7 +147,7 @@
   {
    "key": "GRID",
    "action": "STAND ASIDE",
-   "decision": "CLOSE \u2014 STOP \u22125% HIT (re-enters only if the trend holds)",
+   "decision": "FLAT \u2014 BELOW TREND",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -184,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-11-06T13:17:55+00:00",
+  "checked_at_utc": "2026-11-07T13:17:52+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Nov 6, 2026 at 7:15 AM CST",
-  "equity_close": "2026-11-05",
-  "btc_bar_close_utc": "2026-11-06T12:00:00+00:00"
+  "anchor_ct": "Nov 7, 2026 at 7:15 AM CST",
+  "equity_close": "2026-11-06",
+  "btc_bar_close_utc": "2026-11-07T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "d16e0f83426a",
+ "code_sha": "7e25baa7a514",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "6c06df2e53cd3ab20a51a9b376bcc593a163c2b10e8dabb2afdbfaaf436dab9b"
+  "value": "b1e40e6a19fe7978b73702fae362b1c05b0ec598af30b9cd44482547690d81ba"
  }
 }
