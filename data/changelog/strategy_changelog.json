@@ -1466,7 +1466,7 @@
   "date": "2026-11-09",
   "kind": "execution",
   "title": "Fix PowerShell parse error that stopped the live executor and reconcile tasks",
-  "description": "In ibkr_execute_live_accounts.ps1 and ibkr_reconcile_live_accounts.ps1 the slot-guard warning interpolated \"$GuardExit: ...\", which PowerShell reads as a drive-qualified variable, so the whole script failed to parse and never ran or logged. Now written as ${GuardExit}: ${GuardOut}.",
+  "description": "In ibkr_execute_live_accounts.ps1 and ibkr_reconcile_live_accounts.ps1 the slot-guard warning interpolated \"$GuardExit: ...\", which PowerShell reads as a drive-qualified variable, so the whole script failed to parse and never ran or logged. Now written as ${GuardExit}: ${GuardOut}. Added tests/test_powershell_syntax.py, which statically rejects this pattern in every tracked .ps1 (CI is Linux and cannot run PowerShell), and corrected the live log name in docs/LIVE_SETUP_WINDOWS.md (logs\\ibkr_live_executor.log).",
   "impact": "A parse error aborts the script before any line runs, so the 2:20 PM CT executor, its log and its healthchecks.io ping all went silent (last log Nov 2).",
   "links": []
  }
