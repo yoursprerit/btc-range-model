@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-11-08T13:17:42+00:00",
- "as_of": "2026-11-07",
+ "generated_at_utc": "2026-11-09T13:17:49+00:00",
+ "as_of": "2026-11-08",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -12,9 +12,9 @@
  },
  "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "XLE": 61.62,
   "XOP": 173.77,
   "ERX": 99.21,
+  "XLE": 61.62,
   "SATA": 96.54
  },
  "actions": [
@@ -75,7 +75,7 @@
   {
    "key": "BTC",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -84,7 +84,7 @@
   {
    "key": "MSTR",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -93,7 +93,7 @@
   {
    "key": "MSTU",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -102,7 +102,7 @@
   {
    "key": "ETH",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -184,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-11-08T13:17:41+00:00",
+  "checked_at_utc": "2026-11-09T13:17:48+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Nov 8, 2026 at 7:15 AM CST",
+  "anchor_ct": "Nov 9, 2026 at 7:15 AM CST",
   "equity_close": "2026-11-06",
-  "btc_bar_close_utc": "2026-11-08T12:00:00+00:00"
+  "btc_bar_close_utc": "2026-11-09T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "5ecb9760c0df",
+ "code_sha": "9f5d912b013b",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "f8eb2891fcd0085a74f6333d3600e51d8d3315742aa9b6baa9c6ba709c827b76"
+  "value": "37db852eaf79d9904e7e94e0111fb310b6ad73508c63c21342e9946f692ed801"
  }
 }
