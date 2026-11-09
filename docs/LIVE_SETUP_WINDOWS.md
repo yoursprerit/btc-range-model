@@ -99,7 +99,7 @@ tasks see the environment variables. Approve the phone push when the gateway win
 ## 6. First live day
 
 1. Before 2:20 PM Central: gateway window logged in, phone nearby, `scripts\setup_live.ps1 -Check` all OK.
-2. 2:20 PM CT: the task runs (DST-proof: it is registered at every local time the CT slot maps to and `-SlotCT` lets only the fire at 2:20 PM *Central* proceed; `scripts\setup_live.ps1 -Check` fails a UTC-pinned or drifting trigger). Watch `logs\ibkr_live.log`. Each account prints its orders, then waits for the closing auction.
+2. 2:20 PM CT: the task runs (DST-proof: it is registered at every local time the CT slot maps to and `-SlotCT` lets only the fire at 2:20 PM *Central* proceed; `scripts\setup_live.ps1 -Check` fails a UTC-pinned or drifting trigger). Watch `logs\ibkr_live_executor.log`. Each account prints its orders, then waits for the closing auction.
 3. After 3:00 PM CT: in TWS check the fills. At 3:15 PM CT the reconcile task confirms them (and alerts if anything is unfilled).
 4. To stop everything at any moment: create the file named in `kill_switch_file` (`STOP_LIVE` in the repo folder), or set `"enabled": false` for one account.
 5. Start small. Keep `max_deploy_frac` at 0.25 and `max_order_notional` at 5000 until several days are clean.

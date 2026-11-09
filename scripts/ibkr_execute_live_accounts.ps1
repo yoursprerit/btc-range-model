@@ -105,7 +105,7 @@ if ($SlotCT -and -not $Preview) {
         Log "not the $SlotCT US Central slot (wrong side of a DST change) - exiting, nothing done"
         exit 0
     } elseif ($GuardExit -ne 0) {
-        Log "WARN: slot guard could not run (exit $GuardExit: $GuardOut) - proceeding anyway"
+        Log "WARN: slot guard could not run (exit ${GuardExit}: ${GuardOut}) - proceeding anyway"
     } else {
         Log "slot guard: $GuardOut"
     }
