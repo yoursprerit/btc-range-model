@@ -232,10 +232,14 @@ def test_configs_carry_the_v2_rules():
     wgmi, remx, grid = (tcfg.get_config(k) for k in ("WGMI", "REMX", "GRID"))
     assert wgmi.has_v2_rules and wgmi.v2_gate_col == "btc_close" and wgmi.v2_gate_ma == 50
     assert remx.has_v2_rules and (remx.v2_hold_ma_fast, remx.v2_hold_ma_slow) == (20, 100)
-    assert not grid.has_v2_rules
+    # GRID: 2026-11 retune — SMA200 ±2% band; the 12% trailing stop is a V2 rule
+    assert grid.strategy_mode == "ma_band" and grid.has_v2_rules
+    assert grid.trail_for("px_close", "v2") == pytest.approx(0.12)
+    assert grid.trail_for("px_close", "v1") == 0.0
     assert "SMA20 > SMA100" in remx.rules_label("v2") and "SMA20" not in remx.rules_label("v1")
     assert "BTC > its SMA50" in wgmi.rules_label("v2")
-    assert grid.rules_label("v1") == grid.rules_label("v2")
+    assert "12% trailing stop" in grid.rules_label("v2")
+    assert "trailing" not in grid.rules_label("v1")
 
 
 def test_gold_rules_switch_with_the_version():
@@ -792,3 +796,17 @@ def test_combined_cutover_is_the_bar_after_the_first_published_v2_book_filled():
     assert live == pd.bdate_range(fill, periods=2)[1]           # the session after the fill
     assert oc.STRATEGY_VERSION_LIVE_START == sv.STRATEGY_VERSION_LIVE_START
     assert bt.version_cutover() == sv.STRATEGY_VERSION_LIVE_START
+
+
+def test_ma_band_signal_has_hysteresis():
+    """GRID's banded SMA: enter only ≥ band_enter above the SMA, exit only
+    ≥ band_exit below it, stay put in between."""
+    from dataclasses import replace
+    import backtest_ticker as bt
+    cfg = replace(tcfg.get_config("GRID"), ma_window=5, band_enter=0.05, band_exit=0.05)
+    px = np.array([100, 100, 100, 100, 100, 103, 112, 108, 100, 97, 94, 90, 96, 100.0])
+    sig = bt.trend_long_array(cfg, px, version="v1")
+    assert not sig[:6].any()                 # +3% over the SMA is inside the band → flat
+    assert sig[6] and sig[7] and sig[8]      # +8.7% breakout → long, held through a −4.4% dip
+    assert not sig[9:].any()                 # exits only once ≥5% below the SMA (−6.7%) …
+    #                                          … and stays flat: +4.8% on the last bar < +5%

@@ -1474,6 +1474,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/273"
    }
   ]
- }
-]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-11",
+  "kind": "sleeve",
+  "title": "GRID retuned: MACD 10/20/9 → 200-day SMA ±2% band + 12% trailing stop",
+  "description": "GRID's MACD 10/20/9 filter (−5% fixed stop, ~60 trades since 2021) lagged the 2025-26 trend. It now holds while the close is above its 200-day SMA with a ±2% hysteresis band (enter ≥ +2%, exit ≥ −2%) and trades a 12% trailing stop off the highest close instead of the −5% fixed stop. New `ma_band` strategy mode in backtest_ticker / ticker_config.",
+  "impact": "Real-engine backtest, 2025→now: +39% (Sharpe 0.99, max-DD −14%) vs +16% (0.60, −20%) before and +34% buy-&-hold. Full 2015→now: +365% vs +258% (Sharpe 0.93 vs 0.90, max-DD −17% vs −20%); 2021→now unchanged at +101%; ~11 trades vs ~117. Weaker in the 2021-22 bear window (+11% vs +28%). See GRID_RETUNE_EVAL.md.",
+  "links": []
+ }]
 }

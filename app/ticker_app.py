@@ -435,6 +435,10 @@ def ma_state(d_df):
     if cfg.strategy_mode == "macd":
         desc = (f"the MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) histogram "
                 f"is {macd_hist:+.4f} ({'positive' if above else 'negative'})")
+    elif cfg.strategy_mode == "ma_band":
+        desc = (f"close ${close:,.2f} is {dist:+.1f}% vs the {w}-day SMA ${ma:,.2f} — "
+                f"{'inside the long regime' if above else 'flat'} (enter ≥ "
+                f"+{cfg.band_enter*100:g}%, exit ≤ −{cfg.band_exit*100:g}%)")
     elif cfg.strategy_mode == "dual_ma":
         desc = f"the {cfg.ma_fast}-day SMA is {'above' if above else 'below'} the {cfg.ma_slow}-day SMA ${ma:,.2f}"
     elif cfg.strategy_mode == "ma_vol":
@@ -1357,6 +1361,14 @@ def render_trend_regime_chart(d_df, key_prefix="live", pos=None):
         lines = [(c.rolling(cfg.ma_window).mean()[view],
                   f"{cfg.ma_window}-day SMA (context)", "#2563eb", "dot")]
         sub = f"MACD {cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal} (shading = histogram > 0)"
+    elif m == "ma_band":
+        sma_v = c.rolling(cfg.ma_window).mean()
+        lines = [(sma_v[view], f"{cfg.ma_window}-day SMA", "#2563eb", None),
+                 ((sma_v * (1 + cfg.band_enter))[view],
+                  f"entry line (+{cfg.band_enter*100:g}%)", "#16a34a", "dot"),
+                 ((sma_v * (1 - cfg.band_exit))[view],
+                  f"exit line (−{cfg.band_exit*100:g}%)", "#dc2626", "dot")]
+        sub = f"MA{cfg.ma_window} ±{cfg.band_enter*100:g}% band"
     else:  # "ma" / "ma_vol"
         lines = [(c.rolling(cfg.ma_window).mean()[view],
                   f"{cfg.ma_window}-day SMA", "#2563eb", None)]

@@ -64,8 +64,8 @@ class TickerConfig:
     asset_labels: dict             # column -> short label for cards/tabs
 
     # ── strategy (tuned by the sweep; see backtest_ticker.py --sweep) ─────
-    # strategy_mode ∈ {"ma", "dual_ma", "macd", "ma_vol", "divergence"}.  The
-    # first four are the long/flat trend family (trend_long_array in the engine);
+    # strategy_mode ∈ {"ma", "ma_band", "dual_ma", "macd", "ma_vol", "crash_dd",
+    # "divergence"}.  All but the last are the long/flat trend family (trend_long_array in the engine);
     # "divergence" is the Gold/BTC Pure-Regime system.
     strategy_mode: str
     strategy_name: str
@@ -88,6 +88,11 @@ class TickerConfig:
     # recovers above the dd_reentry_ma-day SMA
     dd_exit_pct: float = 0.30
     dd_reentry_ma: int = 50
+    # banded SMA (mode="ma_band"): enter only once the close is band_enter above
+    # the ma_window-day SMA, exit only once it is band_exit below it (hysteresis —
+    # no whipsaw round-trips on a close that merely hugs the line)
+    band_enter: float = 0.0
+    band_exit: float = 0.0
     # divergence thresholds (mode="divergence"); harmless if unused
     u1_errhi_min: float = 0.08
     d2_errhi_max: float = -0.10
@@ -177,7 +182,8 @@ class TickerConfig:
 
     @property
     def is_trend(self) -> bool:
-        return self.strategy_mode in ("ma", "dual_ma", "macd", "ma_vol", "crash_dd")
+        return self.strategy_mode in ("ma", "ma_band", "dual_ma", "macd", "ma_vol",
+                                      "crash_dd")
 
     @property
     def has_stop(self) -> bool:
@@ -192,6 +198,8 @@ class TickerConfig:
         m = self.strategy_mode
         if m == "ma":
             return f"MA{self.ma_window}"
+        if m == "ma_band":
+            return f"MA{self.ma_window} ±{self.band_enter*100:g}% band"
         if m == "dual_ma":
             return f"Dual-MA {self.ma_fast}/{self.ma_slow}"
         if m == "macd":
@@ -208,6 +216,21 @@ class TickerConfig:
         ``headline``/``core`` = strategy-card copy; ``entry``/``exit`` = rule text."""
         m = self.strategy_mode
         st = self.stop_label
+        if m == "ma_band":
+            be, bx = self.band_enter * 100, self.band_exit * 100
+            return dict(
+                cond=f"close holds above the {self.ma_window}-day SMA band",
+                cond_short=f"close &lt; SMA{self.ma_window} −{bx:g}%",
+                line=f"{self.ma_window}-day SMA",
+                headline=f"{self.ma_window}-day SMA trend filter with a ±{be:g}% band",
+                core=(f"hold {self.key} while it trades above its {self.ma_window}-day "
+                      f"SMA — enter only after a close {be:g}% above the line and "
+                      f"exit only after a close {bx:g}% below it, so a close hugging "
+                      f"the line does not whipsaw the position"),
+                entry=(f"close is <b>{be:g}% above</b> the {self.ma_window}-day SMA "
+                       f"(decided at the close)"),
+                exit=(f"close is <b>{bx:g}% below</b> the {self.ma_window}-day SMA "
+                      f"(or the trailing stop trips)"))
         if m == "dual_ma":
             return dict(
                 cond=f"{self.ma_fast}-day SMA &gt; {self.ma_slow}-day SMA",
@@ -373,18 +396,25 @@ CONFIGS["GRID"] = TickerConfig(
     sentiment_label="Grid / electrification sentiment",
     traded_assets=[("GRID", "px_close")],
     asset_labels={"px_close": "GRID · Grid Infrastructure"},
-    strategy_mode="macd", strategy_name="Grid MACD Trend",
-    ma_window=50, macd_fast=10, macd_slow=20, macd_signal=9, fixed_stop=0.05,
+    strategy_mode="ma_band", strategy_name="Grid SMA200 Band Trend",
+    ma_window=200, band_enter=0.02, band_exit=0.02, fixed_stop=1.0,
+    v2_trail_stop=0.12,
+    v2_note=("2026-11 retune: MACD 10/20/9 (−5% stop, ~60 trades) → 200-day SMA "
+             "with a ±2% hysteresis band and a 12% trailing stop (no fixed stop)."),
     hl_band_pct=0.010,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.007, day_down_thresh=-0.007,
-    results_note=("OOS 2021→now: a MACD 10/20/9 trend filter (−5% stop) returns "
-                  "+134% vs Buy&Hold +132% at a lower drawdown (−16% vs −30%) and "
-                  "a higher Sharpe (1.20 vs 0.83) — and beats the old 150-day SMA "
-                  "filter (+105%, 0.87) on both return and Sharpe. The 10/20/9 "
-                  "parameters are the training-selected optimum and match the "
-                  "full-window optimum (no overfitting gap); ~57 trades, so it is "
-                  "the most turnover-sensitive of the trend configs."),
+    results_note=("2026-11 retune (GRID_RETUNE_EVAL.md): the old MACD 10/20/9 filter "
+                  "whipsawed (≈60 trades since 2021) and lagged the 2025-26 trend — "
+                  "+16% vs Buy&Hold +34% in 2025→now. The 200-day SMA with a ±2% "
+                  "hysteresis band (enter ≥ +2% above, exit ≥ 2% below) and a 12% "
+                  "trailing stop returns +39% (Sharpe 0.99, max-DD −14%) in 2025→now, "
+                  "+365% vs +258% over the full 2015→now history (Sharpe 0.93 vs 0.90, "
+                  "max-DD −17% vs −20%) and the same +101% 2021→now, in ~11 trades. "
+                  "It is the centre of a broad plateau (SMA 100-250 × band 0-4% all "
+                  "beat MACD on full-history Sharpe) and a selection made on pre-2021 "
+                  "data alone picked the same family — but it gives up part of the "
+                  "2021-22 bear-market edge MACD had (+11% vs +28%)."),
 )
 
 

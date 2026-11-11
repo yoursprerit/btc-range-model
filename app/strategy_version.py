@@ -35,8 +35,9 @@ Version history
   2026-10-11 — still V2), the excess stays in cash at 0 %; XOP (SPDR S&P Oil & Gas E&P) trades the energy β
   slot in place of OIH (same XLE crash-shield signal; also 2026-10-10 —
   ``overall_core.UNIVERSE_CHANGES``); a stop/trail hit publishes a CLOSE.
-  GRID, SOXX, XLE, BTC, PBW, ARTY, GDX/NUGT sleeves are identical in V1 and
-  V2.
+  GRID was retuned in-version on 2026-11 (MACD 10/20/9 → 200-day SMA ±2% band
+  + 12% trailing stop under V2; ``ticker_config``); SOXX, XLE, BTC, PBW, ARTY,
+  GDX/NUGT sleeves are identical in V1 and V2.
 
 Kept dependency-light (stdlib only) so the read-only artifact apps
 (📋 Targetbook, ✅ Executed Book, 🕵️ Daily Audit, 🩺 Strategy Health) can show

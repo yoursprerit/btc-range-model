@@ -308,6 +308,9 @@ def trend_long_array(cfg, gcl, version: str | None = None):
     PRIMARY close array ``gcl`` (decision at each close → executed next bar).
 
       ma        long while close > N-day SMA
+      ma_band   banded SMA with hysteresis: turn long once the close is
+                ``band_enter`` above the N-day SMA, flat once it is
+                ``band_exit`` below it, otherwise keep the prior state
       dual_ma   long while the fast SMA is above the slow SMA
       macd      long while the MACD histogram (fast, slow, signal) > 0
       ma_vol    long while close > N-day SMA AND realised vol is below k · its
@@ -347,6 +350,19 @@ def _trend_long_base(cfg, gcl):
         med = v.rolling(cfg.vol_med_win).median()
         above = gcl > _rolling_mean(gcl, cfg.ma_window)
         return (above & (v < cfg.vol_k * med).to_numpy())
+    if m == "ma_band":
+        sma = _rolling_mean(gcl, cfg.ma_window)
+        up = np.asarray(gcl > sma * (1 + cfg.band_enter), bool)
+        dn = np.asarray(gcl < sma * (1 - cfg.band_exit), bool)
+        sig = np.zeros(len(gcl), bool)
+        on = False
+        for i in range(len(gcl)):
+            if (not on) and up[i]:
+                on = True
+            elif on and dn[i]:
+                on = False
+            sig[i] = on
+        return sig
     if m == "crash_dd":
         c = pd.Series(gcl)
         hi52 = c.rolling(252, min_periods=60).max().to_numpy()
