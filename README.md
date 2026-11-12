@@ -139,7 +139,7 @@ out-of-sample over multiple periods **and** the full bull+bear cycle.
 - **Divergence Pure-Regime** (BTC, Gold Miners, PBW, ARTY) — enter on a bullish
   H/L-forecast divergence (U1) confirmed inside a trend-regime gate; exit on
   momentum-fade / exhaustion (D2/D3) or a fixed stop.
-- **Trend filters** (SOXX & Gold Trend dual-MA 25/100 · GRID MACD 10/20/9 ·
+- **Trend filters** (SOXX & Gold Trend dual-MA 25/100 · GRID MACD 10/20/9 (V2: only above the 100-day SMA) ·
   REMX dual-MA 50/200 golden cross · WGMI 50-day SMA + volatility filter) —
   long only while the trend holds, flat otherwise.
 - **Crash-shield quasi-B&H** (XLE · XOP · ERX; OIH in the XLE app) — long by default; exit only
@@ -171,7 +171,7 @@ evaluation / experiment docs behind it are grouped under *Additional docs*. The
 | BTC Divergence Pure-Regime | BTC · MSTR · MSTU · ETH (traded as ETHA) | **[`TRADING_STRATEGY.md`](TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`BTC_MSTR_MSTU_STRATEGY_EVAL.md`](BTC_MSTR_MSTU_STRATEGY_EVAL.md) · [`ETH_BMNR_STRATEGY_EVAL.md`](ETH_BMNR_STRATEGY_EVAL.md) (ETH add + a look-ahead finding) · [`TREND_SIGNATURES.md`](TREND_SIGNATURES.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (MSTU stop) |
 | Gold middle path (dual-MA + divergence) | GLDM · UGL & GDX · NUGT | **[`GLDM_TRADING_STRATEGY.md`](GLDM_TRADING_STRATEGY.md)** — current live spec<br>_Additional docs:_ [`GLDM_README.md`](GLDM_README.md) · [`LEV_SIBLINGS_STOP_EVAL.md`](LEV_SIBLINGS_STOP_EVAL.md) (UGL/NUGT stops) |
 | Semis Dual-MA 25/100 | SOXX · SOXL | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) · [`SOXX_STOP_EVAL.md`](SOXX_STOP_EVAL.md) · [`SOXL_STOP_EVAL.md`](SOXL_STOP_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) |
-| Grid MACD 10/20/9 | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
+| Grid MACD 10/20/9 (+ V2 SMA100 up-trend gate) | GRID | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`GRID_RETUNE_EVAL.md`](GRID_RETUNE_EVAL.md) · [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Energy Divergence Pure-Regime | XLE · OIH · XOP · ERX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`SOXL_ERX_ADDITION_EVAL.md`](SOXL_ERX_ADDITION_EVAL.md) (ERX) |
 | Metals Dual-MA 50/200 golden cross | REMX | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`REGIME_DIVERGENCE_EVAL.md`](REGIME_DIVERGENCE_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
 | Miner MA-50 + volatility filter | WGMI | **[`TICKER_APPS_README.md`](TICKER_APPS_README.md)** — current strategy<br>_Additional docs:_ [`HYPERPARAM_SEARCH_EVAL.md`](HYPERPARAM_SEARCH_EVAL.md) · [`ML_STATISTICAL_STRATEGY_EVAL.md`](ML_STATISTICAL_STRATEGY_EVAL.md) |
@@ -232,7 +232,7 @@ drawdown — the harder tests are **Sharpe** and whether it can beat B&H on
 | Signal | Strategy | Strat return | B&H return | Strat MDD | B&H MDD | Sharpe (S / B&H) |
 |---|---|---:|---:|---:|---:|---:|
 | SOXX | Dual-MA 25/100, −5 % stop | **+425 %** | +340 % | **−27 %** | −46 % | **1.18 / 0.91** |
-| GRID | MACD 10/20/9, −5 % stop | **+134 %** | +124 % | **−16 %** | −30 % | **1.19 / 0.79** |
+| GRID | MACD 10/20/9, −5 % stop (V1; V2 adds close > SMA100 — 2021→ +76 % / −14 % / 0.96, 2025→ +21 % / −9 % / 0.90; see `GRID_RETUNE_EVAL.md`) | **+134 %** | +124 % | **−16 %** | −30 % | **1.19 / 0.79** |
 | XLE | Crash-shield quasi-B&H (30 % / SMA50) | +198 % | +207 % | −27 % | −27 % | 0.89 / 0.90 |
 | REMX | Dual-MA 50/200 golden cross | **+98 %** | +5 % | **−36 %** | −74 % | **0.56 / 0.23** |
 | WGMI | MA-50 + vol-filter | **+376 %** | +223 % | **−32 %** | −63 % | **1.80 / 0.97** |

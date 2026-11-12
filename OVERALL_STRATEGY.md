@@ -28,6 +28,7 @@ sleeves are identical in V1 and V2; GRID gained a 100-day-SMA up-trend gate on 2
 | **UGL** | same signal, −3 % fixed stop | same gate; **12 % trailing stop** | +215 % / −44 % / 0.80 → **+366 % / −30 % / 1.04** |
 | **WGMI** | SMA50 + vol filter, no stop | entry only while **BTC > its 50-day SMA** (parent gate) | +333 % / −38 % / 1.62 → **+395 % / −17 % / 1.88** (2024→) |
 | **REMX** | 50/200 golden cross, −5 % | entry unchanged; **hold only while SMA20 > SMA100** | +97 % / −41 % / 0.55 → **+155 % / −27 % / 0.73** |
+| **GRID** | MACD 10/20/9, −5 % stop | signal taken only while the **close > its 100-day SMA** (`v2_price_gate_ma`; 2026-11-12, still V2 — no version bump) | Balanced replay 2026 YTD **+66 % → +80 %** (Sharpe 1.85 → 2.14), 2021→ +1,052 % → +1,033 % (1.83 → 1.81), max-DD −14.1 % → −16.7 %; GRID cap 30 % — `GRID_RETUNE_EVAL.md` |
 | **Energy β slot** | **OIH** (oil services) traded off the XLE crash-shield | **XOP** (SPDR S&P Oil & Gas E&P) in OIH's β slot, same XLE signal, no stop — `overall_core.UNIVERSE_CHANGES` (2026-10-10) | OIH +127 % / −46 % / 0.57 → **XOP +200 % / −40 % / 0.73** |
 
 **Allocator — adds-only.** A sleeve the book already holds is never trimmed
