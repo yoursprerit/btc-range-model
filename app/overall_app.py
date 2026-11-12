@@ -2889,6 +2889,24 @@ with tab_live:
             st.warning(f"Could not build the {_pnl_view} replay ({_exc}); showing "
                        "the live-logic replay instead.")
             _PFV = _PF
+        # The per-instrument results of the SELECTED generation.  The CI snapshot
+        # pack carries only wf / curves / rets (no ``results``), and the page-level
+        # ``results`` is always the live (V2) universe — so the per-asset breakdown,
+        # trade log and realized-P&L tables must read these, or they would show V2
+        # numbers (and the V2 universe, XOP not OIH) whatever the selector says.
+        _results_v = results
+        if _PFV is not _PF:
+            try:
+                _results_v = (_PFV.get("results")
+                              or (get_results(_bucket(), _pnl_ver) or {}).get("results")
+                              or results)
+            except Exception:
+                _results_v = results
+        _parents_v = []
+        for _pk in ov.PARENT_KEYS:
+            _grp_v = [r for r in _results_v if r["parent"] == _pk]
+            if _grp_v:
+                _parents_v.append((_pk, _grp_v))
         _c2_start = pd.Timestamp(ov.C2_RECORD_START).strftime("%b %d, %Y")
         # the record is priced on the sleeves' PRICE returns (version-
         # independent): a published book held its sleeves whatever a
@@ -3601,7 +3619,7 @@ with tab_live:
             if _ibkr_sum is not None:
                 _render_ibkr_summary(_ibkr, _ibkr_sum, _sm, _dep_monthly, _dep_day, _ibkr_sim)
             # per-asset since-start reads (also feed the blend-level trade stats)
-            _pa = ov.per_asset_slice_metrics(results, _start_sel, end=_end_arg)
+            _pa = ov.per_asset_slice_metrics(_results_v, _start_sel, end=_end_arg)
             if _bh_src:
                 # buy & hold never trades: exactly one position per sleeve,
                 # opened at the anchor and still open at the end.  The
@@ -4378,7 +4396,7 @@ with tab_live:
                     "sold day by day through sell signals & optimizer tilts, "
                     "plus those still open (toggle to show)",
                     key="overall_daily_position_log"):
-                _res_by_key = {r["key"]: r for r in results}
+                _res_by_key = {r["key"]: r for r in _results_v}
                 # the as-published record trades on Collective2: list C2's
                 # own fills (dates, prices, net P&L) rather than the book's
                 # weight diffs priced at official closes
@@ -4994,7 +5012,7 @@ with tab_live:
                            "<th style='text-align:right'>vs its strategy</th></tr>")
                     bpr = []
                     _bh_by_key = {p["key"]: p for p in _bh_pa}
-                    for pk, grp in parents:
+                    for pk, grp in _parents_v:
                         for res in grp:
                             p = _bh_by_key.get(res["key"])
                             if not p:
@@ -5112,7 +5130,7 @@ with tab_live:
                     par = []
                     _wts = _wmax
                     _pa_by_key = {p["key"]: p for p in _pa}
-                    for pk, grp in parents:
+                    for pk, grp in _parents_v:
                         for res in grp:
                             p = _pa_by_key.get(res["key"])
                             if not p:
@@ -5200,7 +5218,7 @@ with tab_live:
             # (buy & hold places one buy per sleeve at the anchor and never
             # another ticket — there is no round-trip log to build)
             _tl = [] if _bh_src else ov.trade_log_since(
-                results, _wmax, _start_sel, weight_matrix=_wf["weights"],
+                _results_v, _wmax, _start_sel, weight_matrix=_wf["weights"],
                 end=_end_arg)
             _n_open_tl = sum(1 for t in _tl if t["open"])
             if not _bh_src and st.toggle(
