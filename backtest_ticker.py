@@ -308,6 +308,9 @@ def trend_long_array(cfg, gcl, version: str | None = None):
     PRIMARY close array ``gcl`` (decision at each close → executed next bar).
 
       ma        long while close > N-day SMA
+      ma_band   banded SMA with hysteresis: turn long once the close is
+                ``band_enter`` above the N-day SMA, flat once it is
+                ``band_exit`` below it, otherwise keep the prior state
       dual_ma   long while the fast SMA is above the slow SMA
       macd      long while the MACD histogram (fast, slow, signal) > 0
       ma_vol    long while close > N-day SMA AND realised vol is below k · its
@@ -323,14 +326,20 @@ def trend_long_array(cfg, gcl, version: str | None = None):
     ``v2_hold_ma_fast``/``v2_hold_ma_slow`` hold condition into the signal
     (REMX: hold the 50/200 golden cross only while the 20-day SMA is above the
     100-day), so the sleeve exits a fading up-cycle months before the slow
-    death cross.  Configs without a hold rule are identical in V1 and V2.
+    death cross.  ``v2_price_gate_ma`` additionally ANDs "close above its N-day
+    SMA" (GRID: the MACD signal is taken only in an up-trend, so it cannot
+    whipsaw through a down-trend).  Configs without these rules are identical
+    in V1 and V2.
     """
     base = _trend_long_base(cfg, gcl)
-    if active_version(version) == "v2" and getattr(cfg, "v2_hold_ma_fast", 0) \
-            and getattr(cfg, "v2_hold_ma_slow", 0):
-        hold = (_rolling_mean(gcl, cfg.v2_hold_ma_fast)
-                > _rolling_mean(gcl, cfg.v2_hold_ma_slow))
-        return np.asarray(base, bool) & np.asarray(hold, bool)
+    if active_version(version) == "v2":
+        base = np.asarray(base, bool)
+        if getattr(cfg, "v2_hold_ma_fast", 0) and getattr(cfg, "v2_hold_ma_slow", 0):
+            base = base & (_rolling_mean(gcl, cfg.v2_hold_ma_fast)
+                           > _rolling_mean(gcl, cfg.v2_hold_ma_slow))
+        if getattr(cfg, "v2_price_gate_ma", 0):
+            base = base & (np.asarray(gcl, float)
+                           > _rolling_mean(gcl, cfg.v2_price_gate_ma))
     return base
 
 
@@ -347,6 +356,19 @@ def _trend_long_base(cfg, gcl):
         med = v.rolling(cfg.vol_med_win).median()
         above = gcl > _rolling_mean(gcl, cfg.ma_window)
         return (above & (v < cfg.vol_k * med).to_numpy())
+    if m == "ma_band":
+        sma = _rolling_mean(gcl, cfg.ma_window)
+        up = np.asarray(gcl > sma * (1 + cfg.band_enter), bool)
+        dn = np.asarray(gcl < sma * (1 - cfg.band_exit), bool)
+        sig = np.zeros(len(gcl), bool)
+        on = False
+        for i in range(len(gcl)):
+            if (not on) and up[i]:
+                on = True
+            elif on and dn[i]:
+                on = False
+            sig[i] = on
+        return sig
     if m == "crash_dd":
         c = pd.Series(gcl)
         hi52 = c.rolling(252, min_periods=60).max().to_numpy()

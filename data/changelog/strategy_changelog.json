@@ -1474,6 +1474,19 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/273"
    }
   ]
- }
-]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-12",
+  "kind": "sleeve",
+  "title": "GRID: MACD 10/20/9 taken only while the close is above its 100-day SMA",
+  "description": "Under V2, GRID's MACD 10/20/9 (−5% stop) signal is ANDed with close > 100-day SMA (new `v2_price_gate_ma` rule in ticker_config / backtest_ticker; V1 stays the bare MACD). The bare MACD whipsawed through the 2026 H2 down-trend — six consecutive small losers after two good trades. The GRID app now shows the gate as its own LONG/CASH condition row, banner row, strategy-card rule and chart line; data/grid/backtest_results.json and data/overall/overall_results.json were regenerated (Overall optimal GRID weight 3.3% Balanced / 6.5% Growth / 2.0% Aggressive).",
+  "impact": "Overall walk-forward replay, GRID cap 30%, Balanced: 2026 YTD +66% → +80% (Sharpe 1.85 → 2.14), last 3 months −7% → −2%, 2021→ level (+1,052% → +1,033%, Sharpe 1.83 → 1.81, max-DD −14.1% → −16.7%); Growth 2021→ +1,296% → +1,369%, 2026 +76% → +86%. Stand-alone V2: 2025→ +16% (Sharpe 0.60, DD −20%) → +21% (0.90, −9%), but 2021→ return +101% → +76% (Sharpe 0.92 → 0.96). A 200-day-SMA ±2% band + 12% trail was better stand-alone yet worse inside the portfolio and was not adopted. See GRID_RETUNE_EVAL.md.",
+  "links": [
+   {
+    "label": "PR #274",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/274"
+   }
+  ]
+ }]
 }

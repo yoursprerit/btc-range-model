@@ -212,7 +212,7 @@ def overall_config(key: str) -> TickerConfig:
     Every app is aligned to the strategy its own app trades: BTC via the CT
     engine (see run_universe), GLDM via its Divergence Pure-Regime config, and
     the six ETF apps via their exact ``ticker_config`` entries — SOXX on its
-    25/100 dual-MA crossover, GRID on its MACD 10/20/9 filter, WGMI on its
+    25/100 dual-MA crossover, GRID on its MACD 10/20/9 filter (V2: only above its 100-day SMA), WGMI on its
     50-day SMA + volatility filter, REMX on its 50/200 dual-MA golden cross, XLE
     on its energy divergence.  The Overall app therefore matches each source app
     bar-for-bar.
@@ -5557,7 +5557,7 @@ def live_exit_keys(results: list[dict], spot: dict,
     bar.  The mode's REAL long condition is re-evaluated with the live price as
     the newest close (via ``trend_long_now_live``): for ``ma``/``ma_vol`` that's
     close-vs-SMA, for ``dual_ma`` the fast/slow SMA cross, and for ``macd`` the
-    MACD histogram sign (e.g. GRID's 10/20/9) — NOT a naive price-vs-line read
+    MACD histogram sign / SMA band state — NOT a naive price-vs-line read
     (so a golden-cross name whose price merely dips below its slow SMA is not
     mis-flagged).  These filters decide at the close and act on
     the next bar.  By default this covers positions currently **held** (long
@@ -5569,7 +5569,7 @@ def live_exit_keys(results: list[dict], spot: dict,
     out = set()
     for r in results:
         mode = r.get("mode")
-        if mode not in ("ma", "dual_ma", "macd", "ma_vol"):
+        if mode not in ("ma", "ma_band", "dual_ma", "macd", "ma_vol"):
             continue
         p = r.get("pos") or {}
         in_pos = bool(p.get("in_pos"))
@@ -5665,12 +5665,12 @@ def live_entry_keys(results: list[dict], spot: dict) -> set:
     U1 + the regime gate at today's close is flagged too.  Instruments already
     signalling buy off the last close (committed entries, action OPEN) are
     excluded — they are flagged separately as certain, not "likely", entries.
-    MACD sleeves (GRID) are re-evaluated like the other trend modes: the live
+    MACD / banded-SMA sleeves (GRID) are re-evaluated like the other trend modes: the live
     price is appended as the provisional close and the histogram sign re-read."""
     out = set()
     for r in results:
         mode = r.get("mode")
-        if mode not in ("ma", "dual_ma", "macd", "ma_vol", "divergence"):
+        if mode not in ("ma", "ma_band", "dual_ma", "macd", "ma_vol", "divergence"):
             continue
         p = r.get("pos") or {}
         if p.get("in_pos"):

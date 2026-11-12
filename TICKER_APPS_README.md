@@ -19,7 +19,7 @@ streamlit run streamlit_app.py     # root router → pick any app in the sidebar
 | App | Asset | What it is | Chosen strategy |
 |---|---|---|---|
 | 🖥️ **SOXX** | iShares Semiconductor ETF | high-beta chips (NVDA/AVGO/AMD) | Dual-MA 25/100 crossover |
-| ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 |
+| ⚡ **GRID** | First Trust Clean Edge Grid ETF | grid / electrification infra | MACD 10/20/9 (V2: only above the 100-day SMA, 2026-11) |
 | 🛢️ **XLE** | Energy Select Sector SPDR | large-cap energy (+ OIH · XOP · ERX siblings) | Crash-shield quasi-B&H |
 | 🧲 **REMX** | VanEck Rare Earth & Strategic Metals | rare-earth / strategic metals | Dual-MA 50/200 golden cross |
 | ⛏️ **WGMI** | CoinShares Valkyrie Bitcoin Miners ETF | 2–3× BTC-beta miners (MARA/RIOT/CLSK) | 50-day SMA + volatility filter |

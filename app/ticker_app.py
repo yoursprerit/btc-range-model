@@ -427,14 +427,29 @@ def ma_state(d_df):
             and len(c) >= cfg.v2_hold_ma_slow):
         hold_ok = bool(np.mean(c[-cfg.v2_hold_ma_fast:]) > np.mean(c[-cfg.v2_hold_ma_slow:]))
     dist = (close / ma - 1) * 100 if ma == ma and ma else 0.0
+    # V2 up-trend gate (GRID): close must be above its N-day SMA for the MACD signal
+    # to count — surfaced as its own row so a blocked MACD-positive bar is explained
+    pgate = None
+    if _ver == "v2" and cfg.v2_price_gate_ma and len(c) >= 1:
+        _pm = float(np.mean(c[-cfg.v2_price_gate_ma:]))
+        pgate = dict(ok=bool(close > _pm), sma=_pm, n=int(cfg.v2_price_gate_ma),
+                     dist=(close / _pm - 1) * 100 if _pm else 0.0)
     # config-driven MACD histogram value on the latest bar (macd mode only)
     macd_hist = None
     if cfg.strategy_mode == "macd" and len(c):
         macd_hist = float(bt.macd_hist_array(cfg, c)[-1])
     # human phrase describing the current signal state
     if cfg.strategy_mode == "macd":
+        _pg = (f"; V2 up-trend gate: close ${close:,.2f} "
+               f"{'above' if pgate['ok'] else 'below'} the {pgate['n']}-day SMA "
+               f"${pgate['sma']:,.2f}" if pgate else "")
         desc = (f"the MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) histogram "
-                f"is {macd_hist:+.4f} ({'positive' if above else 'negative'})")
+                f"is {macd_hist:+.4f} ({'positive' if macd_hist > 0 else 'negative'})"
+                f" — signal {'LONG' if above else 'flat'}{_pg}")
+    elif cfg.strategy_mode == "ma_band":
+        desc = (f"close ${close:,.2f} is {dist:+.1f}% vs the {w}-day SMA ${ma:,.2f} — "
+                f"{'inside the long regime' if above else 'flat'} (enter ≥ "
+                f"+{cfg.band_enter*100:g}%, exit ≤ −{cfg.band_exit*100:g}%)")
     elif cfg.strategy_mode == "dual_ma":
         desc = f"the {cfg.ma_fast}-day SMA is {'above' if above else 'below'} the {cfg.ma_slow}-day SMA ${ma:,.2f}"
     elif cfg.strategy_mode == "ma_vol":
@@ -455,7 +470,7 @@ def ma_state(d_df):
     return dict(ma=ma, ma_prev=ma_prev, close=close, above=above,
                 slope_pos=ma > ma_prev, window=w, dist=dist, desc=desc,
                 macd_hist=macd_hist, vol_state=vol_state, ma_fast_val=ma_fast_val,
-                gate_ok=gate_ok, hold_ok=hold_ok, version=_ver,
+                gate_ok=gate_ok, hold_ok=hold_ok, pgate=pgate, version=_ver,
                 line_label=TUI["line"], cond=TUI["cond"], cond_short=TUI["cond_short"])
 
 
@@ -732,6 +747,10 @@ def render_strategy_card(version=None):
                   f"drops below the {cfg.v2_hold_ma_slow}-day (re-enter only when the cross "
                   "and the hold condition both hold)")
                  if _v2 and cfg.v2_hold_ma_fast and cfg.v2_hold_ma_slow else "")
+    _pgate_row = ((f"<br>② <b>V2 up-trend gate</b> — the signal counts only while the close is "
+                   f"above its {cfg.v2_price_gate_ma}-day SMA (a close below it exits; re-enter "
+                   "only when the signal and the gate both hold)")
+                  if _v2 and cfg.v2_price_gate_ma else "")
     _trail_row = ((f"<br>② <b>V2 trailing stop</b> — {cfg.v2_trail_stop*100:.0f}% below the "
                    "highest close since entry") if _v2 and cfg.v2_trail_stop else "")
     if IS_DIV:
@@ -806,7 +825,7 @@ def render_strategy_card(version=None):
       <div style='font-size:11px; font-weight:700; color:#b91c1c; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:5px;'>📤 Exit — go to cash</div>
       <div style='font-size:12px; color:#334155; line-height:1.7;'>
-        ① {TUI['exit']}{_hold_row}{_trail_row}{(('<br>' + ('③' if (_hold_row or _trail_row) else '②') + ' <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else '')}
+        ① {TUI['exit']}{_hold_row}{_pgate_row}{_trail_row}{(('<br>' + ('③' if (_hold_row or _trail_row or _pgate_row) else '②') + ' <b>fixed stop</b> — ' + cfg.stop_label + ' from entry') if cfg.has_stop else '')}
       </div>
     </div>
   </div>
@@ -924,6 +943,15 @@ def render_conditions_box(sigs, mst, pos=None):
                 rowm(maf > mas, f"{cfg.ma_fast}-day SMA &gt; {cfg.ma_slow}-day SMA",
                      f"${maf:,.2f} &gt; ${mas:,.2f} (need &gt; 0%, now {gap:+.2f}%)") + \
                 "</table>"
+        elif mst.get("pgate") is not None and mst.get("macd_hist") is not None:
+            # MACD + V2 up-trend gate: two separate conditions, both must hold
+            _pg = mst["pgate"]
+            entry_html = "<table style='border-collapse:collapse;'>" + \
+                rowm(mst["macd_hist"] > 0, mst["cond"],
+                     f"histogram {mst['macd_hist']:+.4f} (need &gt; 0)") + \
+                rowm(_pg["ok"], f"V2 up-trend gate — close &gt; {_pg['n']}-day SMA",
+                     f"close ${mst['close']:,.2f} vs SMA ${_pg['sma']:,.2f} "
+                     f"({_pg['dist']:+.2f}%)") + "</table>"
         else:
             entry_html = "<table style='border-collapse:collapse;'>" + \
                 rowm(above, mst["cond"], mst["desc"]) + "</table>"
@@ -936,7 +964,12 @@ def render_conditions_box(sigs, mst, pos=None):
                 "Strategy Logic V2: entries only — a held position is never closed by "
                 "this gate") + "</table>"
         exit_html = "<table style='border-collapse:collapse;'>" + \
-            rowm(not above, mst["cond_short"], "→ move to cash") + \
+            rowm((not above) if mst.get("pgate") is None else (mst["macd_hist"] <= 0),
+                 mst["cond_short"], "→ move to cash") + \
+            (rowm(not mst["pgate"]["ok"],
+                  f"V2 up-trend gate — close &lt; {mst['pgate']['n']}-day SMA",
+                  "Strategy Logic V2: → exit; re-enter only when the signal and the "
+                  "gate both hold") if mst.get("pgate") is not None else "") + \
             (rowm(not bool(_v2h),
                   f"V2 hold rule — {cfg.v2_hold_ma_fast}-day SMA &lt; "
                   f"{cfg.v2_hold_ma_slow}-day SMA",
@@ -1148,6 +1181,11 @@ def render_ma_signatures(mst, pos=None):
         trend_rows.append(
             (f"MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) hist",
              f"{mh:+.4f}", "> 0", mh > 0))
+    _pgt = mst.get("pgate")
+    if _pgt is not None:
+        trend_rows.append(
+            (f"V2 up-trend gate", f"close ${c:,.2f} vs {_pgt['n']}d SMA ${_pgt['sma']:,.2f}",
+             f"close &gt; {_pgt['n']}-day SMA ({_pgt['dist']:+.2f}%)", _pgt["ok"]))
     # dual_ma: the traded rule is fast SMA > slow SMA, so show BOTH SMA levels
     # against the cross threshold instead of a single close-vs-line read.
     maf = mst.get("ma_fast_val")
@@ -1354,9 +1392,20 @@ def render_trend_regime_chart(d_df, key_prefix="live", pos=None):
                   "#dc2626", "dot")]
         sub = f"crash-shield {int(cfg.dd_exit_pct*100)}%/SMA{cfg.dd_reentry_ma}"
     elif m == "macd":
-        lines = [(c.rolling(cfg.ma_window).mean()[view],
-                  f"{cfg.ma_window}-day SMA (context)", "#2563eb", "dot")]
-        sub = f"MACD {cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal} (shading = histogram > 0)"
+        _gw = cfg.v2_price_gate_ma or cfg.ma_window
+        lines = [(c.rolling(_gw).mean()[view],
+                  f"{_gw}-day SMA ({'V2 up-trend gate' if cfg.v2_price_gate_ma else 'context'})",
+                  "#2563eb", "dot")]
+        sub = (f"MACD {cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal} (shading = histogram > 0"
+               + (f" AND close > {_gw}-day SMA" if cfg.v2_price_gate_ma else "") + ")")
+    elif m == "ma_band":
+        sma_v = c.rolling(cfg.ma_window).mean()
+        lines = [(sma_v[view], f"{cfg.ma_window}-day SMA", "#2563eb", None),
+                 ((sma_v * (1 + cfg.band_enter))[view],
+                  f"entry line (+{cfg.band_enter*100:g}%)", "#16a34a", "dot"),
+                 ((sma_v * (1 - cfg.band_exit))[view],
+                  f"exit line (−{cfg.band_exit*100:g}%)", "#dc2626", "dot")]
+        sub = f"MA{cfg.ma_window} ±{cfg.band_enter*100:g}% band"
     else:  # "ma" / "ma_vol"
         lines = [(c.rolling(cfg.ma_window).mean()[view],
                   f"{cfg.ma_window}-day SMA", "#2563eb", None)]

@@ -19,8 +19,8 @@ holds the version history) found three separate drains — slow trend sleeves
 whipsawed after the gold, rare-earth and Bitcoin-miner up-trends broke, a
 daily priority tilt that re-sized every held sleeve, and stops that the
 publisher never turned into a CLOSE.  **Strategy Logic V2** changes exactly
-these, and nothing else (GRID, SOXX, XLE, PBW, ARTY, GDX/NUGT and the BTC
-sleeves are identical in V1 and V2):
+these, and nothing else (SOXX, XLE, PBW, ARTY, GDX/NUGT and the BTC
+sleeves are identical in V1 and V2; GRID gained a 100-day-SMA up-trend gate on 2026-11-12):
 
 | Sleeve | V1 rule | V2 rule | OOS (V1 → V2) |
 |---|---|---|---|
@@ -28,6 +28,7 @@ sleeves are identical in V1 and V2):
 | **UGL** | same signal, −3 % fixed stop | same gate; **12 % trailing stop** | +215 % / −44 % / 0.80 → **+366 % / −30 % / 1.04** |
 | **WGMI** | SMA50 + vol filter, no stop | entry only while **BTC > its 50-day SMA** (parent gate) | +333 % / −38 % / 1.62 → **+395 % / −17 % / 1.88** (2024→) |
 | **REMX** | 50/200 golden cross, −5 % | entry unchanged; **hold only while SMA20 > SMA100** | +97 % / −41 % / 0.55 → **+155 % / −27 % / 0.73** |
+| **GRID** | MACD 10/20/9, −5 % stop | signal taken only while the **close > its 100-day SMA** (`v2_price_gate_ma`; 2026-11-12, still V2 — no version bump) | Balanced replay 2026 YTD **+66 % → +80 %** (Sharpe 1.85 → 2.14), 2021→ +1,052 % → +1,033 % (1.83 → 1.81), max-DD −14.1 % → −16.7 %; GRID cap 30 % — `GRID_RETUNE_EVAL.md` |
 | **Energy β slot** | **OIH** (oil services) traded off the XLE crash-shield | **XOP** (SPDR S&P Oil & Gas E&P) in OIH's β slot, same XLE signal, no stop — `overall_core.UNIVERSE_CHANGES` (2026-10-10) | OIH +127 % / −46 % / 0.57 → **XOP +200 % / −40 % / 0.73** |
 
 **Allocator — adds-only.** A sleeve the book already holds is never trimmed
@@ -265,7 +266,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −5% / NUGT −8% (2026-07-25 re-sweep) |
 | 🛢️ **XLE** | XLE `core` · XOP `beta` (OIH `beta` under V1) · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
-| ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
+| ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% (V2: only while close > SMA100) |
 | 🧲 **REMX** | REMX `core` | Dual-MA 50/200 golden cross, −5% |
 | ⛏️ **WGMI** | WGMI `beta` | MA-50 + volatility filter, no fixed stop |
 | ☀️ **PBW** | PBW `core` | Clean-Energy Divergence Pure-Regime |

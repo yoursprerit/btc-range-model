@@ -51,6 +51,12 @@ trend-confirm × stop); WGMI 1 680 (MA × vol-window × median-window × k × st
 
 ## GRID — MACD
 
+> **2026-11 update:** the 10/20/9 MACD below is still GRID's signal, but under Strategy
+> Logic V2 it is taken only while the close is above its 100-day SMA, after the bare
+> MACD whipsawed through the 2026 H2 down-trend. Figures in this section are the
+> original (V1) search; see [`GRID_RETUNE_EVAL.md`](GRID_RETUNE_EVAL.md) for the V2 rule
+> and its Overall-replay evidence.
+
 | Config | Full OOS 2021→now | Holdout Aug-25→now |
 |---|---|---|
 | Current MA150 / 5% | +105% / −19% / 0.87 | +33% / 1.50 |
