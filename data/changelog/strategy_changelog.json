@@ -1496,6 +1496,11 @@
   "title": "Fix: P&L per-asset breakdown, trade log and realized P&L now follow the V1 / V2 / Combined selector",
   "description": "In the Overall app's 📈 P&L section the headline metrics and growth curves followed the strategy-logic selector, but the per-asset breakdown (bar chart + table), trade log and realized-P&L-by-asset read the page-level live (V2) results, so they never changed and V1 showed XOP instead of OIH. They now read the selected generation's per-sleeve results.",
   "impact": "Walk-forward replay, last-year window: switching to V1 now changes GLDM −9.5% → −19.3%, UGL −19.6% → −39.5%, GRID +9.1% → −3.4%, REMX −16.2% → −30.7%, WGMI +29.0% → −10.2% and OIH replaces XOP; sleeves unchanged between versions (e.g. SOXX) stay identical.",
-  "links": []
+  "links": [
+   {
+    "label": "PR #275",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/275"
+   }
+  ]
  }]
 }
