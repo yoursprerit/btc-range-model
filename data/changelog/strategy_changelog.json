@@ -1477,11 +1477,11 @@
  },
  {
   "version": "v2",
-  "date": "2026-11-11",
+  "date": "2026-11-12",
   "kind": "sleeve",
-  "title": "GRID retuned: MACD 10/20/9 → 200-day SMA ±2% band + 12% trailing stop",
-  "description": "GRID's MACD 10/20/9 filter (−5% fixed stop, ~60 trades since 2021) lagged the 2025-26 trend. It now holds while the close is above its 200-day SMA with a ±2% hysteresis band (enter ≥ +2%, exit ≥ −2%) and trades a 12% trailing stop off the highest close instead of the −5% fixed stop. New `ma_band` strategy mode in backtest_ticker / ticker_config.",
-  "impact": "Real-engine backtest, 2025→now: +39% (Sharpe 0.99, max-DD −14%) vs +16% (0.60, −20%) before and +34% buy-&-hold. Full 2015→now: +365% vs +258% (Sharpe 0.93 vs 0.90, max-DD −17% vs −20%); 2021→now unchanged at +101%; ~11 trades vs ~117. Weaker in the 2021-22 bear window (+11% vs +28%). See GRID_RETUNE_EVAL.md.",
+  "title": "GRID: MACD 10/20/9 taken only while the close is above its 100-day SMA",
+  "description": "Under V2, GRID's MACD 10/20/9 (−5% stop) signal is ANDed with close > 100-day SMA (new `v2_price_gate_ma` rule in ticker_config / backtest_ticker; V1 stays the bare MACD). The bare MACD whipsawed through the 2026 H2 down-trend — six consecutive small losers after two good trades.",
+  "impact": "Overall walk-forward replay, GRID cap 30%, Balanced: 2026 YTD +66% → +80% (Sharpe 1.85 → 2.14), last 3 months −7% → −2%, 2021→ level (+1,052% → +1,033%, Sharpe 1.83 → 1.81, max-DD −14.1% → −16.7%); Growth 2021→ +1,296% → +1,369%, 2026 +76% → +86%. Stand-alone V2: 2025→ +16% (Sharpe 0.60, DD −20%) → +21% (0.90, −9%), but 2021→ return +101% → +76% (Sharpe 0.92 → 0.96). A 200-day-SMA ±2% band + 12% trail was better stand-alone yet worse inside the portfolio and was not adopted. See GRID_RETUNE_EVAL.md.",
   "links": []
  }]
 }

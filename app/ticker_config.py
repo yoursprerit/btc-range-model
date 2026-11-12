@@ -124,6 +124,7 @@ class TickerConfig:
     # app/strategy_version.py for the generation history.
     v2_hold_ma_fast: int = 0       # hold condition: fast SMA (0 = none) …
     v2_hold_ma_slow: int = 0       # … must sit above this slow SMA to stay long
+    v2_price_gate_ma: int = 0      # uptrend gate: long only while the close is above its N-day SMA
     v2_gate_col: str = ""          # entry gate: macro close column (e.g. "btc_close") …
     v2_gate_ma: int = 0            # … must be above its N-day SMA at the deciding close
     v2_trail_stop: float = 0.0     # trailing stop off the highest close (0 = none)
@@ -145,6 +146,7 @@ class TickerConfig:
     def has_v2_rules(self) -> bool:
         """Does this sleeve's logic differ between V1 and V2 at all?"""
         return bool((self.v2_hold_ma_fast and self.v2_hold_ma_slow)
+                    or self.v2_price_gate_ma
                     or (self.v2_gate_col and self.v2_gate_ma)
                     or self.v2_trail_stop or self.v2_trail_by_asset)
 
@@ -157,6 +159,8 @@ class TickerConfig:
             if self.v2_hold_ma_fast and self.v2_hold_ma_slow:
                 bits.append(f"hold while SMA{self.v2_hold_ma_fast} > "
                             f"SMA{self.v2_hold_ma_slow}")
+            if self.v2_price_gate_ma:
+                bits.append(f"long only while close > SMA{self.v2_price_gate_ma}")
             if self.v2_gate_col and self.v2_gate_ma:
                 bits.append(f"enter only while {self.v2_gate_col.split('_')[0].upper()} "
                             f"> its SMA{self.v2_gate_ma}")
@@ -250,8 +254,13 @@ class TickerConfig:
                 core=(f"hold {self.key} while the MACD histogram "
                       f"({self.macd_fast}/{self.macd_slow}/{self.macd_signal}) is positive "
                       f"— i.e. short-term momentum leads longer-term"),
-                entry=f"the MACD histogram turns <b>positive</b> (MACD above its signal line)",
-                exit="the MACD histogram turns <b>negative</b>")
+                entry=("the MACD histogram turns <b>positive</b> (MACD above its signal "
+                       "line)" + (f" and, under V2, the close is above its "
+                                  f"{self.v2_price_gate_ma}-day SMA"
+                                  if self.v2_price_gate_ma else "")),
+                exit=("the MACD histogram turns <b>negative</b>" +
+                      (f" (or, under V2, the close drops below its "
+                       f"{self.v2_price_gate_ma}-day SMA)" if self.v2_price_gate_ma else "")))
         if m == "crash_dd":
             dd = int(self.dd_exit_pct * 100)
             return dict(
@@ -396,25 +405,30 @@ CONFIGS["GRID"] = TickerConfig(
     sentiment_label="Grid / electrification sentiment",
     traded_assets=[("GRID", "px_close")],
     asset_labels={"px_close": "GRID · Grid Infrastructure"},
-    strategy_mode="ma_band", strategy_name="Grid SMA200 Band Trend",
-    ma_window=200, band_enter=0.02, band_exit=0.02, fixed_stop=1.0,
-    v2_trail_stop=0.12,
-    v2_note=("2026-11 retune: MACD 10/20/9 (−5% stop, ~60 trades) → 200-day SMA "
-             "with a ±2% hysteresis band and a 12% trailing stop (no fixed stop)."),
+    strategy_mode="macd", strategy_name="Grid MACD Trend",
+    ma_window=100, macd_fast=10, macd_slow=20, macd_signal=9, fixed_stop=0.05,
+    v2_price_gate_ma=100,
+    v2_note=("2026-11: the MACD 10/20/9 signal is taken only while the close is "
+             "above its 100-day SMA (V1: bare MACD) — no whipsaw round-trips in a "
+             "down-trend."),
     hl_band_pct=0.010,
     fetch_start="2015-01-01", oos_start="2021-01-01", periods=_STD_PERIODS,
     day_up_thresh=0.007, day_down_thresh=-0.007,
-    results_note=("2026-11 retune (GRID_RETUNE_EVAL.md): the old MACD 10/20/9 filter "
-                  "whipsawed (≈60 trades since 2021) and lagged the 2025-26 trend — "
-                  "+16% vs Buy&Hold +34% in 2025→now. The 200-day SMA with a ±2% "
-                  "hysteresis band (enter ≥ +2% above, exit ≥ 2% below) and a 12% "
-                  "trailing stop returns +39% (Sharpe 0.99, max-DD −14%) in 2025→now, "
-                  "+365% vs +258% over the full 2015→now history (Sharpe 0.93 vs 0.90, "
-                  "max-DD −17% vs −20%) and the same +101% 2021→now, in ~11 trades. "
-                  "It is the centre of a broad plateau (SMA 100-250 × band 0-4% all "
-                  "beat MACD on full-history Sharpe) and a selection made on pre-2021 "
-                  "data alone picked the same family — but it gives up part of the "
-                  "2021-22 bear-market edge MACD had (+11% vs +28%)."),
+    results_note=("2026-11 refinement (GRID_RETUNE_EVAL.md): MACD 10/20/9 (−5% stop) "
+                  "is kept for timing but, under V2, only taken while the close is "
+                  "above its 100-day SMA. The bare MACD whipsawed in the 2026 H2 "
+                  "down-trend (six consecutive small losers). In the Overall walk-"
+                  "forward replay (Balanced, GRID cap 30%) 2026 YTD goes +66% → "
+                  "+80% (Sharpe 1.85 → 2.14) and the last 3 months −7% → −2%, with "
+                  "the full 2021→ replay level (+1,052% → +1,033%, Sharpe 1.83 → "
+                  "1.81; Growth +1,296% → +1,369%). Stand-alone it also cut the "
+                  "pre-2021 max drawdown −35% → −21%; on the repo engine V2 vs V1 is "
+                  "2025→ +21% (Sharpe 0.90, DD −9%) vs +16% (0.60, −20%) but 2021→ "
+                  "+76% vs +101%. Costs: a slightly deeper "
+                  "worst drawdown in Balanced (−14.1% → −16.7%) and some of 2025's "
+                  "run (+116% → +102%). A 200-day-SMA ±2% band + 12% trail was "
+                  "better stand-alone but WORSE inside the portfolio (more "
+                  "correlated with the rest of the book) and was not adopted."),
 )
 
 

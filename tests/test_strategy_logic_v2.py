@@ -232,14 +232,13 @@ def test_configs_carry_the_v2_rules():
     wgmi, remx, grid = (tcfg.get_config(k) for k in ("WGMI", "REMX", "GRID"))
     assert wgmi.has_v2_rules and wgmi.v2_gate_col == "btc_close" and wgmi.v2_gate_ma == 50
     assert remx.has_v2_rules and (remx.v2_hold_ma_fast, remx.v2_hold_ma_slow) == (20, 100)
-    # GRID: 2026-11 retune — SMA200 ±2% band; the 12% trailing stop is a V2 rule
-    assert grid.strategy_mode == "ma_band" and grid.has_v2_rules
-    assert grid.trail_for("px_close", "v2") == pytest.approx(0.12)
-    assert grid.trail_for("px_close", "v1") == 0.0
+    # GRID: MACD 10/20/9, taken under V2 only while the close is above its SMA100
+    assert grid.strategy_mode == "macd" and grid.has_v2_rules
+    assert grid.v2_price_gate_ma == 100 and grid.trail_for("px_close", "v2") == 0.0
     assert "SMA20 > SMA100" in remx.rules_label("v2") and "SMA20" not in remx.rules_label("v1")
     assert "BTC > its SMA50" in wgmi.rules_label("v2")
-    assert "12% trailing stop" in grid.rules_label("v2")
-    assert "trailing" not in grid.rules_label("v1")
+    assert "close > SMA100" in grid.rules_label("v2")
+    assert "SMA100" not in grid.rules_label("v1")
 
 
 def test_gold_rules_switch_with_the_version():
@@ -803,10 +802,28 @@ def test_ma_band_signal_has_hysteresis():
     ≥ band_exit below it, stay put in between."""
     from dataclasses import replace
     import backtest_ticker as bt
-    cfg = replace(tcfg.get_config("GRID"), ma_window=5, band_enter=0.05, band_exit=0.05)
+    cfg = replace(tcfg.get_config("GRID"), strategy_mode="ma_band", ma_window=5,
+                  band_enter=0.05, band_exit=0.05)
     px = np.array([100, 100, 100, 100, 100, 103, 112, 108, 100, 97, 94, 90, 96, 100.0])
     sig = bt.trend_long_array(cfg, px, version="v1")
     assert not sig[:6].any()                 # +3% over the SMA is inside the band → flat
     assert sig[6] and sig[7] and sig[8]      # +8.7% breakout → long, held through a −4.4% dip
     assert not sig[9:].any()                 # exits only once ≥5% below the SMA (−6.7%) …
     #                                          … and stays flat: +4.8% on the last bar < +5%
+
+
+def test_price_gate_only_applies_under_v2():
+    """GRID's MACD signal is ANDed with close > SMA(v2_price_gate_ma) under V2
+    only; V1 stays the bare MACD."""
+    from dataclasses import replace
+    import backtest_ticker as bt
+    cfg = replace(tcfg.get_config("GRID"), v2_price_gate_ma=60)
+    # steady fall then a sharp bounce: MACD turns positive while the close is
+    # still far below its 60-day SMA
+    px = np.r_[np.linspace(150, 100, 60), np.linspace(100, 108, 8)]
+    v1 = bt.trend_long_array(cfg, px, version="v1")
+    v2 = bt.trend_long_array(cfg, px, version="v2")
+    assert v1[-1] and not v2[-1]                     # bare MACD long, gate blocks it
+    assert not (v2 & ~v1).any()                      # the gate only ever removes longs
+    off = bt.trend_long_array(replace(cfg, v2_price_gate_ma=0), px, version="v2")
+    assert (off == v1).all()

@@ -433,8 +433,11 @@ def ma_state(d_df):
         macd_hist = float(bt.macd_hist_array(cfg, c)[-1])
     # human phrase describing the current signal state
     if cfg.strategy_mode == "macd":
+        _pg = (f"; V2 up-trend gate: close ${close:,.2f} "
+               f"{'above' if close > ma else 'below'} the {w}-day SMA ${ma:,.2f}"
+               if _ver == "v2" and cfg.v2_price_gate_ma else "")
         desc = (f"the MACD({cfg.macd_fast}/{cfg.macd_slow}/{cfg.macd_signal}) histogram "
-                f"is {macd_hist:+.4f} ({'positive' if above else 'negative'})")
+                f"is {macd_hist:+.4f} — signal {'LONG' if above else 'flat'}{_pg}")
     elif cfg.strategy_mode == "ma_band":
         desc = (f"close ${close:,.2f} is {dist:+.1f}% vs the {w}-day SMA ${ma:,.2f} — "
                 f"{'inside the long regime' if above else 'flat'} (enter ≥ "

@@ -326,14 +326,20 @@ def trend_long_array(cfg, gcl, version: str | None = None):
     ``v2_hold_ma_fast``/``v2_hold_ma_slow`` hold condition into the signal
     (REMX: hold the 50/200 golden cross only while the 20-day SMA is above the
     100-day), so the sleeve exits a fading up-cycle months before the slow
-    death cross.  Configs without a hold rule are identical in V1 and V2.
+    death cross.  ``v2_price_gate_ma`` additionally ANDs "close above its N-day
+    SMA" (GRID: the MACD signal is taken only in an up-trend, so it cannot
+    whipsaw through a down-trend).  Configs without these rules are identical
+    in V1 and V2.
     """
     base = _trend_long_base(cfg, gcl)
-    if active_version(version) == "v2" and getattr(cfg, "v2_hold_ma_fast", 0) \
-            and getattr(cfg, "v2_hold_ma_slow", 0):
-        hold = (_rolling_mean(gcl, cfg.v2_hold_ma_fast)
-                > _rolling_mean(gcl, cfg.v2_hold_ma_slow))
-        return np.asarray(base, bool) & np.asarray(hold, bool)
+    if active_version(version) == "v2":
+        base = np.asarray(base, bool)
+        if getattr(cfg, "v2_hold_ma_fast", 0) and getattr(cfg, "v2_hold_ma_slow", 0):
+            base = base & (_rolling_mean(gcl, cfg.v2_hold_ma_fast)
+                           > _rolling_mean(gcl, cfg.v2_hold_ma_slow))
+        if getattr(cfg, "v2_price_gate_ma", 0):
+            base = base & (np.asarray(gcl, float)
+                           > _rolling_mean(gcl, cfg.v2_price_gate_ma))
     return base
 
 

@@ -19,8 +19,8 @@ holds the version history) found three separate drains — slow trend sleeves
 whipsawed after the gold, rare-earth and Bitcoin-miner up-trends broke, a
 daily priority tilt that re-sized every held sleeve, and stops that the
 publisher never turned into a CLOSE.  **Strategy Logic V2** changes exactly
-these, and nothing else (GRID, SOXX, XLE, PBW, ARTY, GDX/NUGT and the BTC
-sleeves are identical in V1 and V2):
+these, and nothing else (SOXX, XLE, PBW, ARTY, GDX/NUGT and the BTC
+sleeves are identical in V1 and V2; GRID gained a 100-day-SMA up-trend gate on 2026-11-12):
 
 | Sleeve | V1 rule | V2 rule | OOS (V1 → V2) |
 |---|---|---|---|
@@ -265,7 +265,7 @@ exactly as the dedicated apps do. Instrument *kind* drives its weight cap:
 | ⛏️ **Gold Miners (GDXM)** | GDX `beta` · NUGT `lev` | Divergence Pure-Regime on the GLDM signal · GDX −5% / NUGT −8% (2026-07-25 re-sweep) |
 | 🛢️ **XLE** | XLE `core` · XOP `beta` (OIH `beta` under V1) · ERX `lev` | Crash-shield quasi-B&H (exit >30% below 52-wk high, re-enter above SMA50) · no fixed stop |
 | 🖥️ **SOXX** | SOXX `core` · SOXL `lev` | Dual-MA 25/100 · SOXX −5%, SOXL signal-only |
-| ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% |
+| ⚡ **GRID** | GRID `core` | MACD 10/20/9, −5% (V2: only while close > SMA100) |
 | 🧲 **REMX** | REMX `core` | Dual-MA 50/200 golden cross, −5% |
 | ⛏️ **WGMI** | WGMI `beta` | MA-50 + volatility filter, no fixed stop |
 | ☀️ **PBW** | PBW `core` | Clean-Energy Divergence Pure-Regime |

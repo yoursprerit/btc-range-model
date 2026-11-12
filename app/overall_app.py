@@ -6572,7 +6572,7 @@ Backtesting tab replays either generation:
 | 🥇 **Gold Trend (GLDM)** | GLDM · UGL (2×) | Dual-MA 25/100 + rising-SMA gate | 25-day SMA of the GLDM close crosses above the 100-day **and the 100-day SMA is rising over 20 bars** (V2 gate; decided at the close) | 25-day SMA crosses back below the 100-day, **or the close falls 10% (GLDM) / 12% (UGL) below its highest close since entry** — trailing stop, no fixed stop (V1: bare cross, −3% fixed stops) |
 | ⛏️ **Gold Miners (GDXM)** | GDX (β) · NUGT (2×) | Divergence Pure-Regime | U1 divergence on the GLDM signal (err_hi 3d-avg > +0.10% with ≥2 high-breaks) + regime confirm | D2 fade (err_hi < −0.20%) or D3 exhaustion; GDX −5%, NUGT −8% |
 | 🖥️ **SOXX** | SOXX · SOXL (3×) | Dual-MA 25/100 | 25-day SMA crosses above the 100-day SMA | 25-day SMA crosses back below the 100-day; SOXX −5% stop, SOXL signal-only |
-| ⚡ **GRID** | GRID | SMA200 ±2% band | Close ≥ 2% above its 200-day SMA (decided at the close) | Close ≥ 2% below the 200-day SMA, **or the close falls 12% below its highest close since entry** (V2 trailing stop); no fixed stop (2026-11 retune from MACD 10/20/9) |
+| ⚡ **GRID** | GRID | MACD 10/20/9 + up-trend gate | MACD histogram turns positive **and, under V2, the close is above its 100-day SMA** | MACD histogram turns negative **or the close drops below its 100-day SMA** (V2 gate); −5% stop (V1: bare MACD) |
 | 🛢️ **XLE** | XLE · XOP (β; OIH under V1) · ERX (2×) | Crash-shield quasi-B&H | Long by default; (re-)enter when the close is above the 50-day SMA and not in a crash state | Exit only while the close sits >30% below its rolling 52-week high (crash, not correction); no fixed stop |
 | 🧲 **REMX** | REMX | Dual-MA 50/200 golden cross + hold rule | 50-day SMA crosses above the 200-day SMA (and, under V2, the 20-day SMA is above the 100-day) | 50-day SMA crosses back below the 200-day, **or the 20-day SMA drops below the 100-day** (V2 hold rule); −5% stop (V1: cross-down or stop only) |
 | ⛏️ **WGMI** | WGMI (β) | MA50 + vol filter + BTC gate | Close above the 50-day SMA AND 10-day realised vol < 0.95× its 189-day median **AND Bitcoin above its own 50-day SMA** (V2 parent gate, entries only) | Close below the 50-day SMA or vol spikes above the filter; no fixed stop (unchanged in V2) |
@@ -6621,7 +6621,7 @@ signals, positions and back-tests match each source app:
   H/L fix and are historical).
 - **SOXX / GRID / XLE / REMX / WGMI / PBW / ARTY** reuse their **exact
   `ticker_config`** entries through the same `backtest_ticker` engine their apps
-  use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID 200-day SMA ±2% band with a 12% trailing stop under V2,
+  use (SOXX 25/100 dual-MA driving the stop-less 3× SOXL, GRID MACD 10/20/9 — under V2 taken only above the 100-day SMA —
   WGMI 50-day SMA + vol-filter — under V2 entering only while Bitcoin is above
   its 50-day SMA — REMX 50/200 golden cross — under V2 held only while its
   20-day SMA is above the 100-day — and XLE / PBW / ARTY divergence

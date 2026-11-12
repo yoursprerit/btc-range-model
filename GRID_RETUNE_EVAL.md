@@ -1,51 +1,53 @@
-# GRID retune (2026-11) — MACD 10/20/9 → 200-day SMA ±2% band + 12% trail
+# GRID retune study (2026-11) — what was adopted, what was not
 
-**Why.** GRID's MACD 10/20/9 (−5% stop) had stopped working: 2025→now it returned
-+16% vs Buy&Hold +34% (Sharpe 0.60 vs 0.77) and the 2026 pull-back cost it a −20%
-drawdown, with ~60 round-trips since 2021 (whipsaw, fee-sensitive).
+**Adopted (2026-11-12):** keep GRID's MACD 10/20/9 (−5% stop) and, **under Strategy
+Logic V2 only**, take the signal only while the close is above its **100-day SMA**
+(`TickerConfig.v2_price_gate_ma`). V1 stays the bare MACD.
 
-**What was searched** (`scripts/eval_grid_retune.py`, ~2,700 candidates on the full
-2015→now history, repo fill convention, 10 bp/side): MACD (fast/slow/signal) × stops
-× trailing stops, crash-shield (X% off N-day high / re-entry SMA), plain and **banded**
-SMA (100–250d, 0–4% entry/exit band), dual-MA, MACD∧SMA / MACD∨SMA hybrids, MACD with
-a SMA-cross hold rule.
+**Why.** GRID's MACD whipsawed in the 2026 H2 down-trend: two good trades
+(+12.5 %, +15.6 %) followed by six small losers (−0.6 % … −6.3 %) once the price sat
+below its 200-day SMA, ending 2026 at ~+10 % while energy / semis carried the book.
 
-**Result — real engine (`backtest_ticker.run_strategy`, V2, no fees, per-window restart)**
+## Result — Overall walk-forward replay (V2 allocator, 18 sleeves, GRID cap 30 %)
+`scripts/eval_grid_portfolio.py`. Return / Sharpe / max drawdown, single optimiser
+seed, coupon-rate idle yield, no costs.
 
-| window | old MACD 10/20/9 −5% | **new SMA200 ±2% + 12% trail** | Buy&Hold |
-|---|---|---|---|
-| Full 2015→now | +258% · Sh 0.90 · DD −19.8% | **+365% · 0.93 · −16.7%** | +394% · 0.76 · −40.6% |
-| OOS 2021→now | +101% · 0.92 · −19.8% | +101% · 0.80 · −16.7% | +98% · 0.64 · −30.4% |
-| Bull 2023→now | +57% · 0.94 · −19.8% | **+82% · 0.95 · −13.7%** | +83% · 0.85 · −23.9% |
-| Recent 2025→now | +16% · 0.60 · −19.8% | **+39% · 0.99 · −13.7%** | +34% · 0.77 · −23.9% |
-| Bear 2021–22 | **+28%** · 0.89 · −15.8% | +11% · 0.43 · −16.7% | +8% · 0.29 · −30.4% |
-| Trades (full) | 117 | 11 | – |
+| Balanced | old MACD | **MACD & close > SMA100** |
+|---|---|---|
+| Entire replay (2021→) | +1052 % · 1.83 · −14.1 % | +1033 % · 1.81 · −16.7 % |
+| 2025→ | +259 % · 2.41 · −11.3 % | +264 % · 2.40 · −11.1 % |
+| 2026 YTD | +66 % · 1.85 | **+80 % · 2.14** |
+| Last 3 months | −7 % · −1.41 | **−2 % · −0.35** |
 
-Independent standalone study (with fees): full-history Sharpe 0.52 → 0.84, 2025→ Sharpe 0.44 → 0.98.
+Growth: 2021→ +1296 % → **+1369 %**, 2026 +76 % → **+86 %**. Aggressive: 2021→ +1588 % →
++1538 %, 2026 +90 % → +95 %. Calendar years (Balanced, old → new): 2021 +42/+42,
+2022 +3/+1, 2023 +42/+44, 2024 +54/+51, 2025 +116/+102, 2026 +66/+80.
 
-**Why this one, not the highest-scoring row**
-* **Plateau, not a spike:** every SMA 100–250 × band 0–4% cell has a full-history
-  Sharpe of 0.52–0.79 (MACD baseline 0.52); 200d ±2% sits in the middle of it.
-* **Walk-forward:** choosing by Sharpe on pre-2021 data only (or pre-2023) selects
-  the SMA200 band family (±3%, 12% trail) and it holds up on the unseen years
-  (2021→ +82%, Sharpe 0.70; 2025→ +34%, Sharpe 0.90). Median unseen-window Sharpe of
-  the band grid beats the MACD grid (0.64 vs 0.43 from 2021; 0.77 vs 0.52 from 2023).
-* **Low turnover:** ~11 trades in 11 years vs ~117 — robust to costs/slippage.
-* **Trailing stop instead of −5% fixed:** a fixed −5% cuts winners on a name that
-  routinely pulls back 5%; the 12% trail (V2 `v2_trail_stop`) only caps true breaks.
+Stand-alone GRID on the repo engine, V2 vs V1: 2025→ +21 % (Sharpe 0.90, DD −9 %) vs
++16 % (0.60, −20 %); 2021→ +76 % (0.96) vs +101 % (0.92); full history +173 % vs +258 %
+at max DD −14 % vs −20 %. **The gate trades raw stand-alone return for Sharpe and
+drawdown**; inside the portfolio the full-history result is a tie and the recent year is
+better.
 
-**Honest trade-offs**
-* **2021–22 bear:** the slow SMA is late into a bear tape — +11% vs MACD's +28%
-  (still above B&H, same drawdown). Full-history and recent numbers more than pay
-  for it, but a 2022-style regime would favour the old fast filter.
-* **2021→now Sharpe** is lower (0.80 vs 0.92) at an identical +101% return.
-* The SMA∨MACD hybrid gives more return (+416% full, +45% recent) but a −31%
-  drawdown and 36 trades; rejected as it re-imports MACD's whipsaw and the DD.
-* A re-tuned MACD 12/15/14 also fixes 2025→ (+28%, Sh 1.04) but needs ~117 trades
-  and has only 0.59 full-history Sharpe.
-* The recent window is one trend leg (two trades); treat the 2025→ uplift as
-  supporting evidence, the plateau/walk-forward/full-history as the main case.
+## What else was tested (and why it was not adopted)
+* **SMA200 ±2 % band + 12 % trailing stop** (`ma_band` mode, kept in the engine):
+  clearly the best *stand-alone* rule (full 2015→ +365 % vs +258 %, 2025→ +39 % vs +16 %,
+  ~11 trades, plateau over SMA 100–250 × band 0–4 %, pre-2021 walk-forward picks the same
+  family) — but **worse inside the portfolio** (Balanced 2021→ +859 % / 1.71 vs +1052 % /
+  1.83): it is long ~78 % of days and correlated 0.64 with the rest of the book (old
+  MACD: 49 %, 0.31), so it diversifies less. Script: `scripts/eval_grid_retune.py`.
+* **Faster exits** (8 % trail, 50-day-SMA exit): cost 22–40 pts of 2025→ return, no help
+  in the real Covid crash, far worse in chop.
+* **SMA150 / SMA200 gate:** give up more 2021→ return (Balanced +907 % / +864 %).
+* **Re-entry cool-down:** erratic (10 d and 20 d help, 15 d hurts) — path luck.
+* **GRID cap 10 %:** neutral-to-mixed; **conviction tilt 1.0:** untestable (the replay
+  ignores `FUNDAMENTAL_VIEW`).
+* Re-tuned MACD 12/15/14: fine stand-alone, no better than the old MACD in the portfolio.
 
-**Code.** New `ma_band` mode (`TickerConfig.band_enter/band_exit`,
-`backtest_ticker._trend_long_base`); GRID config now `ma_window=200`, ±2%,
-`fixed_stop=1.0`, `v2_trail_stop=0.12`. Under V1 the sleeve has no trailing stop.
+## Honest limits
+Gains are small (a few % – 15 pts) and inside single-seed allocator noise; ~12 variants
+were run on the same history, so some selection bias remains. The mechanism (no MACD
+trading in a down-trend) is simple and the gate also helped on 2015-2020 data that never
+informed the choice (stand-alone Sharpe 0.29 → 0.37, DD −35 % → −21 %). The cost is a
+slightly deeper worst drawdown in Balanced (−14.1 % → −16.7 %) and ~14 pts of 2025's run.
+Weight guidance: GRID adds little at any size — target ~3–5 %, cap ≤ 10 %.

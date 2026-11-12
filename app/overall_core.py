@@ -212,7 +212,7 @@ def overall_config(key: str) -> TickerConfig:
     Every app is aligned to the strategy its own app trades: BTC via the CT
     engine (see run_universe), GLDM via its Divergence Pure-Regime config, and
     the six ETF apps via their exact ``ticker_config`` entries — SOXX on its
-    25/100 dual-MA crossover, GRID on its 200-day SMA ±2% band, WGMI on its
+    25/100 dual-MA crossover, GRID on its MACD 10/20/9 filter (V2: only above its 100-day SMA), WGMI on its
     50-day SMA + volatility filter, REMX on its 50/200 dual-MA golden cross, XLE
     on its energy divergence.  The Overall app therefore matches each source app
     bar-for-bar.
