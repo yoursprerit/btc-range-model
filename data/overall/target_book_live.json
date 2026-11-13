@@ -1,32 +1,39 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-11-12T13:18:04+00:00",
- "as_of": "2026-11-11",
+ "generated_at_utc": "2026-11-13T13:17:49+00:00",
+ "as_of": "2026-11-12",
  "profile": "Balanced",
  "book_mode": "live",
  "weights": {
   "XLE": 0.1825174825174825,
   "XOP": 0.056643356643356645,
   "ERX": 0.06083916083916084,
-  "ARTY": 0.3,
   "SATA": 0.3
  },
- "cash_weight": 0.10000000000000003,
+ "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "ARTY": 67.92,
-  "XLE": 63.37,
-  "ERX": 104.82,
-  "XOP": 180.14,
-  "SATA": 97.16
+  "ERX": 107.97,
+  "XOP": 183.11,
+  "XLE": 64.33,
+  "SATA": 97.95
  },
  "actions": [
+  {
+   "key": "ARTY",
+   "action": "CLOSE",
+   "decision": "EXIT NEXT BAR \u2014 D3 exhaustion",
+   "target": 0.0,
+   "in_pos": true,
+   "priority": null,
+   "exits_next_bar": true
+  },
   {
    "key": "XLE",
    "action": "HOLD",
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.5938729329081065,
+   "priority": 0.5447619047619048,
    "exits_next_bar": false
   },
   {
@@ -35,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.5909302371875685,
+   "priority": 0.5383825745785112,
    "exits_next_bar": false
   },
   {
@@ -44,22 +51,13 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.5104761904761905,
-   "exits_next_bar": false
-  },
-  {
-   "key": "ARTY",
-   "action": "HOLD",
-   "decision": "LONG \u2014 HOLDING",
-   "target": 0.3,
-   "in_pos": true,
-   "priority": 0.37873015873015875,
+   "priority": 0.3647619047619048,
    "exits_next_bar": false
   },
   {
    "key": "BTC",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -68,7 +66,7 @@
   {
    "key": "MSTR",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -77,7 +75,7 @@
   {
    "key": "MSTU",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -86,7 +84,7 @@
   {
    "key": "ETH",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 fade (bear))",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -176,7 +174,7 @@
   {
    "key": "PBW",
    "action": "STAND ASIDE",
-   "decision": "FLAT \u2014 NO SIGNAL",
+   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -186,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-11-12T13:18:03+00:00",
+  "checked_at_utc": "2026-11-13T13:17:48+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Nov 12, 2026 at 7:15 AM CST",
-  "equity_close": "2026-11-11",
-  "btc_bar_close_utc": "2026-11-12T12:00:00+00:00"
+  "anchor_ct": "Nov 13, 2026 at 7:15 AM CST",
+  "equity_close": "2026-11-12",
+  "btc_bar_close_utc": "2026-11-13T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "27baff274369",
+ "code_sha": "6cb137d1a47b",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "adbe56e4542055e1c3818079117153d3b0c215743add2b17ea614fb24f535446"
+  "value": "470260f573b096c6e1b9ae8fcd49f83bc6b9e39ed7e94aff30cd79e63457b3ea"
  }
 }
