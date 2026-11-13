@@ -1,12 +1,12 @@
 {
  "schema": "c2-positions/v1",
- "fetched_at_utc": "2026-11-13T01:02:00+00:00",
+ "fetched_at_utc": "2026-11-13T20:20:24+00:00",
  "strategy_id": 157874453,
- "book_as_of": "2026-11-11",
- "model_account_value": 100456.0,
+ "book_as_of": "2026-11-12",
+ "model_account_value": 99946.0,
  "starting_cash": 100000.0,
- "cash": 63967.0,
- "c2_return": 0.04,
+ "cash": 63980.4,
+ "c2_return": -0.47,
  "c2_return_label": "Cumul. Return",
  "positions": [
   {
@@ -15,13 +15,6 @@
    "shares": 235.0,
    "avg_cost": 99.05251,
    "opened": "2026-10-13T19:30:31Z"
-  },
-  {
-   "key": "ARTY",
-   "symbol": "ARTY",
-   "shares": 350.0,
-   "avg_cost": 63.935,
-   "opened": "2026-11-10T20:20:19Z"
   },
   {
    "key": "XLE",
@@ -123,6 +116,19 @@
    "closed": "2026-11-06T20:45:33Z",
    "pnl": -523.42,
    "commission": 17.18
+  },
+  {
+   "trade_id": 158209260,
+   "key": "ARTY",
+   "symbol": "ARTY",
+   "side": "long",
+   "quantity": 350.0,
+   "entry_px": 63.935,
+   "exit_px": 65.4948978571429,
+   "opened": "2026-11-10T20:20:19Z",
+   "closed": "2026-11-13T20:20:20Z",
+   "pnl": 538.96,
+   "commission": 7.0
   }
  ]
 }
