@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-11-17T13:17:48+00:00",
- "as_of": "2026-11-16",
+ "generated_at_utc": "2026-11-18T13:17:55+00:00",
+ "as_of": "2026-11-17",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -12,10 +12,10 @@
  },
  "cash_weight": 0.39999999999999997,
  "exec_price": {
-  "XLE": 63.69,
-  "XOP": 179.98,
-  "ERX": 105.76,
-  "SATA": 94.33
+  "XOP": 177.61,
+  "ERX": 104.52,
+  "XLE": 63.36,
+  "SATA": 93.21
  },
  "actions": [
   {
@@ -24,7 +24,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.1825174825174825,
    "in_pos": true,
-   "priority": 0.5257142857142857,
+   "priority": 0.5219047619047619,
    "exits_next_bar": false
   },
   {
@@ -33,7 +33,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.06083916083916084,
    "in_pos": true,
-   "priority": 0.5193592103679048,
+   "priority": 0.5152384660276281,
    "exits_next_bar": false
   },
   {
@@ -42,7 +42,7 @@
    "decision": "LONG \u2014 HOLDING",
    "target": 0.056643356643356645,
    "in_pos": true,
-   "priority": 0.34571428571428575,
+   "priority": 0.34190476190476193,
    "exits_next_bar": false
   },
   {
@@ -102,7 +102,7 @@
   {
    "key": "GDX",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -111,7 +111,7 @@
   {
    "key": "NUGT",
    "action": "STAND ASIDE",
-   "decision": "STAND ASIDE \u2014 EXIT ACTIVE (D2 momentum fade)",
+   "decision": "FLAT \u2014 NO SIGNAL",
    "target": 0.0,
    "in_pos": false,
    "priority": null,
@@ -184,18 +184,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-11-17T13:17:47+00:00",
+  "checked_at_utc": "2026-11-18T13:17:54+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Nov 17, 2026 at 7:15 AM CST",
-  "equity_close": "2026-11-16",
-  "btc_bar_close_utc": "2026-11-17T12:00:00+00:00"
+  "anchor_ct": "Nov 18, 2026 at 7:15 AM CST",
+  "equity_close": "2026-11-17",
+  "btc_bar_close_utc": "2026-11-18T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "a45e27eb7353",
+ "code_sha": "7bc81bebc10b",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "b8fe2c1d35c61dc3f2f98c1faa8af1c50226525f177ad47e2b3c7129ffb0dead"
+  "value": "f649542622f226f9fba64df0190df613fb1a54db17c1aa9430b48bdef5ab5606"
  }
 }
