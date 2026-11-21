@@ -1,27 +1,27 @@
 {
  "schema": "close-overlay/v1",
- "session": "2026-11-17",
- "fetched_at_utc": "2026-11-18T02:30:15Z",
+ "session": "2026-11-20",
+ "fetched_at_utc": "2026-11-21T01:38:17Z",
  "closes": {
-  "ARTY": 61.44,
-  "ERX": 104.52,
-  "GDX": 79.57,
-  "GLDM": 76.1,
-  "GRID": 155.15,
-  "MSTR": 96.5,
-  "MSTU": 14.15,
-  "NUGT": 116.21,
-  "OIH": 354.39,
-  "PBW": 23.04,
-  "REMX": 45.95,
-  "SATA": 93.21,
-  "SOXX": 141.46,
-  "WGMI": 24.19,
-  "XLE": 63.36,
-  "XOP": 177.61
+  "ARTY": 53.94,
+  "OIH": 329.73,
+  "PBW": 20.69,
+  "SOXX": 123.4,
+  "WGMI": 20.0,
+  "XLE": 60.51
  },
  "missing": [
+  "ERX",
+  "GDX",
+  "GLDM",
+  "GRID",
+  "MSTR",
+  "MSTU",
+  "NUGT",
+  "REMX",
+  "SATA",
   "SOXL",
-  "UGL"
+  "UGL",
+  "XOP"
  ]
 }
