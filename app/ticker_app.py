@@ -1057,9 +1057,15 @@ def render_signatures(sigs, pos=None):
         "A first downside break after a run of upside breaks — classic blow-off / "
         "exhaustion reversal. Exit signal (fires even in a bull regime)."),
         unsafe_allow_html=True)
-    if sigs.get("v_reversal_likely"):
+    if sigs.get("v_recent_gate"):
+        _va = sigs.get("v_recent_gate_age") or 0
+        _vl = 2 - _va
+        st.markdown(f"⚡ **V-reversal ACTIVE** — capitulation fired "
+                    f"{'today' if _va == 0 else f'{_va} bar(s) ago'}; the entry gate stays open "
+                    f"for **{_vl} more bar{'s' if _vl != 1 else ''}** (3 bars in total from the trigger bar).")
+    elif sigs.get("v_reversal_likely"):
         st.markdown("⚡ **V-reversal likely** — capitulation low undershoot detected "
-                    "(a fresh V-reversal within 3 bars satisfies the entry trend gate).")
+                    "(once confirmed it stays active for 3 bars in total).")
     if sigs["detail_rows"]:
         with st.expander("📋 Last 5 bars — signal detail", expanded=False):
             st.caption(
@@ -1127,12 +1133,15 @@ def render_gate_signatures(sigs):
         unsafe_allow_html=True)
     g3.markdown(_gate_card(
         "V-Reversal", "⚡", vgate,
-        [("washout in last 3 bars", "yes — ≤3 bars ago" if vgate else "none",
-          "capitulation ≤3 bars ago", vgate, "threshold"),
+        [("washout in last 3 bars",
+          (f"yes — {sigs.get('v_recent_gate_age')} bar(s) ago · "
+           f"{2 - (sigs.get('v_recent_gate_age') or 0)} more bar(s) active") if vgate else "none",
+          "capitulation ≤3 bars ago (active 3 bars total)", vgate, "threshold"),
          ("capitulation score (today)", f"{vdn:.2f}", "> 0.80 + deep low", vgate, "threshold")],
         "A recent sharp washout / capitulation-low undershoot (V-shaped reversal setup) — "
         "also satisfies the entry gate. The gate arms when the capitulation score clears "
-        "0.80 <i>and</i> the day's low deeply undershoots the model, within the last 3 bars."),
+        "0.80 <i>and</i> the day's low deeply undershoots the model; once triggered it stays active for "
+        "<b>3 bars in total</b> (the trigger bar + 2 more)."),
         unsafe_allow_html=True)
 
 
@@ -1496,6 +1505,10 @@ def _add_clean_breakout_markers(fig, sub, sigs):
              if sigs.get("u1_hist") is not None else {})
     d1x, d1y, d2x, d2y = [], [], [], []
     d3x, d3y, u1x, u1y = [], [], [], []
+    vx, vy = [], []
+    v_by = (dict(zip(dts, [bool(x) for x in sigs["v_rev_hist"]]))
+            if sigs.get("v_rev_hist") is not None else {})
+    vwin = int(sigs.get("v_window") or 3)
     for _, r in sub.iterrows():
         td = pd.Timestamp(r["target_date"])
         if d1_by.get(td):
@@ -1508,6 +1521,9 @@ def _add_clean_breakout_markers(fig, sub, sigs):
         if u1_by.get(td):
             u1x.append(td)
             u1y.append(r["actual_high"] if pd.notna(r["actual_high"]) else r["pred_high"])
+        if v_by.get(td):
+            vx.append(td)
+            vy.append(r["actual_low"] if pd.notna(r["actual_low"]) else r["pred_low"])
     if d1x:
         fig.add_trace(go.Scatter(
             x=d1x, y=d1y, mode="markers+text", text=["D1"] * len(d1x),
@@ -1544,6 +1560,16 @@ def _add_clean_breakout_markers(fig, sub, sigs):
             name="U1 fired — bullish breakout pressure",
             hovertemplate="%{x|%b %d}: 🔼 U1 — bullish pressure (3d-avg high "
                           "overshoot + ≥2 high-breaks)<extra></extra>"))
+    if vx:
+        fig.add_trace(go.Scatter(
+            x=vx, y=vy, mode="markers+text", text=["V"] * len(vx),
+            textposition="bottom left", textfont=dict(size=10, color="#a21caf"),
+            marker=dict(symbol="star", size=14, color="#d946ef",
+                        line=dict(width=1.4, color="white")),
+            name=f"V-reversal fired — gate open {vwin} bars",
+            hovertemplate="%{x|%b %d}: ⚡ V-reversal capitulation (dn_score > 0.8, "
+                          f"deep low undershoot) — entry gate stays open for this bar "
+                          f"+ {vwin - 1} more ({vwin} bars total)<extra></extra>"))
 
 
 def _hl_forecast_fig(d_df, sigs=None, n_bars=None):

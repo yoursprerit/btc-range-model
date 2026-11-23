@@ -3193,6 +3193,8 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
         d2_hist      = _d2_hist,
         d3_hist      = _d3_hist,
         u1_hist      = _u1_hist,
+        v_rev_hist   = _v_rev_per_bar,
+        v_window     = V_RECENT_WIN,
         sig_dates    = pd.to_datetime(completed["target_date"]).to_numpy(),
     )
 
@@ -7275,7 +7277,7 @@ def render_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; Clean 7d (no D1/D2 in prior 7 bars) <b>while below MA30</b> — fresh thrust after a washout
             <br>
             <span style='background:#ede9fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; Capitulation spike detected within the last 5 bars
+            &nbsp; Capitulation spike detected within the last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#7c3aed; font-size:11px;'>
               (dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)
             </span>
@@ -8058,7 +8060,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -8109,7 +8111,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -8168,7 +8170,7 @@ def render_mstr_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#ddd6fe; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#7c3aed; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -8910,7 +8912,7 @@ def render_eth_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -8962,7 +8964,7 @@ def render_eth_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -9022,7 +9024,7 @@ def render_eth_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -9806,7 +9808,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -9857,7 +9859,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -9916,7 +9918,7 @@ def render_mstu_trading_strategy_dashboard(bt_bear, bt_bull=None, bt_full_oos=No
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#99f6e4; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0d9488; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -10650,7 +10652,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#fed7aa; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#ea580c; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -10700,7 +10702,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fed7aa; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#ea580c; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -10758,7 +10760,7 @@ def render_btc_trading_strategy_dashboard(bt_bear, bt_bull, bt_full_oos=None,
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fed7aa; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#ea580c; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -11503,7 +11505,7 @@ def render_mstr_options_trading_strategy_dashboard(
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#fde68a; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -11524,7 +11526,7 @@ def render_mstr_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -11552,7 +11554,7 @@ def render_mstr_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#fcd34d; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#d97706; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -12279,7 +12281,7 @@ def render_mstu_options_trading_strategy_dashboard(
             &nbsp; No D1/D2 in prior 7 bars AND BTC price <b>below</b> MA30 (fresh approach)
             <br>
             <span style='background:#bae6fd; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>🚫 No-man's-land blocked: price above a <i>declining</i> MA30 qualifies for <i>neither</i> path</span>
           </div>
@@ -12300,7 +12302,7 @@ def render_mstu_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Entry blocked when both ↑MA30 and Clean 7d are simultaneously active</span>
           </div>
@@ -12328,7 +12330,7 @@ def render_mstu_options_trading_strategy_dashboard(
             &nbsp; No D1 or D2 on BTC in prior 7 bars
             <br>
             <span style='background:#7dd3fc; border-radius:4px; padding:1px 7px;'>⚡ V-reversal</span>
-            &nbsp; BTC capitulation spike within last 5 bars
+            &nbsp; BTC capitulation spike within last 5 bars (stays active 5 bars in total: trigger bar + 4 more)
             <span style='color:#0284c7; font-size:11px;'>(dn_score &gt; 0.8 &amp;&amp; err_lo &gt; 3%)</span>
             <br><span style='color:#dc2626; font-size:11px;'>⚠️ Dead-cat bounces filtered: price above a <i>declining</i> MA30 does not qualify as Confirmed Uptrend</span>
           </div>
@@ -13708,7 +13710,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "<b>exactly one</b> of two non-overlapping trend paths — "
                 "📈 <b>Above MA30</b> (BTC above its 30-day MA — momentum leg) <b>XOR</b> "
                 "🧹 <b>Clean Breakout</b> (Clean 7d while BTC is below MA30 — a fresh thrust off a washout) "
-                "— <b>or</b> a ⚡ <b>V-reversal</b> capitulation within the last 5 bars. The XOR blocks the ambiguous "
+                "— <b>or</b> a ⚡ <b>V-reversal</b> capitulation within the last 5 bars (active for 5 bars in total — the trigger bar + 4 more). The XOR blocks the ambiguous "
                 "both-true and neither-true states. "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 AND MA30 rising) → D3 only (patient); "
                 "<b>BEAR/Neutral</b> → D2 or D3 (defensive). "
@@ -13752,13 +13754,17 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
     _v_active = _v_gate or _v_cap
     if _v_gate:
         v_bg    = "#ede9fe"; v_brd = "#7c3aed"
-        v_label = "⚡ V-REVERSAL ACTIVE — Entry gate open"
+        _v_left = (V_RECENT_WIN - 1) - (_v_age or 0)
+        v_label = (f"⚡ V-REVERSAL ACTIVE — Entry gate open · "
+                   f"{_v_left} more bar{'s' if _v_left != 1 else ''} remaining "
+                   f"(of {V_RECENT_WIN} total)")
         if _v_age == 0:
             v_body = (
                 f"<b>Today's</b> actual low massively overshot the predicted low "
                 f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
                 f"This is the <b>V-reversal capitulation pattern</b>. "
-                f"<b>The V-gate is open for the next 4 bars (5-bar window incl. today)</b> — if U1 fires (err_hi_ma3 &gt; +1.3% AND "
+                f"<b>Stays active for {V_RECENT_WIN - 1} more bars after today "
+                f"({V_RECENT_WIN} bars in total, counting today)</b> — if U1 fires (err_hi_ma3 &gt; +1.3% AND "
                 f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
@@ -13767,7 +13773,8 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             v_body = (
                 f"A capitulation spike fired <b>{_v_age} bar{'s' if _v_age != 1 else ''} ago</b> "
                 f"(not today — today's dn_score={sigs['dn_score_raw']:.2f}, err_lo={sigs['last_lo_err']:+.2f}%). "
-                f"The V-gate remains open for <b>{_bars_remaining} more bar{'s' if _bars_remaining != 1 else ''}</b>. "
+                f"The V-gate stays active for <b>{_bars_remaining} more bar{'s' if _bars_remaining != 1 else ''}</b> "
+                f"({V_RECENT_WIN} bars in total from the trigger bar). "
                 f"If U1 fires (err_hi_ma3 &gt; +1.3% AND hi_breaks_3d ≥ 2) the strategy will enter "
                 f"even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
@@ -13786,12 +13793,13 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         v_bg    = "#f8fafc"; v_brd = "#cbd5e1"
         v_label = "⚡ V-Reversal Gate — not active"
         v_body  = (
-            f"No capitulation in the last 5 bars (today: dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
+            f"No capitulation in the last {V_RECENT_WIN} bars (today: dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
             f"err_lo = <b>{sigs.get('last_lo_err', 0):+.2f}%</b>). "
             f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on any bar within the last 5. "
             f"<br><br>"
-            f"<b>What the V-gate does:</b> When a capitulation spike fires, the strategy can enter "
-            f"on U1 within the 5-bar window even if BTC is below MA30 and clean_10d fails — "
+            f"<b>What the V-gate does:</b> When a capitulation spike fires, the gate stays active for "
+            f"{V_RECENT_WIN} bars in total (the trigger bar + {V_RECENT_WIN - 1} more); the strategy can enter "
+            f"on U1 within that window even if BTC is below MA30 and clean_10d fails — "
             f"catching post-crash recoveries before price has recrossed the trend filter. "
             f"Backtest impact: +$4,685 NAV, Sharpe 0.86→0.90, Max DD −26.9%→−23.6% (2-year period)."
         )
@@ -14996,6 +15004,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                       if sigs.get("u1_hist") is not None else {})
             _d1x, _d1y, _d2x, _d2y = [], [], [], []
             _d3x, _d3y, _u1x, _u1y = [], [], [], []
+            _vx, _vy = [], []
+            _v_by = (dict(zip(_sig_dts, [bool(x) for x in sigs["v_rev_hist"]]))
+                     if sigs.get("v_rev_hist") is not None else {})
+            _vwin = int(sigs.get("v_window") or V_RECENT_WIN)
             for _, _r in series.iterrows():
                 _td = pd.Timestamp(_r["target_date"])
                 if _d1_by.get(_td):
@@ -15010,6 +15022,10 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                     _u1x.append(_td)
                     _u1y.append(_r["actual_high"] if pd.notna(_r["actual_high"])
                                 else _r["pred_high"])
+                if _v_by.get(_td):
+                    _vx.append(_td)
+                    _vy.append(_r["actual_low"] if pd.notna(_r["actual_low"])
+                               else _r["pred_low"])
             if _d1x:
                 fig2.add_trace(go.Scatter(
                     x=_d1x, y=_d1y, mode="markers+text", text=["D1"] * len(_d1x),
@@ -15048,6 +15064,17 @@ def render_dashboard(as_of_t, *, is_live, live_spot=None, live_spot_ts=None,
                     hovertemplate=("Bar %{x|%Y-%m-%d}: 🔼 U1 — bullish pressure "
                                    "(3d-avg high overshoot + ≥2 "
                                    "high-breaks)<extra></extra>")))
+            if _vx:
+                fig2.add_trace(go.Scatter(
+                    x=_vx, y=_vy, mode="markers+text", text=["V"] * len(_vx),
+                    textposition="bottom left", textfont=dict(size=11, color="#a21caf"),
+                    marker=dict(symbol="star", size=15, color="#d946ef",
+                                line=dict(width=1.4, color="white")),
+                    name=f"V-reversal fired — gate open {_vwin} bars",
+                    hovertemplate=("Bar %{x|%Y-%m-%d}: ⚡ V-reversal capitulation "
+                                   f"(dn_score > 0.8, err_lo > 3%) — entry gate stays "
+                                   f"open for this bar + {_vwin - 1} more "
+                                   f"({_vwin} bars total)<extra></extra>")))
 
         # Direction-correctness per day, computed SEPARATELY for HIGH and LOW.
         # For each day D, compare the day-over-day MOVE of the plotted lines:
