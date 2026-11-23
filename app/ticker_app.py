@@ -773,7 +773,8 @@ def render_strategy_card(version=None):
        padding:8px 13px; margin-bottom:12px; font-size:12px; color:{ACCD};'>
     🎯 <b>Pure-Regime entry:</b> a U1 bullish-divergence trigger must be confirmed by
     <b>one</b> of three non-overlapping trend paths — a bull regime (above a rising
-    20-day MA), a washed-out clean breakout from below the MA, or a fresh V-reversal.
+    20-day MA), a washed-out clean breakout from below the MA, or a fresh V-reversal (stays active
+    3 bars in total: the trigger bar + 2 more).
   </div>
   <div style='display:flex; gap:14px; flex-wrap:wrap;'>
     <div style='flex:1; min-width:230px;'>

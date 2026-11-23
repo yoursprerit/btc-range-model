@@ -6601,7 +6601,7 @@ Backtesting tab replays either generation:
 overshoots while price breaks its recent highs) · **D1** = downtrend pressure
 (repeated low-breaks) · **D2** = momentum fade · **D3** = exhaustion ·
 **regime confirm** = price above a rising short MA, or a clean 10-day recovery,
-or a V-reversal gate · **signal-only** = exits on the signal with no fixed
+or a V-reversal gate (active 5 bars after a trigger for BTC sleeves, 3 bars for the others) · **signal-only** = exits on the signal with no fixed
 stop (kept where the 2026-07-25 honest-fill stop sweeps showed a fixed stop
 only whipsaws). Siblings share the
 parent's entry/exit **timing** but fill at their own price with their own stop.
