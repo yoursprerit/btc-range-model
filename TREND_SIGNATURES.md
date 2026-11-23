@@ -251,6 +251,8 @@ CT ensemble uses raw 103-feature matrix).
 
 **V-reversal special case:** After `lo_breaks_3d = 3` AND single-day `err_lo_pct > 3%`
 (dn_score > 0.8 + large undershoot), expect high-probability bounce within 1-2 days.
+Once triggered the V-gate stays active for **5 bars in total** on BTC (the trigger bar + 4 more; 3 bars
+for the GLDM/ticker sleeves). The daily H/L chart marks each trigger bar with a ⭐ **V** on that bar's actual low.
 
 ---
 

@@ -57,7 +57,7 @@ Gold-scaled thresholds (vs BTC's ±1.3%), re-tuned on the causal error:
 | **U1** entry | 3-day centered `err_hi` > **+0.10%** and ≥2 high-breaks | bullish pressure |
 | **D2** exit | 3-day centered `err_hi` < **−0.20%** | momentum fading |
 | **D1** | 3-day centered `err_lo` > **+0.45%** and ≥2 low-breaks | bearish pressure (clean-gate input; not an exit for gold) |
-| **V** reversal | single-bar low undershoot > **+1.00%** + high down-score | capitulation |
+| **V** reversal | single-bar low undershoot > **+1.00%** + high down-score | capitulation; gate stays active **3 bars in total** (trigger bar + 2 more) |
 | Regime | close > rising 20-day MA | bull regime gate |
 
 ## 4. The strategy — middle-path engine split (2026-07)

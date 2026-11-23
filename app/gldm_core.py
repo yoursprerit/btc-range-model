@@ -676,6 +676,9 @@ def compute_trend_signatures(completed: pd.DataFrame) -> dict | None:
                (el / max(abs(el), 0.1)) * 0.20 + float(lo_break[j]) * 0.20)
         v_rev[j] = (dns > 0.8) and (float(err_lo[j]) > V_ERRLO_MIN)
     v_recent_gate = bool(np.any(v_rev[-min(3, n):]))
+    # Bars since the latest capitulation (0=today … 2); None when the gate is shut.
+    _vr_ages = [k for k in range(min(3, n)) if v_rev[n - 1 - k]]
+    v_recent_gate_age = _vr_ages[0] if _vr_ages else None
 
     dn_score_raw = ((-err_hi_ma3 / max(abs(float(np.mean(err_hi[-min(30, n):]))), 0.01)) * 0.30
                     + lo_breaks_3d / 3 * 0.30
@@ -755,7 +758,8 @@ def compute_trend_signatures(completed: pd.DataFrame) -> dict | None:
         d3_triggered=d3_triggered, u1_triggered=u1_triggered,
         entry_triggered=entry_triggered,
         capitulation_signal=capitulation_signal, v_reversal_likely=v_reversal_likely,
-        v_recent_gate=v_recent_gate, exhaustion_active=exhaustion_active,
+        v_recent_gate=v_recent_gate, v_recent_gate_age=v_recent_gate_age, v_window=3,
+        v_rev_hist=v_rev, exhaustion_active=exhaustion_active,
         consec_hi=consec_hi, alert_level=alert_level,
         dn_count=dn_count, up_count=up_count, detail_rows=detail_rows,
         n_bars=n, as_of_date=completed["target_date"].iloc[-1],

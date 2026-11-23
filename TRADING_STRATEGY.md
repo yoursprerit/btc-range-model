@@ -358,6 +358,8 @@ AND exactly one of the following (XOR — combined is blocked):
 
 OR the V-reversal gate fires (overrides the combined block):
     V-reversal within the last 5 bars (dn_score > 0.8 AND err_lo > 3%)
+    Active for 5 bars in total: the trigger bar + the next 4 bars. After the trigger the app
+    shows how many bars remain (4 → 0); the gate closes on the 6th bar unless a new capitulation fires.
 ```
 
 ### Exit Rule
