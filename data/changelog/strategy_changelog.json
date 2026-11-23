@@ -1523,6 +1523,12 @@
   "kind": "ui",
   "title": "V-reversal markers on daily H/L chart + bars-remaining countdown",
   "description": "The daily H/L plots (BTC, ticker sleeves, GLDM) now mark each V-reversal trigger bar (star V on that bar's actual low) like D1/D2/D3/U1. The V-reversal box states how many more bars the gate stays active after the trigger, and strategy text states the total window (5 bars BTC, 3 bars GLDM/tickers, including the Overall page legend). Signal logic unchanged.",
-  "impact": "Display/documentation only: no change to entries, exits or P&L."
+  "impact": "Display/documentation only: no change to entries, exits or P&L.",
+  "links": [
+   {
+    "label": "PR #277",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/277"
+   }
+  ]
  }]
 }
