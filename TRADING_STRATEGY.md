@@ -357,7 +357,7 @@ AND exactly one of the following (XOR — combined is blocked):
     — but NOT both simultaneously (see Combined-Filter Rule below)
 
 OR the V-reversal gate fires (overrides the combined block):
-    V-reversal within the last 3 bars (dn_score > 0.8 AND err_lo > 3%)
+    V-reversal within the last 5 bars (dn_score > 0.8 AND err_lo > 3%)
 ```
 
 ### Exit Rule

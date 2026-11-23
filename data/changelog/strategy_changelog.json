@@ -1502,5 +1502,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/275"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-23",
+  "kind": "ui",
+  "title": "Fix: BTC V-reversal window is 5 bars everywhere (stale 3-bar text and countdown)",
+  "description": "The BTC V-reversal recency window has been 5 bars (V_RECENT_WIN = 5) since 2026-07c, but parts of the BTC Live tab still said 3 bars and the V-gate card counted 'bars remaining' as 2 - age. Text now says 5 bars and the countdown uses V_RECENT_WIN - 1 - age. Signal logic unchanged.",
+  "impact": "Display/documentation only: no change to entries, exits or P&L.",
+  "links": []
  }]
 }

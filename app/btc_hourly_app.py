@@ -3043,7 +3043,7 @@ def compute_trend_signatures(target_date_iso: str, data_end=None,
         _v_rev_per_bar[_j] = (_dns > 0.8) and (float(err_lo[_j]) > 3.0)
     # True if any of the last V_RECENT_WIN bars fired a V-reversal (same window as backtest)
     v_recent_gate = bool(np.any(_v_rev_per_bar[-min(V_RECENT_WIN, n):]))
-    # How many bars ago the most recent V-reversal fired (0=today, 1=yesterday, 2=2d ago)
+    # How many bars ago the most recent V-reversal fired (0=today, 1=yesterday, … up to V_RECENT_WIN-1)
     _vr_ages = [i for i in range(min(V_RECENT_WIN, n)) if _v_rev_per_bar[n - 1 - i]]
     v_recent_gate_age = _vr_ages[0] if _vr_ages else None
 
@@ -3752,7 +3752,7 @@ def run_full_period_backtest(end_date_iso: str,
         lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
-    # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
+    # ── V-Gate (V_RECENT_WIN = 5 bars): V-reversal capitulation as third entry gate ────────────
     # dn_score replicates the live signal formula; v_rev_bar fires when a
     # single bar shows capitulation (dn_score > 0.8 AND err_lo > 3%).
     # v_recent[i] = True if v_rev_bar fired within the last 5 bars — bridges
@@ -6876,7 +6876,7 @@ def run_tf1_backtest(end_date_iso: str, initial_capital: float = 100_000.0,
         lo_i = max(0, i-7)
         clean_10d[i] = not bool(np.any(d1[lo_i:i] | d2[lo_i:i]))
 
-    # ── V-Gate 3-bar: V-reversal capitulation as third entry gate ────────────
+    # ── V-Gate (V_RECENT_WIN = 5 bars): V-reversal capitulation as third entry gate ────────────
     # 30-bar rolling mean keeps the normaliser stable across regimes.
     _DN_NORM_W    = 30
     roll_ehi_norm = np.array([
@@ -13708,7 +13708,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 "<b>exactly one</b> of two non-overlapping trend paths — "
                 "📈 <b>Above MA30</b> (BTC above its 30-day MA — momentum leg) <b>XOR</b> "
                 "🧹 <b>Clean Breakout</b> (Clean 7d while BTC is below MA30 — a fresh thrust off a washout) "
-                "— <b>or</b> a ⚡ <b>V-reversal</b> capitulation within 3 bars. The XOR blocks the ambiguous "
+                "— <b>or</b> a ⚡ <b>V-reversal</b> capitulation within the last 5 bars. The XOR blocks the ambiguous "
                 "both-true and neither-true states. "
                 "Exits adapt to regime: <b>BULL</b> (BTC &gt; MA30 AND MA30 rising) → D3 only (patient); "
                 "<b>BEAR/Neutral</b> → D2 or D3 (defensive). "
@@ -13719,7 +13719,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
             ),
             timing=(
                 "Entry fires 1–2 bars before momentum accelerates. "
-                "V-gate fires 1–3 bars after capitulation (dn_score &gt; 0.8, err_lo &gt; 3%) "
+                "V-gate stays open for up to 4 bars after the capitulation bar (5-bar window) (dn_score &gt; 0.8, err_lo &gt; 3%) "
                 "— bridges the gap before U1 co-fires on the recovery bounce. "
                 "In BULL regime: hold through D2 dips. In BEAR/neutral: exit quickly on D2."
             ),
@@ -13747,7 +13747,7 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
 
     # ── V-Reversal signal — always show; highlight when active ────────────
     _v_gate   = sigs.get("v_recent_gate", False)
-    _v_age    = sigs.get("v_recent_gate_age")      # 0=today, 1=yesterday, 2=2d ago, None=inactive
+    _v_age    = sigs.get("v_recent_gate_age")      # 0=today … V_RECENT_WIN-1, None=inactive
     _v_cap    = sigs.get("capitulation_signal", False)
     _v_active = _v_gate or _v_cap
     if _v_gate:
@@ -13758,12 +13758,12 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
                 f"<b>Today's</b> actual low massively overshot the predicted low "
                 f"(<b>err_lo = {sigs['last_lo_err']:+.2f}%</b>, dn_score = <b>{sigs['dn_score_raw']:.2f}</b>). "
                 f"This is the <b>V-reversal capitulation pattern</b>. "
-                f"<b>The V-gate is open for the next 3 bars</b> — if U1 fires (err_hi_ma3 &gt; +1.3% AND "
+                f"<b>The V-gate is open for the next 4 bars (5-bar window incl. today)</b> — if U1 fires (err_hi_ma3 &gt; +1.3% AND "
                 f"hi_breaks_3d ≥ 2) the strategy will enter even below MA30.<br><br>"
                 f"Historical precedent: Feb 5 2026 (−14.1%, dn_score=4.59) → Feb 6 bounced +12.5%."
             )
         else:
-            _bars_remaining = 2 - _v_age
+            _bars_remaining = (V_RECENT_WIN - 1) - _v_age
             v_body = (
                 f"A capitulation spike fired <b>{_v_age} bar{'s' if _v_age != 1 else ''} ago</b> "
                 f"(not today — today's dn_score={sigs['dn_score_raw']:.2f}, err_lo={sigs['last_lo_err']:+.2f}%). "
@@ -13788,10 +13788,10 @@ def render_trend_signatures(sigs: dict, *, intraday: dict = None, open_positions
         v_body  = (
             f"No capitulation in the last 5 bars (today: dn_score = <b>{sigs.get('dn_score_raw', 0):.2f}</b>, "
             f"err_lo = <b>{sigs.get('last_lo_err', 0):+.2f}%</b>). "
-            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on any bar within the last 3. "
+            f"Gate requires dn_score &gt; 0.8 <b>AND</b> err_lo &gt; 3.0% on any bar within the last 5. "
             f"<br><br>"
             f"<b>What the V-gate does:</b> When a capitulation spike fires, the strategy can enter "
-            f"on U1 within the next 3 bars even if BTC is below MA30 and clean_10d fails — "
+            f"on U1 within the 5-bar window even if BTC is below MA30 and clean_10d fails — "
             f"catching post-crash recoveries before price has recrossed the trend filter. "
             f"Backtest impact: +$4,685 NAV, Sharpe 0.86→0.90, Max DD −26.9%→−23.6% (2-year period)."
         )
