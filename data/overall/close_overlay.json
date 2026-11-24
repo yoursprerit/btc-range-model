@@ -1,27 +1,26 @@
 {
  "schema": "close-overlay/v1",
- "session": "2026-11-20",
- "fetched_at_utc": "2026-11-21T01:38:17Z",
+ "session": "2026-11-23",
+ "fetched_at_utc": "2026-11-24T04:52:52Z",
  "closes": {
-  "ARTY": 53.94,
-  "OIH": 329.73,
-  "PBW": 20.69,
-  "SOXX": 123.4,
-  "WGMI": 20.0,
-  "XLE": 60.51
+  "ARTY": 60.240002,
+  "ERX": 92.919998,
+  "GDX": 72.800003,
+  "GLDM": 71.870003,
+  "GRID": 154.339996,
+  "MSTR": 84.400002,
+  "MSTU": 10.47,
+  "NUGT": 95.93,
+  "OIH": 336.690002,
+  "PBW": 21.74,
+  "REMX": 44.970001,
+  "SATA": 89.75,
+  "SOXL": 43.209999,
+  "SOXX": 140.220001,
+  "UGL": 34.169998,
+  "WGMI": 22.83,
+  "XLE": 59.869999,
+  "XOP": 165.270004
  },
- "missing": [
-  "ERX",
-  "GDX",
-  "GLDM",
-  "GRID",
-  "MSTR",
-  "MSTU",
-  "NUGT",
-  "REMX",
-  "SATA",
-  "SOXL",
-  "UGL",
-  "XOP"
- ]
+ "missing": []
 }
