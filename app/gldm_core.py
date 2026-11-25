@@ -297,6 +297,13 @@ def _merge(symbol_map: dict, interval: str, start: str | None = None,
         if interval == "1d":
             d.index = pd.to_datetime(d.index).normalize()
             d = d[~d.index.duplicated(keep="last")]
+        elif interval == "1h":
+            # Each series stamps bars at its own minute (ARTY :30, ^VIX :57 …).
+            # Collapse to the hour BEFORE the column-concat, otherwise several
+            # rows share one floored hour and the later-sorted (macro, NaN
+            # primary) row wins the dedupe — dropping the primary's bar.
+            d.index = pd.to_datetime(d.index).floor("h")
+            d = d[~d.index.duplicated(keep="last")]
         return d.add_prefix(f"{name}_")
 
     items = list(symbol_map.items())
