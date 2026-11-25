@@ -1,10 +1,10 @@
 {
  "key": "PBW",
  "source": "yahoo-live",
- "saved_at_utc": "2026-11-24T13:17:56+00:00",
- "rows": 4249,
+ "saved_at_utc": "2026-11-25T13:18:01+00:00",
+ "rows": 4250,
  "date_from": "2010-01-04",
- "date_to": "2026-11-23",
+ "date_to": "2026-11-24",
  "columns": [
   "px_open",
   "px_high",
@@ -47,18 +47,18 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "e5e96b2f95941215",
+ "checksum_sha256": "8657d21433246d76",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "4249 rows"
+   "detail": "4250 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "4249 rows (need \u2265 260)"
+   "detail": "4250 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -68,7 +68,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "px_close: 4249 non-null values"
+   "detail": "px_close: 4250 non-null values"
   },
   {
    "name": "required_columns",
@@ -88,12 +88,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "4249 rows vs snapshot 4248"
+   "detail": "4250 rows vs snapshot 4249"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-11-23 vs snapshot 2026-11-20"
+   "detail": "last 2026-11-24 vs snapshot 2026-11-23"
   },
   {
    "name": "no_missing_recent_sessions",
