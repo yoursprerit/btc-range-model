@@ -1530,5 +1530,14 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/277"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-25",
+  "kind": "data",
+  "title": "Fix hourly feed dropping the newest primary bars (ARTY hourly plot stuck on yesterday)",
+  "description": "Hourly fetches now collapse each series to the hour before the column-merge, so a macro row (e.g. ^VIX at :57) can no longer win the same-hour dedupe over the primary's bar and get NaN-dropped. Applies to ticker sleeves (ARTY, WGMI, PBW) and GLDM.",
+  "impact": "Live ARTY hourly feed ended 2026-11-24 20:00 while Yahoo had bars through 2026-11-25 15:15. Forecast-plot only; daily signals unchanged.",
+  "links": []
  }]
 }
