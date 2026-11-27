@@ -1544,5 +1544,19 @@
     "url": "https://github.com/yoursprerit/btc-range-model/pull/278"
    }
   ]
+ },
+ {
+  "version": "v2",
+  "date": "2026-11-27",
+  "kind": "execution",
+  "title": "Early-close slot for the live IBKR executor (Black Friday / Dec 24)",
+  "description": "On scheduled 1 PM ET early-close days the live executor's slot guard now uses an early slot (default 11:30 AM CT; -EarlySlotCT / -LiveEarlyTaskTime) instead of 2:20 PM CT, so MOC orders go in before the 12:50 ET (11:50 CT) cutoff instead of the session being skipped.",
+  "impact": "The day after Thanksgiving and Dec 24 previously skipped the session (2:20 PM CT is past the 11:50 CT cutoff). Re-register the task with setup_windows_option_c.ps1 -LiveTask to pick it up.",
+  "links": [
+   {
+    "label": "PR #279",
+    "url": "https://github.com/yoursprerit/btc-range-model/pull/279"
+   }
+  ]
  }]
 }

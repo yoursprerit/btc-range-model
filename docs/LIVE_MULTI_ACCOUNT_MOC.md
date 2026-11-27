@@ -98,7 +98,7 @@ and a manual 🚀 publish after 2:00 PM drops the amendment (re-run the workflow
 |---|---|
 | Normal run, before 15:50 ET | Whole-share `MOC` / `DAY` orders, every one stamped with its account id. |
 | Run starts **after** the cutoff (PC was off, gateway slow) | **Skip the session.** Nothing is sent, exit code 3, an alert is raised. No limit/market fallback and **no after-hours catch-up** — tomorrow's book supersedes today's. |
-| Early-close day (day after Thanksgiving, Dec 24) | The cutoff moves to 12:50 ET, so the normal slot is past it → session skipped. |
+| Early-close day (day after Thanksgiving, Dec 24) | The cutoff moves to 12:50 ET (11:50 CT), so the normal 2:20 PM CT slot is past it → session skipped. With the task registered with an early slot (`-LiveEarlyTaskTime`, default **11:30 CT**; wrapper `-EarlySlotCT`), the slot guard uses that slot on those days instead and the run trades normally. Manual one-off: `.\scripts\ibkr_execute_live_accounts.ps1` (no `-SlotCT`). |
 | An account holds fractional shares (e.g. 22.8672) | MOC is whole shares only. Buys round to the nearest share; **sells round DOWN and never exceed what is held**. The leftover fraction (e.g. 0.87 share) can't be sold by an MOC order: the log says so (`note: … sell the fractional remainder by hand`) and it is left alone. |
 | The broker rejects an order (IRA/product restriction, permissions) | Reported **within seconds** in the log and alert, with the broker's message, while there's still time before the cutoff to act in TWS. Nothing is substituted. |
 | MOC didn't fully fill after the auction | Exit code 4 + alert; nothing is re-sent. Tomorrow's run re-plans from what the account really holds. |

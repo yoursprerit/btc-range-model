@@ -29,6 +29,11 @@
     so a task registered at several local times trades once, at 2:20 PM CT,
     on both sides of a daylight-saving change. Registered by setup_windows_option_c.ps1
     -LiveTask. Ignored with -Preview. Env: IBKR_SLOT_CT.
+.PARAMETER EarlySlotCT
+    HH:MM US Central slot used INSTEAD of -SlotCT on a scheduled 1 PM ET early-close
+    day (day after Thanksgiving, Dec 24), when the MOC cutoff is 12:50 ET = 11:50 AM CT
+    and the normal slot would be skipped. E.g. 11:30. Empty = no early-close slot
+    (those days are skipped). Env: IBKR_EARLY_SLOT_CT.
 .PARAMETER Preview
     Run the runner WITHOUT --execute: connects, reads every account, prints the
     order plan, places no orders.
@@ -49,6 +54,7 @@ param(
     [string]$Branch = $env:IBKR_BRANCH,
     [string]$Config = $env:IBKR_ACCOUNTS_CONFIG,
     [string]$SlotCT = $env:IBKR_SLOT_CT,
+    [string]$EarlySlotCT = $env:IBKR_EARLY_SLOT_CT,
     [switch]$Preview,
     [switch]$NoPull
 )
@@ -97,7 +103,9 @@ function Log($msg) {
 # Fails OPEN: if the check itself cannot run, trade rather than skip the day.
 if ($SlotCT -and -not $Preview) {
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    $GuardOut = & $Python (Join-Path $ScriptDir 'slot_guard.py') --slot $SlotCT 2>&1
+    $GuardArgs = @('--slot', $SlotCT)
+    if ($EarlySlotCT) { $GuardArgs += @('--early-slot', $EarlySlotCT) }
+    $GuardOut = & $Python (Join-Path $ScriptDir 'slot_guard.py') @GuardArgs 2>&1
     $GuardExit = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($GuardExit -eq 10) {

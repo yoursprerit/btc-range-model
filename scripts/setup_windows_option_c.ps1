@@ -52,6 +52,9 @@
                            2:30 PM US Central slot on a Central-time machine;
                            on another zone pass the local equivalent, e.g.
                            15:30 on an Eastern box).
+.PARAMETER LiveEarlyTaskTime  US CENTRAL slot used instead of -LiveTaskTime on 1 PM ET early-close days
+                           (day after Thanksgiving, Dec 24; MOC cutoff 11:50 AM CT). Default 11:30;
+                           pass '' to skip those days.
 .PARAMETER LiveTaskTime    US CENTRAL wall-clock slot of the LIVE executor (default 14:20),
                            NOT the PC's local time: the task is registered at every
                            local time that slot maps to and guarded (-SlotCT) so it
@@ -124,6 +127,7 @@ param(
     [string]$Port     = '4002',
     [string]$LivePort = '4001',
     [string]$LiveTaskTime = '14:20',
+    [string]$LiveEarlyTaskTime = '11:30',
     [string]$ReconcileTaskTime = '15:15',
     [string]$KillSwitchFile = 'C:\IBC\HALT_TRADING'
 )
@@ -314,10 +318,13 @@ if ($IBC) {
 # PC, two or more elsewhere) and pass -SlotCT: the wrapper then runs only on the
 # fire where America/Chicago is really at the slot (scripts\slot_guard.py).
 # StartBoundary is set WITHOUT an offset so the trigger is never UTC-pinned.
-function New-CentralSlotTriggers([string]$Slot) {
+function New-CentralSlotTriggers([string]$Slot, [string]$EarlySlot = '') {
     $times = @($Slot)                                   # fallback: treat as local
+    if ($EarlySlot) { $times += $EarlySlot }
     if (Test-Path $Venvpy) {
-        $out = & $Venvpy (Join-Path $ScriptDir 'slot_guard.py') --slot $Slot --local-times 2>$null
+        $gArgs = @('--slot', $Slot, '--local-times')
+        if ($EarlySlot) { $gArgs += @('--early-slot', $EarlySlot) }
+        $out = & $Venvpy (Join-Path $ScriptDir 'slot_guard.py') @gArgs 2>$null
         if ($LASTEXITCODE -eq 0 -and $out) { $times = @($out | Where-Object { $_ -match '^\d\d:\d\d$' }) }
         else { Warn "slot_guard.py failed - registering a single local trigger at $Slot" }
     }
@@ -519,8 +526,9 @@ if ($LiveTask) {
         Warn "  (the task is registered anyway; it will exit 2 until the file exists)"
     }
     $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Branch `"$Branch`" -SlotCT `"$LiveTaskTime`""
+    if ($LiveEarlyTaskTime) { $arg += " -EarlySlotCT `"$LiveEarlyTaskTime`"" }
     $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $RepoRoot
-    $trg = @(New-CentralSlotTriggers $LiveTaskTime)
+    $trg = @(New-CentralSlotTriggers $LiveTaskTime $LiveEarlyTaskTime)
     # No -StartWhenAvailable on purpose: a LIVE MOC run that fires late is
     # skipped by the runner anyway (past the 15:50 ET cutoff), so a catch-up
     # fire would only produce a confusing "skipped" alert after the close.

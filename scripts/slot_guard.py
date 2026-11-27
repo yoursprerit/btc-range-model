@@ -10,6 +10,10 @@ asks this module whether *America/Chicago* is actually inside the slot window.
 CLI (stdlib only, no repo imports):
     slot_guard.py --slot 14:20                 exit 0 inside the window, 10 outside
     slot_guard.py --slot 14:20 --local-times   print the local HH:MM triggers to register
+    slot_guard.py --slot 14:20 --early-slot 11:30
+        on a scheduled 1 PM ET early-close day (day after Thanksgiving, Dec 24) the
+        slot is --early-slot instead (the MOC cutoff is then 12:50 ET = 11:50 CT);
+        with --local-times it prints the triggers for BOTH slots
     --now ISO8601 overrides the clock (tests / dry runs); --tz overrides America/Chicago.
 
 Exit 2 on a usage error. The wrappers fail OPEN on anything but 0 / 10: a run at
@@ -53,6 +57,25 @@ def in_slot(now: datetime, slot: str, tz: str = DEFAULT_TZ,
     return ok, detail
 
 
+def is_early_close_day(day: date) -> bool:
+    """Is *day* a scheduled 1 PM ET early close?  Reads the executor's own table
+    (``ibkr_common.US_EARLY_CLOSES``) so there is a single list to maintain.
+    Any failure (pandas missing, ...) answers False: the regular slot applies."""
+    try:
+        from ibkr_common import US_EARLY_CLOSES                 # scripts/ is sys.path[0]
+        return day.isoformat() in US_EARLY_CLOSES
+    except Exception:                                          # noqa: BLE001
+        return False
+
+
+def effective_slot(now: datetime, slot: str, early_slot: str | None,
+                   tz: str = DEFAULT_TZ) -> str:
+    """*early_slot* on an early-close day (by the *tz* calendar date), else *slot*."""
+    if early_slot and is_early_close_day(now.astimezone(ZoneInfo(tz)).date()):
+        return early_slot
+    return slot
+
+
 def local_trigger_times(slot: str, tz: str = DEFAULT_TZ, year: int | None = None) -> list[str]:
     """Distinct machine-local HH:MM at which *slot* (wall clock of *tz*) lands,
     sampled on the 1st and 15th of every month so the weeks where the machine's
@@ -71,6 +94,8 @@ def local_trigger_times(slot: str, tz: str = DEFAULT_TZ, year: int | None = None
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--slot", required=True, help="HH:MM on the wall clock of --tz")
+    p.add_argument("--early-slot", default=None,
+                   help="HH:MM (wall clock of --tz) used instead of --slot on 1 PM ET early closes")
     p.add_argument("--tz", default=DEFAULT_TZ)
     p.add_argument("--now", help="ISO-8601 instant (default: now); naive = UTC")
     p.add_argument("--local-times", action="store_true",
@@ -80,13 +105,21 @@ def main(argv: list[str] | None = None) -> int:
         parse_slot(a.slot)
         if ZoneInfo is None:
             raise RuntimeError("zoneinfo unavailable")
+        if a.early_slot:
+            parse_slot(a.early_slot)
         if a.local_times:
-            print("\n".join(local_trigger_times(a.slot, a.tz)))
+            times = set(local_trigger_times(a.slot, a.tz))
+            if a.early_slot:
+                times |= set(local_trigger_times(a.early_slot, a.tz))
+            print("\n".join(sorted(times)))
             return 0
         now = datetime.fromisoformat(a.now) if a.now else datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
-        ok, detail = in_slot(now, a.slot, a.tz)
+        slot = effective_slot(now, a.slot, a.early_slot, a.tz)
+        ok, detail = in_slot(now, slot, a.tz)
+        if slot != a.slot:
+            detail += " [early-close day]"
     except Exception as e:                                 # noqa: BLE001
         print(f"slot_guard: {type(e).__name__}: {e}", file=sys.stderr)
         return EXIT_USAGE

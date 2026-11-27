@@ -135,3 +135,36 @@ def test_setup_registers_guarded_multi_trigger_tasks():
     assert text.isascii()
     assert "-SlotCT `\"$LiveTaskTime`\"" in text and "New-CentralSlotTriggers $LiveTaskTime" in text
     assert "-SlotCT `\"$ReconcileTaskTime`\"" in text
+
+
+# --- early-close day: 11:30 CT instead of 14:20 CT ----------------------------------
+@pytest.mark.parametrize("now,expected", [
+    ("2026-11-27T17:30", True),    # Black Friday, CST: 11:30 CT -> the early slot
+    ("2026-11-27T17:00", False),   # 11:00 CT: before the -5 min edge
+    ("2026-11-27T20:20", False),   # 14:20 CT: the normal slot is NOT used on an early close
+    ("2026-11-30T17:30", False),   # next Monday (normal day): 11:30 CT is not a slot
+    ("2026-11-30T20:20", True),    # ... and 14:20 CT is
+])
+def test_early_close_day_uses_the_early_slot(now, expected):
+    slot = sg.effective_slot(utc(now), "14:20", "11:30")
+    assert sg.in_slot(utc(now), slot)[0] is expected
+
+
+def test_no_early_slot_means_normal_slot_even_on_early_close():
+    assert sg.effective_slot(utc("2026-11-27T20:20"), "14:20", None) == "14:20"
+
+
+def test_early_slot_cli_and_trigger_union(capsys):
+    assert sg.main(["--slot", "14:20", "--early-slot", "11:30", "--now", "2026-11-27T17:30"]) == 0
+    assert sg.main(["--slot", "14:20", "--early-slot", "11:30", "--now", "2026-11-27T20:20"]) == 10
+    capsys.readouterr()
+    assert sg.main(["--slot", "14:20", "--early-slot", "11:30", "--local-times"]) == 0
+    out = capsys.readouterr().out.split()
+    assert {"14:20", "11:30"} <= {t for t in out} or len(out) > 2   # both slots' local times
+
+
+def test_early_slot_wiring_in_wrapper_and_setup():
+    w = (ROOT / "scripts" / "ibkr_execute_live_accounts.ps1").read_text(encoding="utf-8")
+    assert "$EarlySlotCT" in w and "--early-slot" in w and w.isascii()
+    s = (ROOT / "scripts" / "setup_windows_option_c.ps1").read_text(encoding="utf-8")
+    assert "-EarlySlotCT" in s and "$LiveEarlyTaskTime" in s and s.isascii()
