@@ -1,7 +1,7 @@
 {
  "schema": "overall-target-book/v1",
- "generated_at_utc": "2026-11-26T13:17:58+00:00",
- "as_of": "2026-11-25",
+ "generated_at_utc": "2026-11-27T13:17:34+00:00",
+ "as_of": "2026-11-26",
  "profile": "Balanced",
  "book_mode": "paper",
  "weights": {
@@ -13,10 +13,10 @@
  },
  "cash_weight": 0.10000000000000003,
  "exec_price": {
-  "XOP": 167.93,
   "ERX": 96.26,
-  "XLE": 60.9,
+  "XOP": 167.93,
   "ARTY": 56.74,
+  "XLE": 60.9,
   "SATA": 90.62
  },
  "actions": [
@@ -186,18 +186,18 @@
  "sata_cap": 0.3,
  "signal_audit": {
   "passed": true,
-  "checked_at_utc": "2026-11-26T13:17:56+00:00",
+  "checked_at_utc": "2026-11-27T13:17:33+00:00",
   "stale_apps": []
  },
  "signal_basis": {
-  "anchor_ct": "Nov 26, 2026 at 7:15 AM CST",
+  "anchor_ct": "Nov 27, 2026 at 7:15 AM CST",
   "equity_close": "2026-11-25",
-  "btc_bar_close_utc": "2026-11-26T12:00:00+00:00"
+  "btc_bar_close_utc": "2026-11-27T12:00:00+00:00"
  },
  "strategy_version": "v2",
- "code_sha": "4a2aeed17b76",
+ "code_sha": "8b4f7d66c9ac",
  "signature": {
   "alg": "HMAC-SHA256",
-  "value": "8aee17771791bf3e921beda098c52a5e5fcfc4b5579169b78f1c34fb13533c4a"
+  "value": "9c51ffd64a7b062857b7d0c76f88f4f47a778fe2ba6b1bc3c3c1a099eb3c320b"
  }
 }
