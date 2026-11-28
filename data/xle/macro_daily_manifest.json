@@ -1,10 +1,10 @@
 {
  "key": "XLE",
  "source": "yahoo-live",
- "saved_at_utc": "2026-11-26T13:17:55+00:00",
- "rows": 2993,
+ "saved_at_utc": "2026-11-28T13:17:48+00:00",
+ "rows": 2994,
  "date_from": "2015-01-02",
- "date_to": "2026-11-25",
+ "date_to": "2026-11-27",
  "columns": [
   "px_open",
   "px_high",
@@ -57,18 +57,18 @@
   "vix_close",
   "vix_volume"
  ],
- "checksum_sha256": "27f9b6ff7677f7e5",
+ "checksum_sha256": "25447af0bf7bd755",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "2993 rows"
+   "detail": "2994 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "2993 rows (need \u2265 260)"
+   "detail": "2994 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -78,7 +78,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "px_close: 2993 non-null values"
+   "detail": "px_close: 2994 non-null values"
   },
   {
    "name": "required_columns",
@@ -98,12 +98,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "2993 rows vs snapshot 2992"
+   "detail": "2994 rows vs snapshot 2993"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-11-25 vs snapshot 2026-11-24"
+   "detail": "last 2026-11-27 vs snapshot 2026-11-25"
   },
   {
    "name": "no_missing_recent_sessions",
@@ -114,11 +114,6 @@
    "name": "history_agreement",
    "passed": true,
    "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
-  },
-  {
-   "name": "nasdaq_crosscheck",
-   "passed": true,
-   "detail": "4 new-session close(s) verified against Nasdaq"
   }
  ]
 }

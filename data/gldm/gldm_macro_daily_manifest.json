@@ -1,10 +1,10 @@
 {
  "key": "GLDM",
  "source": "yahoo-live",
- "saved_at_utc": "2026-11-26T13:17:48+00:00",
- "rows": 2117,
+ "saved_at_utc": "2026-11-28T13:17:43+00:00",
+ "rows": 2118,
  "date_from": "2018-06-26",
- "date_to": "2026-11-25",
+ "date_to": "2026-11-27",
  "columns": [
   "gldm_open",
   "gldm_high",
@@ -57,18 +57,18 @@
   "spx_close",
   "spx_volume"
  ],
- "checksum_sha256": "e44aebaa15a43379",
+ "checksum_sha256": "888e8455f8bfc038",
  "qc_passed": true,
  "qc_checks": [
   {
    "name": "non_empty",
    "passed": true,
-   "detail": "2117 rows"
+   "detail": "2118 rows"
   },
   {
    "name": "min_rows",
    "passed": true,
-   "detail": "2117 rows (need \u2265 260)"
+   "detail": "2118 rows (need \u2265 260)"
   },
   {
    "name": "index_sane",
@@ -78,7 +78,7 @@
   {
    "name": "price_positive_finite",
    "passed": true,
-   "detail": "gldm_close: 2117 non-null values"
+   "detail": "gldm_close: 2118 non-null values"
   },
   {
    "name": "required_columns",
@@ -98,12 +98,12 @@
   {
    "name": "no_row_regression",
    "passed": true,
-   "detail": "2117 rows vs snapshot 2116"
+   "detail": "2118 rows vs snapshot 2117"
   },
   {
    "name": "no_span_regression",
    "passed": true,
-   "detail": "last 2026-11-25 vs snapshot 2026-11-24"
+   "detail": "last 2026-11-27 vs snapshot 2026-11-25"
   },
   {
    "name": "no_missing_recent_sessions",
@@ -114,11 +114,6 @@
    "name": "history_agreement",
    "passed": true,
    "detail": "0/119 overlapping daily returns disagree with the snapshot (tolerance 0.001)"
-  },
-  {
-   "name": "nasdaq_crosscheck",
-   "passed": true,
-   "detail": "4 new-session close(s) verified against Nasdaq"
   }
  ]
 }
